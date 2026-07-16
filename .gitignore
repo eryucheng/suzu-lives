@@ -1,0 +1,25 @@
+# Local configuration and credentials
+.env
+.env.*
+!.env.example
+memory/manual_compactor/config.local.json
+memory/rag/config.local.json
+
+# Private conversation data and derived indexes
+memory/rag/history.jsonl
+memory/rag/events.jsonl
+memory/rag/embeddings.jsonl
+memory/manual_compactor/backups/
+memory/manual_compactor/work/
+
+# Runtime output
+*.log
+*.lock
+node_modules/
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Local migration and validation workspace
+/临时测/

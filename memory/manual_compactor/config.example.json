@@ -1,0 +1,18 @@
+{
+  "transcriptPath": "请把 Claude Code 主会话 JSONL 的完整路径填在这里",
+  "claudeCommand": "claude",
+  "claudeArgs": [],
+  "model": "",
+  "memoryOwner": "Agent 的名字",
+  "userName": "用户的名字",
+  "promptFile": "prompt.md",
+  "boundaryContextMessages": 20,
+  "rules": {
+    "minimumHoursSinceLastCompaction": 24,
+    "recentRawHoursToKeep": 24,
+    "contextTokensTrigger": 15000,
+    "recentRawTokensToKeep": 5000
+  },
+  "inheritClaudeSettingsEnv": true,
+  "llmEnv": {}
+}
