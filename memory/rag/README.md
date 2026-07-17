@@ -92,6 +92,8 @@ node .\memory\rag\build-index.mjs --rebuild
 
 ## 安装 Hook
 
+如果要同时启用时间感知和微信分条，可以直接使用仓库的[整套安装配置](../../integrations/README.md)。以下配置用于单独安装 RAG。
+
 把处理器追加到 Agent 项目的 `.claude/settings.json`，不要覆盖已有 Hook：
 
 ```json
