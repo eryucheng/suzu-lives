@@ -1,0 +1,9 @@
+# Merge this top-level block into ~/.cc-connect/config.toml.
+# Replace <PROJECT_DIR> with the absolute path of the Agent project.
+
+[[hooks]]
+event = "message.received"
+type = "command"
+command = 'python "<PROJECT_DIR>/scripts/hooks/wechat-splitter/md_send.py" --inbound'
+async = false
+timeout = 5

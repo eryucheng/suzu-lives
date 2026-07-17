@@ -1,0 +1,21 @@
+{
+  "_说明": [
+    "把本文件复制为 calendar.local.json 后填写。",
+    "MM-DD 表示每年重复，YYYY-MM-DD 只在指定年份命中。",
+    "type 只用于整理分类，不会进入 Agent 看到的句子。"
+  ],
+  "events": [
+    {
+      "date": "08-14",
+      "name": "我们的纪念日",
+      "type": "纪念日",
+      "enabled": false
+    },
+    {
+      "date": "2027-02-06",
+      "name": "当年的特别安排",
+      "type": "日程",
+      "enabled": false
+    }
+  ]
+}

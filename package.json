@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "license": "SEE LICENSE IN LICENSE.md",
-  "description": "Persistent memory and continuity for long-running AI agents.",
+  "description": "Memory, time awareness, and WeChat continuity for long-running AI agents.",
   "type": "module",
   "scripts": {
     "setup": "node scripts/setup.mjs",

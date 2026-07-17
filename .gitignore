@@ -4,6 +4,7 @@
 !.env.example
 memory/manual_compactor/config.local.json
 memory/rag/config.local.json
+.claude/settings.local.json
 
 # Private conversation data and derived indexes
 memory/rag/history.jsonl
@@ -16,10 +17,9 @@ memory/manual_compactor/work/
 *.log
 *.lock
 node_modules/
+__pycache__/
+*.py[cod]
 .DS_Store
 Thumbs.db
 .idea/
 .vscode/
-
-# Local migration and validation workspace
-/临时测/

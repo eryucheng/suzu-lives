@@ -1,0 +1,7 @@
+{
+  "sessionFilePath": "",
+  "port": 8765,
+  "pollIntervalMs": 2000,
+  "maxMessages": 500,
+  "maxRecords": 2500
+}

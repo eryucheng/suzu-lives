@@ -1,0 +1,18 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": [
+              "${CLAUDE_PROJECT_DIR}/scripts/hooks/time-awareness/timehook.mjs"
+            ],
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}

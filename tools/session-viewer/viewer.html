@@ -1,0 +1,416 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>会话查看器</title>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #ededed; height: 100vh; display: flex; flex-direction: column; }
+.header { background: #2e2e2e; color: #fff; padding: 10px 16px; display: flex; align-items: center; justify-content: space-between; font-size: 14px; flex-shrink: 0; }
+.header .file { color: #aaa; font-size: 11px; max-width: 50%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.controls { display: flex; gap: 8px; align-items: center; }
+.controls button { background: #444; color: #fff; border: none; padding: 5px 12px; border-radius: 4px; cursor: pointer; font-size: 12px; }
+.controls button:hover { background: #555; }
+.controls button.active { background: #07c160; }
+.chat { flex: 1; overflow-y: auto; padding: 16px; padding-bottom: 32px; }
+.msg { margin-bottom: 16px; display: flex; flex-direction: column; }
+.msg.user { align-items: flex-end; }
+.msg.assistant { align-items: flex-start; }
+.msg.system { align-items: center; }
+.msg.attachment { align-items: center; }
+.msg.thinking { align-items: flex-start; margin-bottom: 6px; }
+.bubble { max-width: 72%; padding: 10px 14px; border-radius: 8px; font-size: 14px; line-height: 1.6; overflow-wrap: break-word; white-space: pre-wrap; }
+.msg.user .bubble { background: #95ec69; }
+.msg.assistant .bubble { background: #fff; }
+.msg.system .bubble { background: #d9d9d9; font-size: 11px; color: #666; max-width: 90%; border-radius: 4px; padding: 4px 10px; }
+.msg.attachment .bubble { background: #e8e0f0; font-size: 12px; color: #555; max-width: 85%; border-radius: 4px; padding: 6px 12px; border-left: 3px solid #8b6fc0; }
+.msg.attachment .bubble .label { font-weight: bold; color: #6b5090; margin-bottom: 4px; display: block; }
+
+/* 工具调用样式 */
+.tool-block { background: #fff9e6; border: 1px solid #e8d58b; border-radius: 6px; margin-bottom: 8px; overflow: hidden; }
+.tool-header { display: flex; align-items: center; justify-content: space-between; padding: 6px 10px; cursor: pointer; user-select: none; }
+.tool-header:hover { background: #fff3cd; }
+.tool-name { font-weight: bold; font-size: 13px; color: #8b6914; }
+.tool-desc { font-size: 11px; color: #b8952c; margin-left: 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 320px; }
+.tool-expand { font-size: 11px; color: #c9a834; flex-shrink: 0; margin-left: 8px; }
+.tool-body { display: none; padding: 0 10px 8px 10px; }
+.tool-body.open { display: block; }
+.tool-section { margin-top: 6px; }
+.tool-section .sec-label { font-size: 11px; color: #b8952c; font-weight: bold; margin-bottom: 2px; }
+.tool-section pre { background: #fdf8e1; padding: 6px 8px; border-radius: 4px; font-size: 11px; line-height: 1.4; overflow-x: auto; max-height: 200px; overflow-y: auto; margin: 0; white-space: pre-wrap; word-break: break-all; }
+
+/* 思考内容样式 */
+.thinking-block { background: #f0f0f0; border-left: 3px solid #bbb; border-radius: 0 6px 6px 0; padding: 6px 10px; margin-bottom: 6px; max-width: 78%; }
+.thinking-header { font-size: 11px; color: #999; cursor: pointer; user-select: none; }
+.thinking-header:hover { color: #777; }
+.thinking-body { display: none; margin-top: 4px; font-size: 12px; color: #666; white-space: pre-wrap; line-height: 1.5; }
+.thinking-body.open { display: block; }
+
+.time { font-size: 11px; color: #999; margin-top: 2px; }
+.msg.user .time { margin-right: 4px; }
+.msg.assistant .time { margin-left: 4px; }
+.status { background: #f5f5f5; padding: 6px 16px; font-size: 11px; color: #888; flex-shrink: 0; border-top: 1px solid #ddd; display: flex; gap: 16px; }
+.status.error { color: #e74c3c; }
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-thumb { background: #ccc; border-radius: 3px; }
+</style>
+</head>
+<body>
+<div class="header">
+  <span>会话查看器</span>
+  <span class="file" id="filePath">—</span>
+  <div class="controls">
+    <button id="btnAuto" class="active" onclick="toggleAuto()">自动刷新</button>
+    <button onclick="refreshNow()">立即刷新</button>
+    <button onclick="scrollBottom()">滚到底部</button>
+  </div>
+</div>
+<div class="chat" id="chat"></div>
+<div class="status" id="status">加载中...</div>
+
+<script>
+let config = { pollIntervalMs: 2000, maxMessages: 500 };
+let autoRefresh = true;
+let pollTimer = null;
+let lastVersion = null;
+
+async function init() {
+  await loadSnapshot(true);
+  pollTimer = setInterval(checkUpdate, config.pollIntervalMs || 2000);
+}
+
+function toggleAuto() {
+  autoRefresh = !autoRefresh;
+  const btn = document.getElementById('btnAuto');
+  btn.textContent = autoRefresh ? '自动刷新' : '手动刷新';
+  btn.classList.toggle('active', autoRefresh);
+}
+
+function formatTime(ts) {
+  if (!ts) return '';
+  try {
+    const d = new Date(ts);
+    return d.toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  } catch { return ts; }
+}
+
+function formatJson(obj) {
+  try { return JSON.stringify(obj, null, 2); } catch { return String(obj); }
+}
+
+function formatToolResult(value) {
+  return typeof value === 'string' ? value : formatJson(value);
+}
+
+function isPrimitive(v) {
+  return typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean' || v === null;
+}
+
+function escapeHtml(s) {
+  const el = document.createElement('span');
+  el.textContent = String(s);
+  return el.innerHTML;
+}
+
+function getToolSummary(input) {
+  if (!input) return '';
+  if (input.command) return input.command.substring(0, 60);
+  if (input.file_path) return input.file_path.substring(input.file_path.lastIndexOf('/') + 1 || input.file_path.lastIndexOf('\\') + 1);
+  if (input.description) return input.description.substring(0, 60);
+  return '';
+}
+
+// Parse content array, split into thinking / tool_use / text parts in order
+function parseContent(content) {
+  if (!Array.isArray(content)) return [{ type: 'text', text: content || '' }];
+  return content;
+}
+
+function createToolBlock(toolUse) {
+  const block = document.createElement('div');
+  block.className = 'tool-block';
+
+  const name = toolUse.name || '?';
+  const input = toolUse.input || {};
+  const summary = getToolSummary(input);
+
+  const header = document.createElement('div');
+  header.className = 'tool-header';
+  header.innerHTML = `<span class="tool-name">${escapeHtml(name)}</span><span class="tool-desc">${escapeHtml(summary)}</span><span class="tool-expand">▶ 展开</span>`;
+
+  const body = document.createElement('div');
+  body.className = 'tool-body';
+  body.innerHTML = `
+    <div class="tool-section">
+      <div class="sec-label">参数:</div>
+      <pre>${escapeHtml(formatJson(input))}</pre>
+    </div>`;
+
+  let open = false;
+  header.addEventListener('click', () => {
+    open = !open;
+    body.classList.toggle('open', open);
+    header.querySelector('.tool-expand').textContent = open ? '▼ 收起' : '▶ 展开';
+  });
+
+  block.appendChild(header);
+  block.appendChild(body);
+  return block;
+}
+
+function createThinkingBlock(thinking) {
+  const block = document.createElement('div');
+  block.className = 'thinking-block';
+
+  const preview = (thinking.thinking || '').substring(0, 80);
+
+  const header = document.createElement('div');
+  header.className = 'thinking-header';
+  header.textContent = `思考: ${preview}${thinking.thinking && thinking.thinking.length > 80 ? '…' : ''}`;
+
+  const body = document.createElement('div');
+  body.className = 'thinking-body';
+  body.textContent = thinking.thinking || '';
+
+  let open = false;
+  header.addEventListener('click', () => {
+    open = !open;
+    body.classList.toggle('open', open);
+  });
+
+  block.appendChild(header);
+  block.appendChild(body);
+  return block;
+}
+
+function createMsgEl(record) {
+  const type = record.type;
+  const msg = record.message || {};
+  const ts = record.timestamp;
+
+  // --- system message ---
+  if (type === 'system') {
+    const div = document.createElement('div');
+    div.className = 'msg system';
+    div.dataset.uuid = record.uuid || '';
+    const bubble = document.createElement('div');
+    bubble.className = 'bubble';
+    bubble.textContent = record.content || (record.subtype ? `[系统: ${record.subtype}]` : '[系统消息]');
+    const timeEl = document.createElement('div');
+    timeEl.className = 'time';
+    timeEl.textContent = formatTime(ts);
+    div.appendChild(bubble);
+    div.appendChild(timeEl);
+    return div;
+  }
+
+  // --- attachment (context injection) ---
+  if (type === 'attachment') {
+    let content = '';
+    const att = record.attachment || {};
+    if (att.content) {
+      content = Array.isArray(att.content) ? att.content.join('\n') : String(att.content);
+    }
+    if (!content) return null;
+
+    const div = document.createElement('div');
+    div.className = 'msg attachment';
+    div.dataset.uuid = record.uuid || '';
+
+    const attType = att.type || '';
+    const hookName = att.hookName || '';
+    let label = '[上下文注入]';
+    if (hookName) label = `[上下文注入 · ${hookName}]`;
+    else if (attType) label = `[${attType}]`;
+
+    const bubble = document.createElement('div');
+    bubble.className = 'bubble';
+    bubble.innerHTML = `<span class="label">${escapeHtml(label)}</span>${escapeHtml(content)}`;
+
+    const timeEl = document.createElement('div');
+    timeEl.className = 'time';
+    timeEl.textContent = formatTime(ts);
+
+    div.appendChild(bubble);
+    div.appendChild(timeEl);
+    return div;
+  }
+
+  // --- user message ---
+  if (type === 'user') {
+    const content = msg.content;
+
+    // Check if user message content is tool_result array
+    if (Array.isArray(content) && content.some(p => p.type === 'tool_result')) {
+      // User message containing tool results — render as tool blocks
+      const wrapper = document.createElement('div');
+      wrapper.className = 'msg assistant';
+      wrapper.dataset.uuid = record.uuid || '';
+
+      const container = document.createElement('div');
+      container.style.maxWidth = '72%';
+
+      for (const part of content) {
+        if (part.type === 'tool_result') {
+          const block = document.createElement('div');
+          block.className = 'tool-block';
+          block.style.marginBottom = '6px';
+
+          const isError = part.is_error;
+          const resultContent = part.content ?? '';
+          const formattedResult = formatToolResult(resultContent);
+
+          const header = document.createElement('div');
+          header.className = 'tool-header';
+          header.innerHTML = `<span class="tool-name">${isError ? '✗ 结果 (错误)' : '✓ 工具结果'}</span><span class="tool-desc">${escapeHtml(formattedResult.substring(0, 60))}</span><span class="tool-expand">▶ 展开</span>`;
+
+          const body = document.createElement('div');
+          body.className = 'tool-body';
+          body.innerHTML = `<div class="tool-section"><pre>${escapeHtml(formattedResult)}</pre></div>`;
+
+          let open = false;
+          header.addEventListener('click', () => {
+            open = !open;
+            body.classList.toggle('open', open);
+            header.querySelector('.tool-expand').textContent = open ? '▼ 收起' : '▶ 展开';
+          });
+
+          block.appendChild(header);
+          block.appendChild(body);
+          container.appendChild(block);
+        } else if (part.type === 'text' && part.text) {
+          const bubble = document.createElement('div');
+          bubble.className = 'bubble';
+          bubble.textContent = part.text;
+          container.appendChild(bubble);
+        }
+      }
+
+      const timeEl = document.createElement('div');
+      timeEl.className = 'time';
+      timeEl.textContent = formatTime(ts);
+
+      wrapper.appendChild(container);
+      wrapper.appendChild(timeEl);
+      return wrapper;
+    }
+
+    // Regular user message
+    const div = document.createElement('div');
+    div.className = 'msg user';
+    div.dataset.uuid = record.uuid || '';
+
+    let text = '';
+    if (typeof content === 'string') text = content;
+    else if (Array.isArray(content)) {
+      text = content.filter(p => p.type === 'text').map(p => p.text).join('\n');
+    }
+
+    if (!text) return null;
+
+    const bubble = document.createElement('div');
+    bubble.className = 'bubble';
+    bubble.textContent = text;
+
+    const timeEl = document.createElement('div');
+    timeEl.className = 'time';
+    timeEl.textContent = formatTime(ts);
+
+    div.appendChild(bubble);
+    div.appendChild(timeEl);
+    return div;
+  }
+
+  // --- assistant message ---
+  if (type === 'assistant') {
+    const content = msg.content;
+    if (!Array.isArray(content) || content.length === 0) return null;
+
+    const wrapper = document.createElement('div');
+    wrapper.className = 'msg assistant';
+    wrapper.dataset.uuid = record.uuid || '';
+
+    const container = document.createElement('div');
+    container.style.maxWidth = '72%';
+
+    // Process each content part in order
+    for (const part of content) {
+      if (part.type === 'thinking') {
+        container.appendChild(createThinkingBlock(part));
+      } else if (part.type === 'tool_use') {
+        container.appendChild(createToolBlock(part));
+      } else if (part.type === 'text' && part.text) {
+        const bubble = document.createElement('div');
+        bubble.className = 'bubble';
+        bubble.textContent = part.text;
+        container.appendChild(bubble);
+      }
+    }
+
+    const timeEl = document.createElement('div');
+    timeEl.className = 'time';
+    timeEl.textContent = formatTime(ts);
+
+    wrapper.appendChild(container);
+    wrapper.appendChild(timeEl);
+    return wrapper;
+  }
+
+  return null;
+}
+
+function renderSnapshot(payload, forceBottom = false) {
+  const chat = document.getElementById('chat');
+  const wasAtBottom = forceBottom || chat.scrollHeight - chat.scrollTop - chat.clientHeight < 80;
+  const rendered = [];
+  for (const record of payload.records || []) {
+    const el = createMsgEl(record);
+    if (el) rendered.push(el);
+  }
+  const maximum = config.maxMessages || 500;
+  chat.replaceChildren(...rendered.slice(-maximum));
+  setStatus(`${Math.min(rendered.length, maximum)} 条可见消息 · 已扫描 ${payload.scannedRecords} 条记录 · 跳过 ${payload.malformedLines} 条损坏记录 · ${new Date().toLocaleTimeString('zh-CN')}`);
+  if (wasAtBottom) scrollBottom();
+}
+
+async function loadSnapshot(forceRender = false) {
+  try {
+    const res = await fetch('/api/session', { cache: 'no-store' });
+    const payload = await res.json();
+    if (!res.ok) throw new Error(payload.error || `HTTP ${res.status}`);
+    config = { ...config, ...(payload.config || {}) };
+    document.getElementById('filePath').textContent = payload.fileName || '未配置';
+    if (forceRender || payload.version !== lastVersion) {
+      renderSnapshot(payload, lastVersion === null);
+      lastVersion = payload.version;
+    }
+  } catch (e) {
+    setStatus(`加载失败: ${e.message}`, true);
+  }
+}
+
+async function checkUpdate() {
+  if (!autoRefresh) return;
+  await loadSnapshot(false);
+}
+
+async function refreshNow() {
+  await loadSnapshot(true);
+}
+
+function scrollBottom() {
+  const chat = document.getElementById('chat');
+  chat.scrollTop = chat.scrollHeight;
+}
+
+function setStatus(msg, isError) {
+  const el = document.getElementById('status');
+  el.textContent = msg;
+  el.className = 'status' + (isError ? ' error' : '');
+}
+
+init();
+</script>
+</body>
+</html>

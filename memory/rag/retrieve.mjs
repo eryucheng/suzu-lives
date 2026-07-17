@@ -24,7 +24,7 @@ const DEFAULTS = Object.freeze({
     enabled: false,
     baseUrl: "",
     endpoint: "embeddings",
-    apiKeyEnv: "DASHSCOPE_API_KEY",
+    apiKeyEnv: "EMBEDDING_API_KEY",
     apiKey: "",
     model: "text-embedding-v4",
     dimensions: 1024,

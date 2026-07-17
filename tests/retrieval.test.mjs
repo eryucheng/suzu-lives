@@ -23,6 +23,19 @@ const messages = [
   { id: "a2", role: "assistant", speaker: "Agent", timestamp: "2026-07-02T10:00:03.000Z", text: "可以煮番茄面。" },
 ];
 
+test("精简配置默认读取通用 Embedding 环境变量", (context) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "suzu-lives-embedding-env-"));
+  context.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const configPath = path.join(directory, "rag.json");
+  fs.writeFileSync(configPath, JSON.stringify({
+    historyFile: "history.jsonl",
+    embedding: { enabled: true },
+  }), "utf8");
+
+  const config = loadRagConfig(configPath);
+  assert.equal(config.embedding.apiKeyEnv, "EMBEDDING_API_KEY");
+});
+
 test("连续用户消息和助手回复组成一个双方对话轮", () => {
   const turns = buildTurns(messages, 2);
   assert.equal(turns.length, 2);
