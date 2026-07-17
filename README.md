@@ -2,7 +2,7 @@
 
 这是我持续完善长期 AI Agent Suzu 的源码公开项目，目标是让 Agent 在长期运行中保持记忆和行为的连续性。
 
-当前先发布已经完成并验证的记忆系统，运行核心为 Claude Code，也可以通过 cc-connect 接入微信。
+当前发布已经完成并验证的记忆系统、时间感知 Hook、微信消息分条模块和本地会话查看器。运行核心为 Claude Code，也可以通过 cc-connect 接入微信。
 
 ## 当前可用功能
 
@@ -15,8 +15,11 @@
 - 支持本地 BM25，以及可选的 OpenAI 兼容 Embedding API；
 - 从事件卡片、历史原话或日期汇总中只选择一个小而准确的回忆片段；
 - 支持“上周日做了什么”等相对日期查询，没有可靠命中时不强行注入。
+- 提供只在本机运行的会话查看器，阅读用户、助手、系统、上下文注入、思考和工具记录；
+- 在每次用户提示前注入电脑当前本地时间，让 Agent 直接感知日期、星期、分钟以及当天的法定节假日或私人纪念日；
+- 把长回复拆成微信短消息，并在个人微信单 token 发送额度不足时保存队列、提醒刷新和可靠续发。
 
-微信消息分条、时间感知和主动关心将在后续模块中加入。它们不会和记忆代码混在一个不可拆分的脚本里。
+各功能保持为独立模块。记忆位于 `memory/`，自动注入类功能位于 `scripts/hooks/`，手动使用的本地工具位于 `tools/`，不需要把整套系统作为一个不可拆分脚本使用。
 
 ## 记忆结构
 
@@ -35,6 +38,8 @@
 - Node.js 18 或更高版本；
 - Claude Code 命令行可以运行 `claude`；
 - 使用 Hook 时，需要支持 `UserPromptSubmit` 的 Claude Code；
+- 时间感知需要项目级 `UserPromptSubmit` Hook；
+- 微信分条目前只验证 Windows，需要 Python 3.10 或更高版本、cc-connect 1.3.0 或更高版本，以及当前环境可用的 `MessageDisplay` Hook；
 - Embedding 可选，不配置时使用本地 BM25。
 
 本模块没有 npm 运行依赖，不需要执行 `npm install`。
@@ -86,7 +91,13 @@ node .\memory\manual_compactor\compact-jsonl.mjs
 - [手动定向压缩器](memory/manual_compactor/README.md)
 - [历史原文 RAG](memory/rag/README.md)
 
-## 安装 RAG Hook
+## 安装整套 Hook
+
+同时启用时间感知、RAG 和微信分条时，使用[整套安装配置](integrations/README.md)。其中已经正确合并两个 `UserPromptSubmit` 条目和一个 `MessageDisplay` 条目，不需要再从三个模块的文档里分别拼接 Claude Code 配置。
+
+压缩器是手动或定时运行的脚本，会话查看器是本地只读工具，二者不需要注册 Claude Code Hook。
+
+## 只安装 RAG Hook
 
 把下面的处理器追加到 Agent 项目的 `.claude/settings.json`，不要覆盖已有 Hook：
 
@@ -113,13 +124,32 @@ node .\memory\manual_compactor\compact-jsonl.mjs
 
 Hook 失败时会安静跳过，不会阻断正常聊天。
 
+## 时间感知 Hook
+
+时间感知模块在每次 `UserPromptSubmit` 时读取电脑当前本地时间，自动匹配仓库自带的法定节假日，并合并可选且不会被 Git 跟踪的私人纪念日列表，不需要 API 或常驻进程。把它的示例配置追加到项目 `.claude/settings.json` 即可：
+
+- [时间感知安装与原理](scripts/hooks/time-awareness/README.md)
+
+## 会话查看器
+
+会话查看器把 Claude Code JSONL 还原为可读的本地网页，保留上下文附件、思考和工具记录。它首次流式扫描文件，之后只读取新增部分，不会反复加载越来越大的完整 JSONL：
+
+- [会话查看器安装与使用](tools/session-viewer/README.md)
+
+## 微信消息分条
+
+微信分条使用 Claude Code `MessageDisplay` 发送第一段，后台 Worker 续发其余段落；新微信 token 与 cc-connect `message.received` Hook 共同处理发送额度刷新。安装时需要分别合并 Claude Code 和 cc-connect 的 Hook 配置：
+
+- [微信分条安装、额度与故障恢复](scripts/hooks/wechat-splitter/README.md)
+
 ## 开发状态
 
 - [x] 自定义短期、中期、长期记忆链路
 - [x] 双方对话 RAG 与可选 Embedding
 - [x] 本地配置隔离、语法检查和自动测试
-- [ ] 时间感知 Hook
-- [ ] 微信消息分条与额度续发
+- [x] 本地增量会话查看器
+- [x] 时间感知 Hook
+- [x] 微信消息分条与额度续发
 - [ ] 主动关心和定时任务
 - [ ] 视觉、画图、摄像头与网页自动化适配器
 
