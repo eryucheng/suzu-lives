@@ -318,6 +318,17 @@ def post_webhook(config: dict[str, Any], prompt: str) -> None:
         raise RuntimeError(f"Webhook 返回异常状态：HTTP {status}")
 
 
+def webhook_delivery_delay(config: dict[str, Any]) -> float:
+    raw = config["webhook"].get("deliveryDelaySeconds", 0)
+    try:
+        value = float(raw)
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError("配置项 webhook.deliveryDelaySeconds 必须是数字") from exc
+    if value < 0:
+        raise RuntimeError("配置项 webhook.deliveryDelaySeconds 不能小于 0")
+    return value
+
+
 def sender_allowed(config: dict[str, Any], sender: str) -> bool:
     allowed = {
         str(value).strip().lower()
@@ -380,6 +391,7 @@ def process_new_messages(
 ) -> int:
     routes = route_map(config)
     max_chars = max(1, int(config.get("maxContentChars", 2000)))
+    delivery_delay = webhook_delivery_delay(config)
 
     for uid in search_after(connection, last_uid):
         try:
@@ -419,6 +431,12 @@ def process_new_messages(
                     "receivedAt": timestamp,
                 },
             )
+            if delivery_delay > 0:
+                print(
+                    f"UID={uid}：等待 {delivery_delay:g} 秒后投递，"
+                    "避免撞上 Agent 当前处理轮"
+                )
+                time.sleep(delivery_delay)
             post_webhook(config, prompt)
             print(f"已投递 UID={uid}：{prompt}")
             last_uid = uid

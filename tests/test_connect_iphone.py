@@ -58,6 +58,7 @@ class ConnectIphoneTests(unittest.TestCase):
 
     def test_example_feedback_route_passes_content_through(self):
         receive_from_iphone.validate_config(self.config)
+        self.assertEqual(receive_from_iphone.webhook_delivery_delay(self.config), 10)
         template = receive_from_iphone.route_map(self.config)["反馈"]
         prompt = receive_from_iphone.render_prompt(
             template,
