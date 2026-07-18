@@ -2,7 +2,7 @@
 
 这是我持续完善长期 AI Agent Suzu 的源码公开项目，目标是让 Agent 在长期运行中保持记忆和行为的连续性。
 
-当前发布已经完成并验证的记忆系统、时间感知 Hook、微信消息分条模块和本地会话查看器。运行核心为 Claude Code，也可以通过 cc-connect 接入微信。
+当前发布已经完成并验证的记忆系统、时间感知 Hook、微信消息分条模块、本地会话查看器和 iPhone 快捷指令连接。运行核心为 Claude Code，也可以通过 cc-connect 接入微信。
 
 ## 当前可用功能
 
@@ -17,9 +17,10 @@
 - 支持“上周日做了什么”等相对日期查询，没有可靠命中时不强行注入。
 - 提供只在本机运行的会话查看器，阅读用户、助手、系统、上下文注入、思考和工具记录；
 - 在每次用户提示前注入电脑当前本地时间，让 Agent 直接感知日期、星期、分钟以及当天的法定节假日或私人纪念日；
-- 把长回复拆成微信短消息，并在个人微信单 token 发送额度不足时保存队列、提醒刷新和可靠续发。
+- 把长回复拆成微信短消息，并在个人微信单 token 发送额度不足时保存队列、提醒刷新和可靠续发；
+- 通过 SMTP、IMAP 和 cc-connect Webhook，让 Agent 请求 iPhone 快捷指令执行操作，并接收手机返回的自然提示词。
 
-各功能保持为独立模块。记忆位于 `memory/`，自动注入类功能位于 `scripts/hooks/`，手动使用的本地工具位于 `tools/`，不需要把整套系统作为一个不可拆分脚本使用。
+各功能保持为独立模块。记忆位于 `memory/`，自动注入类功能位于 `scripts/hooks/`，Agent 可调用能力位于 `scripts/abilities/`，手动使用的本地工具位于 `tools/`，不需要把整套系统作为一个不可拆分脚本使用。
 
 ## 记忆结构
 
@@ -40,6 +41,7 @@
 - 使用 Hook 时，需要支持 `UserPromptSubmit` 的 Claude Code；
 - 时间感知需要项目级 `UserPromptSubmit` Hook；
 - 微信分条目前只验证 Windows，需要 Python 3.10 或更高版本、cc-connect 1.3.0 或更高版本，以及当前环境可用的 `MessageDisplay` Hook；
+- iPhone 快捷指令连接目前只验证 Windows，需要 Python 3.10 或更高版本、支持 SMTP/IMAP 的邮箱和已启用 Webhook 的 cc-connect；
 - Embedding 可选，不配置时使用本地 BM25。
 
 本模块没有 npm 运行依赖，不需要执行 `npm install`。
@@ -59,6 +61,7 @@ npm run setup
 ```text
 memory/manual_compactor/config.local.json
 memory/rag/config.local.json
+scripts/abilities/connect_iphone/feedback_config.json
 ```
 
 至少需要在压缩器配置中填写：
@@ -142,6 +145,13 @@ Hook 失败时会安静跳过，不会阻断正常聊天。
 
 - [微信分条安装、额度与故障恢复](scripts/hooks/wechat-splitter/README.md)
 
+## iPhone 快捷指令连接
+
+这个模块通过邮件让 Agent 主动请求 iPhone 快捷指令执行操作，也可以监听手机反馈邮件，再通过 cc-connect Webhook 把正文送回指定 Agent 会话。发送端和接收端共用一份本地配置：
+
+- [iPhone 快捷指令连接安装与使用](scripts/abilities/connect_iphone/README.md)
+- [供 Agent 阅读的操作规范](scripts/abilities/connect_iphone/AGENT_USAGE.md)
+
 ## 开发状态
 
 - [x] 自定义短期、中期、长期记忆链路
@@ -150,6 +160,7 @@ Hook 失败时会安静跳过，不会阻断正常聊天。
 - [x] 本地增量会话查看器
 - [x] 时间感知 Hook
 - [x] 微信消息分条与额度续发
+- [x] iPhone 快捷指令双向连接
 - [ ] 主动关心和定时任务
 - [ ] 视觉、画图、摄像头与网页自动化适配器
 

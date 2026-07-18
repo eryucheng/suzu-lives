@@ -1,0 +1,41 @@
+{
+  "mail": {
+    "imapHost": "imap.163.com",
+    "imapPort": 993,
+    "smtpHost": "smtp.163.com",
+    "smtpPort": 465,
+    "username": "your-email@163.com",
+    "passwordEnv": "",
+    "password": "",
+    "mailbox": "INBOX",
+    "clientId": {
+      "enabled": true,
+      "name": "suzu-lives-phone-feedback",
+      "version": "1.0.0",
+      "vendor": "your-name",
+      "supportEmail": "your-email@163.com"
+    },
+    "allowedSenders": [
+      "iphone-sender@example.com"
+    ],
+    "commandRecipient": "your-email@163.com"
+  },
+  "webhook": {
+    "url": "http://127.0.0.1:9111/hook",
+    "token": "填写与cc-connect一致的Webhook Token",
+    "project": "your-project",
+    "sessionKey": "weixin:dm:填写完整会话标识",
+    "silent": true
+  },
+  "idleRefreshSeconds": 1500,
+  "fallbackPollSeconds": 10,
+  "reconnectDelaySeconds": 5,
+  "maxContentChars": 2000,
+  "routes": [
+    {
+      "enabled": true,
+      "subject": "反馈",
+      "promptTemplate": "{{content}}"
+    }
+  ]
+}
