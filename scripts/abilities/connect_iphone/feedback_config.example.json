@@ -25,7 +25,8 @@
     "token": "填写与cc-connect一致的Webhook Token",
     "project": "your-project",
     "sessionKey": "weixin:dm:填写完整会话标识",
-    "silent": true
+    "silent": true,
+    "deliveryDelaySeconds": 10
   },
   "idleRefreshSeconds": 1500,
   "fallbackPollSeconds": 10,

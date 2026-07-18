@@ -49,7 +49,8 @@ npm run setup
 - `token`：与 cc-connect `[webhook]` 配置一致的 Token；
 - `project`：目标项目名称；
 - `sessionKey`：目标会话的完整 `session_key`；
-- `silent`：是否隐藏 Webhook 到达提示。
+- `silent`：是否隐藏 Webhook 到达提示；
+- `deliveryDelaySeconds`：收到反馈后等待多久再交给 Webhook。Agent 自己发起手机操作时，延迟可以避开仍被当前对话占用的会话，默认 10 秒。
 
 ## Agent 主动操作 iPhone
 
