@@ -5,6 +5,8 @@
 memory/manual_compactor/config.local.json
 memory/rag/config.local.json
 .claude/settings.local.json
+.playwright/
+.playwright-cli/
 
 # Private conversation data and derived indexes
 memory/rag/history.jsonl
@@ -12,6 +14,8 @@ memory/rag/events.jsonl
 memory/rag/embeddings.jsonl
 memory/manual_compactor/backups/
 memory/manual_compactor/work/
+scripts/abilities/web-browser/runtime/
+scripts/abilities/connect_iphone/runtime/
 
 # Runtime output
 *.log

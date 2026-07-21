@@ -28,6 +28,19 @@
     "silent": true,
     "deliveryDelaySeconds": 10
   },
+  "imageAttachments": {
+    "directory": "runtime/inbox",
+    "maxBytesPerImage": 20971520,
+    "maxImagesPerMessage": 5,
+    "allowedTypes": [
+      "image/gif",
+      "image/heic",
+      "image/heif",
+      "image/jpeg",
+      "image/png",
+      "image/webp"
+    ]
+  },
   "idleRefreshSeconds": 1500,
   "fallbackPollSeconds": 10,
   "reconnectDelaySeconds": 5,

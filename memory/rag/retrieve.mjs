@@ -464,7 +464,7 @@ export function buildTurns(messages, maxTurnGapHours = DEFAULTS.retrieval.maxTur
       && maxTurnGapMs > 0
       && Number.isFinite(timestamp)
       && Number.isFinite(lastTimestamp)
-      && timestamp - lastTimestamp > maxTurnGapMs
+      && (timestamp < lastTimestamp || timestamp - lastTimestamp > maxTurnGapMs)
     ) flush();
     // Consecutive user messages belong to the same exchange until the
     // assistant has replied. Only then can a later user message start a new

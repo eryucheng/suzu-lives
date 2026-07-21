@@ -1,10 +1,12 @@
 #!/usr/bin/env node
 
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { retrieveMemories } from "./retrieve.mjs";
 
 const HISTORICAL_TIME_MARKERS = /(?:上次|以前|之前|过去|当时|那时|那天|昨天|前天|记得|回忆|曾经)/u;
 
-function isCurrentTimeQuery(value) {
+export function isCurrentTimeQuery(value) {
   const original = String(value || "").trim();
   if (!original || original.length > 50 || HISTORICAL_TIME_MARKERS.test(original)) return false;
 
@@ -23,6 +25,16 @@ function isCurrentTimeQuery(value) {
   ].some((pattern) => pattern.test(text));
 }
 
+export function ragSkipReason(prompt) {
+  const value = String(prompt || "").trim();
+  if (!value) return "empty-prompt";
+  if (value.includes("根据时间和前面聊的内容") || value.startsWith("临时回访：")) {
+    return "timer-context";
+  }
+  if (isCurrentTimeQuery(value)) return "current-time-query";
+  return "";
+}
+
 async function readStdin() {
   let value = "";
   for await (const chunk of process.stdin) value += chunk;
@@ -37,11 +49,8 @@ async function main() {
   const prompt = String(event.prompt || "").trim();
   if (!prompt) return;
 
-  // 链式timer自动触发，不需要检索记忆
-  if (prompt.includes("根据时间和前面聊的内容")) return;
-
-  // 当前时间和日期只能来自本轮运行时事实，不能混入历史时间回答。
-  if (isCurrentTimeQuery(prompt)) return;
+  // Timer 已经带有当前会话或具体回访情境，不需要再检索历史记忆。
+  if (ragSkipReason(prompt)) return;
 
   const result = await retrieveMemories(prompt);
   if (!result.context) return;
@@ -53,8 +62,10 @@ async function main() {
   }));
 }
 
-main().catch((error) => {
-  // RAG 只能补充记忆，绝不能因为自身故障阻断正常聊天。
-  console.error(`RAG hook 已跳过：${error.message}`);
-  process.exitCode = 0;
-});
+if (path.resolve(process.argv[1] || "") === fileURLToPath(import.meta.url)) {
+  main().catch((error) => {
+    // RAG 只能补充记忆，绝不能因为自身故障阻断正常聊天。
+    console.error(`RAG hook 已跳过：${error.message}`);
+    process.exitCode = 0;
+  });
+}
