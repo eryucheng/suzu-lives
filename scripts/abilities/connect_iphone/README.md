@@ -63,7 +63,7 @@ python ".\scripts\abilities\connect_iphone\send_to_iphone.py" "查岗" ""
 
 发送失败时脚本返回非零退出码；只有输出“已发送”才表示邮件已经交给邮箱服务器。
 
-供 Agent 阅读的简短操作规范见 [AGENT_USAGE.md](AGENT_USAGE.md)。
+供 Agent 使用的操作规范位于 [iphone-bridge Skill](../../../.claude/skills/iphone-bridge/SKILL.md)。默认不假定任何手机快捷指令已经配置；真实测试成功后，再把操作登记到 Skill 的“已注册操作”。
 
 ## 手机反馈进入 Agent
 
@@ -85,12 +85,21 @@ python ".\scripts\abilities\connect_iphone\send_to_iphone.py" "查岗" ""
 
 Agent 收到的也是同一句话。
 
+反馈邮件也可以携带图片附件。监听器会验证附件类型、数量和大小，把允许的图片保存到 `runtime/inbox/<邮件UID>/`，再把本地路径追加到送给 Agent 的提示词。登录凭证、邮件原文和图片内容不会上传到 Suzu Lives。
+
+`imageAttachments` 可以调整保存目录、单张大小上限、每封邮件最多图片数和允许的 MIME 类型。`runtime/` 已被 Git 忽略。
+
 模板还支持：
 
 - `{{content}}`：邮件正文；
 - `{{subject}}`：邮件主题；
 - `{{from}}`：发件地址；
 - `{{receivedAt}}`：邮件时间。
+- `{{imageCount}}`：保存成功的图片数量；
+- `{{imagePaths}}`：图片本地路径列表；
+- `{{attachments}}`：供 Agent 使用的完整附件说明。
+
+即使路由模板没有写 `{{attachments}}`，存在图片或附件警告时，监听器也会自动把附件说明追加到提示词末尾。
 
 主题采用精确匹配。没有配置的主题，以及不在 `allowedSenders` 中的发件人，都会被忽略。
 

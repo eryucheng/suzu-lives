@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>记忆查看器</title>
+<style>
+* { box-sizing: border-box; }
+body { margin: 0; background: #f2f3f5; color: #222; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+header { background: #24292f; color: #fff; padding: 18px 24px; }
+header h1 { margin: 0 0 6px; font-size: 20px; }
+header p { margin: 0; color: #b8c0cc; font-size: 13px; }
+.status { padding: 9px 24px; background: #fff; border-bottom: 1px solid #ddd; color: #666; font-size: 12px; overflow-wrap: anywhere; }
+main { display: grid; grid-template-columns: minmax(320px, 1fr) minmax(360px, 1fr); gap: 18px; padding: 18px; align-items: start; }
+.panel { background: #fff; border: 1px solid #ddd; border-radius: 10px; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,.04); }
+.panel-head { padding: 16px 18px 12px; border-bottom: 1px solid #eee; }
+.panel-head h2 { margin: 0 0 5px; font-size: 17px; }
+.panel-head p { margin: 0; color: #777; font-size: 12px; line-height: 1.5; }
+.form { display: flex; gap: 8px; padding: 14px 18px; background: #fafafa; border-bottom: 1px solid #eee; }
+input, select, button, textarea { font: inherit; }
+input, textarea, select { border: 1px solid #c9ced6; border-radius: 6px; background: #fff; padding: 9px 10px; outline: none; }
+input:focus, textarea:focus, select:focus { border-color: #07a85a; box-shadow: 0 0 0 2px rgba(7,168,90,.12); }
+.form input { flex: 1; min-width: 80px; }
+.recall-form { display: block; }
+.recall-form textarea { width: 100%; min-height: 82px; resize: vertical; margin-bottom: 8px; }
+button { border: none; border-radius: 6px; background: #07a85a; color: #fff; padding: 9px 15px; cursor: pointer; white-space: nowrap; }
+button:hover { background: #078b4c; }
+button:disabled { opacity: .55; cursor: wait; }
+.results { padding: 14px 18px 18px; max-height: calc(100vh - 285px); min-height: 220px; overflow: auto; }
+.empty { color: #999; padding: 30px 8px; text-align: center; font-size: 13px; }
+.result-count { font-size: 12px; color: #777; margin-bottom: 10px; }
+.card { border: 1px solid #e0e3e8; border-radius: 8px; padding: 11px 12px; margin-bottom: 10px; background: #fff; }
+.card-head { display: flex; gap: 8px; align-items: center; color: #777; font-size: 11px; margin-bottom: 7px; flex-wrap: wrap; }
+.tag { border-radius: 999px; padding: 2px 7px; background: #edf2f7; color: #4f6475; }
+.tag.event { background: #fff1d5; color: #946200; }
+.tag.user { background: #e1f7d7; color: #2e6c20; }
+.tag.assistant { background: #e8efff; color: #345aa0; }
+.title { font-weight: 650; margin-bottom: 6px; }
+.text { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.55; font-size: 13px; }
+.injection-wrap { padding: 14px 18px 4px; }
+.injection-wrap h3, .details h3 { margin: 0 0 8px; font-size: 14px; }
+.injection { margin: 0; background: #20252b; color: #e8edf2; border-radius: 8px; padding: 13px; min-height: 90px; max-height: 360px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font: 13px/1.6 ui-monospace, SFMono-Regular, Consolas, monospace; }
+.injection.none { background: #f7f7f7; color: #888; border: 1px dashed #ccc; }
+.details { padding: 12px 18px 18px; }
+.meta-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; margin-bottom: 12px; }
+.meta { background: #f5f7f9; border-radius: 6px; padding: 8px; font-size: 11px; color: #667; overflow-wrap: anywhere; }
+.warning { color: #a45100; background: #fff4df; border-radius: 6px; padding: 8px; margin-bottom: 10px; font-size: 12px; }
+@media (max-width: 920px) { main { grid-template-columns: 1fr; } .results { max-height: 560px; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>记忆查看器</h1>
+  <p>一个页面看清“记忆库里有什么”和“这句话最终会让 Agent 想起什么”。</p>
+</header>
+<div class="status" id="storeStatus">正在读取记忆库……</div>
+<main>
+  <section class="panel">
+    <div class="panel-head">
+      <h2>纯搜索</h2>
+      <p>直接搜索 history.jsonl 和 events.jsonl，不调用 API，也不执行召回算法。</p>
+    </div>
+    <div class="form">
+      <input id="plainQuery" type="search" maxlength="200" placeholder="搜索人物、地点、日期、事件或原话">
+      <select id="plainSource" aria-label="搜索范围">
+        <option value="all">全部</option>
+        <option value="history">原始对话</option>
+        <option value="events">事件</option>
+      </select>
+      <button id="plainButton" onclick="runPlainSearch()">搜索</button>
+    </div>
+    <div class="results" id="plainResults"><div class="empty">输入内容后搜索记忆库。</div></div>
+  </section>
+
+  <section class="panel">
+    <div class="panel-head">
+      <h2>关联搜索测试</h2>
+      <p>直接运行当前 RAG 的 retrieveMemories()；下方“最终注入内容”就是 Hook 会交给 Agent 的文本。启用向量时可能调用一次 embedding API。</p>
+    </div>
+    <div class="form recall-form">
+      <textarea id="recallQuery" maxlength="1000" placeholder="例如：记得我之前去科技馆吗"></textarea>
+      <button id="recallButton" onclick="runRecall()">测试召回</button>
+    </div>
+    <div class="injection-wrap">
+      <h3>最终注入内容</h3>
+      <pre class="injection none" id="injection">尚未测试。</pre>
+    </div>
+    <div class="details" id="recallDetails"></div>
+  </section>
+</main>
+
+<script>
+function text(value) { return value === null || value === undefined ? '' : String(value); }
+
+function formatTime(value) {
+  if (!value) return '时间未知';
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? text(value) : date.toLocaleString('zh-CN');
+}
+
+function element(tag, className, content) {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  if (content !== undefined) node.textContent = content;
+  return node;
+}
+
+async function loadStatus() {
+  const target = document.getElementById('storeStatus');
+  try {
+    const response = await fetch('/api/status', { cache: 'no-store' });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+    const vector = payload.embedding.enabled ? `向量已启用：${payload.embedding.model}` : '向量未启用';
+    target.textContent = `history ${payload.historyRecords} 条 · events ${payload.eventRecords} 条 · ${vector} · ${payload.historyPath} · ${payload.eventsPath}`;
+  } catch (error) {
+    target.textContent = `读取失败：${error.message}`;
+  }
+}
+
+function memoryCard(match) {
+  const item = match.item || {};
+  const card = element('article', 'card');
+  const head = element('div', 'card-head');
+  if (match.source === 'events') {
+    head.append(element('span', 'tag event', '事件'));
+    head.append(element('span', '', item.event_date || formatTime(item.source_start_timestamp)));
+    if (item.status) head.append(element('span', '', `状态：${item.status}`));
+  } else {
+    head.append(element('span', `tag ${item.role || ''}`, item.role === 'user' ? '用户' : item.role === 'assistant' ? 'Agent' : text(item.role)));
+    head.append(element('span', '', formatTime(item.timestamp)));
+  }
+  head.append(element('span', '', `第 ${match.lineNumber} 行`));
+  card.append(head);
+  if (match.source === 'events' && item.title) card.append(element('div', 'title', item.title));
+  card.append(element('div', 'text', item.text || '(无文本)'));
+  return card;
+}
+
+async function runPlainSearch() {
+  const queryInput = document.getElementById('plainQuery');
+  const query = queryInput.value.trim();
+  const results = document.getElementById('plainResults');
+  if (!query) {
+    results.replaceChildren(element('div', 'empty', '请输入要搜索的内容。'));
+    queryInput.focus();
+    return;
+  }
+  const button = document.getElementById('plainButton');
+  button.disabled = true;
+  results.replaceChildren(element('div', 'empty', '正在搜索……'));
+  try {
+    const source = document.getElementById('plainSource').value;
+    const response = await fetch(`/api/search?q=${encodeURIComponent(query)}&source=${encodeURIComponent(source)}&limit=100`, { cache: 'no-store' });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+    const nodes = [element('div', 'result-count', `命中 ${payload.matchedRecords} 条${payload.truncated ? '，显示最近 100 条' : ''}`)];
+    for (const match of payload.matches || []) nodes.push(memoryCard(match));
+    if (!payload.matches?.length) nodes.push(element('div', 'empty', '没有找到匹配内容。'));
+    results.replaceChildren(...nodes);
+  } catch (error) {
+    results.replaceChildren(element('div', 'empty', `搜索失败：${error.message}`));
+  } finally {
+    button.disabled = false;
+  }
+}
+
+function skippedReasonLabel(reason) {
+  if (reason === 'generic-query') return '普通短句被查询门槛跳过';
+  if (reason === 'no-recall-topic') return '没有识别到可检索主题';
+  if (reason === 'hook-timer-context') return '主动关心或临时回访由 Hook 明确跳过 RAG';
+  if (reason === 'hook-current-time-query') return '当前时间问题由 Hook 明确跳过历史记忆';
+  return reason || '没有达到注入阈值';
+}
+
+function renderRecall(payload) {
+  const injection = document.getElementById('injection');
+  if (payload.context) {
+    injection.textContent = payload.context;
+    injection.className = 'injection';
+  } else {
+    injection.textContent = `不会注入记忆。原因：${skippedReasonLabel(payload.skippedReason)}`;
+    injection.className = 'injection none';
+  }
+
+  const details = document.getElementById('recallDetails');
+  const grid = element('div', 'meta-grid');
+  const fields = [
+    ['召回意图', payload.recallIntent || '—'],
+    ['检索模式', payload.retrievalMode || '—'],
+    ['向量状态', payload.vector?.status || '—'],
+    ['候选单元', payload.searchedUnits ?? 0],
+    ['history 消息', payload.historyMessages ?? 0],
+    ['events 事件', payload.eventMemories ?? 0],
+  ];
+  for (const [label, value] of fields) grid.append(element('div', 'meta', `${label}：${value}`));
+  const nodes = [element('h3', '', '召回详情'), grid];
+  if (payload.temporalResolution?.matched) {
+    const temporal = payload.temporalResolution;
+    nodes.push(element('div', 'meta', `时间识别：${temporal.expression} → ${temporal.startDate}${temporal.endDate && temporal.endDate !== temporal.startDate ? ` 至 ${temporal.endDate}` : ''}`));
+  }
+  if (payload.vector?.warning) nodes.push(element('div', 'warning', `向量提示：${payload.vector.warning}`));
+  for (const fragment of payload.fragments || []) {
+    const card = element('article', 'card');
+    const head = element('div', 'card-head');
+    head.append(element('span', `tag ${fragment.memoryType === 'event' ? 'event' : ''}`, fragment.memoryType === 'event' ? '事件片段' : '对话片段'));
+    if (Number.isFinite(fragment.score)) head.append(element('span', '', `综合分 ${fragment.score.toFixed(4)}`));
+    if (Number.isFinite(fragment.vectorSimilarity)) head.append(element('span', '', `向量 ${fragment.vectorSimilarity.toFixed(4)}`));
+    if (Number.isFinite(fragment.bm25Score)) head.append(element('span', '', `BM25 ${fragment.bm25Score.toFixed(4)}`));
+    card.append(head, element('div', 'text', fragment.text || ''));
+    nodes.push(card);
+  }
+  details.replaceChildren(...nodes);
+}
+
+async function runRecall() {
+  const input = document.getElementById('recallQuery');
+  const query = input.value.trim();
+  if (!query) {
+    input.focus();
+    return;
+  }
+  const button = document.getElementById('recallButton');
+  const injection = document.getElementById('injection');
+  button.disabled = true;
+  injection.textContent = '正在执行当前 RAG 召回链路……';
+  injection.className = 'injection none';
+  document.getElementById('recallDetails').replaceChildren();
+  try {
+    const response = await fetch('/api/recall', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query }),
+    });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
+    renderRecall(payload);
+  } catch (error) {
+    injection.textContent = `测试失败：${error.message}`;
+    injection.className = 'injection none';
+  } finally {
+    button.disabled = false;
+  }
+}
+
+document.getElementById('plainQuery').addEventListener('keydown', event => {
+  if (event.key === 'Enter') runPlainSearch();
+});
+document.getElementById('recallQuery').addEventListener('keydown', event => {
+  if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) runRecall();
+});
+loadStatus();
+</script>
+</body>
+</html>

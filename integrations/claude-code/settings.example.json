@@ -1,4 +1,12 @@
 {
+  "permissions": {
+    "allow": [
+      "Bash(python scripts/abilities/connect_iphone/send_to_iphone.py *)",
+      "Bash(python scripts/abilities/web-browser/start_browser.py)",
+      "Bash(playwright-cli *)",
+      "Bash(cc-connect timer *)"
+    ]
+  },
   "hooks": {
     "UserPromptSubmit": [
       {

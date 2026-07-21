@@ -2,7 +2,7 @@
 
 这是我持续完善长期 AI Agent Suzu 的源码公开项目，目标是让 Agent 在长期运行中保持记忆和行为的连续性。
 
-当前发布已经完成并验证的记忆系统、时间感知 Hook、微信消息分条模块、本地会话查看器和 iPhone 快捷指令连接。运行核心为 Claude Code，也可以通过 cc-connect 接入微信。
+当前发布已经完成并验证的记忆系统、时间感知 Hook、微信消息分条、两种本地查看器、iPhone 快捷指令连接、主动联系和登录态网页浏览。运行核心为 Claude Code，也可以通过 cc-connect 接入微信。
 
 ## 当前可用功能
 
@@ -16,9 +16,12 @@
 - 从事件卡片、历史原话或日期汇总中只选择一个小而准确的回忆片段；
 - 支持“上周日做了什么”等相对日期查询，没有可靠命中时不强行注入。
 - 提供只在本机运行的会话查看器，阅读用户、助手、系统、上下文注入、思考和工具记录；
+- 提供记忆查看器，可直接搜索 `history.jsonl`、`events.jsonl`，也能用真实召回链路预览最终注入内容；
 - 在每次用户提示前注入电脑当前本地时间，让 Agent 直接感知日期、星期、分钟以及当天的法定节假日或私人纪念日；
 - 把长回复拆成微信短消息，并在个人微信单 token 发送额度不足时保存队列、提醒刷新和可靠续发；
-- 通过 SMTP、IMAP 和 cc-connect Webhook，让 Agent 请求 iPhone 快捷指令执行操作，并接收手机返回的自然提示词。
+- 通过 SMTP、IMAP 和 cc-connect Webhook，让 Agent 请求 iPhone 快捷指令执行操作，并接收手机返回的文字或图片；
+- 使用 cc-connect Timer 实现一条可持续的主动联系链，以及针对具体未完成事情的一次性回访；
+- 通过微软官方 `playwright-cli` Skill 连接保留登录状态的专用 Chrome，让 Agent 操作登录网站和动态网页。
 
 各功能保持为独立模块。记忆位于 `memory/`，自动注入类功能位于 `scripts/hooks/`，Agent 可调用能力位于 `scripts/abilities/`，手动使用的本地工具位于 `tools/`，不需要把整套系统作为一个不可拆分脚本使用。
 
@@ -42,6 +45,7 @@
 - 时间感知需要项目级 `UserPromptSubmit` Hook；
 - 微信分条目前只验证 Windows，需要 Python 3.10 或更高版本、cc-connect 1.3.0 或更高版本，以及当前环境可用的 `MessageDisplay` Hook；
 - iPhone 快捷指令连接目前只验证 Windows，需要 Python 3.10 或更高版本、支持 SMTP/IMAP 的邮箱和已启用 Webhook 的 cc-connect；
+- 登录态网页浏览目前只验证 Windows，需要 Google Chrome、Node.js 和 npm；
 - Embedding 可选，不配置时使用本地 BM25。
 
 本模块没有 npm 运行依赖，不需要执行 `npm install`。
@@ -139,6 +143,12 @@ Hook 失败时会安静跳过，不会阻断正常聊天。
 
 - [会话查看器安装与使用](tools/session-viewer/README.md)
 
+## 记忆查看器
+
+记忆查看器一边提供不会调用 API 的纯文本搜索，一边直接复用当前 RAG 的时间解析、BM25、可选向量和注入阈值，方便检查一段话最终会让 Agent 想起什么：
+
+- [记忆查看器安装与使用](tools/memory-viewer/README.md)
+
 ## 微信消息分条
 
 微信分条使用 Claude Code `MessageDisplay` 发送第一段，后台 Worker 续发其余段落；新微信 token 与 cc-connect `message.received` Hook 共同处理发送额度刷新。安装时需要分别合并 Claude Code 和 cc-connect 的 Hook 配置：
@@ -150,7 +160,19 @@ Hook 失败时会安静跳过，不会阻断正常聊天。
 这个模块通过邮件让 Agent 主动请求 iPhone 快捷指令执行操作，也可以监听手机反馈邮件，再通过 cc-connect Webhook 把正文送回指定 Agent 会话。发送端和接收端共用一份本地配置：
 
 - [iPhone 快捷指令连接安装与使用](scripts/abilities/connect_iphone/README.md)
-- [供 Agent 阅读的操作规范](scripts/abilities/connect_iphone/AGENT_USAGE.md)
+- [供 Agent 使用的 iphone-bridge Skill](.claude/skills/iphone-bridge/SKILL.md)
+
+## 主动联系与临时回访
+
+`proactive-contact` Skill 让 Agent 在 cc-connect Timer 触发时自行判断是否联系用户，并保证链式主动关心只续接一条；普通对话里出现稍后会有结果的具体事情时，也可以建立一次性回访：
+
+- [proactive-contact Skill](.claude/skills/proactive-contact/SKILL.md)
+
+## 登录态网页浏览
+
+网页浏览模块启动一个只监听本机调试端口、长期保留登录状态的专用 Chrome，再由微软官方 `playwright-cli` Skill 连接。它适合登录网站、动态页面和普通网页读取无法处理的交互：
+
+- [登录态网页浏览安装与使用](scripts/abilities/web-browser/README.md)
 
 ## 开发状态
 
@@ -161,8 +183,9 @@ Hook 失败时会安静跳过，不会阻断正常聊天。
 - [x] 时间感知 Hook
 - [x] 微信消息分条与额度续发
 - [x] iPhone 快捷指令双向连接
-- [ ] 主动关心和定时任务
-- [ ] 视觉、画图、摄像头与网页自动化适配器
+- [x] 主动关心和一次性回访
+- [x] 登录态网页自动化适配器
+- [ ] 视觉、画图与摄像头适配器
 
 ## 许可
 

@@ -1,7 +1,9 @@
 import json
 import sys
 import unittest
+from email.message import EmailMessage
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 
@@ -96,6 +98,38 @@ class ConnectIphoneTests(unittest.TestCase):
         self.assertEqual(captured["body"]["prompt"], "诚也现在在QQ")
         self.assertNotIn("payload", captured["body"])
         self.assertEqual(captured["timeout"], 20)
+
+    def test_image_attachment_is_saved_to_private_runtime_directory(self):
+        message = EmailMessage()
+        message.set_content("手机截图")
+        message.add_attachment(
+            b"\x89PNG\r\n\x1a\nfixture",
+            maintype="image",
+            subtype="png",
+            filename="../screen.png",
+        )
+
+        with TemporaryDirectory() as directory:
+            self.config["imageAttachments"] = {
+                "directory": directory,
+                "maxBytesPerImage": 1024,
+                "maxImagesPerMessage": 2,
+                "allowedTypes": ["image/png"],
+            }
+            paths, warnings = receive_from_iphone.extract_image_attachments(
+                message,
+                123,
+                self.config,
+            )
+
+            self.assertEqual(warnings, [])
+            self.assertEqual(len(paths), 1)
+            self.assertTrue(paths[0].is_file())
+            self.assertEqual(paths[0].parent.name, "123")
+            self.assertTrue(paths[0].name.endswith("-screen.png"))
+            prompt = receive_from_iphone.image_prompt(paths, warnings)
+            self.assertIn(str(paths[0]), prompt)
+            self.assertIn("识图能力", prompt)
 
 
 if __name__ == "__main__":

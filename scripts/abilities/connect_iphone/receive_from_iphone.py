@@ -4,6 +4,7 @@ import argparse
 import html
 import imaplib
 import json
+import mimetypes
 import os
 import re
 import select
@@ -23,6 +24,25 @@ from typing import Any
 SCRIPT_DIR = Path(__file__).resolve().parent
 DEFAULT_CONFIG_PATH = SCRIPT_DIR / "feedback_config.json"
 DEFAULT_STATE_PATH = SCRIPT_DIR / "feedback_state.json"
+DEFAULT_INBOX_PATH = SCRIPT_DIR / "runtime" / "inbox"
+
+DEFAULT_ALLOWED_IMAGE_TYPES = {
+    "image/gif",
+    "image/heic",
+    "image/heif",
+    "image/jpeg",
+    "image/png",
+    "image/webp",
+}
+DEFAULT_ALLOWED_IMAGE_EXTENSIONS = {
+    ".gif",
+    ".heic",
+    ".heif",
+    ".jpeg",
+    ".jpg",
+    ".png",
+    ".webp",
+}
 
 
 def configure_console() -> None:
@@ -255,6 +275,134 @@ def extract_body(message) -> str:
     return value.strip()
 
 
+def decode_filename(value: Any) -> str:
+    if not value:
+        return ""
+    try:
+        return str(make_header(decode_header(str(value)))).strip()
+    except (LookupError, UnicodeError):
+        return str(value).strip()
+
+
+def safe_filename(value: str, fallback: str) -> str:
+    name = Path(value.replace("\\", "/")).name.strip() if value else ""
+    name = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", name)
+    name = name.rstrip(". ")
+    return name or fallback
+
+
+def image_settings(config: dict[str, Any]) -> tuple[Path, int, int, set[str]]:
+    raw = config.get("imageAttachments", {})
+    if raw is None:
+        raw = {}
+    if not isinstance(raw, dict):
+        raise RuntimeError("配置项 imageAttachments 必须是对象")
+
+    configured_dir = str(raw.get("directory") or "").strip()
+    inbox_path = Path(configured_dir).expanduser() if configured_dir else DEFAULT_INBOX_PATH
+    if not inbox_path.is_absolute():
+        inbox_path = SCRIPT_DIR / inbox_path
+    inbox_path = inbox_path.resolve()
+
+    try:
+        max_bytes = int(raw.get("maxBytesPerImage", 20 * 1024 * 1024))
+        max_images = int(raw.get("maxImagesPerMessage", 5))
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError("图片附件大小和数量限制必须是整数") from exc
+    if max_bytes <= 0 or max_images <= 0:
+        raise RuntimeError("图片附件大小和数量限制必须大于 0")
+
+    configured_types = raw.get("allowedTypes")
+    if configured_types is None:
+        allowed_types = set(DEFAULT_ALLOWED_IMAGE_TYPES)
+    elif isinstance(configured_types, list):
+        allowed_types = {
+            str(value).strip().lower()
+            for value in configured_types
+            if str(value).strip()
+        }
+        if not allowed_types:
+            raise RuntimeError("imageAttachments.allowedTypes 不能为空列表")
+    else:
+        raise RuntimeError("imageAttachments.allowedTypes 必须是数组")
+
+    return inbox_path, max_bytes, max_images, allowed_types
+
+
+def inferred_extension(content_type: str) -> str:
+    if content_type == "image/jpeg":
+        return ".jpg"
+    value = mimetypes.guess_extension(content_type, strict=False) or ""
+    return value if value in DEFAULT_ALLOWED_IMAGE_EXTENSIONS else ".img"
+
+
+def extract_image_attachments(
+    message,
+    uid: int,
+    config: dict[str, Any],
+) -> tuple[list[Path], list[str]]:
+    inbox_path, max_bytes, max_images, allowed_types = image_settings(config)
+    saved: list[Path] = []
+    warnings: list[str] = []
+    parts = message.walk() if message.is_multipart() else [message]
+
+    for part_index, part in enumerate(parts, start=1):
+        if part.is_multipart():
+            continue
+
+        content_type = part.get_content_type().lower()
+        original_name = decode_filename(part.get_filename())
+        extension = Path(original_name).suffix.lower()
+        is_image = content_type in allowed_types or (
+            content_type == "application/octet-stream"
+            and extension in DEFAULT_ALLOWED_IMAGE_EXTENSIONS
+        )
+        if not is_image:
+            continue
+
+        if len(saved) >= max_images:
+            warnings.append(f"图片附件超过 {max_images} 张，其余图片未保存")
+            break
+
+        raw = part.get_payload(decode=True) or b""
+        if not raw:
+            warnings.append(f"第 {part_index} 个图片附件内容为空")
+            continue
+        if len(raw) > max_bytes:
+            warnings.append(
+                f"图片附件“{original_name or part_index}”超过 "
+                f"{max_bytes // (1024 * 1024)} MB，未保存"
+            )
+            continue
+
+        fallback = f"image-{part_index}{inferred_extension(content_type)}"
+        filename = safe_filename(original_name, fallback)
+        message_dir = inbox_path / str(uid)
+        message_dir.mkdir(parents=True, exist_ok=True)
+
+        # MIME part 序号让文件名保持唯一，同时保证同一 UID 重试时覆盖原文件，
+        # 不会因为 Webhook 暂时失败而产生越来越多的图片副本。
+        target = message_dir / f"{part_index:02d}-{filename}"
+        temporary = target.with_suffix(target.suffix + ".tmp")
+        temporary.write_bytes(raw)
+        os.replace(temporary, target)
+        saved.append(target.resolve())
+
+    return saved, warnings
+
+
+def image_prompt(image_paths: list[Path], warnings: list[str]) -> str:
+    lines: list[str] = []
+    if image_paths:
+        lines.append(f"手机通过邮件返回了 {len(image_paths)} 张图片：")
+        lines.extend(f"- {path}" for path in image_paths)
+        lines.append("请使用你的识图能力查看图片后，再结合当前对话正常回应。")
+    if warnings:
+        lines.append("附件处理提示：")
+        lines.extend(f"- {warning}" for warning in warnings)
+    return "\n".join(lines).strip()
+
+
 def received_time(message) -> str:
     raw = message.get("Date")
     if raw:
@@ -413,8 +561,9 @@ def process_new_messages(
                 continue
 
             content = extract_body(message)
-            if not content:
-                print(f"忽略 UID={uid}：正文为空")
+            image_paths, image_warnings = extract_image_attachments(message, uid, config)
+            if not content and not image_paths and not image_warnings:
+                print(f"忽略 UID={uid}：正文和受支持的图片附件均为空")
                 last_uid = uid
                 save_state(state_path, last_uid)
                 continue
@@ -429,8 +578,14 @@ def process_new_messages(
                     "subject": subject,
                     "from": sender,
                     "receivedAt": timestamp,
+                    "imageCount": str(len(image_paths)),
+                    "imagePaths": "\n".join(str(path) for path in image_paths),
+                    "attachments": image_prompt(image_paths, image_warnings),
                 },
             )
+            attachments_prompt = image_prompt(image_paths, image_warnings)
+            if attachments_prompt and "{{attachments}}" not in template:
+                prompt = "\n\n".join(value for value in (prompt, attachments_prompt) if value)
             if delivery_delay > 0:
                 print(
                     f"UID={uid}：等待 {delivery_delay:g} 秒后投递，"
@@ -467,6 +622,9 @@ def preview(config: dict[str, Any], subject: str, content: str) -> int:
             "subject": subject.strip(),
             "from": "preview@example.com",
             "receivedAt": datetime.now().astimezone().isoformat(timespec="seconds"),
+            "imageCount": "0",
+            "imagePaths": "",
+            "attachments": "",
         },
     )
     print(prompt)

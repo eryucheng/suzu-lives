@@ -22,13 +22,28 @@ integrations/claude-code/settings.example.json
 - RAG 召回 `UserPromptSubmit` Hook；
 - 微信分条 `MessageDisplay` Hook。
 
+它还为以下 Agent 主动能力提供命令权限：
+
+- iPhone 快捷指令请求；
+- 登录态网页浏览；
+- cc-connect 主动关心与临时回访 Timer。
+
 如果 `.claude/settings.json` 已经存在，不要直接覆盖文件。把示例中的两个 `UserPromptSubmit` 条目和一个 `MessageDisplay` 条目合并到现有 `hooks` 对象中。
 
 所有脚本路径都使用 `${CLAUDE_PROJECT_DIR}`，仓库移动到其他用户或其他目录后不需要修改。
 
 只安装单个模块时，继续使用对应模块目录中的说明和示例即可。
 
-压缩器和会话查看器不属于 Hook：压缩器按需手动或定时运行，会话查看器需要查看记录时再启动，因此不会出现在这份 Claude Code 配置中。
+压缩器、两种查看器和网页浏览器启动器不属于 Hook：它们按需运行，因此不会出现在 `hooks` 对象中。
+
+## Claude Code Skills
+
+仓库自带两个项目级 Skill：
+
+- `.claude/skills/iphone-bridge`：调用已经配置的手机能力，缺失时指导新增快捷指令；
+- `.claude/skills/proactive-contact`：管理链式主动关心和一次性临时回访。
+
+如果只把部分模块复制进已有 Agent 项目，同时复制对应 Skill 目录。网页浏览使用微软官方 `playwright-cli` Skill，由 `scripts/abilities/web-browser/setup.cmd` 安装，不在本仓库重复保存其源码。
 
 ## cc-connect
 
