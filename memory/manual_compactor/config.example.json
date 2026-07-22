@@ -7,6 +7,8 @@
   "userName": "用户的名字",
   "promptFile": "prompt.md",
   "boundaryContextMessages": 20,
+  "structuredOutput": "auto",
+  "maxLlmAttempts": 2,
   "rules": {
     "minimumHoursSinceLastCompaction": 24,
     "recentRawHoursToKeep": 24,

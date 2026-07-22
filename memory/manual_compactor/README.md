@@ -22,6 +22,8 @@
 - `memoryOwner` 是摘要中“我”的身份；
 - `userName` 是摘要中对方的称呼。
 
+`structuredOutput` 默认是 `auto`：优先调用 Claude Code 的 `--json-schema`，如果当前 CLI 或 cc-switch 后面的模型明确不支持，再自动退回提示词约束的普通 JSON。`required` 表示不允许回退，`off` 表示始终使用普通 JSON。`maxLlmAttempts` 默认是 `2`，只在外层结果或摘要结果无法解析、无法通过结构校验时重试；认证、网络和普通命令错误不会盲目重试。
+
 相对路径以本目录为基准。配置选择顺序为：`--config`、环境变量 `MEMORY_COMPACTOR_CONFIG`、`config.local.json`、`config.example.json`。
 
 ## 两条处理规则
@@ -68,16 +70,19 @@ node .\memory\manual_compactor\compact-jsonl.mjs
 默认命令等价于：
 
 ```text
-claude -p --bare --tools "" --max-turns 1 --no-session-persistence --output-format json
+claude -p --bare --tools "" --max-turns 2 --no-session-persistence --output-format json --json-schema "..."
 ```
 
-它不 resume 主会话、不保留自己的会话、不能调用工具。LLM 只生成严格 JSON 中的 `summary` 和 `events`；UUID、父链、compact 包装、校验和写入都由代码完成。默认从 `~/.claude/settings.json` 继承 `env`，`llmEnv` 可以覆盖继承值。
+它不 resume 主会话、不保留自己的会话、不能调用外部工具。Schema 模式允许两轮，是因为 Claude Code 需要一次内部结构化输出提交；普通 JSON 回退模式仍只允许一轮。支持时由 JSON Schema 约束 `summary` 和 `events`，随后代码仍会检查字段、日期、状态与来源编号；UUID、父链、compact 包装和写入都由代码完成。默认从 `~/.claude/settings.json` 继承 `env`，`llmEnv` 可以覆盖继承值。
+
+如果模型返回了残缺 JSON 或其他无法解析的结果，压缩器不会写主会话和记忆库。原始失败输出会包装成有效 JSON，保存在 `work/failed-output-时间-attempt-N.json`，然后按配置重试；最终仍失败时，错误信息会直接给出这些文件的位置。
 
 ## 运行产物
 
 - `backups/`：每次正式写入前的完整主 JSONL 备份；
 - `work/latest-summary.md`：最近一次摘要正文，供人工检查；
 - `work/last-run.json`：最近一次执行或跳过报告；
+- `work/failed-output-*.json`：一次性 LLM 失败时的错误和原始输出，只在失败时产生；
 - `../rag/history.jsonl`：退出短期范围的标准化双方原文；
 - `../rag/events.jsonl`：有真实来源和事件日期的事件记忆；
 - `../rag/embeddings.jsonl`：可删除重建的向量索引。

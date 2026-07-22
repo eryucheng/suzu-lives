@@ -30,6 +30,46 @@ export const DEFAULT_RULES = Object.freeze({
   recentRawTokensToKeep: 5_000,
 });
 
+export const MEMORY_OUTPUT_SCHEMA = Object.freeze({
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    summary: {
+      type: "string",
+      description: "更新后的连续第一人称记忆摘要，不能为空。",
+    },
+    events: {
+      type: "array",
+      description: "只包含本批真实对话中值得长期检索的事件；没有时返回空数组。",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          title: { type: "string" },
+          text: { type: "string" },
+          event_date: {
+            type: "string",
+            description: "有效的 YYYY-MM-DD，无法可靠确定时为 unknown。",
+          },
+          status: {
+            type: "string",
+            enum: ["ongoing", "resolved", "unknown"],
+          },
+          source_refs: {
+            type: "array",
+            items: { type: "string" },
+            description: "至少一个 M0001 形式的本批真实对话编号。",
+          },
+        },
+        required: ["title", "text", "event_date", "status", "source_refs"],
+      },
+    },
+  },
+  required: ["summary", "events"],
+});
+
+const STRUCTURED_OUTPUT_MODES = new Set(["auto", "required", "off"]);
+
 function normalizeRules(value = {}) {
   const source = value && typeof value === "object" ? value : {};
   const rules = {};
@@ -88,6 +128,14 @@ function readConfig(transcriptOverride = "", configOverride = "") {
   config.claudeCommand = config.claudeCommand || "claude";
   config.claudeArgs = Array.isArray(config.claudeArgs) ? config.claudeArgs.map(String) : [];
   config.llmEnv = config.llmEnv && typeof config.llmEnv === "object" ? config.llmEnv : {};
+  config.structuredOutput = String(config.structuredOutput || "auto").trim().toLowerCase();
+  if (!STRUCTURED_OUTPUT_MODES.has(config.structuredOutput)) {
+    throw new Error("config.json 中 structuredOutput 只能是 auto、required 或 off");
+  }
+  config.maxLlmAttempts = Number(config.maxLlmAttempts ?? 2);
+  if (!Number.isInteger(config.maxLlmAttempts) || config.maxLlmAttempts < 1 || config.maxLlmAttempts > 3) {
+    throw new Error("config.json 中 maxLlmAttempts 必须是1到3之间的整数");
+  }
   config.rules = normalizeRules(config.rules);
   config.boundaryContextMessages = Number(config.boundaryContextMessages ?? 20);
   if (!Number.isInteger(config.boundaryContextMessages) || config.boundaryContextMessages < 0) {
@@ -414,12 +462,16 @@ function stripJsonCodeFence(value) {
 }
 
 export function parseGeneratedMemoryResult(value) {
-  const text = stripJsonCodeFence(value);
   let parsed;
-  try {
-    parsed = JSON.parse(text);
-  } catch (error) {
-    throw new Error(`一次性LLM的 result 不是有效JSON：${error.message}`);
+  if (typeof value === "string") {
+    const text = stripJsonCodeFence(value);
+    try {
+      parsed = JSON.parse(text);
+    } catch (error) {
+      throw new Error(`一次性LLM的 result 不是有效JSON：${error.message}`);
+    }
+  } else {
+    parsed = value;
   }
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
     throw new Error("一次性LLM的 result 必须是JSON对象");
@@ -475,7 +527,53 @@ export function parseGeneratedMemoryResult(value) {
   };
 }
 
-function runOneShotLlm(config, input, prompt) {
+export function isStructuredOutputCompatibilityError(value) {
+  const text = String(value?.message || value || "");
+  const mentionsStructuredOutput = /(?:--json-schema|json[_ -]?schema|structured[_ -]?output|output_config)/iu.test(text);
+  const rejectsFeature = /(?:unknown|unrecognized|unsupported|not supported|does not support|not available|invalid (?:field|parameter|request)|unexpected|extra inputs?|not permitted|not allowed)/iu.test(text);
+  return mentionsStructuredOutput && rejectsFeature;
+}
+
+export function isStructuredOutputTurnLimitError(value) {
+  const text = String(value?.message || value || "");
+  return /(?:error_max_turns|maximum number of turns|max[_ -]?turns)/iu.test(text)
+    && /tool_use/iu.test(text);
+}
+
+function serializableOutput(value) {
+  if (typeof value === "string") return value;
+  if (value === undefined) return "";
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+}
+
+function attachLlmFailure(error, kind, output) {
+  error.llmFailureKind = kind;
+  error.llmOutput = serializableOutput(output);
+  return error;
+}
+
+function saveFailedLlmOutput(error, attempt, outputMode) {
+  fs.mkdirSync(WORK_DIR, { recursive: true });
+  const now = new Date();
+  const timestamp = now.toISOString().replace(/[:.]/gu, "-");
+  const outputPath = path.join(WORK_DIR, `failed-output-${timestamp}-attempt-${attempt}.json`);
+  const record = {
+    failedAt: now.toISOString(),
+    attempt,
+    outputMode,
+    failureKind: error.llmFailureKind || "unknown",
+    error: error.message,
+    rawOutput: serializableOutput(error.llmOutput),
+  };
+  fs.writeFileSync(outputPath, `${JSON.stringify(record, null, 2)}\n`, "utf8");
+  return outputPath;
+}
+
+function runOneShotLlmAttempt(config, input, prompt, useSchema) {
   const inherited = config.inheritClaudeSettingsEnv === false ? {} : loadInheritedClaudeEnv();
   const env = { ...process.env, ...inherited, ...config.llmEnv };
   if (!env.ANTHROPIC_API_KEY && env.ANTHROPIC_AUTH_TOKEN) env.ANTHROPIC_API_KEY = env.ANTHROPIC_AUTH_TOKEN;
@@ -485,14 +583,14 @@ function runOneShotLlm(config, input, prompt) {
     "-p",
     "--bare",
     "--tools", "",
-    "--max-turns", "1",
+    "--max-turns", useSchema ? "2" : "1",
     "--no-session-persistence",
     "--output-format", "json",
     "--system-prompt", prompt,
   ];
+  if (useSchema) cliArgs.push("--json-schema", JSON.stringify(MEMORY_OUTPUT_SCHEMA));
   if (config.model) cliArgs.push("--model", String(config.model));
 
-  const startedAt = Date.now();
   const result = spawnSync(config.claudeCommand, cliArgs, {
     cwd: SCRIPT_DIR,
     env,
@@ -502,20 +600,88 @@ function runOneShotLlm(config, input, prompt) {
     shell: false,
     windowsHide: true,
   });
-  if (result.error) throw new Error(`无法启动一次性LLM：${result.error.message}`);
-  if (result.status !== 0) throw new Error(`一次性LLM失败（${result.status}）：\n${result.stderr || result.stdout}`);
+  if (result.error) {
+    throw attachLlmFailure(new Error(`无法启动一次性LLM：${result.error.message}`), "process", result.stderr || result.stdout);
+  }
+  if (result.status !== 0) {
+    throw attachLlmFailure(
+      new Error(`一次性LLM失败（${result.status}）：\n${result.stderr || result.stdout}`),
+      "process",
+      result.stderr || result.stdout,
+    );
+  }
 
   let parsed;
   try {
     parsed = JSON.parse(result.stdout);
   } catch (error) {
-    throw new Error(`一次性LLM没有返回有效JSON：${error.message}\n${result.stdout.slice(0, 2000)}`);
+    throw attachLlmFailure(
+      new Error(`一次性LLM没有返回有效JSON：${error.message}\n${result.stdout.slice(0, 2000)}`),
+      "invalid-wrapper",
+      result.stdout,
+    );
   }
-  if (typeof parsed.result !== "string" || !parsed.result.trim()) {
-    throw new Error("一次性LLM没有返回有效的 result 文本");
+  const candidate = useSchema && parsed.structured_output !== null && parsed.structured_output !== undefined
+    ? parsed.structured_output
+    : parsed.result;
+  if ((typeof candidate !== "string" && (!candidate || typeof candidate !== "object"))
+    || (typeof candidate === "string" && !candidate.trim())) {
+    throw attachLlmFailure(
+      new Error("一次性LLM没有返回有效的 structured_output 或 result"),
+      "invalid-wrapper",
+      parsed,
+    );
   }
-  const memory = parseGeneratedMemoryResult(parsed.result);
-  return { ...memory, durationMs: Date.now() - startedAt };
+  try {
+    return parseGeneratedMemoryResult(candidate);
+  } catch (error) {
+    throw attachLlmFailure(error, "invalid-result", candidate);
+  }
+}
+
+function runOneShotLlm(config, input, prompt) {
+  const startedAt = Date.now();
+  let useSchema = config.structuredOutput !== "off";
+  let schemaFallback = false;
+  let retryableFailures = 0;
+  let processAttempts = 0;
+  const failedOutputPaths = [];
+
+  while (true) {
+    processAttempts += 1;
+    const outputMode = useSchema ? "json-schema" : "prompt-json";
+    try {
+      const memory = runOneShotLlmAttempt(config, input, prompt, useSchema);
+      return {
+        ...memory,
+        durationMs: Date.now() - startedAt,
+        llmAttempts: processAttempts,
+        llmOutputMode: outputMode,
+        llmSchemaFallback: schemaFallback,
+      };
+    } catch (error) {
+      const failurePath = saveFailedLlmOutput(error, processAttempts, outputMode);
+      failedOutputPaths.push(failurePath);
+      if (
+        useSchema
+        && config.structuredOutput === "auto"
+        && (
+          isStructuredOutputCompatibilityError(error)
+          || isStructuredOutputTurnLimitError(error)
+        )
+      ) {
+        useSchema = false;
+        schemaFallback = true;
+        continue;
+      }
+
+      const retryable = ["invalid-wrapper", "invalid-result"].includes(error.llmFailureKind);
+      retryableFailures += retryable ? 1 : 0;
+      if (retryable && retryableFailures < config.maxLlmAttempts) continue;
+
+      throw new Error(`${error.message}\n失败输出已保存：${failedOutputPaths.join("、")}`);
+    }
+  }
 }
 
 function preservedRecords(context, headUuid) {
@@ -718,6 +884,9 @@ export async function main(argv = process.argv.slice(2)) {
   let summaryBody;
   let generatedEvents = [];
   let durationMs = 0;
+  let llmAttempts = 0;
+  let llmOutputMode = "summary-file";
+  let llmSchemaFallback = false;
   if (args.has("summary-file")) {
     const summaryPath = resolveLocal(args.get("summary-file"));
     summaryBody = fs.readFileSync(summaryPath, "utf8").trim();
@@ -728,6 +897,9 @@ export async function main(argv = process.argv.slice(2)) {
     summaryBody = result.summary;
     generatedEvents = result.events;
     durationMs = result.durationMs;
+    llmAttempts = result.llmAttempts;
+    llmOutputMode = result.llmOutputMode;
+    llmSchemaFallback = result.llmSchemaFallback;
   }
   const built = buildCompactRecords(entries, context, plan, config, summaryBody, now, durationMs);
   const stagedRag = prepareHistoryAppend(archivedMessages);
@@ -802,6 +974,9 @@ export async function main(argv = process.argv.slice(2)) {
     boundaryUuid: built.boundary.uuid,
     summaryUuid: built.summary.uuid,
     summaryChars: built.wrappedSummary.length,
+    llmAttempts,
+    llmOutputMode,
+    llmSchemaFallback,
     summaryCopyPath: summaryCopyWarning ? null : summaryCopyPath,
     summaryCopyWarning: summaryCopyWarning || undefined,
     ragMessagesAdded: rag.added,
