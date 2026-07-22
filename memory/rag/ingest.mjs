@@ -6,6 +6,7 @@ import { loadRagConfig } from "./retrieve.mjs";
 const AUTOMATION_PROMPT_PREFIXES = [
   "链式关心。当前时间",
   "每日回顾。",
+  "根据时间和前面聊的内容判断",
   "Base directory for this skill:",
 ];
 
@@ -14,29 +15,33 @@ function contentBlocks(content) {
   return Array.isArray(content) ? content : [];
 }
 
-function cleanText(value) {
+export function cleanText(value) {
   return String(value || "")
     .replace(/<system-reminder>[\s\S]*?<\/system-reminder>/giu, "")
     .replace(/<local-command-(?:caveat|stdout)>[\s\S]*?<\/local-command-(?:caveat|stdout)>/giu, "")
+    .replace(/\n*Context:\s*```(?:json)?[\s\S]*?```\s*/giu, "\n")
     .replace(/\r\n/g, "\n")
     .split("\n")
-    .filter((line) => !/^\s*(?:课|course|count|test)\s*$/iu.test(line))
+    .filter((line) => !/^\s*(?:课|course|count|test|发自我的\s*iPhone)\s*$/iu.test(line))
     .map((line) => line.replace(/[ \t]+$/g, ""))
     .join("\n")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 }
 
-function isOperationalText(value) {
+export function isOperationalText(value) {
   const text = String(value || "").trim();
   return !text
     || text === "NO_REPLY"
+    || /^API Error:\s*\d+/iu.test(text)
+    || /^\d{3}\s+(?:Insufficient Balance|Unauthorized|Forbidden|Too Many Requests)\b/iu.test(text)
+    || /^<task-notification>[\s\S]*<\/task-notification>$/iu.test(text)
     || text.includes("<command-name>")
     || /^<system-reminder>[\s\S]*<\/system-reminder>$/iu.test(text)
     || /^<local-command-(?:caveat|stdout)>/iu.test(text);
 }
 
-function isAutomationPrompt(value) {
+export function isAutomationPrompt(value) {
   const text = String(value || "").trim();
   return AUTOMATION_PROMPT_PREFIXES.some((prefix) => text.startsWith(prefix));
 }
@@ -59,7 +64,7 @@ export function visibleUserText(entry) {
   return isOperationalText(text) ? "" : text;
 }
 
-function visibleAssistantTexts(entry) {
+export function visibleAssistantTexts(entry) {
   const record = entry?.record || {};
   if (
     record.type !== "assistant"
