@@ -1,0 +1,19 @@
+{
+  "engine_config": "../image-generation/config.local.json",
+  "size_by_shot": {
+    "rear": "1536x1024",
+    "selfie": "1024x1536",
+    "mirror": "1024x1536"
+  },
+  "references": {
+    "manifest": "visual-references/manifest.json",
+    "max_images": 8
+  },
+  "output": {
+    "directory": "output/phone-camera"
+  },
+  "prompt": {
+    "prefix": "",
+    "suffix": ""
+  }
+}

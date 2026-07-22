@@ -2,6 +2,9 @@
   "permissions": {
     "allow": [
       "Bash(python scripts/abilities/connect_iphone/send_to_iphone.py *)",
+      "Bash(python scripts/abilities/phone-camera/take_photo.py *)",
+      "Bash(python scripts/abilities/phone-camera/manage_references.py *)",
+      "Bash(python scripts/abilities/image-generation/generate_image.py *)",
       "Bash(python scripts/abilities/web-browser/start_browser.py)",
       "Bash(playwright-cli *)",
       "Bash(cc-connect timer *)"

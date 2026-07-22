@@ -4,6 +4,15 @@
 !.env.example
 memory/manual_compactor/config.local.json
 memory/rag/config.local.json
+scripts/abilities/phone-camera/config.local.json
+scripts/abilities/image-generation/config.local.json
+scripts/abilities/image-generation/workflows/registry.local.json
+visual-references/manifest.json
+visual-references/characters/
+visual-references/places/
+visual-references/objects/
+visual-references/styles/
+visual-references/work/
 .claude/settings.local.json
 .playwright/
 .playwright-cli/
@@ -18,6 +27,7 @@ scripts/abilities/web-browser/runtime/
 scripts/abilities/connect_iphone/runtime/
 
 # Runtime output
+output/
 *.log
 *.lock
 node_modules/
