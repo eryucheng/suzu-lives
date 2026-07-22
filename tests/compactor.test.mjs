@@ -2,9 +2,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  MEMORY_OUTPUT_SCHEMA,
   assignMemoryRefs,
   buildLlmInput,
   chooseCompactionPlan,
+  isStructuredOutputCompatibilityError,
+  isStructuredOutputTurnLimitError,
   parseGeneratedMemoryResult,
   parseJsonlText,
 } from "../memory/manual_compactor/compact-jsonl.mjs";
@@ -120,4 +123,37 @@ test("一次性 LLM 结果允许完整 JSON 代码围栏并严格校验结构", 
     () => parseGeneratedMemoryResult('{"summary":"有效摘要","events":[],"extra":true}'),
     /只能包含 summary 和 events/u,
   );
+});
+
+test("一次性 LLM 结果可以直接接收 --json-schema 返回的对象", () => {
+  const result = parseGeneratedMemoryResult({
+    summary: "我记得这件事。",
+    events: [],
+  });
+  assert.equal(result.summary, "我记得这件事。");
+  assert.deepEqual(result.events, []);
+  assert.equal(MEMORY_OUTPUT_SCHEMA.additionalProperties, false);
+  assert.deepEqual(MEMORY_OUTPUT_SCHEMA.required, ["summary", "events"]);
+});
+
+test("只把结构化输出兼容错误识别为 Schema 回退条件", () => {
+  assert.equal(isStructuredOutputCompatibilityError("unknown option '--json-schema'"), true);
+  assert.equal(isStructuredOutputCompatibilityError("output_config is not supported by this provider"), true);
+  assert.equal(
+    isStructuredOutputCompatibilityError("一次性LLM的 result 不是有效JSON：Expected ','"),
+    false,
+  );
+  assert.equal(isStructuredOutputCompatibilityError("401 unauthorized"), false);
+});
+
+test("识别 Schema 内部工具提交被 max-turns 截断的错误", () => {
+  const actualError = JSON.stringify({
+    subtype: "error_max_turns",
+    stop_reason: "tool_use",
+    terminal_reason: "max_turns",
+    errors: ["Reached maximum number of turns (1)"],
+  });
+  assert.equal(isStructuredOutputTurnLimitError(actualError), true);
+  assert.equal(isStructuredOutputTurnLimitError("Reached maximum number of turns (1)"), false);
+  assert.equal(isStructuredOutputTurnLimitError('{"stop_reason":"tool_use"}'), false);
 });
