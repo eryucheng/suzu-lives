@@ -9,6 +9,19 @@ const pairs = [
   ["memory/manual_compactor/config.example.json", "memory/manual_compactor/config.local.json"],
   ["memory/rag/config.example.json", "memory/rag/config.local.json"],
   [
+    "scripts/abilities/phone-camera/config.example.json",
+    "scripts/abilities/phone-camera/config.local.json",
+  ],
+  [
+    "scripts/abilities/image-generation/config.example.json",
+    "scripts/abilities/image-generation/config.local.json",
+  ],
+  [
+    "scripts/abilities/image-generation/workflows/registry.example.json",
+    "scripts/abilities/image-generation/workflows/registry.local.json",
+  ],
+  ["visual-references/manifest.example.json", "visual-references/manifest.json"],
+  [
     "scripts/abilities/connect_iphone/feedback_config.example.json",
     "scripts/abilities/connect_iphone/feedback_config.json",
   ],

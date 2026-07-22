@@ -25,6 +25,9 @@ integrations/claude-code/settings.example.json
 它还为以下 Agent 主动能力提供命令权限：
 
 - iPhone 快捷指令请求；
+- 手机拍照式生图；
+- 云端 API 与本地 ComfyUI 的统一生图入口；
+- 视觉参考库的批量维护；
 - 登录态网页浏览；
 - cc-connect 主动关心与临时回访 Timer。
 
@@ -38,9 +41,12 @@ integrations/claude-code/settings.example.json
 
 ## Claude Code Skills
 
-仓库自带两个项目级 Skill：
+仓库自带五个项目级 Skill：
 
 - `.claude/skills/iphone-bridge`：调用已经配置的手机能力，缺失时指导新增快捷指令；
+- `.claude/skills/phone-camera`：在后摄、前摄自拍和镜面自拍之间选择，并调用图像适配器；
+- `.claude/skills/image-generation`：默认调用 API，并在用户明确指定时选择已注册的本地 ComfyUI 工作流；
+- `.claude/skills/visual-reference-manager`：仅在用户明确要求时登记、修改、删除或校验人物与空间参考图；
 - `.claude/skills/proactive-contact`：管理链式主动关心和一次性临时回访。
 
 如果只把部分模块复制进已有 Agent 项目，同时复制对应 Skill 目录。网页浏览使用微软官方 `playwright-cli` Skill，由 `scripts/abilities/web-browser/setup.cmd` 安装，不在本仓库重复保存其源码。

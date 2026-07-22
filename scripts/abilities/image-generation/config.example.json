@@ -1,0 +1,36 @@
+{
+  "default_backend": "api",
+  "api": {
+    "base_url": "https://example.com/v1",
+    "base_url_env": "IMAGE_BASE_URL",
+    "api_key": "",
+    "api_key_env": "IMAGE_API_KEY",
+    "credentials_file": "",
+    "model": "your-image-model",
+    "model_env": "IMAGE_MODEL",
+    "timeout_seconds": 180,
+    "quality": "",
+    "output_format": "",
+    "input_fidelity": "",
+    "generation_endpoint": "/images/generations",
+    "edit_endpoint": "/images/edits",
+    "extra_body": {},
+    "edit_extra_body": {}
+  },
+  "comfyui": {
+    "base_url": "http://127.0.0.1:8188",
+    "timeout_seconds": 600,
+    "poll_interval_seconds": 1,
+    "upload_subfolder": "suzu-lives",
+    "registry": "workflows/registry.local.json",
+    "default_workflow": ""
+  },
+  "output": {
+    "directory": "output/image-generation"
+  },
+  "delivery": {
+    "command": "cc-connect",
+    "session_key": "",
+    "session_key_env": "CC_CONNECT_SESSION_KEY"
+  }
+}

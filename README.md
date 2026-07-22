@@ -2,7 +2,7 @@
 
 这是我持续完善长期 AI Agent Suzu 的源码公开项目，目标是让 Agent 在长期运行中保持记忆和行为的连续性。
 
-当前发布已经完成并验证的记忆系统、时间感知 Hook、微信消息分条、两种本地查看器、iPhone 快捷指令连接、主动联系和登录态网页浏览。运行核心为 Claude Code，也可以通过 cc-connect 接入微信。
+当前发布包括记忆系统、时间感知 Hook、微信消息分条、两种本地查看器、iPhone 快捷指令连接、主动联系、登录态网页浏览和手机拍照式生图。运行核心为 Claude Code，也可以通过 cc-connect 接入微信。
 
 ## 当前可用功能
 
@@ -22,6 +22,8 @@
 - 通过 SMTP、IMAP 和 cc-connect Webhook，让 Agent 请求 iPhone 快捷指令执行操作，并接收手机返回的文字或图片；
 - 使用 cc-connect Timer 实现一条可持续的主动联系链，以及针对具体未完成事情的一次性回访；
 - 通过微软官方 `playwright-cli` Skill 连接保留登录状态的专用 Chrome，让 Agent 操作登录网站和动态网页。
+- 提供统一图像生成引擎：日常默认使用云端 Images API，用户明确指定时才调用已注册的本地 ComfyUI 工作流，且不会静默切换后端；
+- 让 Agent 在后置摄像头、前置自拍和镜面自拍之间选择，用固定的拍摄几何生成自然的手机随手拍，并可按需组合人物、房间、物品或风格参考图后发进聊天。
 
 各功能保持为独立模块。记忆位于 `memory/`，自动注入类功能位于 `scripts/hooks/`，Agent 可调用能力位于 `scripts/abilities/`，手动使用的本地工具位于 `tools/`，不需要把整套系统作为一个不可拆分脚本使用。
 
@@ -46,6 +48,7 @@
 - 微信分条目前只验证 Windows，需要 Python 3.10 或更高版本、cc-connect 1.3.0 或更高版本，以及当前环境可用的 `MessageDisplay` Hook；
 - iPhone 快捷指令连接目前只验证 Windows，需要 Python 3.10 或更高版本、支持 SMTP/IMAP 的邮箱和已启用 Webhook 的 cc-connect；
 - 登录态网页浏览目前只验证 Windows，需要 Google Chrome、Node.js 和 npm；
+- 手机拍照式生图需要 Python 3.10 或更高版本，以及一个 OpenAI Images API 兼容服务；只有使用 `--send` 时才需要 cc-connect；
 - Embedding 可选，不配置时使用本地 BM25。
 
 本模块没有 npm 运行依赖，不需要执行 `npm install`。
@@ -66,6 +69,9 @@ npm run setup
 memory/manual_compactor/config.local.json
 memory/rag/config.local.json
 scripts/abilities/connect_iphone/feedback_config.json
+scripts/abilities/image-generation/config.local.json
+scripts/abilities/image-generation/workflows/registry.local.json
+scripts/abilities/phone-camera/config.local.json
 ```
 
 至少需要在压缩器配置中填写：
@@ -174,6 +180,16 @@ Hook 失败时会安静跳过，不会阻断正常聊天。
 
 - [登录态网页浏览安装与使用](scripts/abilities/web-browser/README.md)
 
+## 手机拍照式生图
+
+统一图像引擎把云端 API 和本地 ComfyUI 分成两个后端：默认只使用 API，本地后端必须由用户明确指定并选择已注册工作流。`phone-camera` Skill 在它上面负责判断后摄、前置自拍或镜面自拍，并补全稳定的手机拍摄几何。视觉参考库可以按当前场景组合人物、房间、物品或风格参考：
+
+- [统一图像生成引擎](scripts/abilities/image-generation/README.md)
+- [供 Agent 使用的 image-generation Skill](.claude/skills/image-generation/SKILL.md)
+- [手机拍照式生图安装与使用](scripts/abilities/phone-camera/README.md)
+- [供 Agent 使用的 phone-camera Skill](.claude/skills/phone-camera/SKILL.md)
+- [视觉参考库维护 Skill](.claude/skills/visual-reference-manager/SKILL.md)
+
 ## 开发状态
 
 - [x] 自定义短期、中期、长期记忆链路
@@ -185,7 +201,10 @@ Hook 失败时会安静跳过，不会阻断正常聊天。
 - [x] iPhone 快捷指令双向连接
 - [x] 主动关心和一次性回访
 - [x] 登录态网页自动化适配器
-- [ ] 视觉、画图与摄像头适配器
+- [x] 手机拍照式生图适配器
+- [x] API 默认、本地 ComfyUI 按需启用的统一生图框架
+- [x] 可维护的视觉参考库与多图参考生成
+- [ ] 进一步提高固定人物一致性
 
 ## 许可
 
