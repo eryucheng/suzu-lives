@@ -6,8 +6,10 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 import {
+  isAutomationPrompt,
   prepareHistoryAppend,
   standardizeCompactedPrefix,
+  visibleAssistantTexts,
   visibleUserText,
 } from "../rag/ingest.mjs";
 import { syncIndexFromHistory } from "../rag/build-index.mjs";
@@ -266,7 +268,39 @@ export function reconstructLogicalContext(entries) {
 }
 
 function isHumanUser(entry) {
-  return Boolean(visibleUserText(entry));
+  const text = visibleUserText(entry);
+  return Boolean(text) && !isAutomationPrompt(text);
+}
+
+function contentBlocks(content) {
+  if (typeof content === "string") return content ? [{ type: "text", text: content }] : [];
+  return Array.isArray(content) ? content : [];
+}
+
+/**
+ * Keep only records that are useful as live model context. Hook attachments,
+ * skill listings, warnings and stop summaries are transcript noise; retaining
+ * their UUIDs makes every later request pay for them again. User tool results
+ * and assistant tool calls stay because a recent operation may be unfinished.
+ */
+export function shouldPreserveLiveRecord(entry) {
+  const record = entry?.record || {};
+  if (!record.uuid || record.isCompactSummary || record.isMeta) return false;
+
+  if (record.type === "user" && record.message?.role === "user") {
+    const blocks = contentBlocks(record.message.content);
+    if (blocks.some((block) => block?.type === "tool_result")) return true;
+    const text = visibleUserText(entry);
+    return Boolean(text) && !isAutomationPrompt(text);
+  }
+
+  if (record.type === "assistant" && record.message?.role === "assistant") {
+    const blocks = contentBlocks(record.message.content);
+    if (blocks.some((block) => block?.type === "tool_use")) return true;
+    return visibleAssistantTexts(entry).length > 0;
+  }
+
+  return false;
 }
 
 function effectiveInputTokens(usage) {
@@ -305,8 +339,8 @@ function estimateTextTokens(text) {
 
 function estimateRecordTokens(entry) {
   const record = entry.record;
-  if (!record.message) return 4;
-  return 8 + estimateTextTokens(JSON.stringify(record.message));
+  const payload = record.message ?? record.attachment ?? record.content ?? record;
+  return 8 + estimateTextTokens(JSON.stringify(payload));
 }
 
 function chooseTimeHead(logical, cutoffMs) {
@@ -322,6 +356,7 @@ function chooseTokenHead(logical, targetTokens) {
   let targetIndex = logical.length - 1;
   for (let index = logical.length - 1; index >= 0; index -= 1) {
     if (logical[index].record.isCompactSummary) break;
+    if (!shouldPreserveLiveRecord(logical[index])) continue;
     accumulated += estimateRecordTokens(logical[index]);
     targetIndex = index;
     if (accumulated >= targetTokens) break;
@@ -364,7 +399,8 @@ export function chooseCompactionPlan(context, now = new Date(), ruleOverrides = 
 
   if (headIndex < 0) return { action: "skip", reason: "找不到可作为保留起点的完整用户消息", currentTokens };
   const prefix = logical.slice(0, headIndex);
-  const preservedLogical = logical.slice(headIndex).filter((entry) => !entry.record.isCompactSummary);
+  const rawPreservedLogical = logical.slice(headIndex).filter((entry) => !entry.record.isCompactSummary);
+  const preservedLogical = rawPreservedLogical.filter(shouldPreserveLiveRecord);
   if (!prefix.length) return { action: "skip", reason: "切点以前没有可压缩内容", currentTokens };
   if (!preservedLogical.length) return { action: "skip", reason: "切点以后没有可保留原文", currentTokens };
 
@@ -375,7 +411,7 @@ export function chooseCompactionPlan(context, now = new Date(), ruleOverrides = 
     headIndex,
     prefix,
     head: preservedLogical[0],
-    logicalTail: preservedLogical.at(-1),
+    logicalTail: rawPreservedLogical.at(-1),
     preservedLogical,
     elapsedMs: elapsed,
     rules,
@@ -688,7 +724,7 @@ function preservedRecords(context, headUuid) {
   const headIndex = context.logical.findIndex((entry) => entry.record.uuid === headUuid);
   if (headIndex < 0) throw new Error("在当前逻辑上下文中找不到选定head，拒绝写入");
   const preserved = context.logical.slice(headIndex).filter((entry) => (
-    entry.record.uuid && !entry.record.isCompactSummary
+    shouldPreserveLiveRecord(entry)
   ));
   if (!preserved.length || preserved[0].record.uuid !== headUuid) {
     throw new Error("无法从选定head构造保留记录，拒绝写入");
@@ -734,6 +770,7 @@ export function buildCompactRecords(entries, context, plan, config, summaryBody,
   if (!shared.sessionId) throw new Error("模板记录没有sessionId");
 
   const preservedIds = preserved.map((entry) => entry.record.uuid);
+  const segmentTailUuid = plan.logicalTail?.record?.uuid || preservedIds.at(-1);
   const messagesSummarized = plan.prefix.filter((entry) => entry.record.uuid).length;
   const wrappedSummary = summaryWrapper(config, summaryBody);
   const estimatedPostTokens = estimateTextTokens(wrappedSummary)
@@ -759,7 +796,9 @@ export function buildCompactRecords(entries, context, plan, config, summaryBody,
       preservedSegment: {
         headUuid: preservedIds[0],
         anchorUuid,
-        tailUuid: preservedIds.at(-1),
+        // Future records must start after the physical end of this segment,
+        // even when that final record was intentionally omitted as noise.
+        tailUuid: segmentTailUuid,
       },
       preservedMessages: {
         anchorUuid,

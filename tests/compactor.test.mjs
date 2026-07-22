@@ -4,12 +4,14 @@ import test from "node:test";
 import {
   MEMORY_OUTPUT_SCHEMA,
   assignMemoryRefs,
+  buildCompactRecords,
   buildLlmInput,
   chooseCompactionPlan,
   isStructuredOutputCompatibilityError,
   isStructuredOutputTurnLimitError,
   parseGeneratedMemoryResult,
   parseJsonlText,
+  shouldPreserveLiveRecord,
 } from "../memory/manual_compactor/compact-jsonl.mjs";
 
 function messageEntry(index, {
@@ -156,4 +158,78 @@ test("识别 Schema 内部工具提交被 max-turns 截断的错误", () => {
   assert.equal(isStructuredOutputTurnLimitError(actualError), true);
   assert.equal(isStructuredOutputTurnLimitError("Reached maximum number of turns (1)"), false);
   assert.equal(isStructuredOutputTurnLimitError('{"stop_reason":"tool_use"}'), false);
+});
+
+test("compact 保留清单排除 Hook 附件、系统噪声和纯 NO_REPLY", () => {
+  const user = messageEntry(0, {
+    uuid: "user-clean",
+    role: "user",
+    text: "继续聊刚才的事",
+    timestamp: "2026-07-16T06:00:00.000Z",
+  });
+  const assistant = messageEntry(1, {
+    uuid: "assistant-clean",
+    parentUuid: "user-clean",
+    role: "assistant",
+    text: "好",
+    timestamp: "2026-07-16T06:00:01.000Z",
+  });
+  const hookError = {
+    index: 2,
+    line: 3,
+    record: {
+      uuid: "hook-error",
+      parentUuid: "assistant-clean",
+      type: "attachment",
+      attachment: { type: "hook_non_blocking_error", stderr: "x".repeat(5000) },
+      timestamp: "2026-07-16T06:00:02.000Z",
+    },
+  };
+  const noReply = messageEntry(3, {
+    uuid: "no-reply",
+    parentUuid: "hook-error",
+    role: "assistant",
+    text: "NO_REPLY",
+    timestamp: "2026-07-16T06:00:03.000Z",
+  });
+  const stopSummary = {
+    index: 4,
+    line: 5,
+    record: {
+      uuid: "stop-summary",
+      parentUuid: "no-reply",
+      type: "system",
+      subtype: "stop_hook_summary",
+      timestamp: "2026-07-16T06:00:04.000Z",
+      sessionId: "synthetic-session",
+    },
+  };
+  const logical = [user, assistant, hookError, noReply, stopSummary];
+
+  assert.equal(shouldPreserveLiveRecord(user), true);
+  assert.equal(shouldPreserveLiveRecord(assistant), true);
+  assert.equal(shouldPreserveLiveRecord(hookError), false);
+  assert.equal(shouldPreserveLiveRecord(noReply), false);
+  assert.equal(shouldPreserveLiveRecord(stopSummary), false);
+
+  const context = { logical, currentTail: stopSummary };
+  const plan = {
+    head: user,
+    logicalTail: stopSummary,
+    prefix: [],
+    currentTokens: 20_000,
+  };
+  const built = buildCompactRecords(
+    logical,
+    context,
+    plan,
+    { memoryOwner: "Agent", userName: "用户" },
+    "我记得刚才的事。",
+    new Date("2026-07-16T06:01:00.000Z"),
+  );
+  assert.deepEqual(built.boundary.compactMetadata.preservedMessages.uuids, [
+    "user-clean",
+    "assistant-clean",
+  ]);
+  assert.equal(built.boundary.compactMetadata.preservedSegment.tailUuid, "stop-summary");
 });

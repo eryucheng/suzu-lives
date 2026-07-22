@@ -40,7 +40,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "totalBudget": 10,
     "reservedMessages": 2,
     "refreshMessage": "你咋一直不说话",
-    "displayDelayMs": 5000,
+    "displayDelayMs": 0,
     "sendIntervalMs": 120,
     "tokenPollMs": 300,
     "sendTimeoutSeconds": 20,
