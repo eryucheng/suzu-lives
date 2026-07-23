@@ -1,9 +1,17 @@
 @echo off
-chcp 65001 >nul
+setlocal
 cd /d "%~dp0"
-node compact-jsonl.mjs
-set EXIT_CODE=%ERRORLEVEL%
+
+where node >nul 2>nul
+if errorlevel 1 (
+  echo Node.js was not found in PATH.
+  pause
+  exit /b 9009
+)
+
+node "%~dp0compact-jsonl.mjs"
+set "EXIT_CODE=%ERRORLEVEL%"
 echo.
-if not "%EXIT_CODE%"=="0" echo 执行失败，退出码：%EXIT_CODE%
+if not "%EXIT_CODE%"=="0" echo Compactor failed. Exit code: %EXIT_CODE%
 pause
 exit /b %EXIT_CODE%

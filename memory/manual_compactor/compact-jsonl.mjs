@@ -117,10 +117,18 @@ function selectConfigPath(configOverride = "") {
   return EXAMPLE_CONFIG_PATH;
 }
 
+export function parseJsonText(text) {
+  return JSON.parse(String(text).replace(/^\uFEFF/u, ""));
+}
+
+function readJsonFile(filePath) {
+  return parseJsonText(fs.readFileSync(filePath, "utf8"));
+}
+
 function readConfig(transcriptOverride = "", configOverride = "") {
   const configPath = selectConfigPath(configOverride);
   if (!fs.existsSync(configPath)) throw new Error(`找不到配置文件：${configPath}`);
-  const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+  const config = readJsonFile(configPath);
   const configuredTranscript = transcriptOverride || config.transcriptPath;
   if (!configuredTranscript || configuredTranscript.includes("请把")) {
     throw new Error("请复制 config.example.json 为 config.local.json，并填写 transcriptPath");
@@ -153,7 +161,7 @@ export function parseJsonlText(text, source = "transcript") {
     const raw = lines[index];
     if (!raw.trim()) continue;
     try {
-      entries.push({ record: JSON.parse(raw), line: index + 1, index, raw });
+      entries.push({ record: parseJsonText(raw), line: index + 1, index, raw });
     } catch (error) {
       throw new Error(`${source}:${index + 1} 不是有效JSON：${error.message}`);
     }
@@ -484,7 +492,7 @@ function loadInheritedClaudeEnv() {
   const settingsPath = path.join(os.homedir(), ".claude", "settings.json");
   if (!fs.existsSync(settingsPath)) return {};
   try {
-    const settings = JSON.parse(fs.readFileSync(settingsPath, "utf8"));
+    const settings = readJsonFile(settingsPath);
     return settings.env && typeof settings.env === "object" ? settings.env : {};
   } catch (error) {
     throw new Error(`无法读取 ${settingsPath} 的env：${error.message}`);
