@@ -117,7 +117,7 @@ export function loadRagConfig(configOverride = "") {
     || process.env.RAG_CONFIG
     || (fs.existsSync(LOCAL_CONFIG_PATH) ? LOCAL_CONFIG_PATH : EXAMPLE_CONFIG_PATH);
   const configPath = path.resolve(selected);
-  const raw = JSON.parse(fs.readFileSync(configPath, "utf8"));
+  const raw = JSON.parse(fs.readFileSync(configPath, "utf8").replace(/^\uFEFF/u, ""));
   const retrieval = { ...DEFAULTS.retrieval, ...(raw.retrieval || {}) };
   const embedding = { ...DEFAULTS.embedding, ...(raw.embedding || {}) };
   const hybrid = { ...DEFAULTS.hybrid, ...(raw.hybrid || {}) };
