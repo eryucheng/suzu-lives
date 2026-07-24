@@ -407,8 +407,14 @@ export function chooseCompactionPlan(context, now = new Date(), ruleOverrides = 
 
   if (headIndex < 0) return { action: "skip", reason: "找不到可作为保留起点的完整用户消息", currentTokens };
   const prefix = logical.slice(0, headIndex);
-  const rawPreservedLogical = logical.slice(headIndex).filter((entry) => !entry.record.isCompactSummary);
-  const preservedLogical = rawPreservedLogical.filter(shouldPreserveLiveRecord);
+  // Claude Code expects the preserved segment to be a complete UUID chain.
+  // Filtering hook attachments or other runtime records here makes the
+  // compact metadata inconsistent with the physical transcript and can make
+  // resume fall back to the uncompressed branch. Noise is filtered only when
+  // writing RAG history, never from the compact segment itself.
+  const preservedLogical = logical.slice(headIndex).filter((entry) => (
+    entry.record.uuid && !entry.record.isCompactSummary
+  ));
   if (!prefix.length) return { action: "skip", reason: "切点以前没有可压缩内容", currentTokens };
   if (!preservedLogical.length) return { action: "skip", reason: "切点以后没有可保留原文", currentTokens };
 
@@ -419,7 +425,7 @@ export function chooseCompactionPlan(context, now = new Date(), ruleOverrides = 
     headIndex,
     prefix,
     head: preservedLogical[0],
-    logicalTail: rawPreservedLogical.at(-1),
+    logicalTail: preservedLogical.at(-1),
     preservedLogical,
     elapsedMs: elapsed,
     rules,
@@ -732,7 +738,7 @@ function preservedRecords(context, headUuid) {
   const headIndex = context.logical.findIndex((entry) => entry.record.uuid === headUuid);
   if (headIndex < 0) throw new Error("在当前逻辑上下文中找不到选定head，拒绝写入");
   const preserved = context.logical.slice(headIndex).filter((entry) => (
-    shouldPreserveLiveRecord(entry)
+    entry.record.uuid && !entry.record.isCompactSummary
   ));
   if (!preserved.length || preserved[0].record.uuid !== headUuid) {
     throw new Error("无法从选定head构造保留记录，拒绝写入");
@@ -778,7 +784,6 @@ export function buildCompactRecords(entries, context, plan, config, summaryBody,
   if (!shared.sessionId) throw new Error("模板记录没有sessionId");
 
   const preservedIds = preserved.map((entry) => entry.record.uuid);
-  const segmentTailUuid = plan.logicalTail?.record?.uuid || preservedIds.at(-1);
   const messagesSummarized = plan.prefix.filter((entry) => entry.record.uuid).length;
   const wrappedSummary = summaryWrapper(config, summaryBody);
   const estimatedPostTokens = estimateTextTokens(wrappedSummary)
@@ -804,9 +809,7 @@ export function buildCompactRecords(entries, context, plan, config, summaryBody,
       preservedSegment: {
         headUuid: preservedIds[0],
         anchorUuid,
-        // Future records must start after the physical end of this segment,
-        // even when that final record was intentionally omitted as noise.
-        tailUuid: segmentTailUuid,
+        tailUuid: preservedIds.at(-1),
       },
       preservedMessages: {
         anchorUuid,

@@ -160,7 +160,7 @@ test("识别 Schema 内部工具提交被 max-turns 截断的错误", () => {
   assert.equal(isStructuredOutputTurnLimitError('{"stop_reason":"tool_use"}'), false);
 });
 
-test("compact 保留清单排除 Hook 附件、系统噪声和纯 NO_REPLY", () => {
+test("compact 保留完整 UUID 链，RAG 过滤不破坏 Claude Code 恢复结构", () => {
   const user = messageEntry(0, {
     uuid: "user-clean",
     role: "user",
@@ -230,6 +230,9 @@ test("compact 保留清单排除 Hook 附件、系统噪声和纯 NO_REPLY", () 
   assert.deepEqual(built.boundary.compactMetadata.preservedMessages.uuids, [
     "user-clean",
     "assistant-clean",
+    "hook-error",
+    "no-reply",
+    "stop-summary",
   ]);
   assert.equal(built.boundary.compactMetadata.preservedSegment.tailUuid, "stop-summary");
 });
