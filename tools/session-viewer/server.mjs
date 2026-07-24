@@ -4,6 +4,7 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
+import readline from "node:readline";
 import { StringDecoder } from "node:string_decoder";
 import { fileURLToPath } from "node:url";
 
@@ -14,6 +15,9 @@ const DEFAULTS = Object.freeze({
   maxMessages: 500,
   maxRecords: 2500,
 });
+
+const BINARY_KEY = /(?:base64|image[_-]?data|audio[_-]?data|file[_-]?data)/iu;
+const DATA_URL = /^data:[^;,]+;base64,/iu;
 
 function readJson(filePath) {
   try {
@@ -160,6 +164,133 @@ export class JsonlTail {
   }
 }
 
+function searchableStrings(value, key = "", output = [], depth = 0) {
+  if (depth > 24 || value === null || value === undefined) return output;
+  if (typeof value === "string") {
+    if (!(BINARY_KEY.test(key) || DATA_URL.test(value))) output.push(value);
+    return output;
+  }
+  if (typeof value === "number" || typeof value === "boolean") {
+    output.push(String(value));
+    return output;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) searchableStrings(item, key, output, depth + 1);
+    return output;
+  }
+  if (typeof value === "object") {
+    for (const [childKey, childValue] of Object.entries(value)) {
+      searchableStrings(childValue, childKey, output, depth + 1);
+    }
+  }
+  return output;
+}
+
+function safeRecord(value, key = "", depth = 0) {
+  if (depth > 24) return "[嵌套内容已省略]";
+  if (typeof value === "string") {
+    if ((BINARY_KEY.test(key) || DATA_URL.test(value)) && value.length > 512) {
+      return `[二进制内容已省略，共 ${value.length} 字符]`;
+    }
+    return value;
+  }
+  if (Array.isArray(value)) return value.map((item) => safeRecord(item, key, depth + 1));
+  if (value && typeof value === "object") {
+    return Object.fromEntries(Object.entries(value)
+      .map(([childKey, childValue]) => [childKey, safeRecord(childValue, childKey, depth + 1)]));
+  }
+  return value;
+}
+
+/** Stream the entire JSONL instead of searching only the in-memory tail. */
+export async function searchTranscript(sessionFilePath, query, limit = 100) {
+  const needle = String(query || "").normalize("NFKC").trim().toLocaleLowerCase("zh-CN");
+  if (!needle) throw new Error("请输入搜索内容。");
+  if (Array.from(needle).length > 200) throw new Error("搜索内容不能超过 200 个字符。");
+
+  const maximum = boundedInteger(limit, 100, 1, 500, "limit");
+  const matches = [];
+  let lineNumber = 0;
+  let scannedRecords = 0;
+  let malformedLines = 0;
+  let matchedRecords = 0;
+  const input = fs.createReadStream(sessionFilePath, { encoding: "utf8" });
+  const lines = readline.createInterface({ input, crlfDelay: Infinity });
+  for await (const line of lines) {
+    lineNumber += 1;
+    const value = line.trim();
+    if (!value) continue;
+    let record;
+    try {
+      record = JSON.parse(value);
+      scannedRecords += 1;
+    } catch {
+      malformedLines += 1;
+      continue;
+    }
+    const haystack = searchableStrings(record).join("\n").normalize("NFKC").toLocaleLowerCase("zh-CN");
+    if (!haystack.includes(needle)) continue;
+    matchedRecords += 1;
+    matches.push({ lineNumber, record: safeRecord(record) });
+    if (matches.length > maximum) matches.shift();
+  }
+
+  return {
+    query: String(query).trim(),
+    scannedRecords,
+    malformedLines,
+    matchedRecords,
+    truncated: matchedRecords > matches.length,
+    matches,
+  };
+}
+
+/** Read a bounded section of the original JSONL around one physical line. */
+export async function readTranscriptWindow(
+  sessionFilePath,
+  targetLine,
+  before = 100,
+  after = 100,
+) {
+  const target = boundedInteger(targetLine, 0, 1, 2_147_483_647, "line");
+  const beforeCount = boundedInteger(before, 100, 0, 500, "before");
+  const afterCount = boundedInteger(after, 100, 0, 500, "after");
+  const requestedStart = Math.max(1, target - beforeCount);
+  const requestedEnd = target + afterCount;
+  const records = [];
+  let lineNumber = 0;
+  let lastLine = 0;
+  let malformedLines = 0;
+  let targetSeen = false;
+  const input = fs.createReadStream(sessionFilePath, { encoding: "utf8" });
+  const lines = readline.createInterface({ input, crlfDelay: Infinity });
+  for await (const line of lines) {
+    lineNumber += 1;
+    if (lineNumber < requestedStart) continue;
+    if (lineNumber > requestedEnd) break;
+    lastLine = lineNumber;
+    const value = line.trim();
+    if (!value) continue;
+    try {
+      const record = JSON.parse(value);
+      records.push({ lineNumber, record: safeRecord(record) });
+      if (lineNumber === target) targetSeen = true;
+    } catch {
+      malformedLines += 1;
+    }
+  }
+  if (!targetSeen) {
+    throw new Error(`JSONL 第 ${target} 行不存在或不是有效记录。`);
+  }
+  return {
+    targetLine: target,
+    startLine: requestedStart,
+    endLine: lastLine,
+    malformedLines,
+    records,
+  };
+}
+
 function jsonResponse(res, status, value) {
   const body = JSON.stringify(value);
   res.writeHead(status, {
@@ -200,6 +331,33 @@ export async function startServer(options = resolveRuntimeOptions()) {
         jsonResponse(res, 200, tail.snapshot(options));
       } catch (error) {
         jsonResponse(res, 500, { error: error.message });
+      }
+      return;
+    }
+    if (url.pathname === "/api/search") {
+      try {
+        const payload = await searchTranscript(
+          options.sessionFilePath,
+          url.searchParams.get("q"),
+          url.searchParams.get("limit") || 100,
+        );
+        jsonResponse(res, 200, payload);
+      } catch (error) {
+        jsonResponse(res, 400, { error: error.message });
+      }
+      return;
+    }
+    if (url.pathname === "/api/context") {
+      try {
+        const payload = await readTranscriptWindow(
+          options.sessionFilePath,
+          url.searchParams.get("line"),
+          url.searchParams.get("before") ?? 100,
+          url.searchParams.get("after") ?? 100,
+        );
+        jsonResponse(res, 200, payload);
+      } catch (error) {
+        jsonResponse(res, 400, { error: error.message });
       }
       return;
     }

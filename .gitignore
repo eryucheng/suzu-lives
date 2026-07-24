@@ -7,6 +7,7 @@ memory/rag/config.local.json
 scripts/abilities/phone-camera/config.local.json
 scripts/abilities/image-generation/config.local.json
 scripts/abilities/image-generation/workflows/registry.local.json
+scripts/abilities/image-vision/config.local.json
 visual-references/manifest.json
 visual-references/characters/
 visual-references/places/
