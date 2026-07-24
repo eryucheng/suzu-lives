@@ -29,8 +29,15 @@ from reference_library import (
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_DIR = SCRIPT_DIR.parents[2]
-DEFAULT_MANIFEST = PROJECT_DIR / "visual-references" / "manifest.json"
-EXAMPLE_MANIFEST = PROJECT_DIR / "visual-references" / "manifest.example.json"
+DEFAULT_MANIFEST = PROJECT_DIR / "assets" / "visual-references" / "manifest.json"
+LEGACY_MANIFEST = PROJECT_DIR / "visual-references" / "manifest.json"
+EXAMPLE_MANIFEST = PROJECT_DIR / "assets" / "visual-references" / "manifest.example.json"
+
+
+def default_manifest_path() -> Path:
+    if DEFAULT_MANIFEST.exists() or not LEGACY_MANIFEST.exists():
+        return DEFAULT_MANIFEST
+    return LEGACY_MANIFEST
 
 
 def write_json_atomic(path: Path, value: dict[str, Any]) -> None:
@@ -382,7 +389,12 @@ def show_item(manifest_path: Path, item_id: str) -> dict[str, Any]:
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="维护视觉参考图片和 manifest")
-    parser.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST, help="manifest.json 路径")
+    parser.add_argument(
+        "--manifest",
+        type=Path,
+        default=default_manifest_path(),
+        help="manifest.json 路径",
+    )
     subparsers = parser.add_subparsers(dest="command", required=True)
     subparsers.add_parser("init", help="创建空参考库")
     apply_parser = subparsers.add_parser("apply", help="校验并原子执行批量维护计划")

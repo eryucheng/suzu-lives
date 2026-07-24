@@ -29,7 +29,8 @@ from reference_library import (
 DEFAULT_CONFIG = SCRIPT_DIR / "config.local.json"
 EXAMPLE_CONFIG = SCRIPT_DIR / "config.example.json"
 PROFILES_PATH = SCRIPT_DIR / "profiles.json"
-DEFAULT_MANIFEST = PROJECT_DIR / "visual-references" / "manifest.json"
+DEFAULT_MANIFEST = PROJECT_DIR / "assets" / "visual-references" / "manifest.json"
+LEGACY_MANIFEST = PROJECT_DIR / "visual-references" / "manifest.json"
 
 
 def load_phone_config(config_path: Path) -> dict[str, Any]:
@@ -144,6 +145,8 @@ def reference_settings(
     else:
         configured = clean_text(settings.get("manifest"))
         manifest = resolve_project_path(configured) if configured else DEFAULT_MANIFEST
+        if manifest == DEFAULT_MANIFEST and not manifest.exists() and LEGACY_MANIFEST.exists():
+            manifest = LEGACY_MANIFEST
     try:
         max_images = int(settings.get("max_images", 8))
     except (TypeError, ValueError) as exc:

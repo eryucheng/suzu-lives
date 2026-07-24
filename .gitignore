@@ -4,10 +4,18 @@
 !.env.example
 memory/manual_compactor/config.local.json
 memory/rag/config.local.json
+user.md
 scripts/abilities/phone-camera/config.local.json
 scripts/abilities/image-generation/config.local.json
 scripts/abilities/image-generation/workflows/registry.local.json
 scripts/abilities/image-vision/config.local.json
+assets/visual-references/manifest.json
+assets/visual-references/characters/
+assets/visual-references/places/
+assets/visual-references/objects/
+assets/visual-references/styles/
+assets/visual-references/work/
+# Keep ignoring the first release's location so upgrades never expose private images.
 visual-references/manifest.json
 visual-references/characters/
 visual-references/places/

@@ -93,9 +93,9 @@ class ConnectIphoneTests(unittest.TestCase):
             return FakeWebhookResponse()
 
         with patch.object(receive_from_iphone.urllib.request, "urlopen", fake_urlopen):
-            receive_from_iphone.post_webhook(self.config, "诚也现在在QQ")
+            receive_from_iphone.post_webhook(self.config, "用户现在在QQ")
 
-        self.assertEqual(captured["body"]["prompt"], "诚也现在在QQ")
+        self.assertEqual(captured["body"]["prompt"], "用户现在在QQ")
         self.assertNotIn("payload", captured["body"])
         self.assertEqual(captured["timeout"], 20)
 

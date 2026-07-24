@@ -6,7 +6,7 @@
     "mirror": "1024x1536"
   },
   "references": {
-    "manifest": "visual-references/manifest.json",
+    "manifest": "assets/visual-references/manifest.json",
     "max_images": 8
   },
   "output": {

@@ -34,6 +34,20 @@ test("整套 Claude Code 配置包含三个模块且使用可移植路径", () =
   }
 });
 
+test("整套权限包含电脑摄像头且不写死本机路径", () => {
+  const settings = readJson("integrations/claude-code/settings.example.json");
+  const permissions = settings.permissions?.allow ?? [];
+
+  assert.ok(
+    permissions.includes(
+      "Bash(python scripts/abilities/computer-camera/capture_camera.py *)",
+    ),
+  );
+  for (const permission of permissions) {
+    assert.doesNotMatch(permission, /C:\\Users\\|C:\/Users\//u);
+  }
+});
+
 test("单模块 Hook 示例与整套配置保持一致", () => {
   const combined = readJson("integrations/claude-code/settings.example.json");
   const timeOnly = readJson("scripts/hooks/time-awareness/settings.example.json");

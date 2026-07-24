@@ -58,7 +58,9 @@ API、ComfyUI、保存和发送配置统一位于 `image-generation/config.local
 
 详细后端配置和工作流注册见 [统一图像生成引擎](../image-generation/README.md)。
 
-`references.manifest` 指向参考库清单，默认是项目根目录下的 `visual-references/manifest.json`；`max_images` 是单次允许展开的参考图上限，默认 8，最大 16。中转服务除了 `/images/generations` 之外，还必须兼容 OpenAI Images 的 `/images/edits` multipart 请求，参考图功能才能使用。
+`references.manifest` 指向参考库清单，默认是项目根目录下的 `assets/visual-references/manifest.json`；`max_images` 是单次允许展开的参考图上限，默认 8，最大 16。中转服务除了 `/images/generations` 之外，还必须兼容 OpenAI Images 的 `/images/edits` multipart 请求，参考图功能才能使用。
+
+从首个版本升级时，重新运行 `npm run setup` 会把旧的 `visual-references/` 参考库连同图片复制到新位置；旧版配置仍可继续使用原路径，不会删除原始文件。
 
 `prompt.prefix` 和 `prompt.suffix` 是可选的全局补充。第一版保持为空即可；不要把 API Key 或聊天凭证写进提示词。
 
@@ -79,7 +81,7 @@ python ".\scripts\abilities\phone-camera\take_photo.py" --shot mirror --scene "�
 
 ## 建立视觉参考库
 
-首次运行 `npm run setup` 会创建空的 `visual-references/manifest.json`。也可以单独初始化：
+首次运行 `npm run setup` 会创建空的 `assets/visual-references/manifest.json`。也可以单独初始化：
 
 ```powershell
 python ".\scripts\abilities\phone-camera\manage_references.py" init

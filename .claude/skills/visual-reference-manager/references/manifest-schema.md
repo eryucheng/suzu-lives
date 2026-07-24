@@ -2,7 +2,7 @@
 
 ## Manifest
 
-`visual-references/manifest.json` 由维护脚本生成和校验：
+`assets/visual-references/manifest.json` 由维护脚本生成和校验：
 
 ```json
 {

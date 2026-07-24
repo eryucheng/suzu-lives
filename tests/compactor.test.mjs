@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import test from "node:test";
 
 import {
@@ -43,6 +44,16 @@ test("JSONL 损坏时报告准确行号", () => {
     () => parseJsonlText('{"uuid":"ok"}\nnot-json\n', "fixture.jsonl"),
     /fixture\.jsonl:2/u,
   );
+});
+
+test("摘要提示不允许用 Agent 单方面说法建立用户事实", () => {
+  const prompt = fs.readFileSync(
+    new URL("../memory/manual_compactor/prompt.md", import.meta.url),
+    "utf8",
+  );
+  assert.match(prompt, /标记为“我”的消息只能证明记忆拥有者以前这样说过/u);
+  assert.match(prompt, /一次饮食、购买、提及或尝试/u);
+  assert.match(prompt, /source_refs 必须至少包含一条标记为“对方”/u);
 });
 
 test("超过处理间隔后保留最近 24 小时完整原文", () => {

@@ -2,13 +2,14 @@
 
 这是我持续完善长期 AI Agent Suzu 的源码公开项目，目标是让 Agent 在长期运行中保持记忆和行为的连续性。
 
-当前发布包括记忆系统、时间感知 Hook、微信消息分条、两种本地查看器、iPhone 快捷指令连接、主动联系、登录态网页浏览、外部模型识图和手机拍照式生图。运行核心为 Claude Code，也可以通过 cc-connect 接入微信。
+当前发布包括记忆系统、时间感知 Hook、微信消息分条、两种本地查看器、iPhone 快捷指令连接、主动联系、登录态网页浏览、外部模型识图、手机拍照式生图和电脑真实摄像头。运行核心为 Claude Code，也可以通过 cc-connect 接入微信。
 
 ## 当前可用功能
 
 目前包括：
 
 - 定向压缩 Claude Code JSONL，而不是把整段会话完全替换成官方摘要；摘要结果优先用 JSON Schema 约束，并保留兼容回退、失败重试和原始输出留档；
+- 用短小的 `user.md` 保存用户本人已经确认的稳定核心事实，具体事件和原话仍按需从 RAG 召回；
 - 用独立的一次性 LLM 生成第一人称中长期记忆；
 - 完整保留最近 24 小时，或在提前压缩时保留末尾约 5k tokens 原文；
 - 把退出短期上下文的双方真实对话同步归档到 RAG；
@@ -24,7 +25,8 @@
 - 通过微软官方 `playwright-cli` Skill 连接保留登录状态的专用 Chrome，让 Agent 操作登录网站和动态网页。
 - 为没有原生视觉能力的主模型提供独立识图通道，按具体问题读取本地图片，并在人物图片被上游误拒时进行一次中性描述重试；
 - 提供统一图像生成引擎：日常默认使用云端 Images API，用户明确指定时才调用已注册的本地 ComfyUI 工作流，且不会静默切换后端；
-- 让 Agent 在后置摄像头、前置自拍和镜面自拍之间选择，用固定的拍摄几何生成自然的手机随手拍，并可按需组合人物、房间、物品或风格参考图后发进聊天。
+- 让 Agent 在后置摄像头、前置自拍和镜面自拍之间选择，用固定的拍摄几何生成自然的手机随手拍，并可按需组合人物、房间、物品或风格参考图后发进聊天；
+- 让 Agent 调用电脑上的真实摄像头取得当前画面，照片生成后立即继续工作，摄像头在后台保持约 10 秒并留下持续的本机警告。
 
 各功能保持为独立模块。记忆位于 `memory/`，自动注入类功能位于 `scripts/hooks/`，Agent 可调用能力位于 `scripts/abilities/`，手动使用的本地工具位于 `tools/`，不需要把整套系统作为一个不可拆分脚本使用。
 
@@ -32,12 +34,15 @@
 
 ```text
 当前上下文
-├─ 第一人称中长期摘要
+├─ 用户确认过的稳定核心档案
+├─ Agent 第一人称中长期摘要
 ├─ 最近一段完整原始对话
 └─ 当前消息需要时注入的一段事件、原话或日期记忆
 ```
 
 详细设计见 [记忆架构](docs/memory-architecture.md)。
+
+`npm run setup` 会从模板创建不会被 Git 跟踪的 `user.md`。把 `@user.md` 加进 Agent 项目的 `CLAUDE.md`，只在其中保存用户本人已经明确确认、长期稳定、当前有效且高频需要的事实；发生变化时直接修改旧条目。一次饮食、购买、提及和临时状态不应被推断成稳定喜好。
 
 ## 环境要求
 
@@ -50,6 +55,7 @@
 - iPhone 快捷指令连接目前只验证 Windows，需要 Python 3.10 或更高版本、支持 SMTP/IMAP 的邮箱和已启用 Webhook 的 cc-connect；
 - 登录态网页浏览目前只验证 Windows，需要 Google Chrome、Node.js 和 npm；
 - 手机拍照式生图需要 Python 3.10 或更高版本，以及一个 OpenAI Images API 兼容服务；只有使用 `--send` 时才需要 cc-connect；
+- 电脑真实摄像头目前只验证 Windows，需要 Python 3.10 或更高版本及 `opencv-python`；
 - 外部模型识图需要 Python 3.10 或更高版本，以及一个支持图片输入的 OpenAI Chat Completions 兼容服务；Pillow 为可选的自动缩放与格式转换依赖；
 - Embedding 可选，不配置时使用本地 BM25。
 
@@ -68,6 +74,7 @@ npm run setup
 然后编辑：
 
 ```text
+user.md
 memory/manual_compactor/config.local.json
 memory/rag/config.local.json
 scripts/abilities/connect_iphone/feedback_config.json
@@ -202,6 +209,13 @@ Hook 失败时会安静跳过，不会阻断正常聊天。
 - [识图脚本安装与使用](scripts/abilities/image-vision/README.md)
 - [供 Agent 使用的 image-vision Skill](.claude/skills/image-vision/SKILL.md)
 
+## 电脑真实摄像头
+
+`computer-camera` 在 Windows 上打开真实摄像头，预热后保存一张照片并把路径交还给 Agent。摄像头后台保持约 10 秒后自动释放；桌面警告会一直保留到用户确认。需要判断画面内容时，再由 Agent 单独调用识图能力：
+
+- [电脑摄像头安装与使用](scripts/abilities/computer-camera/README.md)
+- [供 Agent 使用的 computer-camera Skill](.claude/skills/computer-camera/SKILL.md)
+
 ## 开发状态
 
 - [x] 自定义短期、中期、长期记忆链路
@@ -217,6 +231,7 @@ Hook 失败时会安静跳过，不会阻断正常聊天。
 - [x] API 默认、本地 ComfyUI 按需启用的统一生图框架
 - [x] 可维护的视觉参考库与多图参考生成
 - [x] 无视觉主模型的外部识图通道
+- [x] 电脑真实摄像头拍照与持续本机警告
 - [ ] 进一步提高固定人物一致性
 
 ## 许可
