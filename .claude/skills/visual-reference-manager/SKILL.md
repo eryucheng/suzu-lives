@@ -24,10 +24,10 @@ description: 维护项目的视觉参考资料库。用户明确要求把收到�
 
 ## 约束
 
-- 不直接手工编辑 `visual-references/manifest.json`，始终使用维护脚本。
+- 不直接手工编辑 `assets/visual-references/manifest.json`，始终使用维护脚本。
 - ID 使用稳定、可读的小写英文层级，例如 `home.bedroom.door-view`。
 - 每张图必须分别写清 `role`、`description`、`preserve` 和 `ignore`；文件名不算描述。
 - 同一张图片只承担明确角色。人物图不继承背景和姿势，空间图不定义人物身份。
 - 新图片与已有 ID 冲突时不覆盖，先向用户说明并确认后续是更新描述、删除旧项还是另建 ID。
 - 只有用户明确要求删除时才生成 `remove` 操作，并明确选择是否删除磁盘图片。
-- 私人脸部和住宅图片只放在 `visual-references/`，不移入 Skill，也不提交到公开仓库。
+- 私人脸部和住宅图片只放在 `assets/visual-references/`，不移入 Skill，也不提交到公开仓库。

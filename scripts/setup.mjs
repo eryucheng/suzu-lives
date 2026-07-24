@@ -24,14 +24,29 @@ const pairs = [
     "scripts/abilities/image-vision/config.example.json",
     "scripts/abilities/image-vision/config.local.json",
   ],
-  ["visual-references/manifest.example.json", "visual-references/manifest.json"],
+  [
+    "assets/visual-references/manifest.example.json",
+    "assets/visual-references/manifest.json",
+  ],
   [
     "scripts/abilities/connect_iphone/feedback_config.example.json",
     "scripts/abilities/connect_iphone/feedback_config.json",
   ],
+  ["user.example.md", "user.md"],
 ];
 
 let created = 0;
+const legacyManifest = path.join(root, "visual-references", "manifest.json");
+const currentManifest = path.join(root, "assets", "visual-references", "manifest.json");
+if (!fs.existsSync(currentManifest) && fs.existsSync(legacyManifest)) {
+  fs.cpSync(path.dirname(legacyManifest), path.dirname(currentManifest), {
+    recursive: true,
+    force: false,
+  });
+  console.log("已复制旧视觉参考库：visual-references/ → assets/visual-references/");
+  created += 1;
+}
+
 for (const [sourceName, targetName] of pairs) {
   const source = path.join(root, sourceName);
   const target = path.join(root, targetName);
@@ -39,6 +54,7 @@ for (const [sourceName, targetName] of pairs) {
     console.log(`保留现有配置：${targetName}`);
     continue;
   }
+  fs.mkdirSync(path.dirname(target), { recursive: true });
   fs.copyFileSync(source, target);
   console.log(`已创建：${targetName}`);
   created += 1;
