@@ -27,6 +27,7 @@ integrations/claude-code/settings.example.json
 - iPhone 快捷指令请求；
 - 手机拍照式生图；
 - 云端 API 与本地 ComfyUI 的统一生图入口；
+- 为不具备视觉能力的主模型读取本地图片；
 - 视觉参考库的批量维护；
 - 登录态网页浏览；
 - cc-connect 主动关心与临时回访 Timer。
@@ -41,11 +42,12 @@ integrations/claude-code/settings.example.json
 
 ## Claude Code Skills
 
-仓库自带五个项目级 Skill：
+仓库自带六个项目级 Skill：
 
 - `.claude/skills/iphone-bridge`：调用已经配置的手机能力，缺失时指导新增快捷指令；
 - `.claude/skills/phone-camera`：在后摄、前摄自拍和镜面自拍之间选择，并调用图像适配器；
 - `.claude/skills/image-generation`：默认调用 API，并在用户明确指定时选择已注册的本地 ComfyUI 工作流；
+- `.claude/skills/image-vision`：在主模型不能直接看图时调用外部视觉模型读取本地图片；
 - `.claude/skills/visual-reference-manager`：仅在用户明确要求时登记、修改、删除或校验人物与空间参考图；
 - `.claude/skills/proactive-contact`：管理链式主动关心和一次性临时回访。
 

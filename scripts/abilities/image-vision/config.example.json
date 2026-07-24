@@ -1,0 +1,16 @@
+{
+  "openai": {
+    "api_key": "",
+    "base_url": "https://example.com/v1",
+    "model": "your-vision-model"
+  },
+  "vision": {
+    "detail": "auto",
+    "timeout_seconds": 90,
+    "max_output_tokens": 800,
+    "max_image_bytes": 1572864,
+    "max_edge": 1600,
+    "jpeg_quality": 90,
+    "retry_on_refusal": true
+  }
+}

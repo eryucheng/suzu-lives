@@ -20,6 +20,10 @@ const pairs = [
     "scripts/abilities/image-generation/workflows/registry.example.json",
     "scripts/abilities/image-generation/workflows/registry.local.json",
   ],
+  [
+    "scripts/abilities/image-vision/config.example.json",
+    "scripts/abilities/image-vision/config.local.json",
+  ],
   ["visual-references/manifest.example.json", "visual-references/manifest.json"],
   [
     "scripts/abilities/connect_iphone/feedback_config.example.json",

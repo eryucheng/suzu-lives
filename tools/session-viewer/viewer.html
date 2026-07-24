@@ -13,7 +13,21 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-
 .controls button { background: #444; color: #fff; border: none; padding: 5px 12px; border-radius: 4px; cursor: pointer; font-size: 12px; }
 .controls button:hover { background: #555; }
 .controls button.active { background: #07c160; }
+.searchbar { background: #3a3a3a; padding: 8px 16px; display: flex; gap: 8px; flex-shrink: 0; }
+.searchbar input { flex: 1; min-width: 120px; border: 1px solid #666; background: #fff; color: #222; border-radius: 4px; padding: 7px 10px; font-size: 13px; outline: none; }
+.searchbar input:focus { border-color: #07c160; box-shadow: 0 0 0 1px #07c160; }
+.searchbar button { border: none; border-radius: 4px; padding: 6px 14px; cursor: pointer; background: #07c160; color: #fff; }
+.searchbar button.secondary { background: #666; }
 .chat { flex: 1; overflow-y: auto; padding: 16px; padding-bottom: 32px; }
+.search-result { border-top: 1px dashed #bbb; padding-top: 10px; margin-bottom: 10px; }
+.search-result:first-child { border-top: none; }
+.search-meta { color: #888; font-size: 11px; margin-bottom: 7px; display: flex; align-items: center; justify-content: center; gap: 10px; }
+.locate-button, .context-back { border: none; border-radius: 4px; padding: 4px 10px; cursor: pointer; background: #07c160; color: #fff; font-size: 11px; }
+.locate-button:hover, .context-back:hover { background: #06ad56; }
+.context-toolbar { position: sticky; top: 0; z-index: 2; display: flex; justify-content: center; align-items: center; gap: 10px; background: rgba(237, 237, 237, 0.96); padding: 4px 0 12px; margin-bottom: 8px; color: #777; font-size: 11px; }
+.context-target { outline: 3px solid #f6b73c; outline-offset: 4px; border-radius: 8px; animation: target-pulse 1.2s ease-out; }
+@keyframes target-pulse { from { outline-color: #ff7a00; } to { outline-color: #f6b73c; } }
+.raw-record { background: #fff; border-radius: 6px; padding: 10px; white-space: pre-wrap; word-break: break-word; font-size: 11px; max-height: 280px; overflow: auto; }
 .msg { margin-bottom: 16px; display: flex; flex-direction: column; }
 .msg.user { align-items: flex-end; }
 .msg.assistant { align-items: flex-start; }
@@ -66,6 +80,11 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-
     <button onclick="scrollBottom()">滚到底部</button>
   </div>
 </div>
+<div class="searchbar">
+  <input id="searchInput" type="search" maxlength="200" placeholder="搜索完整会话（正文、工具调用、注入内容……）">
+  <button onclick="runSearch()">搜索</button>
+  <button class="secondary" onclick="clearSearch()">返回会话</button>
+</div>
 <div class="chat" id="chat"></div>
 <div class="status" id="status">加载中...</div>
 
@@ -74,8 +93,15 @@ let config = { pollIntervalMs: 2000, maxMessages: 500 };
 let autoRefresh = true;
 let pollTimer = null;
 let lastVersion = null;
+let searching = false;
+let viewMode = 'session';
+let lastSearchPayload = null;
+let currentTargetLine = null;
 
 async function init() {
+  document.getElementById('searchInput').addEventListener('keydown', event => {
+    if (event.key === 'Enter') runSearch();
+  });
   await loadSnapshot(true);
   pollTimer = setInterval(checkUpdate, config.pollIntervalMs || 2000);
 }
@@ -374,6 +400,132 @@ function renderSnapshot(payload, forceBottom = false) {
   if (wasAtBottom) scrollBottom();
 }
 
+function renderSearch(payload) {
+  viewMode = 'search';
+  lastSearchPayload = payload;
+  currentTargetLine = null;
+  const chat = document.getElementById('chat');
+  const rendered = [];
+  for (const item of payload.matches || []) {
+    const group = document.createElement('div');
+    group.className = 'search-result';
+    const meta = document.createElement('div');
+    meta.className = 'search-meta';
+    const label = document.createElement('span');
+    label.textContent = `JSONL 第 ${item.lineNumber} 行`;
+    const locate = document.createElement('button');
+    locate.className = 'locate-button';
+    locate.textContent = '定位到对话';
+    locate.addEventListener('click', () => jumpToResult(item.lineNumber));
+    meta.appendChild(label);
+    meta.appendChild(locate);
+    group.appendChild(meta);
+
+    const message = createMsgEl(item.record || {});
+    if (message) {
+      group.appendChild(message);
+    } else {
+      const raw = document.createElement('pre');
+      raw.className = 'raw-record';
+      raw.textContent = formatJson(item.record || {});
+      group.appendChild(raw);
+    }
+    rendered.push(group);
+  }
+  chat.replaceChildren(...rendered);
+  const range = payload.truncated ? `仅显示最近 ${rendered.length} 条` : `显示 ${rendered.length} 条`;
+  setStatus(`“${payload.query}”共命中 ${payload.matchedRecords} 条 · ${range} · 已扫描 ${payload.scannedRecords} 条记录`);
+  chat.scrollTop = 0;
+}
+
+function renderContext(payload) {
+  viewMode = 'context';
+  currentTargetLine = payload.targetLine;
+  const chat = document.getElementById('chat');
+  const rendered = [];
+
+  const toolbar = document.createElement('div');
+  toolbar.className = 'context-toolbar';
+  const back = document.createElement('button');
+  back.className = 'context-back';
+  back.textContent = '← 返回搜索结果';
+  back.addEventListener('click', () => {
+    if (lastSearchPayload) renderSearch(lastSearchPayload);
+  });
+  const range = document.createElement('span');
+  range.textContent = `JSONL 第 ${payload.startLine}～${payload.endLine} 行`;
+  toolbar.appendChild(back);
+  toolbar.appendChild(range);
+  rendered.push(toolbar);
+
+  let targetElement = null;
+  for (const item of payload.records || []) {
+    let element = createMsgEl(item.record || {});
+    if (!element && item.lineNumber === payload.targetLine) {
+      element = document.createElement('pre');
+      element.className = 'raw-record';
+      element.textContent = formatJson(item.record || {});
+    }
+    if (!element) continue;
+    element.dataset.lineNumber = String(item.lineNumber);
+    if (item.lineNumber === payload.targetLine) {
+      element.classList.add('context-target');
+      targetElement = element;
+    }
+    rendered.push(element);
+  }
+  chat.replaceChildren(...rendered);
+  setStatus(`已定位到 JSONL 第 ${payload.targetLine} 行 · 显示前后对话上下文`);
+  requestAnimationFrame(() => {
+    if (targetElement) targetElement.scrollIntoView({ block: 'center' });
+  });
+}
+
+async function jumpToResult(lineNumber) {
+  searching = true;
+  setStatus(`正在读取 JSONL 第 ${lineNumber} 行附近的对话……`);
+  try {
+    const res = await fetch(
+      `/api/context?line=${encodeURIComponent(lineNumber)}&before=100&after=100`,
+      { cache: 'no-store' },
+    );
+    const payload = await res.json();
+    if (!res.ok) throw new Error(payload.error || `HTTP ${res.status}`);
+    renderContext(payload);
+  } catch (e) {
+    setStatus(`定位失败: ${e.message}`, true);
+  }
+}
+
+async function runSearch() {
+  const input = document.getElementById('searchInput');
+  const query = input.value.trim();
+  if (!query) {
+    setStatus('请输入要搜索的内容。', true);
+    input.focus();
+    return;
+  }
+  searching = true;
+  setStatus('正在搜索完整会话……');
+  try {
+    const res = await fetch(`/api/search?q=${encodeURIComponent(query)}&limit=100`, { cache: 'no-store' });
+    const payload = await res.json();
+    if (!res.ok) throw new Error(payload.error || `HTTP ${res.status}`);
+    renderSearch(payload);
+  } catch (e) {
+    setStatus(`搜索失败: ${e.message}`, true);
+  }
+}
+
+async function clearSearch() {
+  searching = false;
+  viewMode = 'session';
+  lastSearchPayload = null;
+  currentTargetLine = null;
+  document.getElementById('searchInput').value = '';
+  await loadSnapshot(true);
+}
+
 async function loadSnapshot(forceRender = false) {
   try {
     const res = await fetch('/api/session', { cache: 'no-store' });
@@ -381,7 +533,7 @@ async function loadSnapshot(forceRender = false) {
     if (!res.ok) throw new Error(payload.error || `HTTP ${res.status}`);
     config = { ...config, ...(payload.config || {}) };
     document.getElementById('filePath').textContent = payload.fileName || '未配置';
-    if (forceRender || payload.version !== lastVersion) {
+    if (!searching && (forceRender || payload.version !== lastVersion)) {
       renderSnapshot(payload, lastVersion === null);
       lastVersion = payload.version;
     }
@@ -396,7 +548,9 @@ async function checkUpdate() {
 }
 
 async function refreshNow() {
-  await loadSnapshot(true);
+  if (viewMode === 'search') await runSearch();
+  else if (viewMode === 'context' && currentTargetLine) await jumpToResult(currentTargetLine);
+  else await loadSnapshot(true);
 }
 
 function scrollBottom() {

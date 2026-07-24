@@ -2,7 +2,7 @@
 
 这是我持续完善长期 AI Agent Suzu 的源码公开项目，目标是让 Agent 在长期运行中保持记忆和行为的连续性。
 
-当前发布包括记忆系统、时间感知 Hook、微信消息分条、两种本地查看器、iPhone 快捷指令连接、主动联系、登录态网页浏览和手机拍照式生图。运行核心为 Claude Code，也可以通过 cc-connect 接入微信。
+当前发布包括记忆系统、时间感知 Hook、微信消息分条、两种本地查看器、iPhone 快捷指令连接、主动联系、登录态网页浏览、外部模型识图和手机拍照式生图。运行核心为 Claude Code，也可以通过 cc-connect 接入微信。
 
 ## 当前可用功能
 
@@ -15,13 +15,14 @@
 - 支持本地 BM25，以及可选的 OpenAI 兼容 Embedding API；
 - 从事件卡片、历史原话或日期汇总中只选择一个小而准确的回忆片段；
 - 支持“上周日做了什么”等相对日期查询，没有可靠命中时不强行注入。
-- 提供只在本机运行的会话查看器，阅读用户、助手、系统、上下文注入、思考和工具记录；
+- 提供只在本机运行的会话查看器，阅读用户、助手、系统、上下文注入、思考和工具记录，并能从全量搜索结果定位到原始聊天位置；
 - 提供记忆查看器，可直接搜索 `history.jsonl`、`events.jsonl`，也能用真实召回链路预览最终注入内容；
 - 在每次用户提示前注入电脑当前本地时间，让 Agent 直接感知日期、星期、分钟以及当天的法定节假日或私人纪念日；
 - 把长回复拆成微信短消息，并在个人微信单 token 发送额度不足时保存队列、提醒刷新和可靠续发；
 - 通过 SMTP、IMAP 和 cc-connect Webhook，让 Agent 请求 iPhone 快捷指令执行操作，并接收手机返回的文字或图片；
 - 使用 cc-connect Timer 实现一条可持续的主动联系链，以及针对具体未完成事情的一次性回访；
 - 通过微软官方 `playwright-cli` Skill 连接保留登录状态的专用 Chrome，让 Agent 操作登录网站和动态网页。
+- 为没有原生视觉能力的主模型提供独立识图通道，按具体问题读取本地图片，并在人物图片被上游误拒时进行一次中性描述重试；
 - 提供统一图像生成引擎：日常默认使用云端 Images API，用户明确指定时才调用已注册的本地 ComfyUI 工作流，且不会静默切换后端；
 - 让 Agent 在后置摄像头、前置自拍和镜面自拍之间选择，用固定的拍摄几何生成自然的手机随手拍，并可按需组合人物、房间、物品或风格参考图后发进聊天。
 
@@ -49,6 +50,7 @@
 - iPhone 快捷指令连接目前只验证 Windows，需要 Python 3.10 或更高版本、支持 SMTP/IMAP 的邮箱和已启用 Webhook 的 cc-connect；
 - 登录态网页浏览目前只验证 Windows，需要 Google Chrome、Node.js 和 npm；
 - 手机拍照式生图需要 Python 3.10 或更高版本，以及一个 OpenAI Images API 兼容服务；只有使用 `--send` 时才需要 cc-connect；
+- 外部模型识图需要 Python 3.10 或更高版本，以及一个支持图片输入的 OpenAI Chat Completions 兼容服务；Pillow 为可选的自动缩放与格式转换依赖；
 - Embedding 可选，不配置时使用本地 BM25。
 
 本模块没有 npm 运行依赖，不需要执行 `npm install`。
@@ -71,6 +73,7 @@ memory/rag/config.local.json
 scripts/abilities/connect_iphone/feedback_config.json
 scripts/abilities/image-generation/config.local.json
 scripts/abilities/image-generation/workflows/registry.local.json
+scripts/abilities/image-vision/config.local.json
 scripts/abilities/phone-camera/config.local.json
 ```
 
@@ -190,6 +193,15 @@ Hook 失败时会安静跳过，不会阻断正常聊天。
 - [供 Agent 使用的 phone-camera Skill](.claude/skills/phone-camera/SKILL.md)
 - [视觉参考库维护 Skill](.claude/skills/visual-reference-manager/SKILL.md)
 
+## 外部模型识图
+
+当 Claude Code 当前使用的主模型不能直接读取图片时，`image-vision` 可以把一张本地图片连同
+用户的具体问题送给 OpenAI Chat Completions 兼容视觉模型。它只把模型确认看到的内容作为
+观察结果，不会把上下文猜测伪装成图中事实：
+
+- [识图脚本安装与使用](scripts/abilities/image-vision/README.md)
+- [供 Agent 使用的 image-vision Skill](.claude/skills/image-vision/SKILL.md)
+
 ## 开发状态
 
 - [x] 自定义短期、中期、长期记忆链路
@@ -204,6 +216,7 @@ Hook 失败时会安静跳过，不会阻断正常聊天。
 - [x] 手机拍照式生图适配器
 - [x] API 默认、本地 ComfyUI 按需启用的统一生图框架
 - [x] 可维护的视觉参考库与多图参考生成
+- [x] 无视觉主模型的外部识图通道
 - [ ] 进一步提高固定人物一致性
 
 ## 许可
