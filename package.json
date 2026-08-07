@@ -7,7 +7,9 @@
   "scripts": {
     "start": "npm run start --workspace=suzu-lives-console",
     "test": "npm run test --workspaces --if-present",
-    "dist": "npm run dist --workspace=suzu-lives-console"
+    "dist": "npm run dist --workspace=suzu-lives-console",
+    "package": "powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File ./scripts/package-release.ps1",
+    "package:fast": "powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File ./scripts/package-release.ps1 -SkipTests"
   },
   "workspaces": [
     "apps/*",
