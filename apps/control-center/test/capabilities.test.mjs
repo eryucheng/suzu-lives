@@ -55,6 +55,38 @@ test("WeChat is a software-level action and never becomes a Claude Skill", () =>
   assert.doesNotMatch(view, /data-toggle-capability="wechat-connection"/u);
 });
 
+test("the capabilities page exposes a separate external-capability entry and safe registration controls", () => {
+  const capabilitySnapshot = {
+    capabilities: [{ id: "image-vision", name: "图像理解", description: "fixture", category: "perceive", enabled: false, canToggle: true, savedSettings: {} }],
+  };
+  const externalCapabilities = {
+    projectRoot: "C:\\contacts\\suzu",
+    capabilities: [{
+      id: "weather.demo",
+      name: "本地天气",
+      version: "1.0.0",
+      description: "本地能力。",
+      types: ["skill", "mcp", "cli"],
+      enabled: false,
+      status: "ready",
+      canEnable: true,
+      canDisable: false,
+      source: { manifestPath: "C:\\package\\suzu-capability.json" },
+      diagnostics: [{ code: "cli-reserved", message: "CLI 不会执行。" }],
+    }],
+  };
+  const overview = renderCapabilities({ state: { capabilityPage: "overview", capabilitySnapshot, externalCapabilities } });
+  const external = renderCapabilities({ state: { capabilityPage: "external", capabilitySnapshot, externalCapabilities } });
+
+  assert.match(overview, /data-open-external-capabilities/u);
+  assert.match(overview, /外部能力/u);
+  assert.match(external, /data-import-external-capability/u);
+  assert.match(external, /data-enable-external-capability="weather\.demo"/u);
+  assert.match(external, /data-disable-external-capability="weather\.demo" disabled/u);
+  assert.match(external, /已登记”不表示程序已经运行/u);
+  assert.match(external, /CLI（预留）/u);
+});
+
 test("abilities live in the primary sidebar instead of management tabs", async () => {
   const sidebar = await fs.readFile(new URL("../src/index.html", import.meta.url), "utf8");
   const app = await fs.readFile(new URL("../src/app.mjs", import.meta.url), "utf8");

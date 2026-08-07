@@ -26,6 +26,12 @@ contextBridge.exposeInMainWorld("suzuConsole", {
     saveSettings: (id, value) => ipcRenderer.invoke("capabilities:save-settings", { id, value }),
     openTravelingMerchantPage: () => ipcRenderer.invoke("capabilities:open-traveling-merchant-page"),
   },
+  externalCapabilities: {
+    snapshot: () => ipcRenderer.invoke("external-capabilities:snapshot"),
+    importManifest: () => ipcRenderer.invoke("external-capabilities:import"),
+    setEnabled: (id, enabled) => ipcRenderer.invoke("external-capabilities:set-enabled", { id, enabled }),
+    remove: (id, confirmed = false) => ipcRenderer.invoke("external-capabilities:remove", { id, confirmed }),
+  },
   agentRuntime: {
     snapshot: () => ipcRenderer.invoke("agent-runtime:snapshot"),
     claudeCodeApiSnapshot: () => ipcRenderer.invoke("agent-runtime:claude-code-api-snapshot"),

@@ -343,16 +343,53 @@ function renderCapabilityCategoryCard(category, capabilities) {
   return `<button type="button" class="capability-space-card capability-space-card--${escapeHtml(category.id)}" data-open-capability-category="${escapeHtml(category.id)}"><span class="capability-space-card__top"><span class="capability-space-card__symbol" aria-hidden="true">${category.id === "create" ? "◌" : category.id === "perceive" ? "◈" : category.id === "act" ? "↗" : "✦"}</span>${status(`${enabled} / ${members.length} 已开启`, enabled ? "ready" : "muted")}</span><span class="capability-space-card__copy"><span class="reference-kicker">${escapeHtml(category.id.toUpperCase())}</span><strong>${escapeHtml(category.label)}</strong><small>${escapeHtml(category.detail)}</small></span><span class="capability-space-card__enter">进入 <b aria-hidden="true">→</b></span></button>`;
 }
 
+function externalCapabilityStatus(capability) {
+  if (capability.status === "registered") return ["已登记", "ready"];
+  if (capability.status === "partial") return ["登记不完整", "muted"];
+  if (capability.status === "error") return ["需要处理", "muted"];
+  return ["未登记", "muted"];
+}
+
+function externalCapabilityTypeLabel(type) {
+  return ({ skill: "Skill", mcp: "MCP", cli: "CLI（预留）" })[type] || type;
+}
+
+function renderExternalCapabilityCard(capability) {
+  const [stateLabel, stateTone] = externalCapabilityStatus(capability);
+  const diagnostics = Array.isArray(capability.diagnostics) ? capability.diagnostics : [];
+  const types = Array.isArray(capability.types) ? capability.types : [];
+  const source = capability.source || {};
+  const enableLabel = capability.enabled ? "再次启用以更新登记" : "启用并登记到当前联系人";
+  const enableDisabled = capability.canEnable !== true ? "disabled" : "";
+  const disableDisabled = capability.canDisable !== true ? "disabled" : "";
+  return `<article class="capability-detail capability-detail--focus"><header class="capability-detail__header"><div><span class="reference-kicker">EXTERNAL / ${escapeHtml(types.map(externalCapabilityTypeLabel).join(" + ") || "CAPABILITY")}</span><h2>${escapeHtml(capability.name || capability.id)}</h2><p>${escapeHtml(capability.description || "没有提供能力说明。")}</p></div>${status(stateLabel, stateTone)}</header><div class="capability-detail__content">${capabilitySettingSection("清单", "版本与来源", "导入时会保存一份清单副本；不会下载或执行其中的第三方代码。", `<div class="capability-form-grid"><div><span>版本</span><strong>${escapeHtml(capability.version || "—")}</strong></div><div class="wide"><span>本地来源</span><small>${escapeHtml(source.manifestPath || "来源路径不可用")}</small></div></div>`)}${capabilitySettingSection("当前宿主", "Claude Code 项目登记", "这是当前的 Claude Code 安装器。清单本身不依赖 Claude，未来可由其他 Agent runtime 安装；“已登记”不表示程序已经运行。", `<div class="capability-inline-action"><div><strong>${escapeHtml(stateLabel)}</strong><small>${escapeHtml(capability.enabled ? "Skill 和 MCP 的受管条目已写入当前项目；Claude Code 仍会按自己的批准流程决定何时连接或运行。" : "启用只会安全写入当前项目的受管 Skill/MCP 配置。")}</small></div><button type="button" class="secondary-button" data-enable-external-capability="${escapeHtml(capability.id)}" ${enableDisabled}>${escapeHtml(enableLabel)}</button><button type="button" class="text-button" data-disable-external-capability="${escapeHtml(capability.id)}" ${disableDisabled}>停用</button></div>`)}${diagnostics.length ? capabilitySettingSection("诊断", "静态检查", "只检查本地文件、登记状态与配置形状，不会启动命令或联网。", `<ul class="capability-setting-empty">${diagnostics.map((diagnostic) => `<li>${escapeHtml(diagnostic.message || diagnostic.code || "未知诊断")}</li>`).join("")}</ul>`) : ""}${capabilityInfoSection("移除", "从 Suzu Lives 移除", "会先从所有已登记项目删除仅属于 Suzu Lives 的条目；任何冲突、项目缺失或手动修改都会中止并保留文件。", `<button type="button" class="text-button" data-remove-external-capability="${escapeHtml(capability.id)}">移除</button>`)}</div></article>`;
+}
+
+function renderExternalCapabilities(state) {
+  const snapshot = state.externalCapabilities || { projectRoot: "", capabilities: [] };
+  const capabilities = Array.isArray(snapshot.capabilities) ? snapshot.capabilities : [];
+  const project = String(snapshot.projectRoot || "").trim();
+  const action = `<div class="capability-page-actions"><button type="button" class="secondary-button" data-return-capabilities>返回能力</button></div>`;
+  const intro = pageIntro("CAPABILITIES / EXTERNAL", "外部能力", "导入用户明确选择的本地清单。当前仅安装到所选联系人的 Claude Code 项目；不会运行或下载第三方代码。", action);
+  const importAction = `<div class="capability-inline-action"><div><strong>${project ? "当前联系人项目已选择" : "尚未选择联系人项目"}</strong><small>${escapeHtml(project || "仍可导入并查看清单；启用前需要先选择联系人。")}</small></div><button type="button" class="primary-button" data-import-external-capability>导入 suzu-capability.json</button></div>`;
+  if (!capabilities.length) return `${intro}<section class="capability-detail capability-detail--focus">${importAction}${emptyBlock(icons.sliders, "还没有外部能力", "选择本地 suzu-capability.json 后，这里会显示静态诊断和当前联系人中的登记状态。")}</section>`;
+  return `${intro}<section class="capability-detail capability-detail--focus">${importAction}</section><section class="capability-detail-page">${capabilities.map(renderExternalCapabilityCard).join("")}</section>`;
+}
+
 export function renderCapabilities({ state }) {
   const snapshot = state.capabilitySnapshot;
   const intro = pageIntro("CAPABILITIES", "能力", "从一个方向进入，再为每项能力单独设置。 ");
+  if (state.capabilityPage === "external") return renderExternalCapabilities(state);
   if (!snapshot) return `${intro}${emptyBlock(icons.sliders, "正在读取能力", "这里会显示当前联系人可以使用的能力。")}`;
   const capabilities = [...(snapshot.capabilities || []), wechatConnectionCapability(state)];
   const categoryIds = new Set(capabilities.map(capabilityCategory));
   const categories = CAPABILITY_CATEGORIES.filter((category) => categoryIds.has(category.id));
   if (!categories.length) return `${intro}${emptyBlock(icons.sliders, "还没有能力", "创建并选择联系人后，这里会显示可用能力。")}`;
   if (state.capabilityPage !== "category" && state.capabilityPage !== "detail") {
-    return `${intro}<section class="capability-space-grid">${categories.map((category) => renderCapabilityCategoryCard(category, capabilities)).join("")}</section>`;
+    const external = state.externalCapabilities;
+    const externalCount = Array.isArray(external?.capabilities) ? external.capabilities.length : 0;
+    const externalEntry = `<section class="capability-detail capability-detail--focus"><div class="capability-inline-action"><div><span class="reference-kicker">EXTERNAL</span><strong>外部能力</strong><small>${externalCount ? `已导入 ${externalCount} 项本地能力；可查看诊断并登记到当前联系人。` : "导入一个本地 suzu-capability.json，接入 Skill 或 MCP。"}</small></div><button type="button" class="secondary-button" data-open-external-capabilities>打开外部能力</button></div></section>`;
+    return `${intro}<section class="capability-space-grid">${categories.map((category) => renderCapabilityCategoryCard(category, capabilities)).join("")}</section>${externalEntry}`;
   }
   const activeCategory = categories.some((category) => category.id === state.capabilityCategory) ? state.capabilityCategory : categories[0].id;
   const visible = capabilities.filter((capability) => capabilityCategory(capability) === activeCategory);
@@ -566,6 +603,8 @@ export async function loadCapabilities(context) {
       if (defaults.value.initialized && unresolved.length) context.setNotice(`已默认开启可安全加入的能力；${unresolved.length} 项保留了已有同名文件。`);
     } else if (defaults?.error) context.setNotice(defaults.error.message || "无法初始化默认能力。");
     if (!context.state.capabilitySnapshot) context.state.capabilitySnapshot = await context.api.capabilities.snapshot();
+    try { context.state.externalCapabilities = await context.api.externalCapabilities?.snapshot?.(); }
+    catch (error) { context.setNotice(error?.message || "内置能力已读取，但暂时无法读取外部能力。 "); }
     try { context.state.apiServices = await context.api.connections.apiServicesSnapshot(); }
     catch (error) { context.setNotice(error?.message || "能力已读取，但暂时无法读取 API 选择。 "); }
     try { context.state.wechatSnapshot = await context.api.wechat?.snapshot?.(); }
@@ -952,6 +991,49 @@ export function bindAgentEvents({ api, applyTheme, openOnboarding, refreshData, 
   };
   document.querySelectorAll("[data-toggle-capability]").forEach((input) => input.addEventListener("change", () => {
     setCapabilityActive(input.dataset.toggleCapability, input.checked);
+  }));
+  document.querySelector("[data-open-external-capabilities]")?.addEventListener("click", () => {
+    state.capabilityPage = "external";
+    state.capabilitySelectedId = "";
+    state.siteAutomationSelectedSiteId = "";
+    render();
+  });
+  document.querySelector("[data-import-external-capability]")?.addEventListener("click", async () => {
+    if (!api.externalCapabilities?.importManifest) return;
+    try {
+      const response = await api.externalCapabilities.importManifest();
+      if (!response?.ok) throw response?.error || new Error("无法导入外部能力。 ");
+      state.externalCapabilities = response.value.snapshot;
+      if (!response.value.canceled) setNotice(response.value.created ? "外部能力清单已导入；尚未运行任何第三方代码。" : "外部能力清单已更新；需要时可再次启用以更新当前联系人中的登记。");
+    } catch (error) { setNotice(error?.message || "无法导入外部能力清单。 "); }
+    render();
+  });
+  const setExternalCapabilityEnabled = async (id, enabled) => {
+    if (!api.externalCapabilities?.setEnabled) return;
+    try {
+      const response = await api.externalCapabilities.setEnabled(id, enabled);
+      if (!response?.ok) throw response?.error || new Error("无法更新外部能力。 ");
+      state.externalCapabilities = response.value.snapshot;
+      setNotice(enabled ? "外部能力已登记到当前联系人；这不会在 Suzu Lives 中运行第三方代码。" : "外部能力已从当前联系人取消登记。 ");
+    } catch (error) { setNotice(error?.message || "无法更新外部能力。 "); }
+    render();
+  };
+  document.querySelectorAll("[data-enable-external-capability]").forEach((button) => button.addEventListener("click", () => {
+    setExternalCapabilityEnabled(button.dataset.enableExternalCapability, true);
+  }));
+  document.querySelectorAll("[data-disable-external-capability]").forEach((button) => button.addEventListener("click", () => {
+    setExternalCapabilityEnabled(button.dataset.disableExternalCapability, false);
+  }));
+  document.querySelectorAll("[data-remove-external-capability]").forEach((button) => button.addEventListener("click", async () => {
+    const capability = state.externalCapabilities?.capabilities?.find((item) => item.id === button.dataset.removeExternalCapability);
+    if (!window.confirm(`移除“${capability?.name || "这项外部能力"}”？它会先尝试清理所有由 Suzu Lives 登记的项目条目。`)) return;
+    try {
+      const response = await api.externalCapabilities?.remove?.(button.dataset.removeExternalCapability, true);
+      if (!response?.ok) throw response?.error || new Error("无法移除外部能力。 ");
+      state.externalCapabilities = response.value.snapshot;
+      setNotice("外部能力已从 Suzu Lives 移除。 ");
+    } catch (error) { setNotice(error?.message || "无法移除外部能力。 "); }
+    render();
   }));
   document.querySelector("[data-toggle-wechat-connection]")?.addEventListener("change", async (event) => {
     if (!api.wechat?.saveSettings) return;
