@@ -13,6 +13,7 @@ export const state = {
   capabilityPage: "overview",
   capabilityCategory: "create",
   capabilitySelectedId: "",
+  externalCapabilities: null,
   companionSessions: null,
   wechatSnapshot: null,
   siteAutomationSelectedSiteId: "",

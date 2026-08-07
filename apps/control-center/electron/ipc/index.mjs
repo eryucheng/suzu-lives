@@ -1,6 +1,7 @@
 import { dialog, ipcMain, nativeImage, safeStorage, shell } from "electron";
 
 import { createCapabilitiesService, packagedCliCommand, registerCapabilitiesIpc } from "./capabilities-ipc.mjs";
+import { createExternalCapabilitiesIpcService, registerExternalCapabilitiesIpc } from "./external-capabilities-ipc.mjs";
 import { registerConversationIpc } from "./conversation-ipc.mjs";
 import { registerWechatIpc } from "./wechat-ipc.mjs";
 import { createConnectionsService, registerConnectionsIpc } from "./connections-ipc.mjs";
@@ -76,6 +77,7 @@ export function registerIpcHandlers({ app, dataStorageService, getMainWindow, se
   });
   void contactProjectsService.syncClaudeProjectSettings().catch(() => undefined);
   const connectionsService = createConnectionsService({ safeStorage, settingsService });
+  const externalCapabilitiesService = createExternalCapabilitiesIpcService({ settingsService });
   const memoryService = createMemoryService({
     settingsService,
     connectionResolver: ({ kind }) => connectionsService.resolveNamedApiConnection(kind),
@@ -111,6 +113,7 @@ export function registerIpcHandlers({ app, dataStorageService, getMainWindow, se
   registerLedgerIpc({ ipcMain, settingsService });
   registerTodayCalendarIpc({ ipcMain, todayCalendarService });
   registerCapabilitiesIpc({ ipcMain, capabilitiesService });
+  registerExternalCapabilitiesIpc({ dialog, getMainWindow, ipcMain, externalCapabilitiesService });
   registerRelationshipFilesIpc({ ipcMain, relationshipFilesService });
   registerProjectHooksIpc({ ipcMain, projectHooksService });
   const conversation = registerConversationIpc({

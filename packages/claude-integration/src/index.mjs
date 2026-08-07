@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import fsSync from "node:fs";
 import path from "node:path";
+import { createHash } from "node:crypto";
 
 import { CAPABILITY_DEFINITIONS, getCapabilityDefinition } from "@suzu-lives/capability-registry";
 import { PROACTIVE_CONTACT_ID, PROACTIVE_CONTACT_NAME, renderProactiveContactSkill } from "@suzu-lives/proactive-contact";
@@ -15,6 +16,16 @@ const CLAUDE_END = "<!-- suzu-lives:managed:end -->";
 const ABILITIES_START = "<!-- suzu-lives:abilities:start -->";
 const ABILITIES_END = "<!-- suzu-lives:abilities:end -->";
 const ABILITY_MARKER_PREFIX = "<!-- suzu-lives:ability:";
+const EXTERNAL_SKILL_MARKER_PREFIX = "<!-- suzu-lives:external-capability:";
+const EXTERNAL_SKILL_METADATA_FILE = ".suzu-lives-external-capability.json";
+const EXTERNAL_SKILL_METADATA_VERSION = 2;
+const EXTERNAL_SKILL_MAX_FILE_BYTES = 1_000_000;
+const EXTERNAL_SKILL_MAX_TOTAL_BYTES = 8_000_000;
+const EXTERNAL_SKILL_MAX_FILES = 256;
+const EXTERNAL_SKILL_MAX_DEPTH = 16;
+const EXTERNAL_MCP_METADATA_FILE = "suzu-lives-external-capabilities.json";
+const EXTERNAL_MCP_METADATA_VERSION = 1;
+const EXTERNAL_ID = /^[a-z0-9](?:[a-z0-9._-]{0,62}[a-z0-9])?$/u;
 const TIME_AWARENESS_ID = "time-awareness";
 const PLAYWRIGHT_CLI_PERMISSION = "Bash(playwright-cli *)";
 const SELECTABLE_CLAUDE_TOOL_PERMISSIONS = Object.freeze([
@@ -592,4 +603,521 @@ export async function removeClaudeRegistration({ projectRoot, abilityId, fsOps =
   ];
   await writeRegistrationTransaction(fsOps, root, registrationFiles);
   return { abilityId: capability.id, removed: true, files: [claudePath, abilitiesPath, skillPath] };
+}
+
+function externalCapabilityId(value) {
+  const id = clean(value).toLowerCase();
+  if (!EXTERNAL_ID.test(id)) throw new ClaudeIntegrationError("外部能力 ID 格式无效。", { code: "external-manifest-invalid" });
+  return id;
+}
+
+function externalVersion(value) {
+  const version = clean(value);
+  if (!version || version.length > 120 || /[\r\n\u0000]/u.test(version)) {
+    throw new ClaudeIntegrationError("外部能力版本格式无效。", { code: "external-manifest-invalid" });
+  }
+  return version;
+}
+
+function externalSkillDirectory(capabilityId) {
+  return `suzu-external-${externalCapabilityId(capabilityId)}`;
+}
+
+function externalMcpServerName(capabilityId) {
+  return `suzu-external-${externalCapabilityId(capabilityId)}`;
+}
+
+function sha256(value) {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+function canonicalJson(value) {
+  if (Array.isArray(value)) return value.map(canonicalJson);
+  if (record(value)) return Object.fromEntries(Object.keys(value).sort().map((key) => [key, canonicalJson(value[key])]));
+  return value;
+}
+
+function jsonHash(value) {
+  return sha256(JSON.stringify(canonicalJson(value)));
+}
+
+function externalTypes(value) {
+  const requested = Array.isArray(value) ? value : ["skill", "mcp"];
+  const types = [...new Set(requested.map((item) => clean(item).toLowerCase()).filter(Boolean))];
+  if (!types.length || types.some((type) => !["skill", "mcp"].includes(type))) {
+    throw new ClaudeIntegrationError("外部能力注册类型无效。", { code: "external-manifest-invalid" });
+  }
+  return types;
+}
+
+function jsonObject(value, label) {
+  if (!record(value)) throw new ClaudeIntegrationError(`${label}必须是 JSON 对象。`, { code: "external-manifest-invalid" });
+  let serialized;
+  try { serialized = JSON.stringify(value); }
+  catch { throw new ClaudeIntegrationError(`${label}无法序列化为 JSON。`, { code: "external-manifest-invalid" }); }
+  if (!serialized || serialized.length > 64_000) {
+    throw new ClaudeIntegrationError(`${label}过大或无效。`, { code: "external-manifest-invalid" });
+  }
+  return JSON.parse(serialized);
+}
+
+function parseJsonObject(content, label, code = "external-registration-invalid") {
+  const source = String(content || "").trim();
+  if (!source) return {};
+  let parsed;
+  try { parsed = JSON.parse(source); }
+  catch { throw new ClaudeIntegrationError(`${label}不是有效 JSON，未修改用户项目。`, { code }); }
+  if (!record(parsed)) throw new ClaudeIntegrationError(`${label}根节点必须是对象，未修改用户项目。`, { code });
+  return parsed;
+}
+
+async function readOptionalSafeProjectFile(fsOps, root, filePath, label) {
+  if (!inside(root, filePath)) throw new ClaudeIntegrationError("外部能力注册目标路径无效。", { code: "external-registration-invalid" });
+  const relative = path.relative(root, filePath);
+  const segments = relative.split(path.sep).filter(Boolean);
+  let current = root;
+  for (const segment of segments.slice(0, -1)) {
+    current = path.join(current, segment);
+    const stat = await lstatIfPresent(fsOps, current);
+    if (!stat) return { exists: false, content: "" };
+    if (stat.isSymbolicLink() || !stat.isDirectory()) {
+      throw new ClaudeIntegrationError(`${current} 不是项目内安全目录；未修改用户项目。`, { code: "external-registration-invalid" });
+    }
+  }
+  const stat = await lstatIfPresent(fsOps, filePath);
+  if (!stat) return { exists: false, content: "" };
+  if (stat.isSymbolicLink() || !stat.isFile()) {
+    throw new ClaudeIntegrationError(`${label}必须是普通文件；未修改用户项目。`, { code: "external-registration-invalid" });
+  }
+  const content = await fsOps.readFile(filePath, "utf8");
+  const afterRead = await lstatIfPresent(fsOps, filePath);
+  if (!afterRead || afterRead.isSymbolicLink() || !afterRead.isFile()) {
+    throw new ClaudeIntegrationError(`${label}在读取时发生了不安全变更；未修改用户项目。`, { code: "external-registration-invalid" });
+  }
+  return { exists: true, content };
+}
+
+async function readOptionalSafeProjectBinaryFile(fsOps, root, filePath, label) {
+  if (!inside(root, filePath)) throw new ClaudeIntegrationError("外部能力注册目标路径无效。", { code: "external-registration-invalid" });
+  const relative = path.relative(root, filePath);
+  const segments = relative.split(path.sep).filter(Boolean);
+  let current = root;
+  for (const segment of segments.slice(0, -1)) {
+    current = path.join(current, segment);
+    const stat = await lstatIfPresent(fsOps, current);
+    if (!stat) return { exists: false, content: Buffer.alloc(0) };
+    if (stat.isSymbolicLink() || !stat.isDirectory()) {
+      throw new ClaudeIntegrationError(`${current} 不是项目内安全目录；未修改用户项目。`, { code: "external-registration-invalid" });
+    }
+  }
+  const stat = await lstatIfPresent(fsOps, filePath);
+  if (!stat) return { exists: false, content: Buffer.alloc(0) };
+  if (stat.isSymbolicLink() || !stat.isFile()) {
+    throw new ClaudeIntegrationError(`${label}必须是普通文件；未修改用户项目。`, { code: "external-registration-invalid" });
+  }
+  const raw = await fsOps.readFile(filePath);
+  const content = Buffer.isBuffer(raw) ? raw : Buffer.from(raw);
+  const afterRead = await lstatIfPresent(fsOps, filePath);
+  if (!afterRead || afterRead.isSymbolicLink() || !afterRead.isFile() || afterRead.size !== content.byteLength) {
+    throw new ClaudeIntegrationError(`${label}在读取时发生了不安全变更；未修改用户项目。`, { code: "external-registration-invalid" });
+  }
+  return { exists: true, content };
+}
+
+function externalSkillRelativePath(value, { code = "external-source-invalid", label = "外部 Skill 文件路径" } = {}) {
+  const source = typeof value === "string" ? value : "";
+  const invalid = () => { throw new ClaudeIntegrationError(`${label}必须是包内使用 / 的安全相对路径。`, { code }); };
+  if (!source || source.length > 1_000 || /[\r\n\u0000]/u.test(source) || source.includes("\\") || path.posix.isAbsolute(source) || path.win32.isAbsolute(source)) invalid();
+  const segments = source.split("/");
+  if (!segments.length || segments.some((segment) => !segment || segment === "." || segment === "..")) invalid();
+  if (segments.length - 1 > EXTERNAL_SKILL_MAX_DEPTH) {
+    throw new ClaudeIntegrationError(`外部 Skill 文件目录层级不能超过 ${EXTERNAL_SKILL_MAX_DEPTH} 层。`, { code });
+  }
+  const normalized = segments.join("/");
+  if (normalized === EXTERNAL_SKILL_METADATA_FILE) {
+    throw new ClaudeIntegrationError("外部 Skill 包不能覆盖 Suzu Lives 的受管标记文件。", { code });
+  }
+  return normalized;
+}
+
+function externalSkillBytes(value, label) {
+  let content;
+  if (Buffer.isBuffer(value)) content = Buffer.from(value);
+  else if (typeof value === "string") content = Buffer.from(value, "utf8");
+  else if (value instanceof Uint8Array) content = Buffer.from(value);
+  else throw new ClaudeIntegrationError(`${label}必须是普通文件内容。`, { code: "external-source-invalid" });
+  if (content.byteLength > EXTERNAL_SKILL_MAX_FILE_BYTES) {
+    throw new ClaudeIntegrationError(`${label}不能超过 ${EXTERNAL_SKILL_MAX_FILE_BYTES.toLocaleString("zh-CN")} 字节。`, { code: "external-source-invalid" });
+  }
+  return content;
+}
+
+function parseExternalSkillMetadata(content, capabilityId) {
+  const metadata = parseJsonObject(content, "外部 Skill 受管标记", "external-skill-conflict");
+  const expectedId = externalCapabilityId(capabilityId);
+  if (metadata.capabilityId !== expectedId) {
+    throw new ClaudeIntegrationError("同名外部 Skill 没有有效的 Suzu Lives 受管标记，未覆盖用户文件。", { code: "external-skill-conflict" });
+  }
+  if (metadata.schemaVersion === 1 && /^[a-f0-9]{64}$/u.test(clean(metadata.contentSha256))) {
+    return {
+      ...metadata,
+      files: { "SKILL.md": clean(metadata.contentSha256) },
+      legacy: true,
+    };
+  }
+  if (metadata.schemaVersion !== EXTERNAL_SKILL_METADATA_VERSION || !record(metadata.files)) {
+    throw new ClaudeIntegrationError("同名外部 Skill 没有有效的 Suzu Lives 受管标记，未覆盖用户文件。", { code: "external-skill-conflict" });
+  }
+  const entries = Object.entries(metadata.files);
+  if (!entries.length || entries.length > EXTERNAL_SKILL_MAX_FILES) {
+    throw new ClaudeIntegrationError("外部 Skill 受管文件清单无效，未覆盖用户文件。", { code: "external-skill-conflict" });
+  }
+  const files = {};
+  const pathKeys = new Set();
+  for (const [rawPath, hash] of entries) {
+    const relativePath = externalSkillRelativePath(rawPath, { code: "external-skill-conflict", label: "外部 Skill 受管文件路径" });
+    const pathKey = process.platform === "win32" ? relativePath.toLowerCase() : relativePath;
+    if (relativePath !== rawPath || Object.hasOwn(files, relativePath) || pathKeys.has(pathKey) || !/^[a-f0-9]{64}$/u.test(clean(hash))) {
+      throw new ClaudeIntegrationError("外部 Skill 受管文件清单无效，未覆盖用户文件。", { code: "external-skill-conflict" });
+    }
+    pathKeys.add(pathKey);
+    files[relativePath] = clean(hash);
+  }
+  if (!Object.hasOwn(files, "SKILL.md")) {
+    throw new ClaudeIntegrationError("外部 Skill 受管文件清单缺少 SKILL.md，未覆盖用户文件。", { code: "external-skill-conflict" });
+  }
+  return { ...metadata, files, legacy: false };
+}
+
+function renderExternalSkillContent({ capabilityId, content }) {
+  const bytes = externalSkillBytes(content, "外部 SKILL.md");
+  const source = bytes.toString("utf8");
+  if (!source.trim() || !Buffer.from(source, "utf8").equals(bytes)) {
+    throw new ClaudeIntegrationError("外部 SKILL.md 必须是非空 UTF-8 文本，未写入用户项目。", { code: "external-source-invalid" });
+  }
+  const trailingNewline = source.endsWith("\n") ? source : `${source}\n`;
+  return `${trailingNewline}\n${EXTERNAL_SKILL_MARKER_PREFIX}${externalCapabilityId(capabilityId)} -->\n`;
+}
+
+function normalizeExternalSkillFiles(skill, capabilityId) {
+  if (!record(skill)) throw new ClaudeIntegrationError("外部 Skill 安装内容无效。", { code: "external-source-invalid" });
+  const supplied = Array.isArray(skill.files)
+    ? skill.files
+    : [{ relativePath: "SKILL.md", content: skill.content, sourcePath: skill.sourcePath }];
+  if (!supplied.length || supplied.length > EXTERNAL_SKILL_MAX_FILES) {
+    throw new ClaudeIntegrationError(`外部 Skill 包必须包含 1 至 ${EXTERNAL_SKILL_MAX_FILES} 个文件。`, { code: "external-source-invalid" });
+  }
+  const seen = new Set();
+  const files = [];
+  let totalBytes = 0;
+  for (const item of supplied) {
+    if (!record(item)) throw new ClaudeIntegrationError("外部 Skill 包文件无效。", { code: "external-source-invalid" });
+    const relativePath = externalSkillRelativePath(item.relativePath);
+    const key = process.platform === "win32" ? relativePath.toLowerCase() : relativePath;
+    if (seen.has(key)) throw new ClaudeIntegrationError("外部 Skill 包包含重复文件路径。", { code: "external-source-invalid" });
+    seen.add(key);
+    let content = externalSkillBytes(item.content, `外部 Skill 文件 ${relativePath}`);
+    if (relativePath === "SKILL.md") content = Buffer.from(renderExternalSkillContent({ capabilityId, content }), "utf8");
+    totalBytes += content.byteLength;
+    if (totalBytes > EXTERNAL_SKILL_MAX_TOTAL_BYTES) {
+      throw new ClaudeIntegrationError(`外部 Skill 包总大小不能超过 ${EXTERNAL_SKILL_MAX_TOTAL_BYTES.toLocaleString("zh-CN")} 字节。`, { code: "external-source-invalid" });
+    }
+    files.push({ relativePath, content });
+  }
+  if (!files.some((file) => file.relativePath === "SKILL.md")) {
+    throw new ClaudeIntegrationError("外部 Skill 包必须在根目录包含 SKILL.md。", { code: "external-source-invalid" });
+  }
+  return files.sort((left, right) => left.relativePath.localeCompare(right.relativePath, "en"));
+}
+
+function externalSkillTarget(folder, relativePath) {
+  const target = path.resolve(folder, ...relativePath.split("/"));
+  if (!inside(folder, target)) {
+    throw new ClaudeIntegrationError("外部 Skill 注册目标路径无效。", { code: "external-registration-invalid" });
+  }
+  return target;
+}
+
+async function ensureExternalSkillParent(fsOps, root, target) {
+  const relative = path.relative(root, path.dirname(target));
+  if (relative.startsWith("..") || path.isAbsolute(relative)) {
+    throw new ClaudeIntegrationError("外部 Skill 注册目标目录无效。", { code: "external-registration-invalid" });
+  }
+  await ensureSafeDirectory(fsOps, root, relative.split(path.sep).filter(Boolean));
+}
+
+async function verifiedExternalSkillFiles({ root, folder, ownership, fsOps }) {
+  const files = new Map();
+  for (const [relativePath, hash] of Object.entries(ownership.files)) {
+    const target = externalSkillTarget(folder, relativePath);
+    const existing = await readOptionalSafeProjectBinaryFile(fsOps, root, target, `外部 Skill 文件 ${relativePath}`);
+    if (!existing.exists || sha256(existing.content) !== hash) {
+      throw new ClaudeIntegrationError(`已登记的外部 Skill 文件 ${relativePath} 被删除或手动修改，未覆盖用户文件。`, { code: "external-skill-modified" });
+    }
+    files.set(relativePath, { path: target, label: `外部 Skill 文件 ${relativePath}`, previous: existing });
+  }
+  return files;
+}
+
+async function prepareExternalSkillWrite({ root, capabilityId, version, skill, fsOps }) {
+  const id = externalCapabilityId(capabilityId);
+  const files = normalizeExternalSkillFiles(skill, id);
+  const folder = await ensureSafeDirectory(fsOps, root, [".claude", "skills", externalSkillDirectory(id)]);
+  const metadataPath = path.join(folder, EXTERNAL_SKILL_METADATA_FILE);
+  const existingMetadata = await readOptionalSafeProjectFile(fsOps, root, metadataPath, "外部 Skill 受管标记");
+  const ownership = existingMetadata.exists ? parseExternalSkillMetadata(existingMetadata.content, id) : null;
+  const managed = ownership ? await verifiedExternalSkillFiles({ root, folder, ownership, fsOps }) : new Map();
+  const nextPaths = new Set(files.map((file) => file.relativePath));
+  const writes = [];
+  for (const file of files) {
+    const target = externalSkillTarget(folder, file.relativePath);
+    const previous = managed.get(file.relativePath)?.previous
+      || await readOptionalSafeProjectBinaryFile(fsOps, root, target, `外部 Skill 文件 ${file.relativePath}`);
+    if (!managed.has(file.relativePath) && previous.exists) {
+      throw new ClaudeIntegrationError(`目标外部 Skill 文件 ${file.relativePath} 不属于 Suzu Lives，未覆盖用户文件。`, { code: "external-skill-conflict" });
+    }
+    writes.push({ path: target, label: `外部 Skill 文件 ${file.relativePath}`, content: file.content, previous });
+  }
+  for (const file of writes) await ensureExternalSkillParent(fsOps, root, file.path);
+  const metadata = {
+    schemaVersion: EXTERNAL_SKILL_METADATA_VERSION,
+    capabilityId: id,
+    version: externalVersion(version),
+    files: Object.fromEntries(files.map((file) => [file.relativePath, sha256(file.content)])),
+    sourcePath: clean(skill?.sourcePath).slice(0, 4_000),
+    registeredAt: new Date().toISOString(),
+  };
+  const removals = [...managed.entries()]
+    .filter(([relativePath]) => !nextPaths.has(relativePath))
+    .map(([, file]) => ({ ...file, delete: true }));
+  return [
+    ...removals,
+    ...writes,
+    { path: metadataPath, label: "外部 Skill 受管标记", content: `${JSON.stringify(metadata, null, 2)}\n`, previous: existingMetadata },
+  ];
+}
+
+function parseExternalMcpMetadata(content) {
+  const parsed = parseJsonObject(content, "外部 MCP 受管标记", "external-mcp-conflict");
+  if (!Object.keys(parsed).length) return { schemaVersion: EXTERNAL_MCP_METADATA_VERSION, entries: {} };
+  if (parsed.schemaVersion !== EXTERNAL_MCP_METADATA_VERSION || !record(parsed.entries)) {
+    throw new ClaudeIntegrationError("外部 MCP 受管标记格式无效，未修改用户项目。", { code: "external-mcp-conflict" });
+  }
+  const entries = {};
+  for (const [id, entry] of Object.entries(parsed.entries)) {
+    if (!EXTERNAL_ID.test(id) || !record(entry) || entry.serverName !== externalMcpServerName(id) || !/^[a-f0-9]{64}$/u.test(clean(entry.configurationSha256))) {
+      throw new ClaudeIntegrationError("外部 MCP 受管标记包含无效条目，未修改用户项目。", { code: "external-mcp-conflict" });
+    }
+    entries[id] = { ...entry };
+  }
+  return { schemaVersion: EXTERNAL_MCP_METADATA_VERSION, entries };
+}
+
+function parseMcpProjectConfig(content) {
+  const configuration = parseJsonObject(content, ".mcp.json", "external-mcp-conflict");
+  if (configuration.mcpServers !== undefined && !record(configuration.mcpServers)) {
+    throw new ClaudeIntegrationError(".mcp.json 的 mcpServers 必须是对象，未修改用户项目。", { code: "external-mcp-conflict" });
+  }
+  return { configuration, servers: { ...(configuration.mcpServers || {}) } };
+}
+
+async function prepareExternalMcpWrite({ root, capabilityId, version, configuration, fsOps }) {
+  const id = externalCapabilityId(capabilityId);
+  const claudeDirectory = await ensureSafeDirectory(fsOps, root, [".claude"]);
+  const mcpPath = path.join(root, ".mcp.json");
+  const metadataPath = path.join(claudeDirectory, EXTERNAL_MCP_METADATA_FILE);
+  const [existingMcp, existingMetadata] = await Promise.all([
+    readTextIfPresent(fsOps, root, mcpPath, ".mcp.json"),
+    readTextIfPresent(fsOps, root, metadataPath, "外部 MCP 受管标记"),
+  ]);
+  const project = parseMcpProjectConfig(existingMcp.content);
+  const metadata = parseExternalMcpMetadata(existingMetadata.content);
+  const serverName = externalMcpServerName(id);
+  const currentServer = project.servers[serverName];
+  const currentOwnership = metadata.entries[id];
+  if (currentServer !== undefined) {
+    if (!currentOwnership || currentOwnership.serverName !== serverName) {
+      throw new ClaudeIntegrationError("同名 MCP 条目不属于 Suzu Lives，未覆盖用户配置。", { code: "external-mcp-conflict" });
+    }
+    if (jsonHash(currentServer) !== currentOwnership.configurationSha256) {
+      throw new ClaudeIntegrationError("已登记的 MCP 条目被手动修改，未覆盖用户配置。", { code: "external-mcp-modified" });
+    }
+  } else if (currentOwnership && currentOwnership.serverName !== serverName) {
+    throw new ClaudeIntegrationError("外部 MCP 受管标记与目标条目不一致，未修改用户项目。", { code: "external-mcp-conflict" });
+  }
+  const serverConfiguration = jsonObject(configuration, "外部 MCP 配置");
+  const nextServers = { ...project.servers, [serverName]: serverConfiguration };
+  const nextMetadata = {
+    schemaVersion: EXTERNAL_MCP_METADATA_VERSION,
+    entries: {
+      ...metadata.entries,
+      [id]: {
+        serverName,
+        version: externalVersion(version),
+        configurationSha256: jsonHash(serverConfiguration),
+        registeredAt: new Date().toISOString(),
+      },
+    },
+  };
+  const nextMcp = { ...project.configuration, mcpServers: nextServers };
+  return [
+    { path: mcpPath, label: ".mcp.json", content: `${JSON.stringify(nextMcp, null, 2)}\n`, previous: existingMcp },
+    { path: metadataPath, label: "外部 MCP 受管标记", content: `${JSON.stringify(nextMetadata, null, 2)}\n`, previous: existingMetadata },
+  ];
+}
+
+async function prepareExternalSkillRemoval({ root, capabilityId, fsOps }) {
+  const id = externalCapabilityId(capabilityId);
+  const folder = path.join(root, ".claude", "skills", externalSkillDirectory(id));
+  const skillPath = path.join(folder, "SKILL.md");
+  const metadataPath = path.join(folder, EXTERNAL_SKILL_METADATA_FILE);
+  const [existingSkill, existingMetadata] = await Promise.all([
+    readOptionalSafeProjectBinaryFile(fsOps, root, skillPath, "外部 SKILL.md"),
+    readOptionalSafeProjectFile(fsOps, root, metadataPath, "外部 Skill 受管标记"),
+  ]);
+  if (!existingSkill.exists && !existingMetadata.exists) return [];
+  if (!existingMetadata.exists) {
+    throw new ClaudeIntegrationError("当前同名外部 SKILL.md 不属于 Suzu Lives，未移除用户文件。", { code: "external-skill-conflict" });
+  }
+  const ownership = parseExternalSkillMetadata(existingMetadata.content, id);
+  const managed = await verifiedExternalSkillFiles({ root, folder, ownership, fsOps });
+  return [
+    ...[...managed.values()].map((file) => ({ ...file, delete: true })),
+    { path: metadataPath, label: "外部 Skill 受管标记", delete: true, previous: existingMetadata },
+  ];
+}
+
+async function prepareExternalMcpRemoval({ root, capabilityId, fsOps }) {
+  const id = externalCapabilityId(capabilityId);
+  const mcpPath = path.join(root, ".mcp.json");
+  const metadataPath = path.join(root, ".claude", EXTERNAL_MCP_METADATA_FILE);
+  const [existingMcp, existingMetadata] = await Promise.all([
+    readOptionalSafeProjectFile(fsOps, root, mcpPath, ".mcp.json"),
+    readOptionalSafeProjectFile(fsOps, root, metadataPath, "外部 MCP 受管标记"),
+  ]);
+  if (!existingMetadata.exists) return [];
+  const metadata = parseExternalMcpMetadata(existingMetadata.content);
+  const ownership = metadata.entries[id];
+  if (!ownership) return [];
+  const serverName = externalMcpServerName(id);
+  if (ownership.serverName !== serverName) {
+    throw new ClaudeIntegrationError("外部 MCP 受管标记与目标条目不一致，未移除用户配置。", { code: "external-mcp-conflict" });
+  }
+  const files = [];
+  const nextEntries = { ...metadata.entries };
+  delete nextEntries[id];
+  if (existingMcp.exists) {
+    const project = parseMcpProjectConfig(existingMcp.content);
+    const currentServer = project.servers[serverName];
+    if (currentServer !== undefined) {
+      if (jsonHash(currentServer) !== ownership.configurationSha256) {
+        throw new ClaudeIntegrationError("已登记的 MCP 条目被手动修改，未移除用户配置。", { code: "external-mcp-modified" });
+      }
+      const nextServers = { ...project.servers };
+      delete nextServers[serverName];
+      files.push({
+        path: mcpPath,
+        label: ".mcp.json",
+        content: `${JSON.stringify({ ...project.configuration, mcpServers: nextServers }, null, 2)}\n`,
+        previous: existingMcp,
+      });
+    }
+  }
+  files.push({
+    path: metadataPath,
+    label: "外部 MCP 受管标记",
+    content: `${JSON.stringify({ schemaVersion: EXTERNAL_MCP_METADATA_VERSION, entries: nextEntries }, null, 2)}\n`,
+    previous: existingMetadata,
+  });
+  return files;
+}
+
+async function inspectExternalSkill({ root, capabilityId, fsOps }) {
+  const id = externalCapabilityId(capabilityId);
+  const folder = path.join(root, ".claude", "skills", externalSkillDirectory(id));
+  const [skill, metadata] = await Promise.all([
+    readOptionalSafeProjectBinaryFile(fsOps, root, path.join(folder, "SKILL.md"), "外部 SKILL.md"),
+    readOptionalSafeProjectFile(fsOps, root, path.join(folder, EXTERNAL_SKILL_METADATA_FILE), "外部 Skill 受管标记"),
+  ]);
+  if (!skill.exists && !metadata.exists) return { registered: false, reason: "当前项目没有这项外部 Skill 的受管登记。", version: "" };
+  if (!metadata.exists) return { registered: false, reason: "当前同名外部 SKILL.md 不属于 Suzu Lives。", version: "" };
+  try {
+    const ownership = parseExternalSkillMetadata(metadata.content, id);
+    await verifiedExternalSkillFiles({ root, folder, ownership, fsOps });
+    return { registered: true, reason: "当前项目已登记这项外部 Skill。", version: clean(ownership.version) };
+  } catch (error) {
+    return { registered: false, reason: clean(error?.message) || "外部 Skill 受管标记无效。", version: "" };
+  }
+}
+
+async function inspectExternalMcp({ root, capabilityId, fsOps }) {
+  const id = externalCapabilityId(capabilityId);
+  const [mcp, metadata] = await Promise.all([
+    readOptionalSafeProjectFile(fsOps, root, path.join(root, ".mcp.json"), ".mcp.json"),
+    readOptionalSafeProjectFile(fsOps, root, path.join(root, ".claude", EXTERNAL_MCP_METADATA_FILE), "外部 MCP 受管标记"),
+  ]);
+  if (!metadata.exists) return { registered: false, reason: "当前项目没有这项外部 MCP 的受管登记。", version: "" };
+  try {
+    const tracking = parseExternalMcpMetadata(metadata.content);
+    const ownership = tracking.entries[id];
+    if (!ownership) return { registered: false, reason: "当前项目没有这项外部 MCP 的受管登记。", version: "" };
+    if (!mcp.exists) return { registered: false, reason: "外部 MCP 受管标记存在，但 .mcp.json 缺失。", version: clean(ownership.version) };
+    const project = parseMcpProjectConfig(mcp.content);
+    const server = project.servers[ownership.serverName];
+    if (server === undefined) return { registered: false, reason: "外部 MCP 受管标记存在，但目标条目缺失。", version: clean(ownership.version) };
+    if (jsonHash(server) !== ownership.configurationSha256) return { registered: false, reason: "已登记的 MCP 条目被手动修改。", version: clean(ownership.version) };
+    return { registered: true, reason: "当前项目已登记这项外部 MCP。", version: clean(ownership.version) };
+  } catch (error) {
+    return { registered: false, reason: clean(error?.message) || "外部 MCP 配置无效。", version: "" };
+  }
+}
+
+/**
+ * Writes only Suzu-owned external capability files. It never starts a
+ * third-party command or contacts a server; Claude Code may use the written
+ * project configuration only after its own normal approval flow.
+ */
+export async function writeExternalClaudeRegistration({ projectRoot, capabilityId, version, skill = null, mcp = null, fsOps = fs } = {}) {
+  const id = externalCapabilityId(capabilityId);
+  if (!skill && !mcp) throw new ClaudeIntegrationError("外部能力至少需要一个可登记的 Skill 或 MCP 适配器。", { code: "external-manifest-invalid" });
+  const root = await resolveSafeProjectRoot(projectRoot, fsOps);
+  const files = [];
+  if (skill) files.push(...(await prepareExternalSkillWrite({ root, capabilityId: id, version, skill, fsOps })));
+  if (mcp) files.push(...(await prepareExternalMcpWrite({ root, capabilityId: id, version, configuration: mcp.configuration, fsOps })));
+  await writeRegistrationTransaction(fsOps, root, files);
+  return { capabilityId: id, files: files.map((file) => file.path) };
+}
+
+/** Removes only entries accompanied by Suzu's ownership metadata and hash. */
+export async function removeExternalClaudeRegistration({ projectRoot, capabilityId, types, fsOps = fs } = {}) {
+  const id = externalCapabilityId(capabilityId);
+  const root = await resolveSafeProjectRoot(projectRoot, fsOps);
+  const files = [];
+  for (const type of externalTypes(types)) {
+    if (type === "skill") files.push(...(await prepareExternalSkillRemoval({ root, capabilityId: id, fsOps })));
+    if (type === "mcp") files.push(...(await prepareExternalMcpRemoval({ root, capabilityId: id, fsOps })));
+  }
+  if (files.length) await writeRegistrationTransaction(fsOps, root, files);
+  return { capabilityId: id, removed: files.length > 0, files: files.map((file) => file.path) };
+}
+
+/** Reads external registration state without modifying the selected project. */
+export async function inspectExternalClaudeRegistration({ projectRoot, capabilityId, types, fsOps = fs } = {}) {
+  const id = externalCapabilityId(capabilityId);
+  const selectedTypes = externalTypes(types);
+  if (!clean(projectRoot)) {
+    const unavailable = { registered: false, reason: "尚未选择当前联系人的 Claude 项目目录。", version: "" };
+    return { capabilityId: id, skill: selectedTypes.includes("skill") ? unavailable : null, mcp: selectedTypes.includes("mcp") ? unavailable : null, registered: false };
+  }
+  let root;
+  try { root = await resolveSafeProjectRoot(projectRoot, fsOps); }
+  catch (error) {
+    const unavailable = { registered: false, reason: clean(error?.message) || "当前 Claude 项目不可读取。", version: "" };
+    return { capabilityId: id, skill: selectedTypes.includes("skill") ? unavailable : null, mcp: selectedTypes.includes("mcp") ? unavailable : null, registered: false };
+  }
+  const [skill, mcp] = await Promise.all([
+    selectedTypes.includes("skill") ? inspectExternalSkill({ root, capabilityId: id, fsOps }) : null,
+    selectedTypes.includes("mcp") ? inspectExternalMcp({ root, capabilityId: id, fsOps }) : null,
+  ]);
+  return { capabilityId: id, skill, mcp, registered: [skill, mcp].filter(Boolean).every((entry) => entry.registered === true) };
 }

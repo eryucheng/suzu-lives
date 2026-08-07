@@ -47,6 +47,8 @@ test("Electron preload exposes the memory bridge", async () => {
   assert.equal(typeof bridge?.conversation?.sessionSettingsSnapshot, "function");
   assert.equal(typeof bridge?.wechat?.begin, "function");
   assert.equal(typeof bridge?.wechat?.saveSettings, "function");
+  assert.equal(typeof bridge?.externalCapabilities?.importManifest, "function");
+  assert.equal(typeof bridge?.externalCapabilities?.setEnabled, "function");
   await bridge.memory.resolveStructure("proposal-1", "accept", "确认");
   assert.equal(calls[0].channel, "memory:resolve-structure");
   assert.deepEqual(JSON.parse(JSON.stringify(calls[0].args[0])), {
@@ -64,4 +66,9 @@ test("Electron preload exposes the memory bridge", async () => {
   assert.equal(calls[3].channel, "conversation:session-settings-snapshot");
   assert.equal(calls[4].channel, "wechat:begin");
   assert.equal(calls[5].channel, "wechat:save-settings");
+  await bridge.externalCapabilities.importManifest();
+  await bridge.externalCapabilities.setEnabled("sample.capability", true);
+  assert.equal(calls[6].channel, "external-capabilities:import");
+  assert.equal(calls[7].channel, "external-capabilities:set-enabled");
+  assert.deepEqual(JSON.parse(JSON.stringify(calls[7].args[0])), { id: "sample.capability", enabled: true });
 });
