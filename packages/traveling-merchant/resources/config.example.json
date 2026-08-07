@@ -1,0 +1,15 @@
+{
+  "url": "https://www.onebiji.com/hykb_tools/comm/lkwgmerchant/preview.php?id=1&imm=1&immgj=0",
+  "wantedItems": [
+    "棱镜球",
+    "炫彩蛋",
+    "祝福项坠"
+  ],
+  "notificationTemplate": "远行商人这轮有：{items}，快去买",
+  "notificationTestMessage": "【测试】远行商人监控投递内容",
+  "notifyOnError": true,
+  "errorNotificationTemplate": "远行商人监控这轮检查失败了：{error}",
+  "requestTimeoutSeconds": 15,
+  "maxAttempts": 3,
+  "retryDelaySeconds": 20
+}

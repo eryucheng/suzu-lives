@@ -1,0 +1,132 @@
+{
+  "version": 1,
+  "description": "长期记忆输入的脱敏构造基线；不包含真实聊天。",
+  "cases": [
+    {
+      "id": "one-off-meal-is-not-preference",
+      "title": "一次吃饭不形成稳定偏好",
+      "category": "admission",
+      "messages": [
+        { "ref": "M0001", "role": "user", "timestamp": "2026-07-01T04:00:00.000Z", "text": "我中午吃了牛肉面。" },
+        { "ref": "M0002", "role": "assistant", "timestamp": "2026-07-01T04:01:00.000Z", "text": "味道怎么样？" }
+      ],
+      "expect": {
+        "minimumMemories": 0,
+        "maximumMemories": 0,
+        "forbidden": [
+          { "kind": "preference", "subjectRole": "user" }
+        ]
+      }
+    },
+    {
+      "id": "explicit-user-preference",
+      "title": "用户明确表达偏好",
+      "category": "preference",
+      "messages": [
+        { "ref": "M0001", "role": "user", "timestamp": "2026-07-02T04:00:00.000Z", "text": "我一直很喜欢逛科技展览，这个你可以记住。" }
+      ],
+      "expect": {
+        "minimumMemories": 1,
+        "maximumMemories": 1,
+        "required": [
+          {
+            "kind": "preference",
+            "subjectRole": "user",
+            "retentionReason": "explicit_preference",
+            "contentIncludes": ["科技展览"],
+            "actorRoles": [
+              { "role": "preference_holder", "actorRole": "user" }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "agent-guess-is-not-user-fact",
+      "title": "Agent猜测不能成为用户事实",
+      "category": "ownership",
+      "messages": [
+        { "ref": "M0001", "role": "user", "timestamp": "2026-07-03T04:00:00.000Z", "text": "你猜我最近喜欢什么？" },
+        { "ref": "M0002", "role": "assistant", "timestamp": "2026-07-03T04:01:00.000Z", "text": "我猜你一定喜欢科幻。" }
+      ],
+      "expect": {
+        "minimumMemories": 0,
+        "maximumMemories": 0,
+        "forbidden": [
+          { "kind": "preference", "subjectRole": "user", "contentIncludes": ["科幻"] }
+        ]
+      }
+    },
+    {
+      "id": "user-biography-does-not-transfer",
+      "title": "用户经历不能转移给Agent",
+      "category": "ownership",
+      "messages": [
+        { "ref": "M0001", "role": "user", "timestamp": "2026-07-04T04:00:00.000Z", "text": "我小学时学过两年围棋。" }
+      ],
+      "expect": {
+        "minimumMemories": 1,
+        "maximumMemories": 1,
+        "required": [
+          { "kind": "fact", "subjectRole": "user", "retentionReason": "identity", "contentIncludes": ["围棋"] }
+        ],
+        "forbidden": [
+          { "kind": "fact", "subjectRole": "agent", "contentIncludes": ["围棋"] }
+        ]
+      }
+    },
+    {
+      "id": "roleplay-is-not-real-history",
+      "title": "角色扮演不能成为现实经历",
+      "category": "reality",
+      "messages": [
+        { "ref": "M0001", "role": "user", "timestamp": "2026-07-05T04:00:00.000Z", "text": "我们来演一段在月球基地生活的故事。" },
+        { "ref": "M0002", "role": "assistant", "timestamp": "2026-07-05T04:01:00.000Z", "text": "好，我刚从月球基地的舱门回来。" }
+      ],
+      "expect": {
+        "minimumMemories": 0,
+        "maximumMemories": 0,
+        "forbidden": [
+          { "kind": "event", "reality": "real", "contentIncludes": ["月球基地"] }
+        ]
+      }
+    },
+    {
+      "id": "unfinished-event-stays-open",
+      "title": "切点处未完成事件不能写成完成",
+      "category": "event-boundary",
+      "messages": [
+        { "ref": "M0001", "role": "user", "timestamp": "2026-07-06T04:00:00.000Z", "text": "我正在去医院的路上，检查结果还不知道。" }
+      ],
+      "boundaryMessages": [
+        { "role": "user", "timestamp": "2026-07-06T05:00:00.000Z", "text": "刚刚做完检查，还在等报告。" }
+      ],
+      "expect": {
+        "minimumMemories": 1,
+        "maximumMemories": 1,
+        "required": [
+          { "kind": "open_loop", "subjectRole": "user", "temporalState": "in_progress", "retentionReason": "open_loop", "contentIncludes": ["检查"] }
+        ],
+        "forbidden": [
+          { "temporalState": "completed", "contentIncludes": ["检查"] }
+        ]
+      }
+    },
+    {
+      "id": "shared-commitment-keeps-shared-owner",
+      "title": "共同约定属于双方",
+      "category": "relationship",
+      "messages": [
+        { "ref": "M0001", "role": "user", "timestamp": "2026-07-07T04:00:00.000Z", "text": "那我们周日一起把照片整理完。" },
+        { "ref": "M0002", "role": "assistant", "timestamp": "2026-07-07T04:01:00.000Z", "text": "好，周日我们一起整理。" }
+      ],
+      "expect": {
+        "minimumMemories": 1,
+        "maximumMemories": 1,
+        "required": [
+          { "kind": "commitment", "subjectRole": "shared", "temporalState": "planned", "retentionReason": "commitment", "contentIncludes": ["照片"] }
+        ]
+      }
+    }
+  ]
+}

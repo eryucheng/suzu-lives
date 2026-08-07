@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "shared": {
+    "goal": "Create exactly one photorealistic image that feels like an ordinary personal smartphone photo, not a professional photo shoot or an AI art showcase.",
+    "look": "Use believable ambient light, ordinary phone exposure, modest computational HDR, natural texture, and slightly imperfect handheld framing. Keep the result casual and immediate.",
+    "constraints": "No collage, split screen, camera interface, timestamp overlay, watermark, caption, or visible prompt text. Do not add people, cameras, phones, mirrors, studio lights, or a photographer unless the selected shot geometry or the visible scene explicitly requires them. Avoid cinematic color grading, glossy advertising polish, extreme depth of field, and implausibly perfect symmetry."
+  },
+  "shots": {
+    "rear": {
+      "default_size": "1536x1024",
+      "shot": "A candid handheld photo taken with the phone's rear camera. Frame the scene from the photographer's natural eye and hand position, with a casual composition rather than a carefully staged commercial composition.",
+      "geometry": "The phone is the camera and stays behind the image plane. The photographer and the phone are not visible. This must not look like a third person photographed someone holding a phone.",
+      "look": "Allow small real-world imperfections such as a mild tilt, ordinary dynamic range, subtle sensor noise, or a partly cropped peripheral object.",
+      "constraints": "Do not invent a person in front of the camera when the scene only describes objects, food, a room, or scenery."
+    },
+    "selfie": {
+      "default_size": "1024x1536",
+      "shot": "A direct front-facing smartphone selfie taken at arm's length by the visible subject. Use the natural close perspective and casual head-and-shoulders or upper-body framing of a phone's front camera.",
+      "geometry": "The viewer is the phone's front-camera lens. The visible subject is holding that phone outside the image frame and looking toward the lens. A forearm or shoulder may naturally affect the pose, but the phone itself cannot appear because it is the camera. There is no mirror and no third-person photographer.",
+      "look": "Use believable front-camera wide-angle perspective, natural facial texture, ambient room or outdoor light, and a slightly imperfect crop.",
+      "constraints": "No visible phone, mirror reflection, selfie stick, external camera, photographer, or third-person viewpoint."
+    },
+    "mirror": {
+      "default_size": "1024x1536",
+      "shot": "A casual smartphone mirror selfie seen through a real mirror, with framing appropriate to the visible scene and outfit. The subject is photographing their own reflection.",
+      "geometry": "The phone must be visibly held by the subject inside the mirror reflection and aimed at the mirror. The reflected room, body, phone, and gaze must share one coherent perspective. Show exactly one real subject reflection and one phone unless the scene explicitly asks for more people.",
+      "look": "Use ordinary indoor ambient light, realistic mirror glare or minor surface imperfection when natural, and the casual composition of a quick outfit or full-body check.",
+      "constraints": "No third-person photographer, floating phone, duplicate phone, impossible reflection, extra reflected person, or view from outside the mirror setup."
+    }
+  }
+}

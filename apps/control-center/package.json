@@ -1,0 +1,70 @@
+{
+  "name": "suzu-lives-console",
+  "version": "0.1.0",
+  "private": true,
+  "author": "儿玉诚也",
+  "description": "Local desktop control center for Suzu Lives.",
+  "license": "SEE LICENSE IN ../../LICENSE.md",
+  "type": "module",
+  "main": "electron/main.mjs",
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test test/*.test.mjs",
+    "dist": "electron-builder --win zip --x64"
+  },
+  "devDependencies": {
+    "electron": "43.2.0",
+    "electron-builder": "26.15.3"
+  },
+  "dependencies": {
+    "@suzu-lives/agent-registry": "0.1.0",
+    "@suzu-lives/browser-automation": "0.1.0",
+    "@suzu-lives/capability-registry": "0.1.0",
+    "@suzu-lives/claude-integration": "0.1.0",
+    "@suzu-lives/conversation-reader": "0.1.0",
+    "@suzu-lives/cost-ledger": "0.1.0",
+    "@suzu-lives/image-workbench": "0.1.0",
+    "@suzu-lives/iphone-bridge": "0.1.0",
+    "@suzu-lives/memory-core": "0.1.0",
+    "@suzu-lives/memory-retriever": "0.1.0",
+    "@suzu-lives/memory-visualization": "0.1.0",
+    "@suzu-lives/service-connections": "0.1.0",
+    "@suzu-lives/task-scheduler": "0.1.0",
+    "@suzu-lives/visual-reference-library": "0.1.0",
+    "@suzu-lives/voice-design": "0.1.0",
+    "qrcode": "1.5.4"
+  },
+  "build": {
+    "appId": "com.suzulives.console",
+    "productName": "Suzu Lives Console",
+    "asar": true,
+    "asarUnpack": [
+      "node_modules/@suzu-lives/iphone-bridge/python/**",
+      "node_modules/@suzu-lives/browser-automation/src/web-browser/**",
+      "node_modules/@suzu-lives/media-understanding/worker/**",
+      "node_modules/@suzu-lives/traveling-merchant/worker/**"
+    ],
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "assets/**/*",
+      "electron/**/*",
+      "shared/**/*",
+      "src/**/*",
+      "package.json"
+    ],
+    "win": {
+      "icon": "assets/app-icon.ico",
+      "target": [
+        {
+          "target": "zip",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "Suzu-Lives-Console-${version}-win-${arch}.${ext}"
+    }
+  }
+}
