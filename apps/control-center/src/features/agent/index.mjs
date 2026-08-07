@@ -253,8 +253,12 @@ function renderVideoUnderstandingSettings(capability, state) {
 function renderVoiceMessageSettings(capability, state) {
   const saved = capabilitySettings(capability);
   const candidates = Array.isArray(saved.candidates) ? saved.candidates : [];
-  const voiceOptions = [["", "沿用当前声音"], ...candidates.map((candidate) => [candidate.voiceId, candidate.preferredName || candidate.voiceId])];
-  return settingsForm("voice-message", `${capabilitySettingSection("声音", "发送语音", "音色设计和发送语音使用同一项声音 API；选择已保存的音色后，语音会在当前 Suzu 会话中作为可播放 MP3 显示，绑定微信时会作为 MP3 文件投递。", `${renderCapabilityApiBinding(state, "sound")}<div class="capability-form-grid"><label class="wide"><span>发送时使用的音色</span>${runtimeChoice("voiceId", saved.voiceId || "", voiceOptions)}</label></div><div class="capability-inline-action"><div><strong>想要新声音？</strong><small>先在音色设计里创建并保存候选，它会出现在这里。</small></div><button type="button" class="secondary-button" data-open-capability-settings="audio">打开音色设计</button></div>`)}<details class="capability-advanced"><summary><span>发送细节</span><small>通常保持默认即可</small></summary><div class="capability-form-grid"><label><span>等待时间（毫秒）</span><input name="timeoutMs" type="number" min="1000" max="600000" value="${escapeHtml(saved.timeoutMs ?? 30000)}"></label></div></details>`, "保存语音设置");
+  const voiceOptions = [["", "请选择当前联系人的声音"], ...candidates.map((candidate) => [candidate.voiceId, candidate.preferredName || candidate.voiceId])];
+  const diagnostic = saved.voiceDiagnostic ? `<p class="capability-setting-empty">${escapeHtml(saved.voiceDiagnostic)}</p>` : "";
+  const scope = saved.selectionSource === "contact"
+    ? "这项选择只属于当前联系人；切换联系人后会显示其自己的选择。"
+    : "API 连接与发送超时在本机共享；音色选择只属于当前联系人。";
+  return settingsForm("voice-message", `${capabilitySettingSection("声音", "发送语音", "音色设计、已选音色和语音发送都按当前联系人对应；语音会在当前 Suzu 会话中作为可播放 MP3 显示，绑定微信时会作为 MP3 文件投递。", `${renderCapabilityApiBinding(state, "sound")}${diagnostic}<div class="capability-form-grid"><label class="wide"><span>当前联系人的发送音色</span>${runtimeChoice("voiceId", saved.voiceId || "", voiceOptions)}<small>${escapeHtml(scope)}</small></label></div><div class="capability-inline-action"><div><strong>想要新声音？</strong><small>先在当前联系人的音色设计里创建并保存候选，它会出现在这里。</small></div><button type="button" class="secondary-button" data-open-capability-settings="audio">打开音色设计</button></div>`)}<details class="capability-advanced"><summary><span>共享发送细节</span><small>适用于本机所有联系人，通常保持默认即可</small></summary><div class="capability-form-grid"><label><span>共享等待时间（毫秒）</span><input name="timeoutMs" type="number" min="1000" max="600000" value="${escapeHtml(saved.timeoutMs ?? 30000)}"></label></div></details>`, "保存当前联系人语音设置");
 }
 
 function actionGroups(site) {

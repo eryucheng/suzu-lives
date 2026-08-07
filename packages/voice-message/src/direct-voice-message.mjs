@@ -10,6 +10,7 @@ import { appendUsageEvent } from "@suzu-lives/cost-ledger";
 const DEFAULT_QWEN_BASE_URL = "https://dashscope.aliyuncs.com/api/v1";
 const DEFAULT_QWEN_MODEL = "qwen3-tts-vd-2026-01-26";
 const MAX_RESPONSE_BYTES = 100 * 1024 * 1024;
+const MAX_AGENT_VOICE_CANDIDATES = 200;
 
 export class DirectVoiceMessageError extends Error {
   constructor(message, { code = "voice_message_error", exitCode = 4 } = {}) {
@@ -47,6 +48,14 @@ function voiceRoot(dataRoot) {
   return path.join(dataRoot, "capabilities", "voice-message");
 }
 
+function agentVoiceMessageRoot(dataRoot, agentId) {
+  const identity = clean(agentId);
+  if (!identity) {
+    throw failure("agent_identity_missing", "语音消息需要当前联系人身份才能读取已选音色。", 10);
+  }
+  return path.join(resolveAgentDataRoot({ dataRoot, agentId: identity }), "voice-message");
+}
+
 function agentAudioDirectory(dataRoot, agentId) {
   const identity = clean(agentId);
   if (!identity) {
@@ -59,14 +68,20 @@ function agentAudioDirectory(dataRoot, agentId) {
   );
 }
 
-function defaultConfigPath(dataRoot) {
+function legacyConfigPath(dataRoot) {
   return path.join(voiceRoot(dataRoot), "config.json");
 }
 
-export function resolveVoiceMessageConfigPath({ dataRoot, configPath = "" } = {}) {
+function defaultConfigPath(dataRoot, agentId = "") {
+  return clean(agentId)
+    ? path.join(agentVoiceMessageRoot(dataRoot, agentId), "config.json")
+    : legacyConfigPath(dataRoot);
+}
+
+export function resolveVoiceMessageConfigPath({ dataRoot, agentId = "", configPath = "" } = {}) {
   const root = requiredDataRoot(dataRoot);
   const requested = clean(configPath);
-  const candidate = requested ? path.resolve(root, requested) : defaultConfigPath(root);
+  const candidate = requested ? path.resolve(root, requested) : defaultConfigPath(root, agentId);
   if (!inside(root, candidate)) {
     throw failure("config_path_outside_data_root", "语音消息配置必须位于 Suzu Lives 软件数据目录内。");
   }
@@ -83,11 +98,93 @@ function readJson(filePath, { code, label }) {
   }
 }
 
-function readVoiceConfig(configPath) {
-  if (!fs.existsSync(configPath)) {
-    throw failure("config_missing", "配置文件不存在：" + configPath + "；请在 Suzu Lives 的语音设置中选择音色。");
+function readOptionalVoiceConfig(configPath) {
+  try {
+    const stat = fs.lstatSync(configPath);
+    if (stat.isSymbolicLink() || !stat.isFile()) {
+      throw failure("config_invalid", "语音消息配置不是安全的普通文件：" + configPath);
+    }
+  } catch (error) {
+    if (error?.code === "ENOENT") return null;
+    if (error instanceof DirectVoiceMessageError) throw error;
+    throw failure("config_invalid", "无法检查语音消息配置：" + error.message);
   }
   return readJson(configPath, { code: "config_invalid", label: "语音消息配置" });
+}
+
+function readVoiceConfig(configPath) {
+  const config = readOptionalVoiceConfig(configPath);
+  if (!config) {
+    throw failure("config_missing", "配置文件不存在：" + configPath + "；请在 Suzu Lives 的语音设置中选择音色。");
+  }
+  return config;
+}
+
+function voiceIdFromConfig(value) {
+  const config = objectValue(value);
+  const tts = objectValue(config.tts);
+  return clean(config.voiceId || config.voice || tts.voiceId || tts.voice_id || tts.voice);
+}
+
+function agentVoiceCandidateIds(dataRoot, agentId) {
+  const identity = clean(agentId);
+  if (!identity) return new Set();
+  const candidatesPath = path.join(resolveAgentDataRoot({ dataRoot, agentId: identity }), "voice-design", "candidates.jsonl");
+  try {
+    const stat = fs.lstatSync(candidatesPath);
+    if (stat.isSymbolicLink() || !stat.isFile()) return new Set();
+    const candidates = new Set();
+    const lines = fs.readFileSync(candidatesPath, "utf8").split(/\r?\n/u).filter(Boolean).slice(-MAX_AGENT_VOICE_CANDIDATES);
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      try {
+        const candidate = objectValue(JSON.parse(line));
+        const candidateId = clean(candidate.id);
+        const voiceId = clean(candidate.voiceId);
+        if (candidateId && voiceId) candidates.add(voiceId);
+      } catch {
+        // Candidate generation already owns validation. An invalid line cannot authorize a voice here.
+      }
+    }
+    return candidates;
+  } catch {
+    return new Set();
+  }
+}
+
+function assertAgentVoiceCandidate({ dataRoot, agentId, voiceId }) {
+  if (!clean(agentId)) {
+    throw failure("agent_identity_missing", "请先选择当前联系人，才能发送联系人专属声音。", 10);
+  }
+  if (!agentVoiceCandidateIds(dataRoot, agentId).has(voiceId)) {
+    throw failure(
+      "voice_not_available_for_agent",
+      "当前联系人没有保存所选音色“" + voiceId + "”。请先在该联系人的音色设计中创建或选择可用音色。",
+      10,
+    );
+  }
+}
+
+function resolveAgentVoiceConfig({ dataRoot, agentId, requireVoiceSelection }) {
+  const contactConfigPath = defaultConfigPath(dataRoot, agentId);
+  const legacyPath = legacyConfigPath(dataRoot);
+  const contactConfig = readOptionalVoiceConfig(contactConfigPath) || {};
+  const legacyConfig = readOptionalVoiceConfig(legacyPath) || {};
+  const contactVoiceId = voiceIdFromConfig(contactConfig);
+  const legacyVoiceId = voiceIdFromConfig(legacyConfig);
+  const voiceId = contactVoiceId || legacyVoiceId;
+  if (requireVoiceSelection) {
+    if (!voiceId) {
+      throw failure("tts_voice_missing", "当前联系人尚未选择音色；请在 Suzu 的语音设置中选择一个已保存音色。", 10);
+    }
+    assertAgentVoiceCandidate({ dataRoot, agentId, voiceId });
+  }
+  return {
+    configPath: contactConfigPath,
+    localConfig: voiceId ? { ...legacyConfig, voiceId } : { ...legacyConfig },
+    selectionSource: contactVoiceId ? "contact" : (legacyVoiceId ? "legacy-fallback" : "missing"),
+    needsMigration: Boolean(!contactVoiceId && legacyVoiceId),
+  };
 }
 
 function positiveNumber(value, fallback) {
@@ -124,6 +221,7 @@ function resolveTts(localConfig, environment, {
 
 export function resolveDirectVoiceRuntime({
   dataRoot,
+  agentId = "",
   configPath = "",
   timeoutMs,
   apiKeyOverride = "",
@@ -133,15 +231,30 @@ export function resolveDirectVoiceRuntime({
   environment = process.env,
 } = {}) {
   const root = requiredDataRoot(dataRoot);
-  const selectedConfigPath = resolveVoiceMessageConfigPath({ dataRoot: root, configPath });
-  const localConfig = readVoiceConfig(selectedConfigPath);
+  const identity = clean(agentId);
+  const requestedConfigPath = clean(configPath);
+  let resolved;
+  if (requestedConfigPath || !identity) {
+    const selectedConfigPath = resolveVoiceMessageConfigPath({ dataRoot: root, configPath: requestedConfigPath });
+    resolved = {
+      configPath: selectedConfigPath,
+      localConfig: readVoiceConfig(selectedConfigPath),
+      selectionSource: requestedConfigPath ? "explicit" : "legacy-global",
+      needsMigration: false,
+    };
+  } else {
+    resolved = resolveAgentVoiceConfig({ dataRoot: root, agentId: identity, requireVoiceSelection: requireTtsCredentials });
+  }
   return {
     dataRoot: root,
     runtimeDataRoot: voiceRoot(root),
-    configPath: selectedConfigPath,
-    timeoutMs: Math.round(positiveNumber(timeoutMs || localConfig.timeoutMs, 30000)),
-    ffmpegPath: clean(localConfig.ffmpegPath) || "ffmpeg",
-    tts: resolveTts(localConfig, environment, {
+    agentId: identity,
+    configPath: resolved.configPath,
+    selectionSource: resolved.selectionSource,
+    needsMigration: resolved.needsMigration,
+    timeoutMs: Math.round(positiveNumber(timeoutMs || resolved.localConfig.timeoutMs, 30000)),
+    ffmpegPath: clean(resolved.localConfig.ffmpegPath) || "ffmpeg",
+    tts: resolveTts(resolved.localConfig, environment, {
       apiKeyOverride,
       baseUrlOverride,
       modelOverride,
@@ -156,6 +269,7 @@ function safeInspection(runtime) {
     delivery: "conversation-attachment",
     outputFormat: "mp3",
     configPath: runtime.configPath,
+    selectionSource: runtime.selectionSource,
     tts: {
       provider: "qwen",
       model: runtime.tts.model,
@@ -163,6 +277,37 @@ function safeInspection(runtime) {
       apiKeyConfigured: Boolean(runtime.tts.apiKey),
     },
   };
+}
+
+async function persistLegacyVoiceSelection(runtime) {
+  if (!runtime.needsMigration || !runtime.agentId || !runtime.tts.voice) return false;
+  const configPath = resolveVoiceMessageConfigPath({ dataRoot: runtime.dataRoot, agentId: runtime.agentId });
+  const directory = path.dirname(configPath);
+  try {
+    const directoryStat = await fsp.lstat(directory);
+    if (directoryStat.isSymbolicLink() || !directoryStat.isDirectory()) {
+      throw failure("config_invalid", "联系人语音配置目录不安全：" + directory, 10);
+    }
+  } catch (error) {
+    if (error instanceof DirectVoiceMessageError) throw error;
+    if (error?.code !== "ENOENT") throw failure("config_invalid", "无法检查联系人语音配置目录：" + error.message, 10);
+    await fsp.mkdir(directory, { recursive: true });
+  }
+  const existing = readOptionalVoiceConfig(configPath) || {};
+  if (Object.keys(existing).length) return false;
+  const temporary = `${configPath}.${process.pid}.${randomUUID()}.tmp`;
+  const next = { schemaVersion: 1, voiceId: runtime.tts.voice };
+  try {
+    await fsp.writeFile(temporary, `${JSON.stringify(next, null, 2)}\n`, { encoding: "utf8", flag: "wx" });
+    await fsp.link(temporary, configPath);
+    await fsp.unlink(temporary);
+  } catch (error) {
+    await fsp.unlink(temporary).catch(() => undefined);
+    if (error?.code === "EEXIST") return false;
+    if (error instanceof DirectVoiceMessageError) throw error;
+    throw failure("config_write_failed", "无法保存当前联系人的音色选择：" + (clean(error?.message) || "未知错误"), 10);
+  }
+  return true;
 }
 
 function withTimeout(timeoutMs) {
@@ -368,8 +513,12 @@ export async function runDirectVoiceMessage({
   if (!inspect && !selectedAudioFile && !message) {
     throw failure("voice_input_missing", "请提供要说的话或 --audio-file。");
   }
+  if (!inspect && !clean(agentId)) {
+    throw failure("agent_identity_missing", "请先选择当前联系人，才能生成联系人专属语音。", 10);
+  }
   const runtime = resolveDirectVoiceRuntime({
     dataRoot,
+    agentId,
     configPath,
     timeoutMs,
     apiKeyOverride,
@@ -379,6 +528,7 @@ export async function runDirectVoiceMessage({
     environment,
   });
   if (inspect) return safeInspection(runtime);
+  if (!selectedAudioFile) await persistLegacyVoiceSelection(runtime);
   const audioDirectory = agentAudioDirectory(runtime.dataRoot, agentId);
 
   const workDirectory = await temporaryDirectory(runtime);
