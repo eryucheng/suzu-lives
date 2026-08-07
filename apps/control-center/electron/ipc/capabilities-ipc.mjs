@@ -198,7 +198,7 @@ function publicJsonLines(rootValue, segments, limit = 30) {
 }
 
 function publicVoiceCandidates(agentRoot) {
-  return publicJsonLines(agentRoot, ["voice-design", "candidates.jsonl"], 40)
+  return publicJsonLines(agentRoot, ["voice-design", "candidates.jsonl"], 200)
     .map((candidate) => ({
       id: publicText(candidate.id, 100),
       voiceId: publicText(candidate.voiceId, 200),
@@ -208,6 +208,73 @@ function publicVoiceCandidates(agentRoot) {
     }))
     .filter((candidate) => candidate.id && candidate.voiceId)
     .reverse();
+}
+
+function existingDirectory(value) {
+  const target = clean(value);
+  if (!target) return false;
+  try {
+    const stat = fsSync.lstatSync(target);
+    return !stat.isSymbolicLink() && stat.isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+function currentVoiceAgentRoot(settings, dataRoot) {
+  const agentId = clean(settings?.agentId);
+  const projectRoot = absoluteProjectRoot(settings?.projectRoot);
+  if (!agentId || !projectRoot || !existingDirectory(projectRoot) || !clean(dataRoot)) return "";
+  return resolveAgentDataRoot({ dataRoot, agentId });
+}
+
+function configuredVoiceId(value) {
+  const config = plainObject(value);
+  const tts = plainObject(config.tts);
+  return clean(config.voiceId || config.voice || tts.voiceId || tts.voice_id || tts.voice);
+}
+
+function voiceMessageSettings({ dataRoot, agentRoot, voiceDesign, candidates }) {
+  const shared = publicJson(dataRoot, ["capabilities", "voice-message", "config.json"]);
+  const contact = agentRoot ? publicJson(agentRoot, ["voice-message", "config.json"]) : {};
+  const contactVoiceId = configuredVoiceId(contact);
+  const legacyVoiceId = configuredVoiceId(shared);
+  const availableVoiceIds = new Set(candidates.map((candidate) => candidate.voiceId));
+  let voiceId = "";
+  let selectionSource = "missing";
+  let diagnostic = "";
+  if (!agentRoot) {
+    selectionSource = "missing-contact";
+    diagnostic = "请先选择存在的当前联系人项目，才能查看或保存联系人专属音色。";
+  } else if (contactVoiceId) {
+    if (availableVoiceIds.has(contactVoiceId)) {
+      voiceId = contactVoiceId;
+      selectionSource = "contact";
+    } else {
+      selectionSource = "invalid-contact";
+      diagnostic = "当前联系人保存的音色不在其候选库中；发送会被安全拒绝，请重新选择。";
+    }
+  } else if (legacyVoiceId && availableVoiceIds.has(legacyVoiceId)) {
+    voiceId = legacyVoiceId;
+    selectionSource = "legacy-fallback";
+    diagnostic = "正在安全沿用旧的全局音色；保存本页或首次合成后会只写入当前联系人，旧全局配置会保留。";
+  } else if (legacyVoiceId) {
+    selectionSource = "legacy-unavailable";
+    diagnostic = "旧全局音色不属于当前联系人的候选库；请为当前联系人选择一个已保存音色。";
+  } else if (!candidates.length) {
+    diagnostic = "当前联系人还没有可用音色；请先在音色设计中创建并保存候选。";
+  } else {
+    diagnostic = "当前联系人尚未选择音色。";
+  }
+  return {
+    saved: Object.keys(shared).length > 0 || Object.keys(contact).length > 0 || Object.keys(voiceDesign).length > 0 || candidates.length > 0,
+    voiceId,
+    timeoutMs: numberOrFallback(shared.timeoutMs, { minimum: 1000, maximum: 600000, fallback: 30000, integer: true }),
+    candidates,
+    selectionSource,
+    voiceDiagnostic: diagnostic,
+    canSelectVoice: Boolean(agentRoot) && candidates.length > 0,
+  };
 }
 
 function normalizedLines(value, label, { maximum = 80, itemMaximum = 160 } = {}) {
@@ -262,7 +329,7 @@ function savedCapabilitySettings(settings, dataRoot) {
   const imageComfyui = plainObject(imageGeneration.comfyui);
   const visualReferences = agentRoot ? publicJson(agentRoot, ["visual-references", "manifest.json"]) : {};
   const voiceDesign = agentRoot ? publicJson(agentRoot, ["voice-design", "config.json"]) : {};
-  const voiceMessage = publicJson(dataRoot, ["capabilities", "voice-message", "config.json"]);
+  const voiceAgentRoot = currentVoiceAgentRoot(settings, dataRoot);
   const iphoneBridge = agentRoot ? publicJson(agentRoot, ["iphone-bridge", "feedback_config.json"]) : {};
   const iphoneFeedback = publicJson(dataRoot, ["automation", "iphone-bridge", "config.json"]);
   const phoneCamera = agentRoot ? publicJson(agentRoot, ["phone-camera", "config.json"]) : {};
@@ -273,7 +340,8 @@ function savedCapabilitySettings(settings, dataRoot) {
   const proactiveContact = publicJson(dataRoot, ["automation", "proactive-contact", "config.json"]);
   const merchant = publicJson(dataRoot, ["automation", "traveling-merchant", "config.json"]);
   const phonePrompt = plainObject(phoneCamera.prompt);
-  const candidates = agentRoot ? publicVoiceCandidates(agentRoot) : [];
+  const candidates = voiceAgentRoot ? publicVoiceCandidates(voiceAgentRoot) : [];
+  const voiceMessage = voiceMessageSettings({ dataRoot, agentRoot: voiceAgentRoot, voiceDesign, candidates });
   return {
     "image-generation": {
       saved: Object.keys(imageGeneration).length > 0,
@@ -314,10 +382,7 @@ function savedCapabilitySettings(settings, dataRoot) {
       },
     },
     "voice-message": {
-      saved: Object.keys(voiceMessage).length > 0 || Object.keys(voiceDesign).length > 0 || candidates.length > 0,
-      voiceId: clean(voiceMessage.voiceId),
-      timeoutMs: numberOrFallback(voiceMessage.timeoutMs, { minimum: 1000, maximum: 600000, fallback: 30000, integer: true }),
-      candidates,
+      ...voiceMessage,
     },
     "iphone-bridge": {
       saved: Object.keys(iphoneBridge).length > 0,
@@ -642,12 +707,29 @@ export function createCapabilitiesService({
       return snapshot();
     }
     if (capabilityId === "voice-message") {
-      const existing = publicJson(dataRoot, ["capabilities", "voice-message", "config.json"]);
-      await writeJsonBelow(dataRoot, ["capabilities", "voice-message", "config.json"], {
-        ...existing,
-        voiceId: boundedText(input.voiceId, "音色", 200),
-        timeoutMs: boundedNumber(input.timeoutMs, "语音发送等待时间", { minimum: 1000, maximum: 600000, fallback: 30000, integer: true }),
+      const agentRoot = currentVoiceAgentRoot(settings, dataRoot);
+      if (!agentRoot) throw new Error("请先选择存在的当前联系人项目，再保存联系人专属音色。 ");
+      const voiceId = boundedText(input.voiceId, "音色", 200);
+      if (!voiceId) throw new Error("请为当前联系人选择一个已保存音色。 ");
+      const candidates = publicVoiceCandidates(agentRoot);
+      if (!candidates.some((candidate) => candidate.voiceId === voiceId)) {
+        throw new Error("所选音色不属于当前联系人的候选库，请重新选择。 ");
+      }
+      const contact = publicJson(agentRoot, ["voice-message", "config.json"]);
+      await writeJsonBelow(agentRoot, ["voice-message", "config.json"], {
+        ...contact,
+        schemaVersion: 1,
+        voiceId,
       });
+      const shared = publicJson(dataRoot, ["capabilities", "voice-message", "config.json"]);
+      const currentTimeout = numberOrFallback(shared.timeoutMs, { minimum: 1000, maximum: 600000, fallback: 30000, integer: true });
+      const nextTimeout = boundedNumber(input.timeoutMs, "语音发送等待时间", { minimum: 1000, maximum: 600000, fallback: currentTimeout, integer: true });
+      if (nextTimeout !== currentTimeout) {
+        await writeJsonBelow(dataRoot, ["capabilities", "voice-message", "config.json"], {
+          ...shared,
+          timeoutMs: nextTimeout,
+        });
+      }
       return snapshot();
     }
     if (capabilityId === "iphone-bridge") {

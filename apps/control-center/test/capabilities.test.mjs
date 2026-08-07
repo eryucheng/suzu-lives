@@ -38,6 +38,35 @@ test("abilities use overview, category, then settings pages without implementati
   assert.doesNotMatch(detail, /Claude 注册|稳定 ID|真实前置条件|缺失配置|稳定命令/u);
 });
 
+test("voice settings clearly separates the current contact's voice from shared delivery settings", () => {
+  const view = renderCapabilities({ state: {
+    capabilityPage: "detail",
+    capabilityCategory: "act",
+    capabilitySelectedId: "voice-message",
+    capabilitySnapshot: {
+      capabilities: [{
+        id: "voice-message",
+        name: "发送语音",
+        description: "fixture",
+        category: "act",
+        enabled: true,
+        canToggle: true,
+        savedSettings: {
+          voiceId: "contact-voice",
+          timeoutMs: 30000,
+          selectionSource: "contact",
+          candidates: [{ id: "candidate", voiceId: "contact-voice", preferredName: "当前联系人声音" }],
+        },
+      }],
+    },
+  } });
+  assert.match(view, /当前联系人的发送音色/u);
+  assert.match(view, /只属于当前联系人/u);
+  assert.match(view, /共享发送细节/u);
+  assert.match(view, /保存当前联系人语音设置/u);
+  assert.match(view, /contact-voice/u);
+});
+
 test("WeChat is a software-level action and never becomes a Claude Skill", () => {
   const view = renderCapabilities({
     state: {
@@ -314,7 +343,8 @@ test("each configurable ability saves only its real software-side settings and n
   const phone = JSON.parse(await fs.readFile(path.join(agentRoot, "phone-camera", "config.json"), "utf8"));
   const vision = JSON.parse(await fs.readFile(path.join(dataRoot, "capabilities", "image-vision", "config.json"), "utf8"));
   const video = JSON.parse(await fs.readFile(path.join(dataRoot, "capabilities", "video-understanding", "config.json"), "utf8"));
-  const voice = JSON.parse(await fs.readFile(path.join(dataRoot, "capabilities", "voice-message", "config.json"), "utf8"));
+  const voice = JSON.parse(await fs.readFile(path.join(agentRoot, "voice-message", "config.json"), "utf8"));
+  const sharedVoice = JSON.parse(await fs.readFile(path.join(dataRoot, "capabilities", "voice-message", "config.json"), "utf8"));
   const site = JSON.parse(await fs.readFile(path.join(agentRoot, "site-automation", "config.json"), "utf8"));
   const merchant = JSON.parse(await fs.readFile(path.join(dataRoot, "automation", "traveling-merchant", "config.json"), "utf8"));
   assert.equal(image.default_backend, "comfyui");
@@ -326,13 +356,78 @@ test("each configurable ability saves only its real software-side settings and n
   assert.equal(video.provider.model, "video-selected");
   assert.equal(video.video.cache_enabled, false);
   assert.equal(voice.voiceId, "voice-saved");
-  assert.equal(voice.timeoutMs, 45000);
+  assert.equal(voice.schemaVersion, 1);
+  assert.equal(sharedVoice.timeoutMs, 45000);
+  assert.equal(Object.hasOwn(sharedVoice, "voiceId"), false);
   assert.equal(site.douyin.ownerToken, "private-value");
   assert.equal(site.autoStartBrowser, false);
   assert.equal(merchant.notificationTemplate, "有：{items}");
   assert.equal(merchant.notifyOnError, false);
   assert.equal(snapshot.capabilities.find((item) => item.id === "voice-message").savedSettings.candidates[0].voiceId, "voice-saved");
   assert.doesNotMatch(JSON.stringify(snapshot), /vision-secret|private-value/u);
+});
+
+test("voice-message keeps selected voices per contact, safely falls back from legacy settings, and rejects invalid scopes", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "suzu-contact-voice-settings-"));
+  const dataRoot = path.join(root, "software-data");
+  const projectA = path.join(root, "contact-a");
+  const projectB = path.join(root, "contact-b");
+  await Promise.all([fs.mkdir(projectA), fs.mkdir(projectB)]);
+  const agentA = stableAgentId(projectA);
+  const agentB = stableAgentId(projectB);
+  const agentRootA = path.join(dataRoot, "agents", agentA);
+  const agentRootB = path.join(dataRoot, "agents", agentB);
+  await Promise.all([
+    fs.mkdir(path.join(agentRootA, "voice-design"), { recursive: true }),
+    fs.mkdir(path.join(agentRootB, "voice-design"), { recursive: true }),
+    fs.mkdir(path.join(dataRoot, "capabilities", "voice-message"), { recursive: true }),
+  ]);
+  await Promise.all([
+    fs.writeFile(path.join(agentRootA, "voice-design", "candidates.jsonl"), `${JSON.stringify({ id: "a-legacy", voiceId: "legacy-a", preferredName: "旧声音" })}\n${JSON.stringify({ id: "a-current", voiceId: "voice-a", preferredName: "A 的声音" })}\n`, "utf8"),
+    fs.writeFile(path.join(agentRootB, "voice-design", "candidates.jsonl"), `${JSON.stringify({ id: "b-current", voiceId: "voice-b", preferredName: "B 的声音" })}\n`, "utf8"),
+    fs.writeFile(path.join(dataRoot, "capabilities", "voice-message", "config.json"), JSON.stringify({ voiceId: "legacy-a", timeoutMs: 41000 }), "utf8"),
+  ]);
+  let settings = { projectRoot: projectA, dataRoot, agentId: agentA };
+  const service = createCapabilitiesService({ settingsService: { load: () => settings, response: () => ({ dataRoot }) }, existsCommand: () => true });
+
+  let saved = service.snapshot().capabilities.find((item) => item.id === "voice-message").savedSettings;
+  assert.equal(saved.voiceId, "legacy-a");
+  assert.equal(saved.selectionSource, "legacy-fallback");
+  assert.match(saved.voiceDiagnostic, /旧的全局音色/u);
+
+  settings = { projectRoot: projectB, dataRoot, agentId: agentB };
+  saved = service.snapshot().capabilities.find((item) => item.id === "voice-message").savedSettings;
+  assert.equal(saved.voiceId, "");
+  assert.equal(saved.selectionSource, "legacy-unavailable");
+  await assert.rejects(
+    () => service.saveSettings({ id: "voice-message", value: { voiceId: "legacy-a", timeoutMs: 41000 } }),
+    /不属于当前联系人的候选库/u,
+  );
+  await service.saveSettings({ id: "voice-message", value: { voiceId: "voice-b", timeoutMs: 41000 } });
+
+  settings = { projectRoot: projectA, dataRoot, agentId: agentA };
+  await service.saveSettings({ id: "voice-message", value: { voiceId: "voice-a", timeoutMs: 41000 } });
+  const [contactA, contactB, shared] = await Promise.all([
+    fs.readFile(path.join(agentRootA, "voice-message", "config.json"), "utf8").then(JSON.parse),
+    fs.readFile(path.join(agentRootB, "voice-message", "config.json"), "utf8").then(JSON.parse),
+    fs.readFile(path.join(dataRoot, "capabilities", "voice-message", "config.json"), "utf8").then(JSON.parse),
+  ]);
+  assert.equal(contactA.voiceId, "voice-a");
+  assert.equal(contactB.voiceId, "voice-b");
+  assert.equal(shared.voiceId, "legacy-a");
+
+  settings = { projectRoot: projectB, dataRoot, agentId: agentB };
+  saved = service.snapshot().capabilities.find((item) => item.id === "voice-message").savedSettings;
+  assert.equal(saved.voiceId, "voice-b");
+  assert.equal(saved.selectionSource, "contact");
+
+  settings = { projectRoot: "", dataRoot, agentId: "" };
+  saved = service.snapshot().capabilities.find((item) => item.id === "voice-message").savedSettings;
+  assert.equal(saved.selectionSource, "missing-contact");
+  await assert.rejects(
+    () => service.saveSettings({ id: "voice-message", value: { voiceId: "voice-b", timeoutMs: 41000 } }),
+    /存在的当前联系人项目/u,
+  );
 });
 
 test("website action switches preserve private site configuration and accept only registered site actions", async () => {
