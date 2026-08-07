@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://suzu-lives.local/schema/cost-ledger-event-v1.json",
+  "title": "Suzu Lives cost ledger event",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "id",
+    "timestamp",
+    "model",
+    "feature",
+    "usage",
+    "units"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": 1
+    },
+    "id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "agentId": {
+      "type": "string"
+    },
+    "provider": {
+      "type": "string"
+    },
+    "model": {
+      "type": "string",
+      "minLength": 1
+    },
+    "source": {
+      "type": "string"
+    },
+    "feature": {
+      "type": "string",
+      "minLength": 1
+    },
+    "requestId": {
+      "type": "string"
+    },
+    "usage": {
+      "type": "object"
+    },
+    "units": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "number",
+        "minimum": 0
+      }
+    },
+    "metadata": {
+      "type": "object"
+    }
+  },
+  "additionalProperties": false
+}

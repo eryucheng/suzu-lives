@@ -1,0 +1,20 @@
+{
+  "name": "@suzu-lives/capability-registry",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.mjs",
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  },
+  "dependencies": {
+    "@suzu-lives/browser-automation": "0.1.0",
+    "@suzu-lives/capability-runtime": "0.1.0",
+    "@suzu-lives/device-bridge": "0.1.0",
+    "@suzu-lives/media-understanding": "0.1.0",
+    "@suzu-lives/voice-message": "0.1.0"
+  },
+  "files": [
+    "src/**/*"
+  ]
+}

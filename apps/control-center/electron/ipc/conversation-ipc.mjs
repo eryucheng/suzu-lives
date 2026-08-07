@@ -1,0 +1,125 @@
+import { createConversationReader } from "../services/conversation-reader.mjs";
+import { createConversationChatService } from "../services/conversation-chat.mjs";
+import { createConversationSessionSettingsService } from "../services/conversation-session-settings.mjs";
+
+function clean(value) {
+  return String(value ?? "").trim();
+}
+
+function quotedArgument(value) {
+  const source = clean(value);
+  return source && !/["\r\n]/u.test(source) ? `"${source}"` : "";
+}
+
+export function registerConversationIpc({
+  app,
+  contactProjectsService = null,
+  ipcMain,
+  settingsService,
+  shell,
+  wechatAttachmentCli = "",
+  proactiveContactSettings = () => ({}),
+  isProactiveContactEnabled = () => false,
+  hasTravelingMerchantRecipients = () => false,
+}) {
+  const reader = createConversationReader({ contactProjectsService, settingsService });
+  const sessionSettings = createConversationSessionSettingsService({
+    dataRoot: settingsService.response(settingsService.load()).dataRoot,
+    reader,
+  });
+  const attachmentCommand = ({ sessionId, projectRoot } = {}) => {
+    const invocation = clean(wechatAttachmentCli);
+    const dataRoot = clean(settingsService.response(settingsService.load()).dataRoot);
+    const rootArgument = quotedArgument(dataRoot);
+    const projectArgument = quotedArgument(projectRoot);
+    const sessionArgument = quotedArgument(sessionId);
+    if (!invocation) return "";
+    return rootArgument && projectArgument && sessionArgument
+      ? `${invocation} conversation-attachment --data-root ${rootArgument} --project-root ${projectArgument} --session-id ${sessionArgument}`
+      : `${invocation} conversation-attachment`;
+  };
+  const scheduleCommand = ({ sessionId, projectRoot } = {}) => {
+    const invocation = clean(wechatAttachmentCli);
+    const dataRoot = clean(settingsService.response(settingsService.load()).dataRoot);
+    const rootArgument = quotedArgument(dataRoot);
+    const sessionArgument = quotedArgument(sessionId);
+    const projectArgument = quotedArgument(projectRoot);
+    if (!invocation || !rootArgument) return null;
+    const proactive = proactiveContactSettings() || {};
+    const proactiveEnabled = isProactiveContactEnabled({ sessionId, projectRoot }) === true;
+    const merchantEnabled = hasTravelingMerchantRecipients() === true;
+    return {
+      conversationAdd: proactiveEnabled && sessionArgument && projectArgument
+        ? `${invocation} schedule add --data-root ${rootArgument} --session-id ${sessionArgument} --project-root ${projectArgument}`
+        : "",
+      operationAdd: merchantEnabled ? `${invocation} schedule add --data-root ${rootArgument}` : "",
+      list: `${invocation} schedule list --data-root ${rootArgument}`,
+      remove: `${invocation} schedule remove <任务ID> --data-root ${rootArgument}`,
+      proactiveChainPrompt: clean(proactive.chainPrompt),
+      proactiveFollowUpPrompt: clean(proactive.followUpPrompt),
+    };
+  };
+  let sender = null;
+  const chat = createConversationChatService({
+    agentAttachmentCommand: attachmentCommand,
+    agentScheduleCommand: scheduleCommand,
+    settingsService,
+    reader,
+    onEvent: (payload) => {
+      if (sender && !sender.isDestroyed()) sender.send("conversation:event", payload);
+    },
+  });
+  app?.once?.("before-quit", () => chat.dispose());
+  ipcMain.handle("conversation:snapshot", () => reader.snapshot());
+  ipcMain.handle("conversation:search", (_event, query) => reader.search(query));
+  ipcMain.handle("conversation:focus", (_event, value) => reader.focus(value));
+  ipcMain.handle("conversation:session-settings-snapshot", async (event, value) => {
+    sender = event.sender;
+    return sessionSettings.snapshot(value);
+  });
+  ipcMain.handle("conversation:save-session-settings", async (event, value) => {
+    sender = event.sender;
+    return sessionSettings.save(value);
+  });
+  ipcMain.handle("conversation:open-media-directory", async (event, value) => {
+    sender = event.sender;
+    if (typeof shell?.openPath !== "function") throw new Error("当前环境无法打开本地文件夹。 ");
+    const media = await sessionSettings.mediaDirectory(value);
+    const error = await shell.openPath(media.directory);
+    if (error) throw new Error(`无法打开会话文件目录：${error}`);
+    return media;
+  });
+  ipcMain.handle("conversation:create", async (event) => {
+    sender = event.sender;
+    return reader.create();
+  });
+  ipcMain.handle("conversation:create-contact", async (event, value) => {
+    sender = event.sender;
+    return reader.createContact(value);
+  });
+  ipcMain.handle("conversation:select-contact", async (event, value) => {
+    sender = event.sender;
+    return reader.selectContact(value);
+  });
+  ipcMain.handle("conversation:select", async (event, sessionId) => {
+    sender = event.sender;
+    return reader.select(sessionId);
+  });
+  ipcMain.handle("conversation:send", async (event, value) => {
+    sender = event.sender;
+    return chat.send(value);
+  });
+  ipcMain.handle("conversation:stop", async (event, value) => {
+    sender = event.sender;
+    return chat.stop(value);
+  });
+  ipcMain.handle("conversation:steer", async (event, value) => {
+    sender = event.sender;
+    return chat.steer(value);
+  });
+  ipcMain.handle("conversation:respond-permission", async (event, value) => {
+    sender = event.sender;
+    return chat.respondPermission(value);
+  });
+  return { chat, reader, sessionSettings };
+}

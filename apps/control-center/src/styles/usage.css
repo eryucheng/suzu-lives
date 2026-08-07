@@ -1,0 +1,65 @@
+/* Usage and price-editor pages own this extension point. */
+:where(.usage-summary, .price-model-list, .data-table) {
+  min-width: 0;
+}
+
+.usage-scope {
+  border: 1px solid var(--line);
+  border-radius: 15px;
+  background: var(--panel);
+  margin-bottom: 13px;
+  overflow: clip;
+}
+
+.usage-scope > summary {
+  align-items: center;
+  cursor: pointer;
+  display: flex;
+  justify-content: space-between;
+  gap: 18px;
+  list-style: none;
+  min-height: 76px;
+  padding: 16px 18px;
+}
+
+.usage-scope > summary::-webkit-details-marker {
+  display: none;
+}
+
+.usage-scope h2 {
+  font-size: 13px;
+  margin: 3px 0 0;
+}
+
+.usage-scope p {
+  margin: 4px 0 0;
+}
+
+.usage-scope__control {
+  align-items: center;
+  color: var(--muted);
+  display: inline-flex;
+  font-size: 11px;
+  gap: 7px;
+  white-space: nowrap;
+}
+
+.usage-scope__control b {
+  color: var(--text);
+  font-size: 15px;
+  font-weight: 500;
+  line-height: 1;
+  transition: transform 160ms ease;
+}
+
+.usage-scope[open] > summary {
+  border-bottom: 1px solid var(--line);
+}
+
+.usage-scope[open] .usage-scope__control b {
+  transform: rotate(180deg);
+}
+
+.usage-scope__content {
+  padding: 14px 18px 18px;
+}

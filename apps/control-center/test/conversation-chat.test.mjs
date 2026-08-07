@@ -1,0 +1,498 @@
+import assert from "node:assert/strict";
+import { EventEmitter } from "node:events";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { PassThrough } from "node:stream";
+import test from "node:test";
+
+import {
+  claudeCliArguments,
+  claudeCliEnvironment,
+  createConversationChatService,
+  scheduleSystemPrompt,
+} from "../electron/services/conversation-chat.mjs";
+
+async function temporaryDirectory(prefix) {
+  return fs.mkdtemp(path.join(os.tmpdir(), prefix));
+}
+
+async function flush() {
+  await new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+class FakeChild extends EventEmitter {
+  constructor() {
+    super();
+    this.stdin = new PassThrough();
+    this.stdout = new PassThrough();
+    this.stderr = new PassThrough();
+    this.input = "";
+    this.killed = false;
+    this.stdin.on("data", (chunk) => { this.input += chunk.toString("utf8"); });
+  }
+
+  emitJson(value) {
+    this.stdout.write(`${JSON.stringify(value)}\n`);
+  }
+
+  kill() {
+    this.killed = true;
+    return true;
+  }
+
+  close(code = 0, signal = null) {
+    this.stdout.end();
+    this.stderr.end();
+    this.emit("close", code, signal);
+  }
+}
+
+test("Claude Code stream arguments create or resume only the selected native session", () => {
+  assert.deepEqual(claudeCliArguments({ sessionId: "new-session", hasTranscript: false }), [
+    "-p",
+    "--input-format", "stream-json",
+    "--output-format", "stream-json",
+    "--verbose",
+    "--include-partial-messages",
+    "--permission-prompt-tool", "stdio",
+    "--replay-user-messages",
+    "--disallowed-tools", "Agent,TodoWrite,AskUserQuestion",
+    "--session-id", "new-session",
+  ]);
+  assert.deepEqual(claudeCliArguments({ sessionId: "saved-session", hasTranscript: true }).slice(-2), ["--resume", "saved-session"]);
+});
+
+test("Claude runtime feature settings remove only the selected built-in tools and background features", () => {
+  const enabled = {
+    subagents: true,
+    taskList: true,
+    backgroundTasks: true,
+    nativeCron: true,
+    askUserQuestion: true,
+  };
+  assert.equal(claudeCliArguments({ sessionId: "enabled", claudeRuntimeFeatures: enabled }).includes("--disallowed-tools"), false);
+  assert.deepEqual(claudeCliEnvironment({ claudeRuntimeFeatures: enabled, baseEnv: { KEEP: "yes" } }), {
+    KEEP: "yes",
+  });
+  assert.deepEqual(claudeCliEnvironment({ baseEnv: { KEEP: "yes" } }), {
+    KEEP: "yes",
+    CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1",
+    CLAUDE_CODE_DISABLE_CRON: "1",
+  });
+});
+
+test("schedule prompt keeps the two companion capabilities independently scoped", () => {
+  const proactiveOnly = scheduleSystemPrompt({
+    conversationAdd: "suzu-lives schedule add --session-id session-a",
+    list: "suzu-lives schedule list",
+    remove: "suzu-lives schedule remove <任务ID>",
+    proactiveChainPrompt: "用我的链式提示",
+    proactiveFollowUpPrompt: "用我的回访提示",
+  });
+  assert.match(proactiveOnly, /用我的链式提示/u);
+  assert.match(proactiveOnly, /用我的回访提示/u);
+  assert.doesNotMatch(proactiveOnly, /远行商人/u);
+
+  const merchantOnly = scheduleSystemPrompt({
+    operationAdd: "suzu-lives schedule add",
+    list: "suzu-lives schedule list",
+    remove: "suzu-lives schedule remove <任务ID>",
+  });
+  assert.match(merchantOnly, /远行商人/u);
+  assert.doesNotMatch(merchantOnly, /当前会话已在“主动关心”能力中启用/u);
+});
+
+test("chat starts the local Claude CLI and forwards its stream", async () => {
+  const root = await temporaryDirectory("suzu-direct-chat-");
+  const projectRoot = path.join(root, "project");
+  const homeDirectory = path.join(root, "home");
+  const commandPath = path.join(homeDirectory, ".local", "bin", "claude.exe");
+  await fs.mkdir(projectRoot, { recursive: true });
+  await fs.mkdir(path.dirname(commandPath), { recursive: true });
+  await fs.writeFile(commandPath, "fixture");
+  const events = [];
+  const spawned = [];
+  const service = createConversationChatService({
+    agentAttachmentCommand: () => '"Suzu Lives Console.exe" --suzu-lives-cli conversation-attachment',
+    agentScheduleCommand: () => ({
+      conversationAdd: '"Suzu Lives Console.exe" --suzu-lives-cli schedule add --data-root "D:\\\\suzu" --session-id "session-1" --project-root "D:\\\\project"',
+      operationAdd: '"Suzu Lives Console.exe" --suzu-lives-cli schedule add --data-root "D:\\\\suzu"',
+      list: '"Suzu Lives Console.exe" --suzu-lives-cli schedule list --data-root "D:\\\\suzu"',
+      remove: '"Suzu Lives Console.exe" --suzu-lives-cli schedule remove',
+    }),
+    settingsService: { load: () => ({ projectRoot }) },
+    reader: { ensureActiveSession: async () => ({ id: "session-1", projectRoot, hasTranscript: false }) },
+    homeDirectory,
+    spawnImpl: (command, args, options) => {
+      const child = new FakeChild();
+      spawned.push({ command, args, options, child });
+      return child;
+    },
+    onEvent: (event) => events.push(event),
+  });
+
+  const result = await service.send({ content: "直接聊天" });
+  assert.equal(result.accepted, true);
+  assert.equal(result.sessionId, "session-1");
+  assert.equal(spawned.length, 1);
+  assert.equal(spawned[0].command, commandPath);
+  assert.equal(spawned[0].options.cwd, projectRoot);
+  assert.equal(spawned[0].options.windowsHide, true);
+  assert.ok(spawned[0].args.includes("--session-id"));
+  assert.ok(spawned[0].args.includes("--disallowed-tools"));
+  assert.equal(spawned[0].args[spawned[0].args.indexOf("--disallowed-tools") + 1], "Agent,TodoWrite,AskUserQuestion");
+  assert.equal(spawned[0].options.env.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS, "1");
+  assert.equal(spawned[0].options.env.CLAUDE_CODE_DISABLE_CRON, "1");
+  const attachmentPromptIndex = spawned[0].args.indexOf("--append-system-prompt");
+  assert.ok(attachmentPromptIndex >= 0);
+  assert.match(spawned[0].args[attachmentPromptIndex + 1], /conversation-attachment --image/u);
+  assert.match(spawned[0].args[attachmentPromptIndex + 1], /conversation-attachment --audio/u);
+  assert.match(spawned[0].args[attachmentPromptIndex + 1], /schedule add --data-root/u);
+  await flush();
+  assert.deepEqual(JSON.parse(spawned[0].child.input.trim()), {
+    type: "user",
+    message: { role: "user", content: "直接聊天" },
+  });
+
+  spawned[0].child.emitJson({ type: "system", subtype: "init", slash_commands: ["/compact", { name: "/goal" }] });
+  spawned[0].child.emitJson({ type: "assistant", message: { content: [
+    { type: "thinking", thinking: "先检查当前项目。" },
+    { type: "tool_use", name: "Read", input: { file_path: "CLAUDE.md" } },
+    { type: "text", text: "我在。" },
+  ] } });
+  spawned[0].child.emitJson({ type: "user", message: { content: [{
+    type: "tool_result",
+    content: JSON.stringify({
+      status: "ok",
+      type: "suzu-conversation-attachment",
+      receiptId: "attachment-receipt-1",
+      items: [
+        { kind: "file", path: path.join(projectRoot, "report.txt"), fileName: "report.txt", size: 12 },
+        { kind: "audio", path: path.join(projectRoot, "voice.mp3"), fileName: "voice.mp3", size: 24 },
+      ],
+    }),
+  }] } });
+  spawned[0].child.emitJson({ type: "result", result: "我在。", session_id: "session-1", usage: { input_tokens: 3, output_tokens: 2 } });
+  spawned[0].child.close();
+  await flush();
+  assert.equal(events.find((event) => event.type === "reply-stream")?.content, "我在。");
+  assert.deepEqual(events.filter((event) => event.type === "agent-reply").map((event) => event.content), ["我在。"]);
+  assert.equal(events.find((event) => event.type === "reply")?.done, true);
+  assert.equal(events.find((event) => event.type === "turn-complete")?.sessionId, "session-1");
+  assert.equal(events.find((event) => event.type === "reply")?.projectRoot, projectRoot);
+  assert.match(events.find((event) => event.type === "thinking")?.content || "", /先检查/u);
+  assert.match(events.find((event) => event.type === "tool")?.content || "", /Read/u);
+  assert.match(events.find((event) => event.type === "usage")?.content || "", /合计 5/u);
+  assert.deepEqual(events.find((event) => event.type === "slash-commands")?.commands, ["/compact", "/goal"]);
+  assert.deepEqual(events.find((event) => event.type === "agent-media")?.media, [{
+    kind: "file",
+    path: path.join(projectRoot, "report.txt"),
+    fileName: "report.txt",
+    size: 12,
+  }, {
+    kind: "audio",
+    path: path.join(projectRoot, "voice.mp3"),
+    fileName: "voice.mp3",
+    size: 24,
+  }]);
+});
+
+test("scheduled turns hide NO_REPLY and deliver a visible answer only after completion", async () => {
+  const root = await temporaryDirectory("suzu-scheduled-chat-");
+  const projectRoot = path.join(root, "project");
+  const homeDirectory = path.join(root, "home");
+  const commandPath = path.join(homeDirectory, ".local", "bin", "claude.exe");
+  await fs.mkdir(projectRoot, { recursive: true });
+  await fs.mkdir(path.dirname(commandPath), { recursive: true });
+  await fs.writeFile(commandPath, "fixture");
+  const events = [];
+  const spawned = [];
+  const service = createConversationChatService({
+    settingsService: { load: () => ({ projectRoot }) },
+    reader: { ensureActiveSession: async () => ({ id: "unused", projectRoot, hasTranscript: false }) },
+    homeDirectory,
+    spawnImpl: () => {
+      const child = new FakeChild();
+      spawned.push(child);
+      return child;
+    },
+    onEvent: (event) => events.push(event),
+  });
+
+  await service.sendToSession({
+    content: "<suzu-schedule-task>\\n检查回访是否需要回复\\n</suzu-schedule-task>",
+    sessionId: "scheduled-session",
+    projectRoot,
+    hasTranscript: true,
+    kind: "schedule",
+  });
+  spawned[0].emitJson({ type: "assistant", message: { content: [{ type: "text", text: "NO_REPLY" }] } });
+  spawned[0].emitJson({ type: "result", result: "NO_REPLY" });
+  spawned[0].close();
+  await flush();
+  assert.deepEqual(events.filter((event) => event.type === "agent-reply"), []);
+  assert.deepEqual(events.filter((event) => event.type === "reply"), []);
+
+  await service.sendToSession({
+    content: "<suzu-schedule-task>\\n自然回访\\n</suzu-schedule-task>",
+    sessionId: "scheduled-session",
+    projectRoot,
+    hasTranscript: true,
+    kind: "schedule",
+  });
+  spawned[1].emitJson({ type: "assistant", message: { content: [{ type: "text", text: "你那边现在怎么样？" }] } });
+  spawned[1].emitJson({ type: "result", result: "你那边现在怎么样？" });
+  spawned[1].close();
+  await flush();
+  assert.deepEqual(events.filter((event) => event.type === "agent-reply").map((event) => event.content), ["你那边现在怎么样？"]);
+  assert.equal(events.filter((event) => event.type === "reply").at(-1)?.done, true);
+  service.dispose();
+});
+
+test("a WeChat image and file become one native Claude multimodal user message", async () => {
+  const root = await temporaryDirectory("suzu-wechat-inbound-chat-");
+  const projectRoot = path.join(root, "project");
+  const homeDirectory = path.join(root, "home");
+  const commandPath = path.join(homeDirectory, ".local", "bin", "claude.exe");
+  const imagePath = path.join(root, "inbound-image.png");
+  const filePath = path.join(root, "inbound-file.txt");
+  await Promise.all([
+    fs.mkdir(projectRoot, { recursive: true }),
+    fs.mkdir(path.dirname(commandPath), { recursive: true }),
+  ]);
+  await fs.writeFile(commandPath, "fixture");
+  const spawned = [];
+  const service = createConversationChatService({
+    settingsService: { load: () => ({ projectRoot }) },
+    reader: { ensureActiveSession: async () => ({ id: "unused", projectRoot, hasTranscript: false }) },
+    homeDirectory,
+    spawnImpl: () => {
+      const child = new FakeChild();
+      spawned.push(child);
+      return child;
+    },
+  });
+
+  await service.sendToSession({
+    content: "这是微信带来的附件",
+    sessionId: "wechat-session",
+    projectRoot,
+    hasTranscript: true,
+    media: [
+      { kind: "image", path: imagePath, fileName: "photo.png", mimeType: "image/png", data: Buffer.from([0x89, 0x50, 0x4e, 0x47]) },
+      { kind: "file", path: filePath, fileName: "report.txt", data: Buffer.from("文件内容") },
+    ],
+  });
+  await flush();
+  const input = JSON.parse(spawned[0].input.trim());
+  assert.equal(input.type, "user");
+  assert.equal(input.message.role, "user");
+  assert.equal(Array.isArray(input.message.content), true);
+  assert.deepEqual(input.message.content[0], {
+    type: "image",
+    source: { type: "base64", media_type: "image/png", data: "iVBORw==" },
+  });
+  assert.match(input.message.content.at(-1).text, /这是微信带来的附件/u);
+  assert.match(input.message.content.at(-1).text, /<suzu-wechat-media>/u);
+  assert.ok(input.message.content.at(-1).text.includes(JSON.stringify(filePath).slice(1, -1)));
+  service.dispose();
+});
+
+test("messages in the same Claude session run in FIFO order", async () => {
+  const root = await temporaryDirectory("suzu-chat-queue-");
+  const projectRoot = path.join(root, "project");
+  const homeDirectory = path.join(root, "home");
+  const commandPath = path.join(homeDirectory, ".local", "bin", "claude.exe");
+  await fs.mkdir(projectRoot, { recursive: true });
+  await fs.mkdir(path.dirname(commandPath), { recursive: true });
+  await fs.writeFile(commandPath, "fixture");
+  const events = [];
+  const spawned = [];
+  const service = createConversationChatService({
+    settingsService: { load: () => ({ projectRoot }) },
+    reader: { ensureActiveSession: async () => ({ id: "queue-session", projectRoot, hasTranscript: false }) },
+    homeDirectory,
+    spawnImpl: (_command, args) => {
+      const child = new FakeChild();
+      spawned.push({ args, child });
+      return child;
+    },
+    onEvent: (event) => events.push(event),
+  });
+
+  const first = await service.send({ content: "第一条" });
+  const second = await service.send({ content: "第二条" });
+  assert.equal(first.queued, false);
+  assert.equal(second.queued, true);
+  assert.equal(second.queuePosition, 1);
+  assert.equal(spawned.length, 1);
+
+  spawned[0].child.emitJson({ type: "result", result: "第一条完成" });
+  spawned[0].child.close();
+  await flush();
+  await flush();
+  assert.equal(spawned.length, 2);
+  assert.deepEqual(JSON.parse(spawned[1].child.input.trim()), {
+    type: "user",
+    message: { role: "user", content: "第二条" },
+  });
+  assert.deepEqual(spawned[1].args.slice(-2), ["--resume", "queue-session"]);
+  assert.ok(events.some((event) => event.type === "queue" && event.items.some((item) => item.requestId === second.requestId)));
+  service.dispose();
+});
+
+test("copied Claude session ids remain isolated by project root", async () => {
+  const root = await temporaryDirectory("suzu-chat-project-scope-");
+  const projectA = path.join(root, "project-a");
+  const projectB = path.join(root, "project-b");
+  const homeDirectory = path.join(root, "home");
+  const commandPath = path.join(homeDirectory, ".local", "bin", "claude.exe");
+  await Promise.all([fs.mkdir(projectA, { recursive: true }), fs.mkdir(projectB, { recursive: true }), fs.mkdir(path.dirname(commandPath), { recursive: true })]);
+  await fs.writeFile(commandPath, "fixture");
+  const spawned = [];
+  const service = createConversationChatService({
+    settingsService: { load: () => ({ projectRoot: projectA }) },
+    reader: { ensureActiveSession: async () => ({ id: "unused", projectRoot: projectA, hasTranscript: false }) },
+    homeDirectory,
+    spawnImpl: (_command, _args, options) => {
+      const child = new FakeChild();
+      spawned.push({ child, options });
+      return child;
+    },
+  });
+
+  await service.sendToSession({ content: "项目 A", sessionId: "copied-session", projectRoot: projectA });
+  await service.sendToSession({ content: "项目 B", sessionId: "copied-session", projectRoot: projectB });
+  assert.equal(spawned.length, 2);
+  assert.equal(spawned[0].options.cwd, projectA);
+  assert.equal(spawned[1].options.cwd, projectB);
+
+  const stopped = service.stop({ sessionId: "copied-session", projectRoot: projectA });
+  assert.equal(stopped.stopped, true);
+  assert.equal(spawned[0].child.killed, true);
+  assert.equal(spawned[1].child.killed, false);
+  service.dispose();
+});
+
+test("stop interrupts only the active turn and preserves the normal message queue", async () => {
+  const root = await temporaryDirectory("suzu-chat-stop-");
+  const projectRoot = path.join(root, "project");
+  const homeDirectory = path.join(root, "home");
+  const commandPath = path.join(homeDirectory, ".local", "bin", "claude.exe");
+  await fs.mkdir(projectRoot, { recursive: true });
+  await fs.mkdir(path.dirname(commandPath), { recursive: true });
+  await fs.writeFile(commandPath, "fixture");
+  const events = [];
+  const spawned = [];
+  const service = createConversationChatService({
+    settingsService: { load: () => ({ projectRoot }) },
+    reader: { ensureActiveSession: async () => ({ id: "stop-session", projectRoot, hasTranscript: false }) },
+    homeDirectory,
+    spawnImpl: () => {
+      const child = new FakeChild();
+      spawned.push(child);
+      return child;
+    },
+    onEvent: (event) => events.push(event),
+  });
+
+  await service.send({ content: "正在执行的任务" });
+  await service.send({ content: "排队的消息" });
+  const stopped = service.stop({ sessionId: "stop-session" });
+  assert.equal(stopped.stopped, true);
+  assert.equal(spawned[0].killed, true);
+
+  spawned[0].close(1, "SIGTERM");
+  await flush();
+  await flush();
+  assert.equal(events.find((event) => event.type === "turn-stopped")?.sessionId, "stop-session");
+  assert.equal(spawned.length, 2);
+  assert.equal(JSON.parse(spawned[1].input.trim()).message.content, "排队的消息");
+  service.dispose();
+});
+
+test("steer writes a correction into the active Claude stream without terminating the current task", async () => {
+  const root = await temporaryDirectory("suzu-chat-steer-");
+  const projectRoot = path.join(root, "project");
+  const homeDirectory = path.join(root, "home");
+  const commandPath = path.join(homeDirectory, ".local", "bin", "claude.exe");
+  await fs.mkdir(projectRoot, { recursive: true });
+  await fs.mkdir(path.dirname(commandPath), { recursive: true });
+  await fs.writeFile(commandPath, "fixture");
+  const spawned = [];
+  const service = createConversationChatService({
+    settingsService: { load: () => ({ projectRoot }) },
+    reader: { ensureActiveSession: async () => ({ id: "steer-session", projectRoot, hasTranscript: false }) },
+    homeDirectory,
+    spawnImpl: () => {
+      const child = new FakeChild();
+      spawned.push(child);
+      return child;
+    },
+  });
+
+  await service.send({ content: "原任务" });
+  await service.send({ content: "普通排队消息" });
+  const correction = await service.steer({ content: "请先只读分析，不要修改文件" });
+  assert.equal(correction.delivered, true);
+  assert.equal(spawned[0].killed, false);
+  const directInputs = spawned[0].input.trim().split("\n").map((line) => JSON.parse(line));
+  assert.equal(directInputs.length, 2);
+  assert.equal(directInputs[0].message.content, "原任务");
+  assert.equal(directInputs[1].message.content, "请先只读分析，不要修改文件");
+
+  spawned[0].emitJson({ type: "result", result: "已按引导调整" });
+  spawned[0].close();
+  await flush();
+  await flush();
+  assert.equal(spawned.length, 2);
+  assert.equal(JSON.parse(spawned[1].input.trim()).message.content, "普通排队消息");
+  service.dispose();
+});
+
+test("tool permission is returned only to the Claude process that requested it", async () => {
+  const root = await temporaryDirectory("suzu-direct-permission-");
+  const projectRoot = path.join(root, "project");
+  const homeDirectory = path.join(root, "home");
+  const commandPath = path.join(homeDirectory, ".local", "bin", "claude.exe");
+  await fs.mkdir(projectRoot, { recursive: true });
+  await fs.mkdir(path.dirname(commandPath), { recursive: true });
+  await fs.writeFile(commandPath, "fixture");
+  const events = [];
+  let child;
+  const service = createConversationChatService({
+    settingsService: { load: () => ({ projectRoot }) },
+    reader: { ensureActiveSession: async () => ({ id: "session-2", projectRoot, hasTranscript: true }) },
+    homeDirectory,
+    spawnImpl: () => {
+      child = new FakeChild();
+      return child;
+    },
+    onEvent: (event) => events.push(event),
+  });
+
+  await service.send({ content: "请读取项目文件" });
+  child.emitJson({
+    type: "control_request",
+    request_id: "permission-1",
+    request: { subtype: "can_use_tool", tool_name: "Read", input: { file_path: "CLAUDE.md" } },
+  });
+  await flush();
+  assert.equal(events.find((event) => event.type === "permission")?.toolName, "Read");
+
+  const response = service.respondPermission({ requestId: "permission-1", behavior: "allow" });
+  assert.equal(response.accepted, true);
+  await flush();
+  const messages = child.input.trim().split("\n").map((line) => JSON.parse(line));
+  assert.deepEqual(messages[1], {
+    type: "control_response",
+    response: {
+      subtype: "success",
+      request_id: "permission-1",
+      response: { behavior: "allow", updatedInput: { file_path: "CLAUDE.md" } },
+    },
+  });
+  child.emitJson({ type: "result", result: "已读取。" });
+  child.close();
+});

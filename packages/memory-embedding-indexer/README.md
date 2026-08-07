@@ -1,0 +1,24 @@
+# 长期记忆向量索引
+
+本模块只负责把已经进入长期记忆库的结构化节点增量向量化。它不读取整份原始会话，也不决定哪些内容应该成为记忆。
+
+默认索引所有 `active` 长期节点，但排除：
+
+- `utterance`：原始逐字证据只在明确追问原话时展开，不能与审核后的长期结论争夺普通召回。
+- `topic_or_episode`：旧版未分型兼容节点，不进入新索引。
+
+每个节点使用确定性的标题、正文、主体、状态与时间字段生成索引文本，并保存其 SHA-256。再次运行时只调用新增节点或正文发生变化的节点；人工编辑记忆后，核心层也会主动删除该节点的旧向量。
+
+当前 OpenAI 兼容 provider 支持一次提交最多 10 条文本。写入以单批事务完成；单批失败不会删除已有向量，报告会保留失败节点 ID。配置费用流水路径后，每次真实 API 调用都会追加 `memory-index-embedding` 用量事件。
+
+CLI 示例：
+
+```powershell
+node .\packages\memory-embedding-indexer\src\cli.mjs `
+  --database="D:\path\memory.db" `
+  --agent="agent-id" `
+  --config="D:\path\embedding-config.json" `
+  --ledger="D:\path\usage-events.jsonl"
+```
+
+`--dry-run` 只报告计划，不调用 API。`--memory-id=<id>` 可重复传入，用于小范围验证；`--rebuild` 强制重新生成所选节点。

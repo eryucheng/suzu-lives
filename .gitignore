@@ -1,0 +1,41 @@
+node_modules/
+__pycache__/
+dist/
+dist-*/
+apps/*/dist/
+apps/*/dist-preview/
+*.log
+logs/
+
+# Local databases, caches and recoverable working state
+*.db
+*.db-*
+*.sqlite
+*.sqlite3
+cache/
+caches/
+*.cache
+backup/
+backups/
+*.bak
+*.backup
+
+# Local application state and private agent data
+data/
+runtime/
+.env
+.env.*
+!.env.example
+
+# Secrets and machine-local configuration
+secrets/
+credentials/
+*.pem
+*.key
+*.p12
+*.pfx
+*.secret
+*.token
+*.local.json
+*.local.yaml
+*.local.yml
