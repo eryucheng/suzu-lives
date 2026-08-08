@@ -63,19 +63,22 @@ function merchantTaskContent(message) {
   ].join("\n");
 }
 
-export function registerIpcHandlers({ app, dataStorageService, getMainWindow, settingsService, wechatAttachmentCli = "" }) {
+export function registerIpcHandlers({ app, dataStorageService, getMainWindow, settingsService, wechatAttachmentCli = "", cliLauncherCommand = "", claudeWorkspaceDirectories = [] }) {
+  const currentCliLauncher = clean(cliLauncherCommand) || (app.isPackaged ? packagedCliCommand(app.getPath("exe")) : "");
   const contactProjectsService = createContactProjectsService({
     settingsService,
     ensureClaudeProjectSettings: ({ projectRoot }) => {
-      if (!app.isPackaged) return { status: "development" };
+      if (!currentCliLauncher) return { status: "development" };
       return ensureSuzuClaudeProjectSettings({
         projectRoot,
-        launcher: { command: packagedCliCommand(app.getPath("exe")), available: true },
+        launcher: { command: currentCliLauncher, available: true },
         toolPermissions: settingsService.load()?.claudeToolPermissions,
+        workspaceDirectories: claudeWorkspaceDirectories,
       });
     },
   });
-  void contactProjectsService.syncClaudeProjectSettings().catch(() => undefined);
+  const initialClaudeSettingsSync = contactProjectsService.syncClaudeProjectSettings();
+  void initialClaudeSettingsSync.catch(() => undefined);
   const connectionsService = createConnectionsService({ safeStorage, settingsService });
   const externalCapabilitiesService = createExternalCapabilitiesIpcService({ settingsService });
   const memoryService = createMemoryService({
@@ -95,10 +98,15 @@ export function registerIpcHandlers({ app, dataStorageService, getMainWindow, se
     settingsService,
     packaged: app.isPackaged,
     executablePath: app.getPath("exe"),
+    launcherCommand: currentCliLauncher,
     openExternal: (url) => shell.openExternal(url),
     projectHooksService,
     onIphoneFeedbackChange: () => iphoneFeedbackService?.restart(),
   });
+  void initialClaudeSettingsSync
+    .catch(() => undefined)
+    .then(() => capabilitiesService.refreshManagedRegistrations())
+    .catch(() => undefined);
   registerSettingsIpc({
     app,
     contactProjectsService,
@@ -119,10 +127,12 @@ export function registerIpcHandlers({ app, dataStorageService, getMainWindow, se
   const conversation = registerConversationIpc({
     app,
     contactProjectsService,
+    connectionsService,
     ipcMain,
     settingsService,
     shell,
     wechatAttachmentCli,
+    claudeWorkspaceDirectories,
     proactiveContactSettings: () => capabilitiesService.proactiveContactSettings(),
     isProactiveContactEnabled: ({ sessionId, projectRoot }) => capabilitiesService.isCompanionSessionEnabled({
       abilityId: "proactive-contact", sessionId, projectRoot,
@@ -188,6 +198,6 @@ export function registerIpcHandlers({ app, dataStorageService, getMainWindow, se
   registerConnectionsIpc({ ipcMain, connectionsService });
   registerImageWorkbenchIpc({ connectionsService, ipcMain, nativeImage, settingsService });
   registerVisualReferencesIpc({ dialog, getMainWindow, ipcMain, nativeImage, settingsService });
-  registerVoiceDesignIpc({ connectionsService, ipcMain, settingsService });
+  registerVoiceDesignIpc({ connectionsService, contactProjectsService, ipcMain, settingsService });
   registerMemoryIpc({ ipcMain, settingsService, memoryService });
 }

@@ -1,6 +1,7 @@
 import { createConversationReader } from "../services/conversation-reader.mjs";
 import { createConversationChatService } from "../services/conversation-chat.mjs";
 import { createConversationSessionSettingsService } from "../services/conversation-session-settings.mjs";
+import { createRealtimeVoiceCallService } from "../services/realtime-voice-call.mjs";
 
 function clean(value) {
   return String(value ?? "").trim();
@@ -14,10 +15,12 @@ function quotedArgument(value) {
 export function registerConversationIpc({
   app,
   contactProjectsService = null,
+  connectionsService,
   ipcMain,
   settingsService,
   shell,
   wechatAttachmentCli = "",
+  claudeWorkspaceDirectories = [],
   proactiveContactSettings = () => ({}),
   isProactiveContactEnabled = () => false,
   hasTravelingMerchantRecipients = () => false,
@@ -60,16 +63,32 @@ export function registerConversationIpc({
     };
   };
   let sender = null;
+  let callSender = null;
   const chat = createConversationChatService({
     agentAttachmentCommand: attachmentCommand,
     agentScheduleCommand: scheduleCommand,
+    claudeWorkspaceDirectories,
+    suzuCliCommand: wechatAttachmentCli,
     settingsService,
     reader,
     onEvent: (payload) => {
       if (sender && !sender.isDestroyed()) sender.send("conversation:event", payload);
     },
   });
-  app?.once?.("before-quit", () => chat.dispose());
+  const call = createRealtimeVoiceCallService({
+    chat,
+    connectionsService,
+    reader,
+    settingsService,
+    onEvent: (payload) => {
+      const target = callSender && !callSender.isDestroyed() ? callSender : sender;
+      if (target && !target.isDestroyed()) target.send("conversation:event", payload);
+    },
+  });
+  app?.once?.("before-quit", () => {
+    call.dispose();
+    chat.dispose();
+  });
   ipcMain.handle("conversation:snapshot", () => reader.snapshot());
   ipcMain.handle("conversation:search", (_event, query) => reader.search(query));
   ipcMain.handle("conversation:focus", (_event, value) => reader.focus(value));
@@ -121,5 +140,27 @@ export function registerConversationIpc({
     sender = event.sender;
     return chat.respondPermission(value);
   });
-  return { chat, reader, sessionSettings };
+  ipcMain.handle("conversation:call-start", async (event) => {
+    sender = event.sender;
+    callSender = event.sender;
+    return call.start({ senderId: String(event.sender.id) });
+  });
+  ipcMain.on("conversation:call-audio", (event, value) => {
+    call.pushAudio({ ...(value && typeof value === "object" ? value : {}), senderId: String(event.sender.id) });
+  });
+  ipcMain.handle("conversation:call-commit", async (event, value) => {
+    sender = event.sender;
+    return call.commitAudio({ ...(value && typeof value === "object" ? value : {}), senderId: String(event.sender.id) });
+  });
+  ipcMain.handle("conversation:call-interrupt", async (event, value) => {
+    sender = event.sender;
+    return call.interrupt({ ...(value && typeof value === "object" ? value : {}), senderId: String(event.sender.id) });
+  });
+  ipcMain.handle("conversation:call-stop", async (event, value) => {
+    sender = event.sender;
+    const result = await call.stop({ ...(value && typeof value === "object" ? value : {}), senderId: String(event.sender.id) });
+    if (result?.stopped) callSender = null;
+    return result;
+  });
+  return { call, chat, reader, sessionSettings };
 }

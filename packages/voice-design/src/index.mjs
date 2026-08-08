@@ -23,6 +23,49 @@ function safeFormat(value) { const result = clean(value).toLowerCase(); if (!/^[
 function safePrefix(value) { const result = clean(value).replace(/[^A-Za-z0-9_-]+/gu, "_").replace(/^_+|_+$/gu, "").slice(0, 16); return result || "custom_voice"; }
 function safeRoot(root) { const result = path.resolve(clean(root)); if (!clean(root)) throw new VoiceDesignError("缺少音色数据目录。"); return result; }
 function candidatePath(root, name) { const base = safeRoot(root); const target = path.resolve(base, name); if (path.dirname(target) !== base) throw new VoiceDesignError("候选文件路径无效。"); return target; }
+const candidateMutationQueues = new Map();
+
+function serializeCandidateMutation(root, task) {
+  const key = safeRoot(root);
+  const previous = candidateMutationQueues.get(key) || Promise.resolve();
+  const next = previous.catch(() => undefined).then(task);
+  candidateMutationQueues.set(key, next);
+  next.finally(() => {
+    if (candidateMutationQueues.get(key) === next) candidateMutationQueues.delete(key);
+  }).catch(() => undefined);
+  return next;
+}
+
+function candidateName(value) { return compact(value, "音色名称", 80); }
+
+function normalizeBrokenWavHeader(audio) {
+  if (!Buffer.isBuffer(audio) || audio.length < 20) return audio;
+  if (audio.subarray(0, 4).toString("ascii") !== "RIFF" || audio.subarray(8, 12).toString("ascii") !== "WAVE") return audio;
+  let offset = 12;
+  let dataOffset = -1;
+  while (offset + 8 <= audio.length) {
+    const chunkSize = audio.readUInt32LE(offset + 4);
+    if (audio.subarray(offset, offset + 4).toString("ascii") === "data") { dataOffset = offset; break; }
+    const nextOffset = offset + 8 + chunkSize + (chunkSize % 2);
+    if (nextOffset > audio.length) return audio;
+    offset = nextOffset;
+  }
+  if (dataOffset < 0) return audio;
+  const actualRiffSize = audio.length - 8;
+  const dataStart = dataOffset + 8;
+  const actualDataSize = audio.length - dataStart;
+  const declaredRiffSize = audio.readUInt32LE(4);
+  const declaredDataSize = audio.readUInt32LE(dataOffset + 4);
+  if (declaredRiffSize <= actualRiffSize && declaredDataSize <= actualDataSize) return audio;
+  const normalized = Buffer.from(audio);
+  normalized.writeUInt32LE(actualRiffSize, 4);
+  normalized.writeUInt32LE(actualDataSize, dataOffset + 4);
+  return normalized;
+}
+
+function normalizePreviewAudio(audio, responseFormat) {
+  return safeFormat(responseFormat || "wav") === "wav" ? normalizeBrokenWavHeader(audio) : audio;
+}
 
 export function validateVoiceDesignConfig(value = {}) {
   const baseUrl = optionalCompact(value.baseUrl, DEFAULT_VOICE_DESIGN_CONFIG.baseUrl, "Base URL", 500).replace(/\/+$/u, "");
@@ -101,6 +144,7 @@ function publicCandidate(value) {
   return {
     id: clean(value.id),
     voiceId: clean(value.voiceId),
+    displayName: clean(value.displayName),
     preferredName: clean(value.preferredName),
     targetModel: clean(value.targetModel),
     designModel: clean(value.designModel),
@@ -111,22 +155,13 @@ function publicCandidate(value) {
     previewText: clean(value.previewText),
     createdAt: clean(value.createdAt),
     previewAvailable: Boolean(value.previewFile),
+    retained: Boolean(clean(value.retainedAt)),
+    retainedAt: clean(value.retainedAt),
   };
 }
 
 export async function readCandidates(root, { limit = 200 } = {}) {
-  const destination = candidatePath(root, "candidates.jsonl");
-  const result = [];
-  try {
-    const input = readline.createInterface({ input: (await import("node:fs")).createReadStream(destination, { encoding: "utf8" }), crlfDelay: Infinity });
-    for await (const line of input) {
-      try {
-        const value = JSON.parse(line);
-        if (value?.id && value?.voiceId && value?.createdAt) result.push(publicCandidate(value));
-      } catch {}
-    }
-  } catch { return []; }
-  return result.slice(-limit).reverse();
+  return (await readCandidateRecords(root)).slice(-limit).reverse().map(publicCandidate);
 }
 
 export async function readPreview(root, id) {
@@ -136,7 +171,8 @@ export async function readPreview(root, id) {
   if (!record?.previewFile) return null;
   const filePath = candidatePath(root, record.previewFile);
   const audio = await fs.readFile(filePath);
-  return { data: audio.toString("base64"), responseFormat: safeFormat(record.responseFormat || "wav") };
+  const responseFormat = safeFormat(record.responseFormat || "wav");
+  return { data: normalizePreviewAudio(audio, responseFormat).toString("base64"), responseFormat };
 }
 
 async function readCandidateRecords(root) {
@@ -149,6 +185,55 @@ async function readCandidateRecords(root) {
     }
   } catch {}
   return result;
+}
+
+async function writeCandidateRecords(root, records) {
+  const destination = candidatePath(root, "candidates.jsonl");
+  const temporary = candidatePath(root, "candidates-" + randomUUID() + ".tmp");
+  await fs.mkdir(path.dirname(destination), { recursive: true });
+  await fs.writeFile(temporary, records.map((item) => JSON.stringify(item)).join("\n") + (records.length ? "\n" : ""), "utf8");
+  await fs.rename(temporary, destination);
+}
+
+async function updateCandidate(root, id, update) {
+  const safeId = compact(id, "候选 ID", 100);
+  return serializeCandidateMutation(root, async () => {
+    const records = await readCandidateRecords(root);
+    const index = records.findIndex((item) => item.id === safeId);
+    if (index < 0) throw new VoiceDesignError("找不到这个音色候选。");
+    const next = update({ ...records[index] });
+    records[index] = next;
+    await writeCandidateRecords(root, records);
+    return publicCandidate(next);
+  });
+}
+
+export async function renameVoiceCandidate(root, { id, name } = {}) {
+  const displayName = candidateName(name);
+  return updateCandidate(root, id, (candidate) => ({ ...candidate, displayName, renamedAt: new Date().toISOString() }));
+}
+
+export async function retainVoiceCandidate(root, id) {
+  return updateCandidate(root, id, (candidate) => ({ ...candidate, retainedAt: clean(candidate.retainedAt) || new Date().toISOString() }));
+}
+
+export async function deleteVoiceCandidate(root, id) {
+  const safeId = compact(id, "候选 ID", 100);
+  return serializeCandidateMutation(root, async () => {
+    const records = await readCandidateRecords(root);
+    const index = records.findIndex((item) => item.id === safeId);
+    if (index < 0) throw new VoiceDesignError("找不到这个音色候选。");
+    const [removed] = records.splice(index, 1);
+    await writeCandidateRecords(root, records);
+
+    // Only generated preview names are eligible for cleanup. A malformed local
+    // record must never turn this action into deletion of another data file.
+    const previewFile = clean(removed.previewFile);
+    if (/^preview-[A-Za-z0-9_-]+\.[A-Za-z0-9]{2,12}$/u.test(previewFile)) {
+      await fs.rm(candidatePath(root, previewFile), { force: true }).catch(() => undefined);
+    }
+    return publicCandidate(removed);
+  });
 }
 
 export async function saveCandidate(root, { response, config, input, preferredName }) {
@@ -174,14 +259,17 @@ export async function saveCandidate(root, { response, config, input, preferredNa
     createdAt: new Date().toISOString(),
     requestId: parsed.requestId,
   };
-  await fs.mkdir(destinationRoot, { recursive: true });
-  if (parsed.previewAudio) await fs.writeFile(candidatePath(destinationRoot, previewFile), parsed.previewAudio, { flag: "wx" });
-  try {
-    await fs.appendFile(candidatePath(destinationRoot, "candidates.jsonl"), JSON.stringify(record) + "\n", "utf8");
-  } catch (error) {
-    if (previewFile) await fs.rm(candidatePath(destinationRoot, previewFile), { force: true });
-    throw error;
-  }
+  await serializeCandidateMutation(destinationRoot, async () => {
+    await fs.mkdir(destinationRoot, { recursive: true });
+    const preview = parsed.previewAudio ? normalizePreviewAudio(parsed.previewAudio, safeConfig.responseFormat) : null;
+    if (preview) await fs.writeFile(candidatePath(destinationRoot, previewFile), preview, { flag: "wx" });
+    try {
+      await fs.appendFile(candidatePath(destinationRoot, "candidates.jsonl"), JSON.stringify(record) + "\n", "utf8");
+    } catch (error) {
+      if (previewFile) await fs.rm(candidatePath(destinationRoot, previewFile), { force: true });
+      throw error;
+    }
+  });
   return { candidate: publicCandidate(record), request: parsed };
 }
 

@@ -222,6 +222,34 @@ test("the first ability visit safely enables the catalog once and preserves late
   assert.equal(again.snapshot.capabilities.find((item) => item.id === "phone-camera").enabled, false);
 });
 
+test("managed registrations refresh a stale launcher without re-enabling a removed ability", async () => {
+  const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "suzu-registration-refresh-project-"));
+  const dataRoot = await fs.mkdtemp(path.join(os.tmpdir(), "suzu-registration-refresh-data-"));
+  const agentId = stableAgentId(projectRoot);
+  const settings = { projectRoot, dataRoot, agentId };
+  const settingsService = { load: () => settings, response: () => ({ dataRoot }) };
+  const oldService = createCapabilitiesService({ settingsService, existsCommand: () => true });
+  await oldService.register("voice-message");
+  await fs.mkdir(path.join(dataRoot, "agents", agentId, "capabilities"), { recursive: true });
+  await fs.writeFile(path.join(dataRoot, "agents", agentId, "capabilities", "defaults-v1.json"), JSON.stringify({
+    version: 2,
+    initialized: true,
+  }), "utf8");
+
+  const developmentCommand = '"D:\\Apps\\AI\\Suzu Lives-v1\\node_modules\\electron\\dist\\electron.exe" "D:\\Apps\\AI\\Suzu Lives-v1\\apps\\control-center" --suzu-lives-cli';
+  const service = createCapabilitiesService({ settingsService, launcherCommand: developmentCommand, existsCommand: () => false });
+  const refreshed = await service.refreshManagedRegistrations();
+  const skill = await fs.readFile(path.join(projectRoot, ".claude", "skills", "voice-message", "SKILL.md"), "utf8");
+  const projectSettings = JSON.parse(await fs.readFile(path.join(projectRoot, ".claude", "settings.json"), "utf8"));
+  const marker = JSON.parse(await fs.readFile(path.join(dataRoot, "agents", agentId, "capabilities", "defaults-v1.json"), "utf8"));
+  assert.equal(refreshed.errors.length, 0);
+  assert.match(skill, /electron\.exe" "D:\\Apps\\AI\\Suzu Lives-v1\\apps\\control-center" --suzu-lives-cli voice-message/u);
+  assert.ok(projectSettings.permissions.allow.includes(`Bash(${developmentCommand} *)`));
+  assert.equal(projectSettings.permissions.allow.includes("Bash(suzu-lives:*)"), false);
+  assert.equal(marker.registrationVersion, 3);
+  assert.equal(marker.launcherCommand, developmentCommand);
+});
+
 test("phone camera and traveling merchant settings use the existing software-side config paths", async () => {
   const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "suzu-capability-settings-project-"));
   const dataRoot = await fs.mkdtemp(path.join(os.tmpdir(), "suzu-capability-settings-data-"));
@@ -427,6 +455,51 @@ test("voice-message keeps selected voices per contact, safely falls back from le
   await assert.rejects(
     () => service.saveSettings({ id: "voice-message", value: { voiceId: "voice-b", timeoutMs: 41000 } }),
     /存在的当前联系人项目/u,
+  );
+});
+
+test("voice-message exposes a contact's MiniMax custom audio without exposing its development key", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "suzu-minimax-custom-audio-settings-"));
+  const dataRoot = path.join(root, "software-data");
+  const projectRoot = path.join(root, "contact");
+  await fs.mkdir(projectRoot);
+  const agentId = stableAgentId(projectRoot);
+  const agentRoot = path.join(dataRoot, "agents", agentId);
+  await fs.mkdir(path.join(agentRoot, "voice-message"), { recursive: true });
+  await fs.writeFile(path.join(agentRoot, "voice-message", "custom-voices.json"), JSON.stringify({
+    schemaVersion: 1,
+    voices: [{
+      id: "custom-minimax-voice",
+      name: "Suzu 电话声",
+      provider: "minimax",
+      voiceId: "minimax-voice-id",
+      apiKey: "development-only-minimax-key",
+      model: "speech-2.8-hd",
+    }],
+  }), "utf8");
+  const settings = { projectRoot, dataRoot, agentId };
+  const service = createCapabilitiesService({ settingsService: { load: () => settings, response: () => ({ dataRoot }) }, existsCommand: () => true });
+
+  const before = service.snapshot().capabilities.find((item) => item.id === "voice-message").savedSettings;
+  assert.equal(before.customVoices[0].name, "Suzu 电话声");
+  assert.equal(JSON.stringify(before).includes("development-only-minimax-key"), false);
+  await service.saveSettings({
+    id: "voice-message",
+    value: { provider: "minimax", voiceId: "minimax-voice-id", customVoiceId: "custom-minimax-voice", timeoutMs: 30000 },
+  });
+  const contact = JSON.parse(await fs.readFile(path.join(agentRoot, "voice-message", "config.json"), "utf8"));
+  assert.deepEqual(contact, {
+    schemaVersion: 2,
+    provider: "minimax",
+    voiceId: "minimax-voice-id",
+    customVoiceId: "custom-minimax-voice",
+  });
+  const after = service.snapshot().capabilities.find((item) => item.id === "voice-message").savedSettings;
+  assert.equal(after.voiceProvider, "minimax");
+  assert.equal(after.customVoiceId, "custom-minimax-voice");
+  await assert.rejects(
+    () => service.saveSettings({ id: "voice-message", value: { provider: "minimax", voiceId: "minimax-voice-id", customVoiceId: "other" } }),
+    /MiniMax 自定义音色/u,
   );
 });
 

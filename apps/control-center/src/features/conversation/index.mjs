@@ -20,6 +20,7 @@ export { parseSuzuConversationCommand } from "../../../shared/conversation-comma
 const viewState = {
   avatarCrop: null,
   busySessions: new Set(),
+  call: null,
   contactCreateOpen: false,
   dismissController: null,
   draft: "",
@@ -68,6 +69,7 @@ const chatIcons = {
   folder: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 7.2h6l1.9 2h9.1v8.7a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2V7.2Z"></path></svg>',
   scissors: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="6.4" cy="17.2" r="2.2"></circle><circle cx="6.4" cy="6.8" r="2.2"></circle><path d="m8.2 8.2 10.3 7.1M8.2 15.8l4-2.8"></path></svg>',
   mic: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8.5" y="3" width="7" height="12" rx="3.5"></rect><path d="M5.8 11.5a6.2 6.2 0 0 0 12.4 0M12 17.7V21M8.5 21h7"></path></svg>',
+  phone: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7.2 3.8 5.4 5.1c-.9.7-1.2 1.9-.7 3 1.8 4.3 5.2 7.7 9.5 9.5 1.1.5 2.3.2 3-.7l1.3-1.8c.6-.8.5-1.9-.3-2.6l-2.2-1.8c-.7-.6-1.8-.6-2.5.1l-1.1 1.1a13.1 13.1 0 0 1-3.8-3.8l1.1-1.1c.7-.7.7-1.8.1-2.5L9.8 4.1c-.7-.8-1.8-.9-2.6-.3Z"></path></svg>',
   sound: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 14h3.2L12 18V6L7.2 10H4v4Z"></path><path d="M15 9.2a4.2 4.2 0 0 1 0 5.6M17.8 6.4a8.1 8.1 0 0 1 0 11.2"></path></svg>',
 };
 
@@ -293,23 +295,37 @@ function mediaPreviewAttributes(item) {
   return `data-conversation-media-preview="${escapeHtml(item.key)}" data-conversation-media-url="${escapeHtml(item.url)}" data-conversation-media-name="${escapeHtml(item.name)}" data-conversation-media-message-id="${escapeHtml(item.messageId)}" data-conversation-media-line-number="${item.lineNumber || ""}"`;
 }
 
+function voiceMessage(value) {
+  const url = clean(value?.fileUrl);
+  const enabled = Boolean(url);
+  const waveform = [35, 62, 46, 84, 56, 92, 48, 74, 39, 66, 45, 78]
+    .map((height) => `<i style="--voice-bar-height:${height}%"></i>`)
+    .join("");
+  return `<section class="conversation-voice" data-conversation-voice>
+    ${url ? `<audio class="conversation-voice__media" data-conversation-voice-media preload="metadata" src="${escapeHtml(url)}"></audio>` : ""}
+    <button type="button" class="conversation-voice__toggle" data-conversation-voice-toggle aria-label="${enabled ? "播放语音" : "语音暂不可播放"}" aria-pressed="false" ${enabled ? "" : "disabled"}><span class="conversation-voice__toggle-icon" aria-hidden="true"></span></button>
+    <span class="conversation-voice__content">
+      <span class="conversation-voice__wave" aria-hidden="true">${waveform}</span>
+      <span class="conversation-voice__track" aria-hidden="true"><span data-conversation-voice-progress></span></span>
+    </span>
+    <span class="conversation-voice__time" data-conversation-voice-time>${enabled ? "语音" : "暂不可播放"}</span>
+  </section>`;
+}
+
 function block(value, prefs, message) {
   if (value.kind === "text") return `<div class="conversation-text">${escapeHtml(value.text)}</div>`;
   if (value.kind === "media") {
-    const imageName = value.fileName || (value.mediaKind === "audio" ? "音频附件" : "图片附件");
+    if (value.mediaKind === "audio") return voiceMessage(value);
+    const imageName = value.fileName || "图片附件";
     const imageItem = imageMediaItem(value, message);
     const image = imageItem
       ? `<button type="button" class="conversation-media__preview" ${mediaPreviewAttributes(imageItem)} aria-label="放大查看 ${escapeHtml(imageName)}"><img class="conversation-media__image" src="${escapeHtml(value.fileUrl)}" alt="${escapeHtml(imageName)}" loading="lazy"></button>`
       : "";
-    const audio = value.mediaKind === "audio" && clean(value.fileUrl)
-      ? `<audio class="conversation-media__audio" controls preload="metadata" src="${escapeHtml(value.fileUrl)}"></audio>`
-      : "";
-    const type = value.mediaKind === "image" ? "图片" : value.mediaKind === "audio" ? "音频" : "文件";
-    const mediaClass = value.mediaKind === "image" ? "image" : value.mediaKind === "audio" ? "audio" : "file";
+    const type = value.mediaKind === "image" ? "图片" : "文件";
+    const mediaClass = value.mediaKind === "image" ? "image" : "file";
     const size = attachmentSize(value.size);
     return `<section class="conversation-media conversation-media--${escapeHtml(mediaClass)}">
       ${image}
-      ${audio}
       <div class="conversation-media__copy"><small>${type}附件</small><strong>${escapeHtml(value.fileName || "未命名附件")}</strong>${size ? `<span>${escapeHtml(size)}</span>` : ""}</div>
     </section>`;
   }
@@ -346,17 +362,6 @@ function row(message, context, showTimestamp = true) {
   const content = message.blocks.map((item) => block(item, prefs, message)).join("");
   const mediaOnly = message.blocks.length === 1 && message.blocks[0]?.kind === "media";
   const usageMeta = prefs.tokens && message.kind === "assistant" ? usage(message.usage) : "";
-  const delivery = message.pending
-    ? " · 发送中"
-    : message.queued
-      ? ` · 排队中${message.queuePosition ? `（第 ${message.queuePosition} 条）` : ""}`
-      : message.steering
-        ? " · 引导已送达"
-      : message.accepted
-        ? " · 已发送"
-        : message.streaming
-          ? " · 正在回复"
-          : "";
   if (!content && !usageMeta) return "";
   const timestamp = showTimestamp && message.timestamp ? escapeHtml(dateTime(message.timestamp)) : "";
   const sourceMessageId = messageSourceId(message);
@@ -368,7 +373,7 @@ function row(message, context, showTimestamp = true) {
     ${profile ? `<div class="conversation-avatar">${avatar(profile, profile.displayName)}</div>` : ""}
     <div class="conversation-bubble">
       ${content}${usageMeta}
-      ${timestamp || delivery ? `<div class="conversation-meta">${timestamp}${delivery}</div>` : ""}
+      ${timestamp ? `<div class="conversation-meta">${timestamp}</div>` : ""}
     </div>
   </article>`;
 }
@@ -590,6 +595,40 @@ function conversationComposer(ready) {
   </form>`;
 }
 
+function callStatusLabel(call) {
+  const phase = clean(call?.phase);
+  if (clean(call?.label)) return clean(call.label);
+  if (phase === "connecting") return "正在接通…";
+  if (phase === "thinking") return "正在想怎么回答…";
+  if (phase === "speaking") return "正在说话…";
+  if (phase === "error") return "通话出了点问题";
+  if (phase === "ending") return "正在挂断…";
+  return "正在听你说…";
+}
+
+function conversationCallDialog(context, contact) {
+  const call = viewState.call;
+  if (!call || call.minimized) return "";
+  const name = clean(contact?.name) || clean(call.contactName) || "联系人";
+  const agent = getAgentProfile(context.state.settings);
+  const transcript = clean(call.partialTranscript) || clean(call.lastTranscript);
+  const error = clean(call.error);
+  return `<div class="conversation-call-overlay" data-conversation-call-backdrop>
+    <section class="conversation-call-dialog" id="conversationCall" role="dialog" aria-modal="true" aria-labelledby="conversationCallTitle">
+      <header><button type="button" class="conversation-call-dialog__minimize" data-minimize-conversation-call aria-label="最小化通话">‹</button><span>语音通话</span></header>
+      <div class="conversation-call-dialog__person">
+        <span class="conversation-call-dialog__avatar">${avatar(agent, name)}</span>
+        <h2 id="conversationCallTitle">${escapeHtml(name)}</h2>
+        <p class="conversation-call-dialog__status is-${escapeHtml(clean(call.phase) || "listening")}">${escapeHtml(callStatusLabel(call))}</p>
+      </div>
+      <div class="conversation-call-dialog__wave" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+      <div class="conversation-call-dialog__transcript" aria-live="polite">${transcript ? `<span>${call.partialTranscript ? "你正在说" : "你说"}</span><strong>${escapeHtml(transcript)}</strong>` : "<span>直接说话即可，Suzu 会在你停顿后回答。</span>"}</div>
+      ${error ? `<p class="conversation-call-dialog__error">${escapeHtml(error)}</p>` : ""}
+      <footer><button type="button" class="conversation-call-dialog__hangup" data-end-conversation-call ${call.phase === "ending" ? "disabled" : ""} aria-label="挂断语音通话">${chatIcon("phone")}<span>挂断</span></button></footer>
+    </section>
+  </div>`;
+}
+
 function activeSession(payload) {
   const id = clean(payload?.activeSessionId);
   return (payload?.sessions || []).find((session) => session.id === id) || null;
@@ -807,6 +846,8 @@ export function renderConversation(context) {
   const activeContact = snapshot.activeContact || null;
   const hasContactsRoot = Boolean(clean(snapshot.contactsRoot || context.state.settings?.contactsRoot));
   const peer = clean(activeContact?.name) || "未选择联系人";
+  const callAvailable = ready && Boolean(clean(activeContact?.agentId));
+  const callActive = Boolean(viewState.call);
   return `<section class="conversation-workspace" aria-label="对话">
     <aside class="conversation-roster" aria-label="联系人列表">
       <div class="conversation-roster__heading"><strong>联系人</strong><button type="button" data-conversation-new title="新建联系人" aria-label="新建联系人" ${hasContactsRoot ? "" : "disabled"}>＋</button></div>
@@ -816,6 +857,7 @@ export function renderConversation(context) {
       <header class="conversation-pane__header">
         <h1 class="conversation-peer">${escapeHtml(peer)}</h1>
         <div class="conversation-pane__actions">
+          <button type="button" class="conversation-icon-button conversation-icon-button--call${callActive ? " is-active" : ""}" data-open-conversation-call title="${callActive ? "返回语音通话" : "开始语音通话"}" aria-label="${callActive ? "返回语音通话" : "开始与此联系人语音通话"}" ${callAvailable || callActive ? "" : "disabled"}>${chatIcon("phone")}</button>
           <button type="button" class="conversation-icon-button${viewState.searchOpen ? " is-active" : ""}" data-toggle-conversation-search title="搜索消息" aria-label="搜索消息">${chatIcon("search")}</button>
           <button type="button" class="conversation-icon-button${viewState.menuOpen ? " is-active" : ""}" data-toggle-conversation-menu title="更多聊天选项" aria-label="更多聊天选项">${chatIcon("more")}</button>
           ${viewState.menuOpen ? `<div class="conversation-menu">
@@ -843,6 +885,7 @@ export function renderConversation(context) {
     ${wechatQrDialog(activeContact)}
     ${mediaPreviewDialog()}
     ${avatarCropDialog()}
+    ${conversationCallDialog(context, activeContact)}
   </section>`;
 }
 
@@ -908,7 +951,413 @@ async function load(context, force = false) {
   }
 }
 
+function callAudioState(context) {
+  const AudioContextConstructor = window.AudioContext || window.webkitAudioContext;
+  if (!AudioContextConstructor) throw new Error("当前运行环境不支持实时音频。 ");
+  const audioContext = new AudioContextConstructor({ latencyHint: "interactive" });
+  return {
+    audioContext,
+    currentSource: null,
+    commitPending: false,
+    epoch: 0,
+    hasSpoken: false,
+    nextIndex: 0,
+    pending: new Map(),
+    skipped: new Set(),
+    processor: null,
+    silentGain: null,
+    source: null,
+    stream: null,
+    speechFrames: 0,
+    silenceFrames: 0,
+    speaking: false,
+    lastInterruptAt: 0,
+    context,
+  };
+}
+
+function base64ToAudioBuffer(value) {
+  const source = String(value || "");
+  const binary = window.atob(source);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+  return bytes.buffer;
+}
+
+function stopConversationCallPlayback(call) {
+  const audio = call?.audio;
+  if (!audio) return;
+  audio.epoch += 1;
+  audio.pending.clear();
+  audio.skipped.clear();
+  audio.nextIndex = 0;
+  const source = audio.currentSource;
+  audio.currentSource = null;
+  try { source?.stop?.(); } catch { /* The source may already have ended. */ }
+}
+
+async function disposeConversationCallAudio(call) {
+  const audio = call?.audio;
+  if (call?.renderTimer) window.clearTimeout(call.renderTimer);
+  if (call) call.renderTimer = null;
+  if (!audio) return;
+  stopConversationCallPlayback(call);
+  try { audio.processor?.disconnect?.(); } catch { /* A disconnected node needs no work. */ }
+  try { audio.source?.disconnect?.(); } catch { /* A disconnected node needs no work. */ }
+  try { audio.silentGain?.disconnect?.(); } catch { /* A disconnected node needs no work. */ }
+  for (const track of audio.stream?.getTracks?.() || []) track.stop();
+  try { await audio.audioContext?.close?.(); } catch { /* The renderer may already be shutting down. */ }
+  call.audio = null;
+}
+
+function renderConversationCallSoon(context, call) {
+  if (viewState.call !== call) return;
+  const now = Date.now();
+  const previous = Number(call.lastRenderAt) || 0;
+  if (now - previous >= 120) {
+    if (call.renderTimer) window.clearTimeout(call.renderTimer);
+    call.renderTimer = null;
+    call.lastRenderAt = now;
+    context.render();
+    return;
+  }
+  if (call.renderTimer) return;
+  call.renderTimer = window.setTimeout(() => {
+    call.renderTimer = null;
+    if (viewState.call !== call) return;
+    call.lastRenderAt = Date.now();
+    context.render();
+  }, 120 - (now - previous));
+}
+
+function downsamplePcm16(input, inputRate, targetRate = 16000) {
+  const source = input instanceof Float32Array ? input : new Float32Array(0);
+  const rate = Number(inputRate) || targetRate;
+  if (!source.length || rate < 1) return new Int16Array(0);
+  if (rate === targetRate) {
+    const output = new Int16Array(source.length);
+    for (let index = 0; index < source.length; index += 1) {
+      const sample = Math.max(-1, Math.min(1, source[index] || 0));
+      output[index] = sample < 0 ? Math.round(sample * 32768) : Math.round(sample * 32767);
+    }
+    return output;
+  }
+  const ratio = rate / targetRate;
+  const length = Math.max(1, Math.floor(source.length / ratio));
+  const output = new Int16Array(length);
+  for (let index = 0; index < length; index += 1) {
+    const start = Math.floor(index * ratio);
+    const end = Math.min(source.length, Math.max(start + 1, Math.floor((index + 1) * ratio)));
+    let total = 0;
+    for (let cursor = start; cursor < end; cursor += 1) total += source[cursor] || 0;
+    const sample = Math.max(-1, Math.min(1, total / Math.max(1, end - start)));
+    output[index] = sample < 0 ? Math.round(sample * 32768) : Math.round(sample * 32767);
+  }
+  return output;
+}
+
+function inputEnergy(input) {
+  if (!input?.length) return 0;
+  let total = 0;
+  for (let index = 0; index < input.length; index += 1) total += input[index] * input[index];
+  return Math.sqrt(total / input.length);
+}
+
+async function interruptConversationCallFromSpeech(context, call) {
+  if (viewState.call !== call || !call.id || call.phase !== "speaking" && call.phase !== "thinking") return;
+  const now = Date.now();
+  if (now - call.audio.lastInterruptAt < 600) return;
+  call.audio.lastInterruptAt = now;
+  stopConversationCallPlayback(call);
+  call.phase = "listening";
+  call.label = "正在听你说…";
+  context.render();
+  try {
+    await context.api.conversation.call.interrupt({ callId: call.id });
+  } catch (error) {
+    if (viewState.call === call) call.error = `无法打断回复：${error?.message || error}`;
+    context.render();
+  }
+}
+
+function updateConversationCallVAD(context, call, input) {
+  const audio = call?.audio;
+  if (!audio || viewState.call !== call) return;
+  if (inputEnergy(input) >= 0.012) {
+    audio.speechFrames += 1;
+    audio.silenceFrames = 0;
+    if (!audio.speaking && audio.speechFrames >= 2) {
+      audio.speaking = true;
+      audio.hasSpoken = true;
+      void interruptConversationCallFromSpeech(context, call);
+    }
+    return;
+  }
+  audio.silenceFrames += 1;
+  if (audio.speaking && audio.silenceFrames >= 9) {
+    audio.speaking = false;
+    audio.speechFrames = 0;
+    void commitConversationCallUtterance(context, call);
+  }
+}
+
+async function commitConversationCallUtterance(context, call) {
+  const audio = call?.audio;
+  if (!audio || viewState.call !== call || !call.id || !audio.hasSpoken || audio.commitPending) return;
+  if (!context.api.conversation.call?.commit) {
+    call.error = "当前版本没有加载语音断句功能。";
+    context.render();
+    return;
+  }
+  audio.hasSpoken = false;
+  audio.commitPending = true;
+  call.phase = "thinking";
+  call.label = "正在理解你说的话…";
+  context.render();
+  try {
+    const result = await context.api.conversation.call.commit({ callId: call.id });
+    if (!result?.accepted || !result?.committed) throw new Error("本句音频没有成功提交。");
+  } catch (error) {
+    if (viewState.call === call) {
+      call.phase = "listening";
+      call.label = "正在听你说…";
+      call.error = `无法提交这句话：${error?.message || error}`;
+      context.render();
+    }
+  } finally {
+    if (call.audio === audio) audio.commitPending = false;
+  }
+}
+
+async function startConversationCallMicrophone(context, call) {
+  if (!navigator.mediaDevices?.getUserMedia) throw new Error("当前环境无法读取麦克风。 ");
+  const audio = call.audio;
+  const stream = await navigator.mediaDevices.getUserMedia({
+    audio: {
+      autoGainControl: true,
+      channelCount: 1,
+      echoCancellation: true,
+      noiseSuppression: true,
+    },
+  });
+  if (viewState.call !== call || !call.id) {
+    for (const track of stream.getTracks()) track.stop();
+    return;
+  }
+  audio.stream = stream;
+  audio.source = audio.audioContext.createMediaStreamSource(stream);
+  // 2,048 frames keeps capture chunks around 40–45 ms on the usual desktop
+  // sample rates, short enough for a conversational turn without flooding IPC.
+  audio.processor = audio.audioContext.createScriptProcessor(2048, 1, 1);
+  audio.silentGain = audio.audioContext.createGain();
+  audio.silentGain.gain.value = 0;
+  audio.source.connect(audio.processor);
+  audio.processor.connect(audio.silentGain);
+  audio.silentGain.connect(audio.audioContext.destination);
+  audio.processor.onaudioprocess = (event) => {
+    if (viewState.call !== call || !call.id) return;
+    const input = event.inputBuffer.getChannelData(0);
+    updateConversationCallVAD(context, call, input);
+    const pcm = downsamplePcm16(input, audio.audioContext.sampleRate, 16000);
+    if (!pcm.length) return;
+    const payload = pcm.buffer.slice(pcm.byteOffset, pcm.byteOffset + pcm.byteLength);
+    context.api.conversation.call.audio({ callId: call.id, audio: payload });
+  };
+}
+
+function playNextConversationCallAudio(context, call) {
+  const audio = call?.audio;
+  if (!audio || audio.currentSource) return;
+  while (audio.skipped.delete(audio.nextIndex)) audio.nextIndex += 1;
+  if (!audio.pending.has(audio.nextIndex)) return;
+  const buffer = audio.pending.get(audio.nextIndex);
+  audio.pending.delete(audio.nextIndex);
+  audio.nextIndex += 1;
+  const source = audio.audioContext.createBufferSource();
+  source.buffer = buffer;
+  source.connect(audio.audioContext.destination);
+  audio.currentSource = source;
+  source.onended = () => {
+    if (audio.currentSource !== source) return;
+    audio.currentSource = null;
+    playNextConversationCallAudio(context, call);
+    if (!audio.currentSource && !audio.pending.size && viewState.call === call && call.phase === "speaking") {
+      call.phase = "listening";
+      call.label = "正在听你说…";
+      context.render();
+    }
+  };
+  source.start();
+}
+
+async function receiveConversationCallAudio(context, event) {
+  const call = viewState.call;
+  if (!call || clean(event?.callId) !== call.id || !call.audio) return;
+  const index = Number(event.index);
+  if (!Number.isSafeInteger(index) || index < 0) return;
+  const epoch = call.audio.epoch;
+  try {
+    const input = base64ToAudioBuffer(event.audioBase64);
+    const decoded = await call.audio.audioContext.decodeAudioData(input);
+    if (viewState.call !== call || !call.audio || call.audio.epoch !== epoch) return;
+    call.audio.pending.set(index, decoded);
+    call.phase = "speaking";
+    call.label = "正在说话…";
+    playNextConversationCallAudio(context, call);
+    context.render();
+  } catch (error) {
+    if (viewState.call === call) {
+      call.audio?.skipped.add(index);
+      playNextConversationCallAudio(context, call);
+      call.error = `无法播放这段语音：${error?.message || error}`;
+      context.render();
+    }
+  }
+}
+
+async function startConversationCall(context) {
+  if (viewState.call) {
+    viewState.call.minimized = false;
+    context.render();
+    return;
+  }
+  if (!context.api.conversation.call?.start) {
+    viewState.error = "当前版本没有加载实时语音通话。";
+    context.render();
+    return;
+  }
+  let audio;
+  try {
+    audio = callAudioState(context);
+    await audio.audioContext.resume?.();
+  } catch (error) {
+    viewState.error = `无法初始化通话音频：${error?.message || error}`;
+    context.render();
+    return;
+  }
+  const call = {
+    audio,
+    contactName: clean(viewState.snapshot?.activeContact?.name),
+    error: "",
+    id: "",
+    label: "正在接通…",
+    lastRenderAt: 0,
+    lastTranscript: "",
+    minimized: false,
+    partialTranscript: "",
+    phase: "connecting",
+  };
+  viewState.call = call;
+  viewState.error = "";
+  viewState.menuOpen = false;
+  viewState.searchOpen = false;
+  viewState.settingsOpen = false;
+  context.render();
+  try {
+    const result = await context.api.conversation.call.start();
+    if (viewState.call !== call) {
+      await context.api.conversation.call.stop({ callId: result?.callId }).catch(() => undefined);
+      return;
+    }
+    call.id = clean(result?.callId);
+    call.contactName = clean(result?.contactName) || call.contactName;
+    if (!call.id) throw new Error("通话服务没有返回通话标识。 ");
+    await startConversationCallMicrophone(context, call);
+    call.phase = "listening";
+    call.label = "正在听你说…";
+    context.render();
+  } catch (error) {
+    if (call.id) await context.api.conversation.call.stop({ callId: call.id }).catch(() => undefined);
+    await disposeConversationCallAudio(call);
+    if (viewState.call === call) viewState.call = null;
+    viewState.error = `无法开始语音通话：${error?.message || error}`;
+    context.render();
+  }
+}
+
+async function endConversationCall(context) {
+  const call = viewState.call;
+  if (!call || call.ending) return;
+  call.ending = true;
+  call.phase = "ending";
+  call.label = "正在挂断…";
+  context.render();
+  try {
+    if (call.id) await context.api.conversation.call.stop({ callId: call.id });
+  } catch (error) {
+    if (viewState.call === call) call.error = `无法挂断通话：${error?.message || error}`;
+  } finally {
+    await disposeConversationCallAudio(call);
+    if (viewState.call === call) viewState.call = null;
+    context.render();
+  }
+}
+
+function handleConversationCallEvent(context, event) {
+  const call = viewState.call;
+  if (!call || clean(event?.callId) !== call.id) return false;
+  if (event.type === "call-state") {
+    call.phase = clean(event.state) || call.phase;
+    call.label = clean(event.label) || call.label;
+    if (call.phase !== "speaking") call.error = "";
+    context.render();
+    return true;
+  }
+  if (event.type === "call-transcript") {
+    const text = clean(event.text);
+    if (event.final) {
+      call.lastTranscript = text;
+      call.partialTranscript = "";
+    } else {
+      call.partialTranscript = text;
+    }
+    if (event.final) context.render();
+    else renderConversationCallSoon(context, call);
+    return true;
+  }
+  if (event.type === "call-clear-audio") {
+    stopConversationCallPlayback(call);
+    call.phase = "listening";
+    call.label = "正在听你说…";
+    context.render();
+    return true;
+  }
+  if (event.type === "call-audio") {
+    void receiveConversationCallAudio(context, event);
+    return true;
+  }
+  if (event.type === "call-audio-skip") {
+    const index = Number(event.index);
+    if (Number.isSafeInteger(index) && index >= 0 && call.audio) {
+      call.audio.skipped.add(index);
+      playNextConversationCallAudio(context, call);
+    }
+    return true;
+  }
+  if (event.type === "call-error") {
+    call.phase = "error";
+    call.error = clean(event.message) || "通话出了点问题。";
+    context.render();
+    return true;
+  }
+  if (event.type === "call-ended") {
+    void disposeConversationCallAudio(call);
+    if (viewState.call === call) viewState.call = null;
+    context.render();
+    return true;
+  }
+  return false;
+}
+
 function handleConversationEvent(context, event) {
+  if (handleConversationCallEvent(context, event)) return;
+  // The call sheet owns its own listening/thinking/speaking state.  Do not
+  // leak Claude's internal turn labels into the text composer while a voice
+  // turn is running; refresh the normal history after it settles instead.
+  if (event?.kind === "call") {
+    if (["turn-complete", "turn-stopped", "error"].includes(event.type)) void load(context, true);
+    return;
+  }
   const activeProjectRoot = clean(viewState.snapshot?.projectRoot);
   if (activeProjectRoot && clean(event?.projectRoot) && !sameProjectRoot(activeProjectRoot, event.projectRoot)) return;
   const requestId = clean(event?.requestId);
@@ -1011,7 +1460,7 @@ export function startConversationPolling(context) {
   viewState.timer = window.setInterval(() => load(context), 2000);
 }
 
-export function stopConversationPolling() {
+export function stopConversationPolling(context = null) {
   if (viewState.timer) window.clearInterval(viewState.timer);
   viewState.timer = null;
   viewState.unsubscribe?.();
@@ -1020,6 +1469,7 @@ export function stopConversationPolling() {
   viewState.wechatUnsubscribe = null;
   viewState.dismissController?.abort();
   viewState.dismissController = null;
+  if (context && viewState.call) void endConversationCall(context);
 }
 
 async function saveDisplayPreference(context, input) {
@@ -1423,9 +1873,97 @@ async function openConversationMediaPreview(context, button) {
   }
 }
 
+export function voiceTimeLabel(value) {
+  const seconds = Math.max(0, Math.floor(Number(value) || 0));
+  const minutes = Math.floor(seconds / 60);
+  return `${minutes}:${String(seconds % 60).padStart(2, "0")}`;
+}
+
+function updateConversationVoice(voice, audio) {
+  const button = voice.querySelector("[data-conversation-voice-toggle]");
+  const time = voice.querySelector("[data-conversation-voice-time]");
+  const progress = voice.querySelector("[data-conversation-voice-progress]");
+  const duration = Number(audio?.duration);
+  const current = Math.max(0, Number(audio?.currentTime) || 0);
+  const ready = Number.isFinite(duration) && duration > 0;
+  const playing = Boolean(audio && !audio.paused && !audio.ended);
+  voice.classList.toggle("is-playing", playing);
+  voice.classList.toggle("is-ready", ready);
+  if (button) {
+    button.setAttribute("aria-pressed", playing ? "true" : "false");
+    button.setAttribute("aria-label", playing ? "暂停语音" : "播放语音");
+  }
+  if (time) time.textContent = ready ? `${voiceTimeLabel(current)} / ${voiceTimeLabel(duration)}` : "语音";
+  if (progress) progress.style.width = ready ? `${Math.min(100, Math.max(0, (current / duration) * 100))}%` : "0%";
+}
+
+function markConversationVoiceUnavailable(voice) {
+  const button = voice.querySelector("[data-conversation-voice-toggle]");
+  const time = voice.querySelector("[data-conversation-voice-time]");
+  voice.classList.remove("is-playing");
+  voice.classList.add("is-unavailable");
+  if (button) {
+    button.disabled = true;
+    button.setAttribute("aria-pressed", "false");
+    button.setAttribute("aria-label", "语音暂不可播放");
+  }
+  if (time) time.textContent = "暂不可播放";
+}
+
+function bindConversationVoiceEvents() {
+  document.querySelectorAll("[data-conversation-voice]").forEach((voice) => {
+    const audio = voice.querySelector("[data-conversation-voice-media]");
+    const toggle = voice.querySelector("[data-conversation-voice-toggle]");
+    if (!audio || !toggle) {
+      markConversationVoiceUnavailable(voice);
+      return;
+    }
+    const update = () => updateConversationVoice(voice, audio);
+    ["loadedmetadata", "durationchange", "timeupdate", "play", "pause", "ended"].forEach((event) => audio.addEventListener(event, update));
+    audio.addEventListener("error", () => markConversationVoiceUnavailable(voice));
+    toggle.addEventListener("click", async () => {
+      if (!audio.paused) {
+        audio.pause();
+        return;
+      }
+      document.querySelectorAll("[data-conversation-voice-media]").forEach((other) => {
+        if (other !== audio && !other.paused) other.pause();
+      });
+      try {
+        await audio.play();
+      } catch {
+        markConversationVoiceUnavailable(voice);
+      }
+    });
+    update();
+  });
+}
+
 export function bindConversationEvents(context) {
   bindConversationOverlayDismissal(context);
   bindAvatarCropEvents(context);
+  bindConversationVoiceEvents();
+  document.querySelector("[data-open-conversation-call]")?.addEventListener("click", () => {
+    if (viewState.call) {
+      viewState.call.minimized = false;
+      context.render();
+      return;
+    }
+    void startConversationCall(context);
+  });
+  document.querySelector("[data-minimize-conversation-call]")?.addEventListener("click", () => {
+    if (!viewState.call) return;
+    viewState.call.minimized = true;
+    context.render();
+  });
+  document.querySelector("[data-conversation-call-backdrop]")?.addEventListener("click", (event) => {
+    if (event.target !== event.currentTarget || !viewState.call) return;
+    viewState.call.minimized = true;
+    context.render();
+  });
+  document.querySelector("[data-end-conversation-call]")?.addEventListener("click", () => {
+    void endConversationCall(context);
+  });
   document.querySelector("[data-open-conversation]")?.addEventListener("click", () => context.setRelationshipPage("conversation"));
   document.querySelector("[data-open-memory]")?.addEventListener("click", () => context.setRelationshipPage("memory"));
   document.querySelector("[data-open-relationship-settings]")?.addEventListener("click", () => context.setRelationshipPage("settings"));
@@ -1454,6 +1992,7 @@ export function bindConversationEvents(context) {
     if (!name || viewState.sending || !context.api.conversation.createContact) return;
     viewState.sending = true;
     try {
+      if (viewState.call) await endConversationCall(context);
       viewState.snapshot = await context.api.conversation.createContact({ name });
       viewState.lastVersion = viewState.snapshot.version;
       if (context.api.settings?.get) context.state.settings = await context.api.settings.get();
@@ -1483,6 +2022,7 @@ export function bindConversationEvents(context) {
     const id = clean(button.dataset.conversationContact);
     if (!id || viewState.sending || !context.api.conversation.selectContact) return;
     try {
+      if (viewState.call) await endConversationCall(context);
       viewState.snapshot = await context.api.conversation.selectContact({ id });
       viewState.lastVersion = viewState.snapshot.version;
       if (context.api.settings?.get) context.state.settings = await context.api.settings.get();

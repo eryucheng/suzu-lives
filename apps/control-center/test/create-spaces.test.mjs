@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { renderVoiceDesign } from "../src/features/create/audio.mjs";
+import { loadVoiceDesign, renderVoiceDesign } from "../src/features/create/audio.mjs";
 import { renderCreateOverview } from "../src/features/create/overview.mjs";
 import { renderCreate } from "../src/features/create/index.mjs";
 import { renderDrawing } from "../src/features/create/drawing.mjs";
@@ -63,8 +63,64 @@ test("drawing and audio subpages keep return navigation and real settings entryp
   assert.match(audio, /候选历史/);
   assert.match(audio, /管理 → API/);
   assert.match(audio, /data-open-api-services/);
+  assert.match(audio, /data-open-custom-audio/);
+  assert.match(audio, /自定义音频/);
   assert.doesNotMatch(audio, /name="apiKey"/);
   assert.doesNotMatch(audio, /name="baseUrl"/);
   assert.doesNotMatch(audio, /不会自动/);
   assert.doesNotMatch(audio, /微信/);
+});
+
+test("voice design keeps prompts editable and explains when a bound API key cannot be read", async () => {
+  await loadVoiceDesign({
+    api: {
+      voiceDesign: {
+        snapshot: async () => ({
+          status: "ready",
+          connection: { configured: false, credentialStatus: "unreadable" },
+          config: { designModel: "qwen-voice-design", targetModel: "qwen3-tts-vd-2026-01-26", namePrefix: "suzu", language: "zh", sampleRate: 24000, responseFormat: "wav" },
+          candidates: [],
+        }),
+      },
+    },
+    render() {},
+  });
+  const audio = renderVoiceDesign();
+  assert.match(audio, /密钥需要重存/);
+  assert.match(audio, /保存的 Key 无法读取/);
+  assert.match(audio, /重新保存阿里百炼 Key/);
+  assert.match(audio, /name="voicePrompt"[^>]*>/);
+  assert.doesNotMatch(audio, /name="voicePrompt"[^>]*disabled/);
+  assert.match(audio, /data-open-api-services/);
+});
+
+test("voice design uses a human candidate flow and exposes a contact list configuration entry", async () => {
+  await loadVoiceDesign({
+    api: {
+      voiceDesign: {
+        snapshot: async () => ({
+          status: "ready",
+          connection: { configured: true, credentialStatus: "ready" },
+          config: { designModel: "qwen-voice-design", targetModel: "qwen3-tts-vd-2026-01-26", namePrefix: "suzu", language: "zh", sampleRate: 24000, responseFormat: "wav" },
+          selectedVoiceId: "voice-kept",
+          candidates: [{ id: "kept", voiceId: "voice-kept", displayName: "夜谈", createdAt: "2026-08-07T12:00:00.000Z", previewAvailable: true, retained: true }],
+          contacts: [{ id: "contact-suzu", name: "Suzu", provider: "qwen", voiceId: "voice-kept", customVoiceId: "" }],
+          assignableVoices: [{ key: "qwen:contact-suzu:kept", provider: "qwen", voiceId: "voice-kept", name: "夜谈", sourceContactId: "contact-suzu", sourceCandidateId: "kept" }],
+        }),
+      },
+    },
+    render() {},
+  });
+  const audio = renderVoiceDesign();
+  assert.match(audio, /配置联系人音色/);
+  assert.doesNotMatch(audio, /配置当前联系人音色/);
+  assert.match(audio, /修改音色名称/);
+  assert.match(audio, />试听</);
+  assert.match(audio, /已保留/);
+  assert.match(audio, /data-delete-voice="kept"/);
+  assert.match(audio, />删除</);
+  assert.match(audio, /voice-candidate-list" data-voice-candidate-list/);
+  assert.doesNotMatch(audio, /复制 voiceId/);
+  assert.doesNotMatch(audio, /复制目标模型/);
+  assert.doesNotMatch(audio, /voice-kept/);
 });

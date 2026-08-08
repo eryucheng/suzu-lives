@@ -53,6 +53,13 @@ contextBridge.exposeInMainWorld("suzuConsole", {
     send: (value) => ipcRenderer.invoke("conversation:send", value),
     stop: (value) => ipcRenderer.invoke("conversation:stop", value),
     steer: (value) => ipcRenderer.invoke("conversation:steer", value),
+    call: {
+      start: () => ipcRenderer.invoke("conversation:call-start"),
+      audio: (value) => ipcRenderer.send("conversation:call-audio", value),
+      commit: (value) => ipcRenderer.invoke("conversation:call-commit", value),
+      interrupt: (value) => ipcRenderer.invoke("conversation:call-interrupt", value),
+      stop: (value) => ipcRenderer.invoke("conversation:call-stop", value),
+    },
     respondPermission: (value) => ipcRenderer.invoke("conversation:respond-permission", value),
     onEvent: (callback) => {
       if (typeof callback !== "function") return () => {};
@@ -111,7 +118,12 @@ contextBridge.exposeInMainWorld("suzuConsole", {
   voiceDesign: {
     snapshot: () => ipcRenderer.invoke("voice-design:snapshot"),
     saveSettings: (value) => ipcRenderer.invoke("voice-design:save-settings", value),
+    saveCustomAudio: (value) => ipcRenderer.invoke("voice-design:save-custom-audio", value),
+    saveContactVoice: (value) => ipcRenderer.invoke("voice-design:save-contact-voice", value),
     create: (value) => ipcRenderer.invoke("voice-design:create", value),
+    renameCandidate: (value) => ipcRenderer.invoke("voice-design:rename-candidate", value),
+    retainCandidate: (id) => ipcRenderer.invoke("voice-design:retain-candidate", id),
+    deleteCandidate: (id) => ipcRenderer.invoke("voice-design:delete-candidate", id),
     preview: (id) => ipcRenderer.invoke("voice-design:preview", id),
   },
   memory: {

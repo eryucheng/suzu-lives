@@ -43,7 +43,7 @@ function applyTheme() {
 function setView(view) {
   if (!shellViews.has(view) && view !== "admin") return;
   if (view === "relationships" && state.view === "relationships") {
-    stopConversationPolling();
+    stopConversationPolling(context);
     state.relationshipPage = "overview";
     render();
     return;
@@ -63,7 +63,7 @@ function setView(view) {
   const enteringRelationships = state.view !== "relationships" && view === "relationships";
   const enteringCreate = state.view !== "create" && view === "create";
   const enteringCapabilities = state.view !== "capabilities" && view === "capabilities";
-  if (state.view === "relationships" && view !== "relationships") stopConversationPolling();
+  if (state.view === "relationships" && view !== "relationships") stopConversationPolling(context);
   state.view = view;
   if (enteringRelationships) state.relationshipPage = "overview";
   if (enteringCreate) state.createPage = "overview";
@@ -85,7 +85,7 @@ function setView(view) {
 
 function setRelationshipPage(page) {
   const nextPage = ["overview", "conversation", "memory", "settings"].includes(page) ? page : "overview";
-  stopConversationPolling();
+  stopConversationPolling(context);
   if (nextPage === "memory") {
     state.memoryViewMode = state.memoryStatus?.status === "ready" ? "brain" : "library";
     state.memoryEditMode = false;

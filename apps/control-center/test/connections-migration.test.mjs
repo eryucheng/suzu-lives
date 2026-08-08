@@ -29,6 +29,7 @@ test("create and audio snapshots report a selected named connection without lega
   assert.equal(imageSnapshot.textToImageModel, "z-image-turbo");
   assert.equal(imageSnapshot.referenceImageModel, "wan2.7-image");
   assert.equal(voiceSnapshot.configured, true);
+  assert.equal(voiceSnapshot.credentialStatus, "ready");
   assert.equal(voiceSnapshot.baseUrl, "https://dashscope.example.test/v1");
   assert.equal(JSON.stringify({ imageSnapshot, voiceSnapshot }).includes(opaque()), false);
 });

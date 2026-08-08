@@ -23,7 +23,12 @@ export function createConnectionsService({ safeStorage, settingsService, environ
   const dashScopeSnapshot = async () => {
     const selected = await resolveNamed("voice-design");
     if (!selected) return dashScope.snapshot();
-    return { baseUrl: selected.baseUrl, configured: Boolean(selected.key), source: selected.key ? "saved" : "none" };
+    return {
+      baseUrl: selected.baseUrl,
+      configured: Boolean(selected.key),
+      source: selected.key ? "saved" : "none",
+      credentialStatus: selected.credentialStatus,
+    };
   };
   const imageApiSnapshot = async () => {
     const selected = await resolveNamed("image-workbench");

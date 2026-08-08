@@ -20,9 +20,19 @@ async function writeJsonAtomic(filePath, value) {
   await fs.writeFile(temporary, JSON.stringify(value, null, 2) + "\n", "utf8");
   await fs.rename(temporary, filePath);
 }
+function credentialState(value, safeStorage) {
+  const encrypted = clean(value);
+  if (!encrypted) return { key: "", status: "missing" };
+  if (!safeStorage?.isEncryptionAvailable?.()) return { key: "", status: "encryption-unavailable" };
+  try {
+    const key = clean(safeStorage.decryptString(Buffer.from(encrypted, "base64")));
+    return { key, status: key ? "ready" : "invalid" };
+  } catch {
+    return { key: "", status: "unreadable" };
+  }
+}
 function decrypt(value, safeStorage) {
-  if (!clean(value) || !safeStorage?.isEncryptionAvailable?.()) return "";
-  try { return safeStorage.decryptString(Buffer.from(value, "base64")); } catch { return ""; }
+  return credentialState(value, safeStorage).key;
 }
 
 function createCredentialService({ dataRoot, safeStorage, environment = process.env, name, environmentKeys = [] }) {
@@ -212,7 +222,7 @@ function typeLabel(type) {
 }
 
 function publicNamedConnection(value, safeStorage) {
-  const key = decrypt(value.encryptedApiKey, safeStorage);
+  const credential = credentialState(value.encryptedApiKey, safeStorage);
   return {
     id: value.id,
     name: value.name,
@@ -228,7 +238,8 @@ function publicNamedConnection(value, safeStorage) {
     extraBody: value.extraBody,
     editExtraBody: value.editExtraBody,
     timeoutMs: value.timeoutMs,
-    configured: Boolean(key),
+    configured: Boolean(credential.key),
+    credentialStatus: credential.status,
   };
 }
 
@@ -340,8 +351,15 @@ export function createNamedApiConnectionService({ dataRoot, safeStorage }) {
     if (!id) return null;
     const connection = store.connections.find((item) => item.id === id);
     if (!connection || !BINDING_TYPES[name]?.includes(connection.type)) return null;
-    const apiKey = decrypt(connection.encryptedApiKey, safeStorage);
-    return { ...connection, provider: typeLabel(connection.type), apiKey, key: apiKey, source: apiKey ? "saved" : "none" };
+    const credential = credentialState(connection.encryptedApiKey, safeStorage);
+    return {
+      ...connection,
+      provider: typeLabel(connection.type),
+      apiKey: credential.key,
+      key: credential.key,
+      source: credential.key ? "saved" : "none",
+      credentialStatus: credential.status,
+    };
   }
   return { snapshot, save, remove, bind, resolve };
 }

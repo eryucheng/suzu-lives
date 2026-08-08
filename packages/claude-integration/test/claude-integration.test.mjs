@@ -48,7 +48,8 @@ test("explicit registration preserves user files and writes the Suzu project def
   assert.doesNotMatch(skill, new RegExp(project.replace(/[\\^$.*+?()[\]{}|]/gu, "\\$&"), "u"));
   assert.doesNotMatch(skill, /config\.local|registry\.local|D:\\Apps|ling/iu);
   assert.equal(settings.skipWebFetchPreflight, true);
-  assert.deepEqual(settings.permissions.allow, ["Bash(suzu-lives:*)", "Bash(playwright-cli *)", "Read", "WebFetch", "WebSearch"]);
+  assert.equal(settings.permissions.defaultMode, "acceptEdits");
+  assert.deepEqual(settings.permissions.allow, ["Bash(suzu-lives *)", "Bash(playwright-cli *)", "Read", "WebFetch", "WebSearch"]);
 });
 
 test("Suzu project defaults preserve user settings and replace only a prior Suzu CLI permission", async () => {
@@ -71,9 +72,10 @@ test("Suzu project defaults preserve user settings and replace only a prior Suzu
   await ensureSuzuClaudeProjectSettings({ projectRoot: project, launcher });
   const settings = JSON.parse(await fs.readFile(settingsPath, "utf8"));
   assert.equal(settings.skipWebFetchPreflight, true);
+  assert.equal(settings.permissions.defaultMode, "acceptEdits");
   assert.deepEqual(settings.permissions.allow, [
     "Bash(git status:*)",
-    'Bash("D:\\current\\Suzu Lives Console.exe" --suzu-lives-cli:*)',
+    'Bash("D:\\current\\Suzu Lives Console.exe" --suzu-lives-cli *)',
     "Bash(playwright-cli *)",
     "Read",
     "WebFetch",
@@ -83,6 +85,26 @@ test("Suzu project defaults preserve user settings and replace only a prior Suzu
   assert.deepEqual(settings.env, { KEEP: "yes" });
   assert.equal(settings.hooks.UserPromptSubmit[0].hooks[0].command, "user-hook");
   assert.equal((await ensureSuzuClaudeProjectSettings({ projectRoot: project, launcher })).changed, false);
+});
+
+test("development launcher is accepted and replaces an outdated packaged CLI permission", async () => {
+  const project = await temporaryDirectory("suzu-project-development-launcher-");
+  const settingsPath = path.join(project, ".claude", "settings.json");
+  await fs.mkdir(path.dirname(settingsPath), { recursive: true });
+  await fs.writeFile(settingsPath, JSON.stringify({
+    permissions: { allow: ['Bash("D:\\old\\Suzu Lives Console.exe" --suzu-lives-cli:*)'] },
+  }, null, 2), "utf8");
+  const developmentLauncher = {
+    command: '"D:\\Apps\\AI\\Suzu Lives-v1\\node_modules\\electron\\dist\\electron.exe" "D:\\Apps\\AI\\Suzu Lives-v1\\apps\\control-center" --suzu-lives-cli',
+    available: true,
+  };
+
+  await writeClaudeRegistration({ projectRoot: project, abilityId: "voice-message", launcher: developmentLauncher });
+  const settings = JSON.parse(await fs.readFile(settingsPath, "utf8"));
+  const skill = await fs.readFile(path.join(project, ".claude", "skills", "voice-message", "SKILL.md"), "utf8");
+  assert.ok(settings.permissions.allow.includes(`Bash(${developmentLauncher.command} *)`));
+  assert.equal(settings.permissions.allow.some((item) => item.includes("D:\\old\\Suzu Lives Console.exe")), false);
+  assert.match(skill, /electron\.exe" "D:\\Apps\\AI\\Suzu Lives-v1\\apps\\control-center" --suzu-lives-cli voice-message/u);
 });
 
 test("Suzu project settings honor disabled selectable read and web permissions", async () => {
@@ -103,9 +125,21 @@ test("Suzu project settings honor disabled selectable read and web permissions",
   assert.deepEqual(settings.permissions.allow, [
     "WebFetch",
     "Bash(git status:*)",
-    "Bash(suzu-lives:*)",
+    "Bash(suzu-lives *)",
     "Bash(playwright-cli *)",
   ]);
+});
+
+test("every Suzu contact project gets the shared workspace and automatic file edits", async () => {
+  const project = await temporaryDirectory("suzu-project-shared-workspace-");
+  const workspace = await temporaryDirectory("suzu-shared-workspace-");
+  await ensureSuzuClaudeProjectSettings({ projectRoot: project, launcher, workspaceDirectories: [workspace] });
+
+  const settingsPath = path.join(project, ".claude", "settings.json");
+  const settings = JSON.parse(await fs.readFile(settingsPath, "utf8"));
+  assert.equal(settings.permissions.defaultMode, "acceptEdits");
+  assert.deepEqual(settings.additionalDirectories, [workspace]);
+  assert.equal((await ensureSuzuClaudeProjectSettings({ projectRoot: project, launcher, workspaceDirectories: [workspace] })).changed, false);
 });
 
 test("managed registration updates its own file but refuses a user-owned skill collision", async () => {
