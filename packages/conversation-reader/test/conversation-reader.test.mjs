@@ -27,6 +27,20 @@ test("display model covers user, assistant blocks, system, attachment, and tool 
   assert.deepEqual(messages.map((message) => message.kind), ["user", "assistant", "system", "system", "attachment"]); assert.deepEqual(messages[1].blocks.map((block) => block.kind), ["thinking", "tool_use", "text"]); assert.equal(messages[2].blocks[0].kind, "tool_result");
 });
 
+test("managed Skill context injected by Claude never becomes a user chat bubble", () => {
+  const messages = buildDisplayMessages([
+    { type: "user", timestamp: "2026-08-07T16:48:32.531Z", message: { content: "还好，你能发语音给我听吗" } },
+    {
+      type: "user",
+      timestamp: "2026-08-07T16:48:43.678Z",
+      message: {
+        content: "Base directory for this skill: D:\\Apps\\Suzu lives\\contact-demo\\.claude\\skills\\voice-message\n\n<!-- suzu-lives:ability:voice-message -->\n# 发送语音\n\n这是自动注入的执行上下文。",
+      },
+    },
+  ]);
+  assert.deepEqual(messages.map((message) => message.blocks[0].text), ["还好，你能发语音给我听吗"]);
+});
+
 test("search categories return real media and date records that can be reopened around their source line", async () => {
   const imagePath = path.join(os.tmpdir(), "suzu-search-image.png");
   const filePath = await fixture([

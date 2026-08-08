@@ -7,6 +7,8 @@ import { PassThrough } from "node:stream";
 import test from "node:test";
 
 import {
+  claudeAllowedTools,
+  claudeAllowedToolsForWorkspace,
   claudeCliArguments,
   claudeCliEnvironment,
   createConversationChatService,
@@ -57,10 +59,17 @@ test("Claude Code stream arguments create or resume only the selected native ses
     "--include-partial-messages",
     "--permission-prompt-tool", "stdio",
     "--replay-user-messages",
+    "--permission-mode", "acceptEdits",
     "--disallowed-tools", "Agent,TodoWrite,AskUserQuestion",
     "--session-id", "new-session",
   ]);
   assert.deepEqual(claudeCliArguments({ sessionId: "saved-session", hasTranscript: true }).slice(-2), ["--resume", "saved-session"]);
+  assert.deepEqual(claudeAllowedTools({ read: true, webFetch: false, webSearch: true }), ["Read", "WebSearch"]);
+  const allowed = claudeCliArguments({ sessionId: "allowed-tools", allowedTools: claudeAllowedToolsForWorkspace({ read: true, webFetch: true, webSearch: false }, { suzuCliCommand: "suzu-lives" }), workspaceDirectories: ["D:/Suzu/workspace"] });
+  assert.match(allowed[allowed.indexOf("--allowed-tools") + 1], /^Read,WebFetch,/u);
+  assert.equal(allowed[allowed.indexOf("--permission-mode") + 1], "acceptEdits");
+  assert.equal(allowed[allowed.indexOf("--add-dir") + 1], path.resolve("D:/Suzu/workspace"));
+  assert.ok(allowed[allowed.indexOf("--allowed-tools") + 1].includes("Bash(suzu-lives *)"));
 });
 
 test("Claude runtime feature settings remove only the selected built-in tools and background features", () => {
@@ -106,9 +115,11 @@ test("schedule prompt keeps the two companion capabilities independently scoped"
 test("chat starts the local Claude CLI and forwards its stream", async () => {
   const root = await temporaryDirectory("suzu-direct-chat-");
   const projectRoot = path.join(root, "project");
+  const workspaceDirectory = path.join(root, "suzu-workspace");
   const homeDirectory = path.join(root, "home");
   const commandPath = path.join(homeDirectory, ".local", "bin", "claude.exe");
   await fs.mkdir(projectRoot, { recursive: true });
+  await fs.mkdir(workspaceDirectory, { recursive: true });
   await fs.mkdir(path.dirname(commandPath), { recursive: true });
   await fs.writeFile(commandPath, "fixture");
   const events = [];
@@ -121,9 +132,11 @@ test("chat starts the local Claude CLI and forwards its stream", async () => {
       list: '"Suzu Lives Console.exe" --suzu-lives-cli schedule list --data-root "D:\\\\suzu"',
       remove: '"Suzu Lives Console.exe" --suzu-lives-cli schedule remove',
     }),
+    claudeWorkspaceDirectories: [workspaceDirectory],
     settingsService: { load: () => ({ projectRoot }) },
     reader: { ensureActiveSession: async () => ({ id: "session-1", projectRoot, hasTranscript: false }) },
     homeDirectory,
+    suzuCliCommand: '"Suzu Lives Console.exe" --suzu-lives-cli',
     spawnImpl: (command, args, options) => {
       const child = new FakeChild();
       spawned.push({ command, args, options, child });
@@ -140,6 +153,10 @@ test("chat starts the local Claude CLI and forwards its stream", async () => {
   assert.equal(spawned[0].options.cwd, projectRoot);
   assert.equal(spawned[0].options.windowsHide, true);
   assert.ok(spawned[0].args.includes("--session-id"));
+  assert.match(spawned[0].args[spawned[0].args.indexOf("--allowed-tools") + 1], /^Read,WebFetch,WebSearch,/u);
+  assert.ok(spawned[0].args[spawned[0].args.indexOf("--allowed-tools") + 1].includes('Bash("Suzu Lives Console.exe" --suzu-lives-cli *)'));
+  assert.equal(spawned[0].args[spawned[0].args.indexOf("--permission-mode") + 1], "acceptEdits");
+  assert.equal(spawned[0].args[spawned[0].args.indexOf("--add-dir") + 1], workspaceDirectory);
   assert.ok(spawned[0].args.includes("--disallowed-tools"));
   assert.equal(spawned[0].args[spawned[0].args.indexOf("--disallowed-tools") + 1], "Agent,TodoWrite,AskUserQuestion");
   assert.equal(spawned[0].options.env.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS, "1");
@@ -409,6 +426,58 @@ test("stop interrupts only the active turn and preserves the normal message queu
   assert.equal(events.find((event) => event.type === "turn-stopped")?.sessionId, "stop-session");
   assert.equal(spawned.length, 2);
   assert.equal(JSON.parse(spawned[1].input.trim()).message.content, "排队的消息");
+  service.dispose();
+});
+
+test("request-scoped stop can remove a queued voice turn before it starts", async () => {
+  const root = await temporaryDirectory("suzu-call-queue-stop-");
+  const projectRoot = path.join(root, "project");
+  const homeDirectory = path.join(root, "home");
+  const commandPath = path.join(homeDirectory, ".local", "bin", "claude.exe");
+  await fs.mkdir(projectRoot, { recursive: true });
+  await fs.mkdir(path.dirname(commandPath), { recursive: true });
+  await fs.writeFile(commandPath, "fixture");
+  const events = [];
+  const spawned = [];
+  const service = createConversationChatService({
+    settingsService: { load: () => ({ projectRoot }) },
+    reader: { ensureActiveSession: async () => ({ id: "call-stop-session", projectRoot, hasTranscript: false }) },
+    homeDirectory,
+    spawnImpl: () => {
+      const child = new FakeChild();
+      spawned.push(child);
+      return child;
+    },
+    onEvent: (event) => events.push(event),
+  });
+
+  await service.send({ content: "普通长任务" });
+  const queued = await service.sendToSession({
+    content: "会被打断的通话内容",
+    sessionId: "call-stop-session",
+    projectRoot,
+    kind: "call",
+    requestId: "suzu-call-queued-turn",
+  });
+  assert.equal(queued.queued, true);
+  const stopped = service.stop({
+    sessionId: "call-stop-session",
+    projectRoot,
+    requestId: "suzu-call-queued-turn",
+  });
+  assert.deepEqual(stopped, {
+    accepted: true,
+    stopped: true,
+    sessionId: "call-stop-session",
+    message: "已从队列中移除这次回复。",
+  });
+  assert.equal(events.find((event) => event.requestId === "suzu-call-queued-turn" && event.type === "turn-stopped")?.kind, "call");
+
+  spawned[0].emitJson({ type: "result", result: "普通任务结束" });
+  spawned[0].close();
+  await flush();
+  await flush();
+  assert.equal(spawned.length, 1);
   service.dispose();
 });
 

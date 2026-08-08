@@ -33,7 +33,9 @@
     "@suzu-lives/task-scheduler": "0.1.0",
     "@suzu-lives/visual-reference-library": "0.1.0",
     "@suzu-lives/voice-design": "0.1.0",
-    "qrcode": "1.5.4"
+    "@suzu-lives/voice-message": "0.1.0",
+    "qrcode": "1.5.4",
+    "ws": "8.18.3"
   },
   "build": {
     "appId": "com.suzulives.console",

@@ -210,6 +210,30 @@ function publicVoiceCandidates(agentRoot) {
     .reverse();
 }
 
+function publicCustomVoices(agentRoot) {
+  const document = agentRoot ? publicJson(agentRoot, ["voice-message", "custom-voices.json"]) : {};
+  const voices = [];
+  const seen = new Set();
+  for (const value of (Array.isArray(document.voices) ? document.voices : []).slice(0, 100)) {
+    const voice = plainObject(value);
+    const id = publicText(voice.id, 100);
+    const name = publicText(voice.name, 80);
+    const provider = clean(voice.provider).toLowerCase();
+    const voiceId = publicText(voice.voiceId, 200);
+    if (!id || !name || provider !== "minimax" || !voiceId || seen.has(id)) continue;
+    seen.add(id);
+    voices.push({
+      id,
+      name,
+      provider,
+      voiceId,
+      model: publicText(voice.model, 160) || "speech-2.8-hd",
+      createdAt: publicText(voice.createdAt, 100),
+    });
+  }
+  return voices;
+}
+
 function existingDirectory(value) {
   const target = clean(value);
   if (!target) return false;
@@ -234,20 +258,47 @@ function configuredVoiceId(value) {
   return clean(config.voiceId || config.voice || tts.voiceId || tts.voice_id || tts.voice);
 }
 
-function voiceMessageSettings({ dataRoot, agentRoot, voiceDesign, candidates }) {
+function configuredVoiceProvider(value) {
+  const config = plainObject(value);
+  const tts = plainObject(config.tts);
+  return clean(config.provider || tts.provider).toLowerCase() === "minimax" ? "minimax" : "qwen";
+}
+
+function configuredCustomVoiceId(value) {
+  const config = plainObject(value);
+  const tts = plainObject(config.tts);
+  return clean(config.customVoiceId || tts.customVoiceId);
+}
+
+function voiceMessageSettings({ dataRoot, agentRoot, voiceDesign, candidates, customVoices }) {
   const shared = publicJson(dataRoot, ["capabilities", "voice-message", "config.json"]);
   const contact = agentRoot ? publicJson(agentRoot, ["voice-message", "config.json"]) : {};
   const contactVoiceId = configuredVoiceId(contact);
+  const contactProvider = configuredVoiceProvider(contact);
+  const contactCustomVoiceId = configuredCustomVoiceId(contact);
   const legacyVoiceId = configuredVoiceId(shared);
   const availableVoiceIds = new Set(candidates.map((candidate) => candidate.voiceId));
   let voiceId = "";
+  let voiceProvider = "qwen";
+  let customVoiceId = "";
   let selectionSource = "missing";
   let diagnostic = "";
   if (!agentRoot) {
     selectionSource = "missing-contact";
     diagnostic = "请先选择存在的当前联系人项目，才能查看或保存联系人专属音色。";
   } else if (contactVoiceId) {
-    if (availableVoiceIds.has(contactVoiceId)) {
+    if (contactProvider === "minimax") {
+      const selected = customVoices.find((item) => item.id === contactCustomVoiceId && item.voiceId === contactVoiceId);
+      if (selected) {
+        voiceId = contactVoiceId;
+        voiceProvider = "minimax";
+        customVoiceId = selected.id;
+        selectionSource = "contact";
+      } else {
+        selectionSource = "invalid-contact";
+        diagnostic = "当前联系人保存的 MiniMax 自定义音色不存在；发送会被安全拒绝，请重新选择。";
+      }
+    } else if (availableVoiceIds.has(contactVoiceId)) {
       voiceId = contactVoiceId;
       selectionSource = "contact";
     } else {
@@ -261,19 +312,22 @@ function voiceMessageSettings({ dataRoot, agentRoot, voiceDesign, candidates }) 
   } else if (legacyVoiceId) {
     selectionSource = "legacy-unavailable";
     diagnostic = "旧全局音色不属于当前联系人的候选库；请为当前联系人选择一个已保存音色。";
-  } else if (!candidates.length) {
-    diagnostic = "当前联系人还没有可用音色；请先在音色设计中创建并保存候选。";
+  } else if (!candidates.length && !customVoices.length) {
+    diagnostic = "当前联系人还没有可用音色；请先在音色设计中创建并保存候选，或添加自定义音频。";
   } else {
     diagnostic = "当前联系人尚未选择音色。";
   }
   return {
-    saved: Object.keys(shared).length > 0 || Object.keys(contact).length > 0 || Object.keys(voiceDesign).length > 0 || candidates.length > 0,
+    saved: Object.keys(shared).length > 0 || Object.keys(contact).length > 0 || Object.keys(voiceDesign).length > 0 || candidates.length > 0 || customVoices.length > 0,
     voiceId,
+    voiceProvider,
+    customVoiceId,
     timeoutMs: numberOrFallback(shared.timeoutMs, { minimum: 1000, maximum: 600000, fallback: 30000, integer: true }),
     candidates,
+    customVoices,
     selectionSource,
     voiceDiagnostic: diagnostic,
-    canSelectVoice: Boolean(agentRoot) && candidates.length > 0,
+    canSelectVoice: Boolean(agentRoot) && (candidates.length > 0 || customVoices.length > 0),
   };
 }
 
@@ -341,7 +395,8 @@ function savedCapabilitySettings(settings, dataRoot) {
   const merchant = publicJson(dataRoot, ["automation", "traveling-merchant", "config.json"]);
   const phonePrompt = plainObject(phoneCamera.prompt);
   const candidates = voiceAgentRoot ? publicVoiceCandidates(voiceAgentRoot) : [];
-  const voiceMessage = voiceMessageSettings({ dataRoot, agentRoot: voiceAgentRoot, voiceDesign, candidates });
+  const customVoices = voiceAgentRoot ? publicCustomVoices(voiceAgentRoot) : [];
+  const voiceMessage = voiceMessageSettings({ dataRoot, agentRoot: voiceAgentRoot, voiceDesign, candidates, customVoices });
   return {
     "image-generation": {
       saved: Object.keys(imageGeneration).length > 0,
@@ -467,12 +522,17 @@ export function createCapabilitiesService({
   existsCommand = commandExists,
   packaged = false,
   executablePath = "",
+  launcherCommand = "",
   openExternal = null,
   projectHooksService = null,
   onIphoneFeedbackChange = null,
 } = {}) {
   if (!settingsService || typeof settingsService.load !== "function") throw new Error("能力服务需要软件设置服务。");
   const stableLauncher = () => {
+    const currentLauncher = clean(launcherCommand);
+    if (currentLauncher) {
+      return { command: currentLauncher, available: true, reason: "使用当前正在运行的 Suzu Lives CLI。" };
+    }
     if (packaged) {
       const command = packagedCliCommand(executablePath);
       return { command, available: true, reason: "使用当前打包的 Suzu Lives EXE 的无窗口 Agent CLI。移动 portable EXE 后请在软件中重新注册能力以更新引用。" };
@@ -583,6 +643,42 @@ export function createCapabilitiesService({
     const root = capabilityAgentRoot(settings);
     return root ? publicJson(root, ["capabilities", "defaults-v1.json"]) : {};
   };
+  const registrationRefreshRequired = (marker, launcher) => (
+    marker.registrationVersion !== 3 || clean(marker.launcherCommand) !== launcher.command
+  );
+  const refreshManagedRegistrations = async () => {
+    const settings = settingsService.load();
+    const launcher = stableLauncher();
+    const projectRoot = clean(settings?.projectRoot);
+    const agentRoot = capabilityAgentRoot(settings);
+    if (!projectRoot || !agentRoot || launcher.available !== true) {
+      return { refreshed: false, errors: [], snapshot: snapshot() };
+    }
+    const marker = defaultsMarker(settings);
+    if (!registrationRefreshRequired(marker, launcher)) {
+      return { refreshed: false, errors: [], snapshot: snapshot() };
+    }
+    const errors = [];
+    for (const capability of claudeAgentAbilityCatalog()) {
+      // This Skill does not contain a launcher, and refreshing it would also
+      // reinstall its Hook. The project settings sync already updates its CLI
+      // permission when needed.
+      if (capability.id === "time-awareness") continue;
+      if (inspectClaudeRegistration({ projectRoot, abilityId: capability.id }).registered !== true) continue;
+      try { await registerAbility(capability.id); }
+      catch (error) { errors.push({ id: capability.id, code: clean(error?.code), message: clean(error?.message) || "无法更新受管注册。" }); }
+    }
+    if (!errors.length) {
+      await writeJsonBelow(agentRoot, ["capabilities", "defaults-v1.json"], {
+        ...marker,
+        version: Math.max(Number(marker.version) || 0, 2),
+        registrationVersion: 3,
+        launcherCommand: launcher.command,
+        registrationsRefreshedAt: new Date().toISOString(),
+      });
+    }
+    return { refreshed: true, errors, snapshot: snapshot() };
+  };
   const initializeDefaults = async () => {
     const settings = settingsService.load();
     const launcher = stableLauncher();
@@ -590,10 +686,20 @@ export function createCapabilitiesService({
     const agentRoot = capabilityAgentRoot(settings);
     if (!projectRoot || !agentRoot || launcher.available !== true) return { initialized: false, errors: [], snapshot: snapshot() };
     const marker = defaultsMarker(settings);
-    if (marker.initialized === true) return { initialized: false, errors: [], snapshot: snapshot() };
+    if (marker.initialized === true) {
+      const refreshed = await refreshManagedRegistrations();
+      return { initialized: false, errors: refreshed.errors, snapshot: refreshed.snapshot };
+    }
     const errors = [];
     for (const capability of claudeAgentAbilityCatalog()) {
-      if (inspectClaudeRegistration({ projectRoot, abilityId: capability.id }).registered === true) continue;
+      const registered = inspectClaudeRegistration({ projectRoot, abilityId: capability.id }).registered === true;
+      if (registered) {
+        if (capability.id !== "time-awareness" && registrationRefreshRequired(marker, launcher)) {
+          try { await registerAbility(capability.id); }
+          catch (error) { errors.push({ id: capability.id, code: clean(error?.code), message: clean(error?.message) || "无法更新受管注册。" }); }
+        }
+        continue;
+      }
       try { await registerAbility(capability.id); }
       catch (error) { errors.push({ id: capability.id, code: clean(error?.code), message: clean(error?.message) || "无法默认开启。" }); }
     }
@@ -603,6 +709,8 @@ export function createCapabilitiesService({
       version: 2,
       initialized: !retryNeeded,
       initializedAt: new Date().toISOString(),
+      registrationVersion: errors.length ? 0 : 3,
+      launcherCommand: errors.length ? "" : launcher.command,
       unresolved: errors.map(({ id, code }) => ({ id, code })),
     });
     return { initialized: true, errors, snapshot: snapshot() };
@@ -711,15 +819,36 @@ export function createCapabilitiesService({
       if (!agentRoot) throw new Error("请先选择存在的当前联系人项目，再保存联系人专属音色。 ");
       const voiceId = boundedText(input.voiceId, "音色", 200);
       if (!voiceId) throw new Error("请为当前联系人选择一个已保存音色。 ");
-      const candidates = publicVoiceCandidates(agentRoot);
-      if (!candidates.some((candidate) => candidate.voiceId === voiceId)) {
-        throw new Error("所选音色不属于当前联系人的候选库，请重新选择。 ");
-      }
       const contact = publicJson(agentRoot, ["voice-message", "config.json"]);
+      const provider = clean(input.provider).toLowerCase() || "qwen";
+      let nextContact;
+      if (provider === "minimax") {
+        const customVoiceId = boundedText(input.customVoiceId, "自定义音频", 100);
+        const customVoice = publicCustomVoices(agentRoot).find((item) => item.id === customVoiceId && item.voiceId === voiceId);
+        if (!customVoice) throw new Error("所选 MiniMax 自定义音色不属于当前联系人，请重新选择。 ");
+        nextContact = {
+          ...contact,
+          schemaVersion: 2,
+          provider: "minimax",
+          voiceId,
+          customVoiceId: customVoice.id,
+        };
+      } else if (provider === "qwen" || provider === "dashscope") {
+        const candidates = publicVoiceCandidates(agentRoot);
+        if (!candidates.some((candidate) => candidate.voiceId === voiceId)) {
+          throw new Error("所选音色不属于当前联系人的候选库，请重新选择。 ");
+        }
+        const { customVoiceId: _customVoiceId, provider: _provider, ...contactWithoutCustomVoice } = contact;
+        nextContact = {
+          ...contactWithoutCustomVoice,
+          schemaVersion: 1,
+          voiceId,
+        };
+      } else {
+        throw new Error("当前只支持 Qwen 候选音色或 MiniMax 自定义音色。 ");
+      }
       await writeJsonBelow(agentRoot, ["voice-message", "config.json"], {
-        ...contact,
-        schemaVersion: 1,
-        voiceId,
+        ...nextContact,
       });
       const shared = publicJson(dataRoot, ["capabilities", "voice-message", "config.json"]);
       const currentTimeout = numberOrFallback(shared.timeoutMs, { minimum: 1000, maximum: 600000, fallback: 30000, integer: true });
@@ -860,6 +989,7 @@ export function createCapabilitiesService({
   return {
     snapshot,
     initializeDefaults,
+    refreshManagedRegistrations,
     saveSettings,
     proactiveContactSettings: getProactiveContactSettings,
     enabledCompanionSessions,

@@ -23,6 +23,9 @@ test("Electron preload exposes the memory bridge", async () => {
       calls.push({ channel, args });
       return { ok: true };
     },
+    send: (channel, ...args) => {
+      calls.push({ channel, args });
+    },
     on: () => {},
     removeListener: () => {},
   };
@@ -44,9 +47,15 @@ test("Electron preload exposes the memory bridge", async () => {
   assert.equal(typeof bridge?.memory?.resolveStructure, "function");
   assert.equal(typeof bridge?.conversation?.stop, "function");
   assert.equal(typeof bridge?.conversation?.steer, "function");
+  assert.equal(typeof bridge?.conversation?.call?.start, "function");
+  assert.equal(typeof bridge?.conversation?.call?.audio, "function");
+  assert.equal(typeof bridge?.conversation?.call?.commit, "function");
+  assert.equal(typeof bridge?.conversation?.call?.interrupt, "function");
+  assert.equal(typeof bridge?.conversation?.call?.stop, "function");
   assert.equal(typeof bridge?.conversation?.sessionSettingsSnapshot, "function");
   assert.equal(typeof bridge?.wechat?.begin, "function");
   assert.equal(typeof bridge?.wechat?.saveSettings, "function");
+  assert.equal(typeof bridge?.voiceDesign?.saveContactVoice, "function");
   assert.equal(typeof bridge?.externalCapabilities?.importManifest, "function");
   assert.equal(typeof bridge?.externalCapabilities?.setEnabled, "function");
   await bridge.memory.resolveStructure("proposal-1", "accept", "确认");
@@ -60,15 +69,28 @@ test("Electron preload exposes the memory bridge", async () => {
   await bridge.conversation.steer({ content: "请改为只读" });
   assert.equal(calls[1].channel, "conversation:stop");
   assert.equal(calls[2].channel, "conversation:steer");
+  await bridge.conversation.call.start();
+  await bridge.conversation.call.commit({ callId: "call-1" });
+  await bridge.conversation.call.interrupt({ callId: "call-1" });
+  await bridge.conversation.call.stop({ callId: "call-1" });
+  bridge.conversation.call.audio({ callId: "call-1", audio: new ArrayBuffer(0) });
+  assert.equal(calls[3].channel, "conversation:call-start");
+  assert.equal(calls[4].channel, "conversation:call-commit");
+  assert.equal(calls[5].channel, "conversation:call-interrupt");
+  assert.equal(calls[6].channel, "conversation:call-stop");
+  assert.equal(calls[7].channel, "conversation:call-audio");
   await bridge.conversation.sessionSettingsSnapshot({ sessionId: "session-1" });
   await bridge.wechat.begin({ sessionId: "session-1" });
   await bridge.wechat.saveSettings({ enabled: true });
-  assert.equal(calls[3].channel, "conversation:session-settings-snapshot");
-  assert.equal(calls[4].channel, "wechat:begin");
-  assert.equal(calls[5].channel, "wechat:save-settings");
+  assert.equal(calls[8].channel, "conversation:session-settings-snapshot");
+  assert.equal(calls[9].channel, "wechat:begin");
+  assert.equal(calls[10].channel, "wechat:save-settings");
   await bridge.externalCapabilities.importManifest();
   await bridge.externalCapabilities.setEnabled("sample.capability", true);
-  assert.equal(calls[6].channel, "external-capabilities:import");
-  assert.equal(calls[7].channel, "external-capabilities:set-enabled");
-  assert.deepEqual(JSON.parse(JSON.stringify(calls[7].args[0])), { id: "sample.capability", enabled: true });
+  assert.equal(calls[11].channel, "external-capabilities:import");
+  assert.equal(calls[12].channel, "external-capabilities:set-enabled");
+  assert.deepEqual(JSON.parse(JSON.stringify(calls[12].args[0])), { id: "sample.capability", enabled: true });
+  await bridge.voiceDesign.saveContactVoice({ contactId: "contact-suzu", provider: "qwen", voiceId: "voice-kept" });
+  assert.equal(calls[13].channel, "voice-design:save-contact-voice");
+  assert.deepEqual(JSON.parse(JSON.stringify(calls[13].args[0])), { contactId: "contact-suzu", provider: "qwen", voiceId: "voice-kept" });
 });

@@ -23,6 +23,17 @@ const CLAUDE_RUNTIME_FEATURE_DEFAULTS = Object.freeze({
   nativeCron: false,
   askUserQuestion: false,
 });
+const VOICE_CALL_SYSTEM_PROMPT = [
+  "当前是 Suzu 内置语音通话。",
+  "请用自然、口语化、简短的中文回答；先给一两句可以独立朗读的短句。",
+  "不要朗读 Markdown、文件路径、工具过程、内部状态或“正在处理”。",
+  "如果确实需要操作工具，先用一句简短的话说明，再继续完成事情。",
+].join("\n");
+const SELECTABLE_CLAUDE_ALLOWED_TOOLS = Object.freeze([
+  ["read", "Read"],
+  ["webFetch", "WebFetch"],
+  ["webSearch", "WebSearch"],
+]);
 
 export class ConversationChatError extends Error {
   constructor(message) {
@@ -45,6 +56,38 @@ function normalizeClaudeRuntimeFeatures(value = {}) {
     nativeCron: source.nativeCron === true,
     askUserQuestion: source.askUserQuestion === true,
   };
+}
+
+export function claudeAllowedTools(value = {}) {
+  const source = value && typeof value === "object" && !Array.isArray(value) ? value : {};
+  return SELECTABLE_CLAUDE_ALLOWED_TOOLS
+    .filter(([key]) => source[key] !== false)
+    .map(([, tool]) => tool);
+}
+
+function suzuCliAllowedTool(value) {
+  const command = clean(value);
+  if (!command || /[\r\n()]/u.test(command)) return "";
+  return `Bash(${command} *)`;
+}
+
+function normalizeClaudeWorkspaceDirectories(value) {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set();
+  return value.flatMap((item) => {
+    const directory = clean(item);
+    if (!directory || /[\r\n]/u.test(directory) || !path.isAbsolute(directory)) return [];
+    const resolved = path.resolve(directory);
+    const key = process.platform === "win32" ? resolved.toLowerCase() : resolved;
+    if (seen.has(key)) return [];
+    seen.add(key);
+    return [resolved];
+  });
+}
+
+export function claudeAllowedToolsForWorkspace(value = {}, { suzuCliCommand = "" } = {}) {
+  const cliPermission = suzuCliAllowedTool(suzuCliCommand);
+  return [...claudeAllowedTools(value), ...(cliPermission ? [cliPermission] : [])];
 }
 
 function bounded(value, limit) {
@@ -331,7 +374,7 @@ function isNoReply(value) {
 }
 
 /** The flags are deliberately limited to Claude Code's public stream protocol. */
-export function claudeCliArguments({ sessionId, hasTranscript = false, appendSystemPrompt = "", claudeRuntimeFeatures } = {}) {
+export function claudeCliArguments({ sessionId, hasTranscript = false, appendSystemPrompt = "", claudeRuntimeFeatures, allowedTools = [], workspaceDirectories = [] } = {}) {
   const id = clean(sessionId);
   if (!id) throw new ConversationChatError("缺少 Claude 会话标识。");
   const extraPrompt = clean(appendSystemPrompt);
@@ -341,6 +384,8 @@ export function claudeCliArguments({ sessionId, hasTranscript = false, appendSys
     !features.taskList && "TodoWrite",
     !features.askUserQuestion && "AskUserQuestion",
   ].filter(Boolean);
+  const permittedTools = [...new Set((Array.isArray(allowedTools) ? allowedTools : []).map(clean).filter((tool) => ["Read", "WebFetch", "WebSearch"].includes(tool) || /^Bash\([^\r\n()]+ \*\)$/u.test(tool)))];
+  const sharedDirectories = normalizeClaudeWorkspaceDirectories(workspaceDirectories);
   return [
     "-p",
     "--input-format", "stream-json",
@@ -349,6 +394,9 @@ export function claudeCliArguments({ sessionId, hasTranscript = false, appendSys
     "--include-partial-messages",
     "--permission-prompt-tool", "stdio",
     "--replay-user-messages",
+    "--permission-mode", "acceptEdits",
+    ...sharedDirectories.flatMap((directory) => ["--add-dir", directory]),
+    ...(permittedTools.length ? ["--allowed-tools", permittedTools.join(",")] : []),
     ...(disallowedTools.length ? ["--disallowed-tools", disallowedTools.join(",")] : []),
     ...(extraPrompt ? ["--append-system-prompt", extraPrompt] : []),
     ...(hasTranscript ? ["--resume", id] : ["--session-id", id]),
@@ -390,6 +438,8 @@ export function createConversationChatService({
   homeDirectory = os.homedir(),
   agentAttachmentCommand = null,
   agentScheduleCommand = null,
+  claudeWorkspaceDirectories = [],
+  suzuCliCommand = "",
   spawnImpl = spawn,
   onEvent = () => {},
 } = {}) {
@@ -665,14 +715,18 @@ export function createConversationChatService({
     const scheduleCommands = typeof agentScheduleCommand === "function"
       ? agentScheduleCommand({ sessionId: request.sessionId, projectRoot: request.projectRoot })
       : null;
-    const claudeRuntimeFeatures = settingsService.load()?.claudeRuntimeFeatures;
+    const currentSettings = settingsService.load() || {};
+    const claudeRuntimeFeatures = currentSettings.claudeRuntimeFeatures;
     const args = claudeCliArguments({
       sessionId: request.sessionId,
       hasTranscript: request.hasTranscript || knownTranscripts.has(request.key),
       claudeRuntimeFeatures,
+      allowedTools: claudeAllowedToolsForWorkspace(currentSettings.claudeToolPermissions, { suzuCliCommand }),
+      workspaceDirectories: claudeWorkspaceDirectories,
       appendSystemPrompt: [
         wechatAttachmentSystemPrompt(attachmentCommand),
         scheduleSystemPrompt(scheduleCommands),
+        request.kind === "call" ? VOICE_CALL_SYSTEM_PROMPT : "",
       ].filter(Boolean).join("\n\n"),
     });
     let child;
@@ -798,7 +852,7 @@ export function createConversationChatService({
     return { id, projectRoot: root, hasTranscript: hasTranscript === true };
   };
 
-  const enqueue = async ({ content, kind = "message", media: suppliedMedia = [], mediaSource = "wechat", session: requestedSession = null } = {}) => {
+  const enqueue = async ({ content, kind = "message", media: suppliedMedia = [], mediaSource = "wechat", requestId: suppliedRequestId = "", session: requestedSession = null } = {}) => {
     if (disposed) throw new ConversationChatError("聊天服务已经停止。");
     const media = normalizeInboundMedia(suppliedMedia, mediaSource);
     const text = validateContent(content, { allowEmpty: media.length > 0 });
@@ -815,7 +869,7 @@ export function createConversationChatService({
       kind,
       key: turnKey(session.id, session.projectRoot),
       projectRoot: session.projectRoot,
-      requestId: `suzu-${randomUUID()}`,
+      requestId: clean(suppliedRequestId) || `suzu-${randomUUID()}`,
       sessionId: session.id,
     };
     const queue = queueFor(session.id, session.projectRoot);
@@ -853,21 +907,51 @@ export function createConversationChatService({
   };
 
   const send = ({ content } = {}) => enqueue({ content });
-  const sendToSession = ({ content, sessionId, projectRoot, hasTranscript = false, kind = "message", media = [], mediaSource = "wechat" } = {}) => (
-    enqueue({ content, kind, media, mediaSource, session: { sessionId, projectRoot, hasTranscript } })
+  const sendToSession = ({ content, sessionId, projectRoot, hasTranscript = false, kind = "message", media = [], mediaSource = "wechat", requestId = "" } = {}) => (
+    enqueue({ content, kind, media, mediaSource, requestId, session: { sessionId, projectRoot, hasTranscript } })
   );
 
-  const stop = ({ sessionId, projectRoot } = {}) => {
+  const stop = ({ sessionId, projectRoot, requestId } = {}) => {
     const id = clean(sessionId);
     if (!id) throw new ConversationChatError("缺少要停止的 Claude 会话标识。");
     const root = clean(projectRoot);
+    const requestedRequestId = clean(requestId);
     const matches = root
       ? [activeTurns.get(turnKey(id, root))].filter(Boolean)
       : [...activeTurns.values()].filter((item) => item.sessionId === id);
     if (matches.length > 1) throw new ConversationChatError("同名 Claude 会话正在多个工作目录中运行，请从对应会话里停止。 ");
-    const turn = matches[0];
+    const turn = requestedRequestId ? matches.find((item) => item.requestId === requestedRequestId) : matches[0];
+    if (requestedRequestId && !turn) {
+      const queues = root
+        ? [pendingTurns.get(turnKey(id, root))].filter(Boolean)
+        : [...pendingTurns.entries()]
+          .filter(([, queue]) => queue.some((item) => item.sessionId === id))
+          .map(([, queue]) => queue);
+      for (const queue of queues) {
+        const index = queue.findIndex((item) => item.requestId === requestedRequestId);
+        if (index < 0) continue;
+        const [queued] = queue.splice(index, 1);
+        if (!queue.length) pendingTurns.delete(queued.key);
+        emitQueue(queued.sessionId, queued.projectRoot);
+        emit({
+          type: "turn-stopped",
+          requestId: queued.requestId,
+          sessionId: queued.sessionId,
+          projectRoot: queued.projectRoot,
+          kind: queued.kind,
+          message: "已停止当前 Claude Code 任务。",
+          timestamp: new Date().toISOString(),
+        });
+        return { accepted: true, stopped: true, sessionId: id, message: "已从队列中移除这次回复。" };
+      }
+    }
     if (!turn) {
-      return { accepted: true, stopped: false, sessionId: id, message: "当前会话没有正在执行的 Claude Code 任务。" };
+      return {
+        accepted: true,
+        stopped: false,
+        sessionId: id,
+        message: requestedRequestId ? "这条通话回复已经结束或不在当前会话中。" : "当前会话没有正在执行的 Claude Code 任务。",
+      };
     }
     interruptTurn(turn, "已停止当前 Claude Code 任务。");
     return { accepted: true, stopped: true, sessionId: id, message: "正在停止当前 Claude Code 任务。" };

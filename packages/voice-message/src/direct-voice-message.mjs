@@ -9,8 +9,13 @@ import { appendUsageEvent } from "@suzu-lives/cost-ledger";
 
 const DEFAULT_QWEN_BASE_URL = "https://dashscope.aliyuncs.com/api/v1";
 const DEFAULT_QWEN_MODEL = "qwen3-tts-vd-2026-01-26";
+const DEFAULT_COSYVOICE_MODEL = "cosyvoice-v3.5-plus";
+const DEFAULT_MINIMAX_BASE_URL = "https://api.minimax.io/v1";
+const DEFAULT_MINIMAX_MODEL = "speech-2.8-hd";
 const MAX_RESPONSE_BYTES = 100 * 1024 * 1024;
 const MAX_AGENT_VOICE_CANDIDATES = 200;
+const MAX_AGENT_CUSTOM_VOICES = 100;
+const AGENT_ID = /^agent-[a-f0-9]{16}$/iu;
 
 export class DirectVoiceMessageError extends Error {
   constructor(message, { code = "voice_message_error", exitCode = 4 } = {}) {
@@ -126,6 +131,92 @@ function voiceIdFromConfig(value) {
   return clean(config.voiceId || config.voice || tts.voiceId || tts.voice_id || tts.voice);
 }
 
+function voiceProviderFromConfig(value) {
+  const config = objectValue(value);
+  const tts = objectValue(config.tts);
+  const provider = clean(config.provider || tts.provider).toLowerCase();
+  if (!provider || provider === "qwen" || provider === "dashscope" || provider === "bailian") return "qwen";
+  if (provider === "minimax") return "minimax";
+  if (provider === "cosyvoice") return "cosyvoice";
+  throw failure("tts_provider_invalid", "不支持的语音服务：" + provider + "。", 10);
+}
+
+function customVoiceIdFromConfig(value) {
+  const config = objectValue(value);
+  const tts = objectValue(config.tts);
+  return clean(config.customVoiceId || tts.customVoiceId);
+}
+
+function sourceAgentId(value) {
+  const agentId = clean(value).toLowerCase();
+  return AGENT_ID.test(agentId) ? agentId : "";
+}
+
+function sourceAgentIdFromConfig(value) {
+  const config = objectValue(value);
+  const tts = objectValue(config.tts);
+  return sourceAgentId(config.sourceAgentId || tts.sourceAgentId);
+}
+
+function sourceCandidateIdFromConfig(value) {
+  const config = objectValue(value);
+  const tts = objectValue(config.tts);
+  return clean(config.sourceCandidateId || tts.sourceCandidateId);
+}
+
+function customVoiceSourceFromConfig(value) {
+  const config = objectValue(value);
+  const tts = objectValue(config.tts);
+  return clean(config.customVoiceSource || tts.customVoiceSource).toLowerCase();
+}
+
+function customVoiceSourceAgentIdFromConfig(value) {
+  const config = objectValue(value);
+  const tts = objectValue(config.tts);
+  return sourceAgentId(config.customVoiceSourceAgentId || tts.customVoiceSourceAgentId);
+}
+
+function customVoicesAt(customVoicesPath) {
+  try {
+    const stat = fs.lstatSync(customVoicesPath);
+    if (stat.isSymbolicLink() || !stat.isFile()) return [];
+    const document = objectValue(JSON.parse(fs.readFileSync(customVoicesPath, "utf8").replace(/^\uFEFF/u, "")));
+    const voices = [];
+    const seen = new Set();
+    for (const value of (Array.isArray(document.voices) ? document.voices : []).slice(0, MAX_AGENT_CUSTOM_VOICES)) {
+      const voice = objectValue(value);
+      const id = clean(voice.id);
+      const name = clean(voice.name);
+      const provider = clean(voice.provider).toLowerCase();
+      const voiceId = clean(voice.voiceId);
+      const apiKey = clean(voice.apiKey);
+      if (!id || !name || !["minimax", "cosyvoice"].includes(provider) || !voiceId || !apiKey || seen.has(id)) continue;
+      seen.add(id);
+      voices.push({
+        id,
+        name,
+        provider,
+        voiceId,
+        apiKey,
+        model: clean(voice.model) || (provider === "cosyvoice" ? DEFAULT_COSYVOICE_MODEL : DEFAULT_MINIMAX_MODEL),
+      });
+    }
+    return voices;
+  } catch {
+    return [];
+  }
+}
+
+function agentCustomVoices(dataRoot, agentId) {
+  const identity = clean(agentId);
+  if (!identity) return [];
+  return customVoicesAt(path.join(agentVoiceMessageRoot(dataRoot, identity), "custom-voices.json"));
+}
+
+function globalCustomVoices(dataRoot) {
+  return customVoicesAt(path.join(requiredDataRoot(dataRoot), "voice-message", "custom-voices.json"));
+}
+
 function agentVoiceCandidateIds(dataRoot, agentId) {
   const identity = clean(agentId);
   if (!identity) return new Set();
@@ -152,9 +243,38 @@ function agentVoiceCandidateIds(dataRoot, agentId) {
   }
 }
 
-function assertAgentVoiceCandidate({ dataRoot, agentId, voiceId }) {
+function sourceVoiceCandidateAvailable({ dataRoot, agentId, candidateId, voiceId }) {
+  const identity = sourceAgentId(agentId);
+  if (!identity || !clean(candidateId)) return false;
+  const candidatesPath = path.join(resolveAgentDataRoot({ dataRoot, agentId: identity }), "voice-design", "candidates.jsonl");
+  try {
+    const stat = fs.lstatSync(candidatesPath);
+    if (stat.isSymbolicLink() || !stat.isFile()) return false;
+    const lines = fs.readFileSync(candidatesPath, "utf8").split(/\r?\n/u).filter(Boolean).slice(-MAX_AGENT_VOICE_CANDIDATES);
+    return lines.some((line) => {
+      try {
+        const candidate = objectValue(JSON.parse(line));
+        return clean(candidate.id) === clean(candidateId) && clean(candidate.voiceId) === voiceId && Boolean(clean(candidate.retainedAt));
+      } catch {
+        return false;
+      }
+    });
+  } catch {
+    return false;
+  }
+}
+
+function assertAgentVoiceCandidate({ dataRoot, agentId, voiceId, sourceAgentId: configuredSourceAgentId = "", sourceCandidateId = "" }) {
   if (!clean(agentId)) {
     throw failure("agent_identity_missing", "请先选择当前联系人，才能发送联系人专属声音。", 10);
+  }
+  if (configuredSourceAgentId || sourceCandidateId) {
+    if (sourceVoiceCandidateAvailable({ dataRoot, agentId: configuredSourceAgentId, candidateId: sourceCandidateId, voiceId })) return;
+    throw failure(
+      "voice_not_available_for_agent",
+      "联系人所选的百炼音色已经不可用。请在 Suzu 的音色设置中重新选择。",
+      10,
+    );
   }
   if (!agentVoiceCandidateIds(dataRoot, agentId).has(voiceId)) {
     throw failure(
@@ -165,24 +285,112 @@ function assertAgentVoiceCandidate({ dataRoot, agentId, voiceId }) {
   }
 }
 
+function selectedCustomVoice({ dataRoot, agentId, provider, customVoiceId, voiceId, customVoiceSource, customVoiceSourceAgentId }) {
+  const exact = (voices) => voices.find((voice) => voice.provider === provider && voice.id === customVoiceId && voice.voiceId === voiceId) || null;
+  if (customVoiceSource === "global") return exact(globalCustomVoices(dataRoot));
+  if (customVoiceSource === "contact") {
+    return customVoiceSourceAgentId ? exact(agentCustomVoices(dataRoot, customVoiceSourceAgentId)) : null;
+  }
+  if (customVoiceSourceAgentId) return exact(agentCustomVoices(dataRoot, customVoiceSourceAgentId));
+  return exact(agentCustomVoices(dataRoot, agentId));
+}
+
+function assertAgentVoiceSelection({ dataRoot, agentId, provider, voiceId, customVoiceId, sourceAgentId: configuredSourceAgentId = "", sourceCandidateId = "", customVoiceSource = "", customVoiceSourceAgentId = "" }) {
+  if (provider === "qwen" && !clean(customVoiceId)) {
+    assertAgentVoiceCandidate({ dataRoot, agentId, voiceId, sourceAgentId: configuredSourceAgentId, sourceCandidateId });
+    return null;
+  }
+  const selected = selectedCustomVoice({ dataRoot, agentId, provider, customVoiceId, voiceId, customVoiceSource, customVoiceSourceAgentId });
+  if (!selected) {
+    const label = provider === "cosyvoice" ? "阿里百炼 CosyVoice 复刻音色" : "MiniMax 自定义音色";
+    throw failure(
+      "voice_not_available_for_agent",
+      "当前联系人没有保存所选的" + label + "。请在 Suzu 的音色设置中重新选择。",
+      10,
+    );
+  }
+  return selected;
+}
+
 function resolveAgentVoiceConfig({ dataRoot, agentId, requireVoiceSelection }) {
   const contactConfigPath = defaultConfigPath(dataRoot, agentId);
   const legacyPath = legacyConfigPath(dataRoot);
   const contactConfig = readOptionalVoiceConfig(contactConfigPath) || {};
   const legacyConfig = readOptionalVoiceConfig(legacyPath) || {};
   const contactVoiceId = voiceIdFromConfig(contactConfig);
+  const contactProvider = contactVoiceId ? voiceProviderFromConfig(contactConfig) : "qwen";
+  const contactCustomVoiceId = customVoiceIdFromConfig(contactConfig);
+  const contactSourceAgentId = sourceAgentIdFromConfig(contactConfig);
+  const contactSourceCandidateId = sourceCandidateIdFromConfig(contactConfig);
+  const contactCustomVoiceSource = customVoiceSourceFromConfig(contactConfig);
+  const contactCustomVoiceSourceAgentId = customVoiceSourceAgentIdFromConfig(contactConfig);
   const legacyVoiceId = voiceIdFromConfig(legacyConfig);
-  const voiceId = contactVoiceId || legacyVoiceId;
+  const legacyProvider = legacyVoiceId ? voiceProviderFromConfig(legacyConfig) : "qwen";
+  const selection = contactVoiceId
+    ? {
+      voiceId: contactVoiceId,
+      provider: contactProvider,
+      customVoiceId: contactCustomVoiceId,
+      sourceAgentId: contactSourceAgentId,
+      sourceCandidateId: contactSourceCandidateId,
+      customVoiceSource: contactCustomVoiceSource,
+      customVoiceSourceAgentId: contactCustomVoiceSourceAgentId,
+      source: "contact",
+    }
+    : legacyVoiceId
+      ? {
+        voiceId: legacyVoiceId,
+        provider: legacyProvider,
+        customVoiceId: customVoiceIdFromConfig(legacyConfig),
+        sourceAgentId: sourceAgentIdFromConfig(legacyConfig),
+        sourceCandidateId: sourceCandidateIdFromConfig(legacyConfig),
+        customVoiceSource: customVoiceSourceFromConfig(legacyConfig),
+        customVoiceSourceAgentId: customVoiceSourceAgentIdFromConfig(legacyConfig),
+        source: "legacy-fallback",
+      }
+      : {
+        voiceId: "",
+        provider: "qwen",
+        customVoiceId: "",
+        sourceAgentId: "",
+        sourceCandidateId: "",
+        customVoiceSource: "",
+        customVoiceSourceAgentId: "",
+        source: "missing",
+      };
+  let customVoice = null;
   if (requireVoiceSelection) {
-    if (!voiceId) {
+    if (!selection.voiceId) {
       throw failure("tts_voice_missing", "当前联系人尚未选择音色；请在 Suzu 的语音设置中选择一个已保存音色。", 10);
     }
-    assertAgentVoiceCandidate({ dataRoot, agentId, voiceId });
+    customVoice = assertAgentVoiceSelection({
+      dataRoot,
+      agentId,
+      provider: selection.provider,
+      voiceId: selection.voiceId,
+      customVoiceId: selection.customVoiceId,
+      sourceAgentId: selection.sourceAgentId,
+      sourceCandidateId: selection.sourceCandidateId,
+      customVoiceSource: selection.customVoiceSource,
+      customVoiceSourceAgentId: selection.customVoiceSourceAgentId,
+    });
   }
   return {
     configPath: contactConfigPath,
-    localConfig: voiceId ? { ...legacyConfig, voiceId } : { ...legacyConfig },
-    selectionSource: contactVoiceId ? "contact" : (legacyVoiceId ? "legacy-fallback" : "missing"),
+    localConfig: selection.voiceId
+      ? {
+        ...legacyConfig,
+        voiceId: selection.voiceId,
+        provider: selection.provider,
+        customVoiceId: selection.customVoiceId,
+        ...(selection.sourceAgentId ? { sourceAgentId: selection.sourceAgentId } : {}),
+        ...(selection.sourceCandidateId ? { sourceCandidateId: selection.sourceCandidateId } : {}),
+        ...(selection.customVoiceSource ? { customVoiceSource: selection.customVoiceSource } : {}),
+        ...(selection.customVoiceSourceAgentId ? { customVoiceSourceAgentId: selection.customVoiceSourceAgentId } : {}),
+        ...(customVoice ? { apiKey: customVoice.apiKey, model: customVoice.model } : {}),
+      }
+      : { ...legacyConfig },
+    selectionSource: selection.source,
     needsMigration: Boolean(!contactVoiceId && legacyVoiceId),
   };
 }
@@ -200,22 +408,34 @@ function resolveTts(localConfig, environment, {
 } = {}) {
   const config = objectValue(localConfig);
   const tts = objectValue(config.tts);
-  const apiKeyEnvironment = clean(config.apiKeyEnv || tts.apiKeyEnv) || "DASHSCOPE_API_KEY";
-  const apiKey = clean(apiKeyOverride || environment[apiKeyEnvironment] || config.apiKey || tts.apiKey);
+  const provider = voiceProviderFromConfig(config);
+  const apiKeyEnvironment = clean(config.apiKeyEnv || tts.apiKeyEnv) || (provider === "minimax" ? "MINIMAX_API_KEY" : "DASHSCOPE_API_KEY");
+  const configuredApiKey = clean(config.apiKey || tts.apiKey);
+  const apiKey = provider === "minimax" || provider === "cosyvoice"
+    ? clean(configuredApiKey || environment[apiKeyEnvironment] || apiKeyOverride)
+    : clean(apiKeyOverride || environment[apiKeyEnvironment] || configuredApiKey);
   const voice = clean(config.voiceId || config.voice || tts.voiceId || tts.voice_id || tts.voice);
   if (requireCredentials && !apiKey) {
-    throw failure("tts_api_key_missing", "缺少百炼 API Key：请在 Suzu 的“声音”连接中配置，或设置 " + apiKeyEnvironment + "。");
+    const providerName = provider === "minimax" ? "MiniMax" : "百炼";
+    throw failure("tts_api_key_missing", "缺少" + providerName + " API Key：请在 Suzu 的音色设置中配置，或设置 " + apiKeyEnvironment + "。");
   }
   if (requireCredentials && !voice) {
     throw failure("tts_voice_missing", "缺少音色：请在 Suzu 的语音设置中选择一个音色。");
   }
   return {
+    provider,
     apiKey,
-    baseUrl: clean(baseUrlOverride || config.baseUrl || tts.baseUrl || tts.base_url) || DEFAULT_QWEN_BASE_URL,
-    model: clean(modelOverride || config.model || tts.model) || DEFAULT_QWEN_MODEL,
+    baseUrl: provider === "minimax"
+      ? DEFAULT_MINIMAX_BASE_URL
+      : clean(baseUrlOverride || config.baseUrl || tts.baseUrl || tts.base_url) || DEFAULT_QWEN_BASE_URL,
+    model: provider === "minimax"
+      ? clean(config.model || tts.model) || DEFAULT_MINIMAX_MODEL
+      : provider === "cosyvoice"
+        ? clean(config.model || tts.model) || DEFAULT_COSYVOICE_MODEL
+        : clean(modelOverride || config.model || tts.model) || DEFAULT_QWEN_MODEL,
     voice,
     maxTextLength: Math.round(positiveNumber(config.maxTextLength || config.max_text_len || tts.maxTextLength || tts.max_text_len, 300)),
-    languageType: clean(config.languageType || tts.languageType),
+    languageType: provider === "qwen" ? clean(config.languageType || tts.languageType) : "",
   };
 }
 
@@ -271,7 +491,7 @@ function safeInspection(runtime) {
     configPath: runtime.configPath,
     selectionSource: runtime.selectionSource,
     tts: {
-      provider: "qwen",
+      provider: runtime.tts.provider,
       model: runtime.tts.model,
       voiceConfigured: Boolean(runtime.tts.voice),
       apiKeyConfigured: Boolean(runtime.tts.apiKey),
@@ -296,7 +516,7 @@ async function persistLegacyVoiceSelection(runtime) {
   const existing = readOptionalVoiceConfig(configPath) || {};
   if (Object.keys(existing).length) return false;
   const temporary = `${configPath}.${process.pid}.${randomUUID()}.tmp`;
-  const next = { schemaVersion: 1, voiceId: runtime.tts.voice };
+  const next = { schemaVersion: 2, provider: runtime.tts.provider, voiceId: runtime.tts.voice };
   try {
     await fsp.writeFile(temporary, `${JSON.stringify(next, null, 2)}\n`, { encoding: "utf8", flag: "wx" });
     await fsp.link(temporary, configPath);
@@ -310,10 +530,24 @@ async function persistLegacyVoiceSelection(runtime) {
   return true;
 }
 
-function withTimeout(timeoutMs) {
+function withTimeout(timeoutMs, abortSignal = null) {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  return { signal: controller.signal, cancel: () => clearTimeout(timer) };
+  let timedOut = false;
+  const onAbort = () => controller.abort();
+  if (abortSignal?.aborted) onAbort();
+  else abortSignal?.addEventListener?.("abort", onAbort, { once: true });
+  const timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutMs);
+  return {
+    signal: controller.signal,
+    cancel: () => {
+      clearTimeout(timer);
+      abortSignal?.removeEventListener?.("abort", onAbort);
+    },
+    timedOut: () => timedOut,
+  };
 }
 
 async function readResponseBytes(response, label, { responseCode = "tts_response_invalid" } = {}) {
@@ -323,8 +557,8 @@ async function readResponseBytes(response, label, { responseCode = "tts_response
   return bytes;
 }
 
-async function fetchJson(fetchImpl, url, options, timeoutMs, label) {
-  const timeout = withTimeout(timeoutMs);
+async function fetchJson(fetchImpl, url, options, timeoutMs, label, abortSignal = null) {
+  const timeout = withTimeout(timeoutMs, abortSignal);
   try {
     const response = await fetchImpl(url, { ...options, signal: timeout.signal });
     const body = await readResponseBytes(response, label);
@@ -335,7 +569,9 @@ async function fetchJson(fetchImpl, url, options, timeoutMs, label) {
       throw failure("tts_response_invalid", label + "返回的不是有效 JSON：" + error.message, 5);
     }
   } catch (error) {
-    if (error?.name === "AbortError") throw failure("tts_timeout", label + "超时", 5);
+    if (error?.name === "AbortError") {
+      throw failure(timeout.timedOut() ? "tts_timeout" : "tts_aborted", timeout.timedOut() ? label + "超时" : label + "已取消", 5);
+    }
     if (error instanceof DirectVoiceMessageError) throw error;
     throw failure("tts_network_error", label + "请求失败：" + (clean(error?.message) || "未知错误"), 5);
   } finally {
@@ -343,14 +579,16 @@ async function fetchJson(fetchImpl, url, options, timeoutMs, label) {
   }
 }
 
-async function fetchBuffer(fetchImpl, url, timeoutMs, label) {
-  const timeout = withTimeout(timeoutMs);
+async function fetchBuffer(fetchImpl, url, timeoutMs, label, abortSignal = null) {
+  const timeout = withTimeout(timeoutMs, abortSignal);
   try {
     const response = await fetchImpl(url, { signal: timeout.signal });
     if (!response?.ok) throw failure("tts_audio_download_failed", label + " HTTP " + (response?.status || 0), 5);
     return await readResponseBytes(response, label);
   } catch (error) {
-    if (error?.name === "AbortError") throw failure("tts_timeout", label + "超时", 5);
+    if (error?.name === "AbortError") {
+      throw failure(timeout.timedOut() ? "tts_timeout" : "tts_aborted", timeout.timedOut() ? label + "超时" : label + "已取消", 5);
+    }
     if (error instanceof DirectVoiceMessageError) throw error;
     throw failure("tts_network_error", label + "请求失败：" + (clean(error?.message) || "未知错误"), 5);
   } finally {
@@ -367,7 +605,7 @@ function audioFormat(audioUrl) {
   }
 }
 
-async function synthesizeQwen({ text, runtime, fetchImpl, ledgerPath, agentId }) {
+async function synthesizeQwen({ text, runtime, fetchImpl, ledgerPath, agentId, feature = "voice-message-tts", abortSignal = null }) {
   if (!text) throw failure("voice_text_missing", "语音文本不能为空。");
   if (runtime.tts.maxTextLength > 0 && [...text].length > runtime.tts.maxTextLength) {
     throw failure("voice_text_too_long", "语音文本超过 " + runtime.tts.maxTextLength + " 字符，请缩短内容。");
@@ -389,13 +627,14 @@ async function synthesizeQwen({ text, runtime, fetchImpl, ledgerPath, agentId })
     },
     runtime.timeoutMs,
     "百炼 TTS",
+    abortSignal,
   );
   if (clean(result.code) || Number(result.status_code || 200) >= 400) {
     throw failure("tts_provider_error", ("百炼 TTS 失败：" + clean(result.code) + " " + clean(result.message)).trim(), 5);
   }
   const audioUrl = clean(result.output?.audio?.url);
   if (!audioUrl) throw failure("tts_response_invalid", "百炼 TTS 响应缺少 output.audio.url", 5);
-  const audio = await fetchBuffer(fetchImpl, audioUrl, runtime.timeoutMs, "下载合成音频");
+  const audio = await fetchBuffer(fetchImpl, audioUrl, runtime.timeoutMs, "下载合成音频", abortSignal);
   const targetLedger = clean(ledgerPath);
   if (!targetLedger) throw failure("ledger_path_missing", "缺少 Suzu Lives 用量账本路径。", 10);
   try {
@@ -404,7 +643,7 @@ async function synthesizeQwen({ text, runtime, fetchImpl, ledgerPath, agentId })
       provider: "阿里云百炼",
       model: runtime.tts.model,
       source: "语音合成",
-      feature: "voice-message-tts",
+      feature,
       requestId: clean(result.request_id),
       usage: result.usage && typeof result.usage === "object" ? result.usage : {},
       units: { inputCharacters: [...text].length },
@@ -414,6 +653,123 @@ async function synthesizeQwen({ text, runtime, fetchImpl, ledgerPath, agentId })
     throw failure("ledger_write_failed", "无法写入 Suzu Lives 用量账本：" + (clean(error?.message) || "未知错误"), 10);
   }
   return { audio, format: audioFormat(audioUrl), requestId: clean(result.request_id) };
+}
+
+async function synthesizeCosyVoice({ text, runtime, fetchImpl, ledgerPath, agentId, feature = "voice-message-tts", abortSignal = null }) {
+  if (!text) throw failure("voice_text_missing", "语音文本不能为空。");
+  if (runtime.tts.maxTextLength > 0 && [...text].length > runtime.tts.maxTextLength) {
+    throw failure("voice_text_too_long", "语音文本超过 " + runtime.tts.maxTextLength + " 字符，请缩短内容。");
+  }
+  if (typeof fetchImpl !== "function") throw failure("tts_fetch_unavailable", "没有可用的 TTS HTTP 客户端。", 5);
+  const endpoint = runtime.tts.baseUrl.replace(/\/+$/u, "") + "/services/audio/tts/SpeechSynthesizer";
+  const result = await fetchJson(
+    fetchImpl,
+    endpoint,
+    {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer " + runtime.tts.apiKey,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: runtime.tts.model,
+        input: { text, voice: runtime.tts.voice, format: "mp3", sample_rate: 24000 },
+      }),
+    },
+    runtime.timeoutMs,
+    "百炼 CosyVoice TTS",
+    abortSignal,
+  );
+  if (clean(result.code) || Number(result.status_code || 200) >= 400) {
+    throw failure("tts_provider_error", ("百炼 CosyVoice TTS 失败：" + clean(result.code) + " " + clean(result.message)).trim(), 5);
+  }
+  const audioUrl = clean(result.output?.audio?.url);
+  if (!audioUrl) throw failure("tts_response_invalid", "百炼 CosyVoice TTS 响应缺少 output.audio.url", 5);
+  const audio = await fetchBuffer(fetchImpl, audioUrl, runtime.timeoutMs, "下载合成音频", abortSignal);
+  const targetLedger = clean(ledgerPath);
+  if (!targetLedger) throw failure("ledger_path_missing", "缺少 Suzu Lives 用量账本路径。", 10);
+  try {
+    await appendUsageEvent(targetLedger, {
+      agentId: clean(agentId),
+      provider: "阿里云百炼",
+      model: runtime.tts.model,
+      source: "语音合成",
+      feature,
+      requestId: clean(result.request_id),
+      usage: result.usage && typeof result.usage === "object" ? result.usage : {},
+      units: { inputCharacters: [...text].length },
+      metadata: { voice: runtime.tts.voice, outputFormat: "mp3" },
+    });
+  } catch (error) {
+    throw failure("ledger_write_failed", "无法写入 Suzu Lives 用量账本：" + (clean(error?.message) || "未知错误"), 10);
+  }
+  return { audio, format: "mp3", requestId: clean(result.request_id) };
+}
+
+function minimaxAudioBuffer(value) {
+  const hex = clean(value);
+  if (!hex || hex.length % 2 !== 0 || !/^[0-9a-f]+$/iu.test(hex)) {
+    throw failure("tts_response_invalid", "MiniMax T2A 响应缺少有效的音频数据。", 5);
+  }
+  const audio = Buffer.from(hex, "hex");
+  if (!audio.length) throw failure("tts_response_invalid", "MiniMax T2A 返回了空音频。", 5);
+  return audio;
+}
+
+async function synthesizeMiniMax({ text, runtime, fetchImpl, ledgerPath, agentId, feature = "voice-message-tts", abortSignal = null }) {
+  if (!text) throw failure("voice_text_missing", "语音文本不能为空。");
+  if (runtime.tts.maxTextLength > 0 && [...text].length > runtime.tts.maxTextLength) {
+    throw failure("voice_text_too_long", "语音文本超过 " + runtime.tts.maxTextLength + " 字符，请缩短内容。");
+  }
+  if (typeof fetchImpl !== "function") throw failure("tts_fetch_unavailable", "没有可用的 TTS HTTP 客户端。", 5);
+  const endpoint = runtime.tts.baseUrl.replace(/\/+$/u, "") + "/t2a_v2";
+  const result = await fetchJson(
+    fetchImpl,
+    endpoint,
+    {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer " + runtime.tts.apiKey,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: runtime.tts.model,
+        text,
+        stream: false,
+        language_boost: "auto",
+        output_format: "hex",
+        voice_setting: { voice_id: runtime.tts.voice, speed: 1, vol: 1, pitch: 0 },
+        audio_setting: { sample_rate: 32000, bitrate: 128000, format: "mp3", channel: 1 },
+      }),
+    },
+    runtime.timeoutMs,
+    "MiniMax T2A",
+    abortSignal,
+  );
+  const providerStatus = Number(result.base_resp?.status_code);
+  if (Number.isFinite(providerStatus) && providerStatus !== 0) {
+    throw failure("tts_provider_error", ("MiniMax T2A 失败：" + clean(result.base_resp?.status_msg || result.base_resp?.status_code)).trim(), 5);
+  }
+  const audio = minimaxAudioBuffer(result.data?.audio);
+  const targetLedger = clean(ledgerPath);
+  if (!targetLedger) throw failure("ledger_path_missing", "缺少 Suzu Lives 用量账本路径。", 10);
+  try {
+    const usageCharacters = Number(result.data?.extra_info?.usage_characters);
+    await appendUsageEvent(targetLedger, {
+      agentId: clean(agentId),
+      provider: "MiniMax",
+      model: runtime.tts.model,
+      source: "语音合成",
+      feature,
+      requestId: clean(result.trace_id),
+      usage: Number.isFinite(usageCharacters) ? { inputCharacters: usageCharacters } : {},
+      units: { inputCharacters: [...text].length },
+      metadata: { voice: runtime.tts.voice, outputFormat: "mp3" },
+    });
+  } catch (error) {
+    throw failure("ledger_write_failed", "无法写入 Suzu Lives 用量账本：" + (clean(error?.message) || "未知错误"), 10);
+  }
+  return { audio, format: "mp3", requestId: clean(result.trace_id) };
 }
 
 function runProcess(command, args, label, spawnImpl = spawn) {
@@ -487,6 +843,38 @@ async function saveMp3Audio({ source, sourceFormat, runtime, audioDirectory, wor
 }
 
 /**
+ * Synthesizes one short piece of speech without writing a file.  The desktop
+ * call surface uses this so it can start playing each sentence while Claude
+ * is still producing the rest of its answer.  Credentials stay in the main
+ * process because callers pass an already-resolved runtime.
+ */
+export async function synthesizeDirectVoiceAudio({
+  text = "",
+  runtime,
+  fetchImpl = globalThis.fetch,
+  ledgerPath = "",
+  agentId = "",
+  feature = "voice-message-tts",
+  abortSignal = null,
+} = {}) {
+  const message = clean(text);
+  if (!message) throw failure("voice_text_missing", "语音文本不能为空。");
+  if (!runtime?.tts?.provider) throw failure("tts_runtime_missing", "缺少联系人语音运行配置。", 10);
+  await persistLegacyVoiceSelection(runtime);
+  const synthesized = runtime.tts.provider === "minimax"
+    ? await synthesizeMiniMax({ text: message, runtime, fetchImpl, ledgerPath, agentId, feature, abortSignal })
+    : runtime.tts.provider === "cosyvoice"
+      ? await synthesizeCosyVoice({ text: message, runtime, fetchImpl, ledgerPath, agentId, feature, abortSignal })
+      : await synthesizeQwen({ text: message, runtime, fetchImpl, ledgerPath, agentId, feature, abortSignal });
+  return {
+    ...synthesized,
+    provider: runtime.tts.provider,
+    model: runtime.tts.model,
+    voice: runtime.tts.voice,
+  };
+}
+
+/**
  * Generates a local MP3 only. Delivery is deliberately handled by the current
  * Suzu conversation attachment command, which renders it in Suzu and forwards
  * it as a regular MP3 file to every WeChat account bound to that conversation.
@@ -528,7 +916,6 @@ export async function runDirectVoiceMessage({
     environment,
   });
   if (inspect) return safeInspection(runtime);
-  if (!selectedAudioFile) await persistLegacyVoiceSelection(runtime);
   const audioDirectory = agentAudioDirectory(runtime.dataRoot, agentId);
 
   const workDirectory = await temporaryDirectory(runtime);
@@ -541,7 +928,7 @@ export async function runDirectVoiceMessage({
       source = loaded.audio;
       sourceFormat = loaded.format;
     } else {
-      const synthesized = await synthesizeQwen({ text: message, runtime, fetchImpl, ledgerPath, agentId });
+      const synthesized = await synthesizeDirectVoiceAudio({ text: message, runtime, fetchImpl, ledgerPath, agentId });
       source = synthesized.audio;
       sourceFormat = synthesized.format;
       requestId = synthesized.requestId;

@@ -23,6 +23,30 @@ app.setPath("userData", dataStorageService.dataRoot);
 
 let mainWindow = null;
 
+function isSuzuRendererUrl(value) {
+  try {
+    return new URL(String(value || "")).protocol === "file:";
+  } catch {
+    return false;
+  }
+}
+
+function configureMicrophonePermission(webContents) {
+  const session = webContents?.session;
+  if (!session) return;
+  // Voice calls are an in-app feature.  Approve microphone access only for
+  // Suzu's local renderer and only for audio; camera/screen permissions keep
+  // their normal deny-by-default behavior.
+  session.setPermissionCheckHandler((_contents, permission, requestingOrigin) => (
+    permission === "media" && isSuzuRendererUrl(requestingOrigin)
+  ));
+  session.setPermissionRequestHandler((_contents, permission, callback, details) => {
+    const requestedMedia = Array.isArray(details?.mediaTypes) ? details.mediaTypes : [];
+    const audioOnly = requestedMedia.length === 0 || requestedMedia.every((kind) => kind === "audio");
+    callback(permission === "media" && audioOnly && isSuzuRendererUrl(details?.requestingUrl || details?.securityOrigin));
+  });
+}
+
 function createWindow(settingsService) {
   const startupTheme = settingsService.load().theme;
   mainWindow = new BrowserWindow({
@@ -43,6 +67,7 @@ function createWindow(settingsService) {
     },
   });
 
+  configureMicrophonePermission(mainWindow.webContents);
   mainWindow.loadFile(path.join(APP_ROOT, "src", "index.html"), {
     query: { theme: startupTheme },
   });
@@ -81,6 +106,13 @@ function conversationAttachmentCli() {
   return appRoot ? `${executable} ${appRoot} --suzu-lives-cli` : "";
 }
 
+function claudeWorkspaceRoot() {
+  // Every Suzu persona gets the same software workspace, including future
+  // contacts.  In development that is the repository root; packaged builds
+  // retain the app's own root as their shared working area.
+  return app.isPackaged ? APP_ROOT : path.resolve(APP_ROOT, "..", "..");
+}
+
 if (cliArgumentIndex !== -1) {
   app.whenReady()
     .then(() => runSuzuLivesCli({ args: process.argv.slice(cliArgumentIndex + 1), connectionResolver: cliConnectionResolver }))
@@ -107,12 +139,15 @@ if (cliArgumentIndex !== -1) {
     app.setAppUserModelId("com.suzulives.console");
     Menu.setApplicationMenu(null);
     const settingsService = createSettingsService({ app, dataStorageService });
+    const cliLauncherCommand = conversationAttachmentCli();
     registerIpcHandlers({
       app,
       getMainWindow: () => mainWindow,
       settingsService,
       dataStorageService,
-      wechatAttachmentCli: conversationAttachmentCli(),
+      wechatAttachmentCli: cliLauncherCommand,
+      cliLauncherCommand,
+      claudeWorkspaceDirectories: [claudeWorkspaceRoot()],
     });
     createWindow(settingsService);
     app.on("activate", () => {

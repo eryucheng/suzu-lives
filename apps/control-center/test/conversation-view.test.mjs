@@ -11,6 +11,7 @@ import {
   shouldSubmitConversationOnEnter,
   shouldShowWechatTimeDivider,
   splitAssistantMessageOnBlankLines,
+  voiceTimeLabel,
 } from "../src/features/conversation/index.mjs";
 
 const messages = [
@@ -49,6 +50,8 @@ test("relationship overview makes the conversation card the accessible subpage e
   assert.equal((view.match(/data-conversation-contact=/g) || []).length, 0);
   assert.doesNotMatch(view, /data-return-relationships/);
   assert.match(view, /class="conversation-peer">未选择联系人<\/h1>/);
+  assert.match(view, /data-open-conversation-call/);
+  assert.match(view, /开始与此联系人语音通话/);
   assert.match(view, /data-toggle-conversation-search/);
   assert.match(view, /data-toggle-conversation-menu/);
   assert.doesNotMatch(view, /data-toggle-conversation-settings/);
@@ -113,7 +116,7 @@ test("image attachments render as fixed previews that can be enlarged", () => {
   assert.match(markup, /agent-image\.png/);
 });
 
-test("MP3 attachments render an in-Suzu audio player", () => {
+test("MP3 messages render as a playable voice bar instead of an attachment card", () => {
   const markup = renderConversationMessages([{
     kind: "assistant",
     timestamp: "2026-08-05T10:00:00+08:00",
@@ -125,10 +128,24 @@ test("MP3 attachments render an in-Suzu audio player", () => {
       size: 2048,
     }],
   }], { state: { settings: { conversationPreferences: { tools: false } } } });
-  assert.match(markup, /conversation-media--audio/);
-  assert.match(markup, /conversation-media__audio/);
-  assert.match(markup, /<audio[^>]+controls/u);
-  assert.match(markup, /voice\.mp3/);
+  assert.match(markup, /conversation-voice/);
+  assert.match(markup, /data-conversation-voice-toggle/);
+  assert.match(markup, /data-conversation-voice-media/);
+  assert.doesNotMatch(markup, /音频附件/u);
+  assert.doesNotMatch(markup, /<audio[^>]+controls/u);
+});
+
+test("voice bars use a stable short duration label", () => {
+  assert.equal(voiceTimeLabel(0), "0:00");
+  assert.equal(voiceTimeLabel(65.9), "1:05");
+});
+
+test("chat bubbles never append delivery or reply-status labels", () => {
+  const markup = renderConversationMessages([
+    { kind: "user", accepted: true, timestamp: "2026-08-05T10:00:00+08:00", blocks: [{ kind: "text", text: "收到" }] },
+    { kind: "assistant", streaming: true, timestamp: "2026-08-05T10:00:01+08:00", blocks: [{ kind: "text", text: "好的" }] },
+  ], { state: { settings: { conversationPreferences: { timeDisplay: "bubble" } } } });
+  assert.doesNotMatch(markup, /已发送|正在回复|发送中|排队中|引导已送达/u);
 });
 
 test("conversation overlays close together when the user clicks away or presses Escape", () => {

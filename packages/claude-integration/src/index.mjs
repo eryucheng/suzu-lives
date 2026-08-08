@@ -66,7 +66,10 @@ function clean(value) {
 function safeCommand(value) {
   const command = clean(value || "suzu-lives");
   const portableCli = /^"([A-Za-z]:[\\/][^"\r\n]{1,240}\.exe)" --suzu-lives-cli$/iu;
-  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u.test(command) && !portableCli.test(command)) throw new ClaudeIntegrationError("稳定启动命令格式无效。");
+  const developmentCli = /^"([A-Za-z]:[\\/][^"\r\n]{1,240}\.exe)" "([A-Za-z]:[\\/][^"\r\n]{1,240})" --suzu-lives-cli$/iu;
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u.test(command) && !portableCli.test(command) && !developmentCli.test(command)) {
+    throw new ClaudeIntegrationError("稳定启动命令格式无效。");
+  }
   return command;
 }
 
@@ -235,14 +238,51 @@ function parseClaudeProjectSettings(content) {
 }
 
 function suzuCliBashPermission(command) {
-  return `Bash(${safeCommand(command)}:*)`;
+  // Use Claude Code's documented Bash-prefix form.  The old `:*` form is
+  // recognized below only so existing Suzu projects are upgraded safely.
+  return `Bash(${safeCommand(command)} *)`;
 }
 
 function isSuzuCliBashPermission(value) {
-  return /^Bash\(\s*(?:suzu-lives|"[A-Za-z]:[\\/][^"\r\n]{1,240}\.exe"\s+--suzu-lives-cli):\*\)$/iu.test(clean(value));
+  const match = /^Bash\((.+?)(?::\*| \*)\)$/u.exec(clean(value));
+  if (!match) return false;
+  try {
+    const command = safeCommand(match[1]);
+    return command === "suzu-lives" || command.endsWith(" --suzu-lives-cli");
+  } catch {
+    return false;
+  }
 }
 
-function updateSuzuClaudeProjectSettings(existing, { command, toolPermissions } = {}) {
+function normalizeWorkspaceDirectories(value = []) {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) throw new ClaudeIntegrationError("共享项目目录必须是数组，未修改 Claude 项目设置。 ");
+  const seen = new Set();
+  return value.flatMap((item) => {
+    const directory = clean(item);
+    if (!directory || /[\r\n]/u.test(directory) || !path.isAbsolute(directory)) {
+      throw new ClaudeIntegrationError("共享项目目录必须是有效的绝对路径，未修改 Claude 项目设置。 ");
+    }
+    const resolved = path.resolve(directory);
+    const key = process.platform === "win32" ? resolved.toLowerCase() : resolved;
+    if (seen.has(key)) return [];
+    seen.add(key);
+    return [resolved];
+  });
+}
+
+function sameDirectory(left, right) {
+  const first = clean(left);
+  const second = clean(right);
+  if (!first || !second || !path.isAbsolute(first) || !path.isAbsolute(second)) return false;
+  const normalizedLeft = path.resolve(first);
+  const normalizedRight = path.resolve(second);
+  return process.platform === "win32"
+    ? normalizedLeft.toLowerCase() === normalizedRight.toLowerCase()
+    : normalizedLeft === normalizedRight;
+}
+
+function updateSuzuClaudeProjectSettings(existing, { command, toolPermissions, workspaceDirectories } = {}) {
   const settings = parseClaudeProjectSettings(existing.content);
   if (settings.permissions !== undefined && !record(settings.permissions)) {
     throw new ClaudeIntegrationError(".claude/settings.json 的 permissions 必须是对象，未修改 Claude 项目设置。 ");
@@ -255,8 +295,16 @@ function updateSuzuClaudeProjectSettings(existing, { command, toolPermissions } 
   if (existingAllow.some((item) => typeof item !== "string")) {
     throw new ClaudeIntegrationError(".claude/settings.json 的 permissions.allow 只能包含字符串，未修改 Claude 项目设置。 ");
   }
+  if (settings.additionalDirectories !== undefined && !Array.isArray(settings.additionalDirectories)) {
+    throw new ClaudeIntegrationError(".claude/settings.json 的 additionalDirectories 必须是数组，未修改 Claude 项目设置。 ");
+  }
+  const existingDirectories = settings.additionalDirectories || [];
+  if (existingDirectories.some((item) => typeof item !== "string")) {
+    throw new ClaudeIntegrationError(".claude/settings.json 的 additionalDirectories 只能包含字符串，未修改 Claude 项目设置。 ");
+  }
 
   const currentSuzuPermission = suzuCliBashPermission(command);
+  const sharedDirectories = normalizeWorkspaceDirectories(workspaceDirectories);
   const selectablePermissions = normalizeSelectableClaudeToolPermissions(toolPermissions);
   const enabledSelectablePermissions = new Set(SELECTABLE_CLAUDE_TOOL_PERMISSIONS
     .filter(([key]) => selectablePermissions[key])
@@ -300,7 +348,14 @@ function updateSuzuClaudeProjectSettings(existing, { command, toolPermissions } 
     nextAllow.push(permission);
     changed = true;
   }
+  const nextDirectories = [...existingDirectories];
+  for (const directory of sharedDirectories) {
+    if (nextDirectories.some((item) => sameDirectory(item, directory))) continue;
+    nextDirectories.push(directory);
+    changed = true;
+  }
   if (settings.skipWebFetchPreflight !== true) changed = true;
+  if (permissions.defaultMode !== "acceptEdits") changed = true;
 
   if (!changed) return { changed: false, content: existing.content };
   return {
@@ -308,7 +363,8 @@ function updateSuzuClaudeProjectSettings(existing, { command, toolPermissions } 
     content: `${JSON.stringify({
       ...settings,
       skipWebFetchPreflight: true,
-      permissions: { ...permissions, allow: nextAllow },
+      ...(settings.additionalDirectories !== undefined || nextDirectories.length ? { additionalDirectories: nextDirectories } : {}),
+      permissions: { ...permissions, defaultMode: "acceptEdits", allow: nextAllow },
     }, null, 2)}\n`,
   };
 }
@@ -327,7 +383,7 @@ async function resolveSafeProjectRoot(projectRoot, fsOps) {
   return fsOps.realpath(requestedRoot);
 }
 
-async function prepareSuzuClaudeProjectSettings({ root, command, toolPermissions, fsOps }) {
+async function prepareSuzuClaudeProjectSettings({ root, command, toolPermissions, workspaceDirectories, fsOps }) {
   const claudeDirectory = await ensureSafeDirectory(fsOps, root, [".claude"]);
   const settingsPath = path.join(claudeDirectory, "settings.json");
   await assertSafeFile(fsOps, root, settingsPath, ".claude/settings.json");
@@ -335,14 +391,14 @@ async function prepareSuzuClaudeProjectSettings({ root, command, toolPermissions
   return {
     settingsPath,
     existing,
-    updated: updateSuzuClaudeProjectSettings(existing, { command, toolPermissions }),
+    updated: updateSuzuClaudeProjectSettings(existing, { command, toolPermissions, workspaceDirectories }),
   };
 }
 
-export async function ensureSuzuClaudeProjectSettings({ projectRoot, launcher = {}, toolPermissions, fsOps = fs } = {}) {
+export async function ensureSuzuClaudeProjectSettings({ projectRoot, launcher = {}, toolPermissions, workspaceDirectories, fsOps = fs } = {}) {
   const command = assertLauncher(launcher);
   const root = await resolveSafeProjectRoot(projectRoot, fsOps);
-  const prepared = await prepareSuzuClaudeProjectSettings({ root, command, toolPermissions, fsOps });
+  const prepared = await prepareSuzuClaudeProjectSettings({ root, command, toolPermissions, workspaceDirectories, fsOps });
   if (prepared.updated.changed) await writeAtomically(fsOps, root, prepared.settingsPath, prepared.updated.content);
   return {
     settingsPath: prepared.settingsPath,
@@ -534,7 +590,7 @@ function renderAbilitiesManagedBlock({ abilityIds, command = "suzu-lives" } = {}
   return renderClaudeManagedBlock({ abilityIds, command }).replace(CLAUDE_START, ABILITIES_START).replace(CLAUDE_END, ABILITIES_END);
 }
 
-export async function writeClaudeRegistration({ projectRoot, abilityId, launcher = {}, toolPermissions, fsOps = fs } = {}) {
+export async function writeClaudeRegistration({ projectRoot, abilityId, launcher = {}, toolPermissions, workspaceDirectories, fsOps = fs } = {}) {
   const capability = assertRegisterableAbility(abilityId);
   const command = assertLauncher(launcher);
   const root = await resolveSafeProjectRoot(projectRoot, fsOps);
@@ -559,7 +615,7 @@ export async function writeClaudeRegistration({ projectRoot, abilityId, launcher
   const claudeContent = ensureUniqueClaudeReference(existingClaude.content, "abilities.md");
   const abilitiesContent = mergeClaudeManagedBlock(existingAbilities.content, renderAbilitiesManagedBlock({ abilityIds: [...ids], command }));
   const skillContent = renderCapabilitySkill({ abilityId: capability.id, command });
-  const projectSettings = await prepareSuzuClaudeProjectSettings({ root, command, toolPermissions, fsOps });
+  const projectSettings = await prepareSuzuClaudeProjectSettings({ root, command, toolPermissions, workspaceDirectories, fsOps });
   const registrationFiles = [
     { path: skillPath, label: "SKILL.md", content: skillContent, previous: existingSkill },
     { path: abilitiesPath, label: "abilities.md", content: abilitiesContent, previous: existingAbilities },

@@ -15,6 +15,7 @@ const WECHAT_MEDIA_MANIFEST_OPEN = "<suzu-wechat-media>";
 const WECHAT_MEDIA_MANIFEST_CLOSE = "</suzu-wechat-media>";
 const SCHEDULE_TASK_OPEN = "<suzu-schedule-task>";
 const MERCHANT_TASK_OPEN = "<suzu-merchant-task>";
+const SUZU_MANAGED_SKILL_CONTEXT = /^Base directory for this skill:\s*[^\r\n]+[\s\S]*?<!--\s*suzu-lives:ability:[a-z0-9._-]+\s*-->/iu;
 const SEARCH_CATEGORIES = new Set(["messages", "images", "files", "audio", "links", "date"]);
 const DATE_QUERY_PATTERN = /^\d{4}-\d{2}-\d{2}$/u;
 
@@ -218,6 +219,15 @@ function textParts(content) {
   });
 }
 
+function isManagedSuzuSkillContext(content) {
+  const values = typeof content === "string"
+    ? [content]
+    : Array.isArray(content)
+      ? content.filter((part) => part?.type === "text").map((part) => String(part.text || ""))
+      : [];
+  return values.some((value) => SUZU_MANAGED_SKILL_CONTEXT.test(value));
+}
+
 function scheduledTaskNotice(content) {
   const values = typeof content === "string"
     ? [content]
@@ -248,6 +258,9 @@ export function buildDisplayMessages(records, maxMessages = 500) {
     let blocks = [];
     let label = "";
     if (type === "user") {
+      // Claude writes the full text of an auto-loaded Skill as a synthetic
+      // user record. It is execution context, not something the person sent.
+      if (isManagedSuzuSkillContext(message.content)) continue;
       const taskNotice = scheduledTaskNotice(message.content);
       if (taskNotice) {
         kind = "system";

@@ -160,6 +160,146 @@ test("direct voice runner synthesizes, converts to MP3, and records usage withou
   assert.equal(events[0].metadata.outputFormat, "mp3");
 });
 
+test("a contact's MiniMax custom audio uses its local development key and produces an MP3", async () => {
+  const root = await temporaryDirectory("suzu-minimax-contact-voice-");
+  const dataRoot = path.join(root, "software-data");
+  const projectRoot = path.join(root, "contact");
+  await fs.mkdir(projectRoot);
+  const agentId = stableAgentId(projectRoot);
+  const agentRoot = resolveAgentDataRoot({ dataRoot, agentId });
+  await fs.mkdir(path.join(agentRoot, "voice-message"), { recursive: true });
+  await Promise.all([
+    fs.writeFile(path.join(agentRoot, "voice-message", "config.json"), JSON.stringify({
+      schemaVersion: 2,
+      provider: "minimax",
+      voiceId: "minimax-voice-1",
+      customVoiceId: "custom-minimax-1",
+    }), "utf8"),
+    fs.writeFile(path.join(agentRoot, "voice-message", "custom-voices.json"), JSON.stringify({
+      schemaVersion: 1,
+      voices: [{
+        id: "custom-minimax-1",
+        name: "Suzu 的电话声",
+        provider: "minimax",
+        voiceId: "minimax-voice-1",
+        apiKey: "minimax-development-key",
+        model: "speech-2.8-hd",
+      }],
+    }), "utf8"),
+  ]);
+  const ledgerPath = path.join(agentRoot, "cost-ledger", "events.jsonl");
+  const calls = [];
+  const result = await runDirectVoiceMessage({
+    dataRoot,
+    ledgerPath,
+    agentId,
+    text: "你好，这是 MiniMax 的测试语音。",
+    apiKeyOverride: "dashscope-key-that-must-not-be-used",
+    baseUrlOverride: "https://dashscope.example.test/api/v1",
+    modelOverride: "qwen-model-that-must-not-be-used",
+    fetchImpl: async (url, options = {}) => {
+      calls.push([String(url), options]);
+      return bytesResponse({
+        trace_id: "minimax-trace-1",
+        base_resp: { status_code: 0, status_msg: "success" },
+        data: {
+          audio: Buffer.from("minimax-mp3").toString("hex"),
+          extra_info: { usage_characters: 15 },
+        },
+      });
+    },
+    processRunner: async () => { throw new Error("MiniMax MP3 should not be converted again"); },
+    now: () => new Date("2026-08-08T00:00:00.000Z"),
+  });
+
+  assert.equal(result.status, "ok");
+  assert.equal(result.ttsRequestId, "minimax-trace-1");
+  assert.equal(await fs.readFile(result.savedPath, "utf8"), "minimax-mp3");
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0][0], "https://api.minimax.io/v1/t2a_v2");
+  assert.equal(calls[0][1].headers.Authorization, "Bearer minimax-development-key");
+  const request = JSON.parse(calls[0][1].body);
+  assert.equal(request.model, "speech-2.8-hd");
+  assert.equal(request.output_format, "hex");
+  assert.equal(request.voice_setting.voice_id, "minimax-voice-1");
+  assert.equal(request.audio_setting.format, "mp3");
+  const [event] = (await fs.readFile(ledgerPath, "utf8")).trim().split("\n").map((line) => JSON.parse(line));
+  assert.equal(event.provider, "MiniMax");
+  assert.equal(event.requestId, "minimax-trace-1");
+});
+
+test("a saved voice can be assigned from the library to a different contact", async () => {
+  const root = await temporaryDirectory("suzu-shared-contact-voice-");
+  const dataRoot = path.join(root, "software-data");
+  const sourceProject = path.join(root, "source-contact");
+  const targetProject = path.join(root, "target-contact");
+  await Promise.all([fs.mkdir(sourceProject), fs.mkdir(targetProject)]);
+  const sourceAgentId = stableAgentId(sourceProject);
+  const targetAgentId = stableAgentId(targetProject);
+  const sourceRoot = resolveAgentDataRoot({ dataRoot, agentId: sourceAgentId });
+  const targetRoot = resolveAgentDataRoot({ dataRoot, agentId: targetAgentId });
+  await Promise.all([
+    fs.mkdir(path.join(sourceRoot, "voice-design"), { recursive: true }),
+    fs.mkdir(path.join(targetRoot, "voice-message"), { recursive: true }),
+    fs.mkdir(path.join(dataRoot, "voice-message"), { recursive: true }),
+  ]);
+  await Promise.all([
+    fs.writeFile(path.join(sourceRoot, "voice-design", "candidates.jsonl"), `${JSON.stringify({ id: "retained-source", voiceId: "qwen-shared-voice", retainedAt: "2026-08-08T00:00:00.000Z" })}\n`, "utf8"),
+    fs.writeFile(path.join(targetRoot, "voice-message", "config.json"), JSON.stringify({
+      schemaVersion: 3,
+      provider: "qwen",
+      voiceId: "qwen-shared-voice",
+      sourceAgentId,
+      sourceCandidateId: "retained-source",
+    }), "utf8"),
+    fs.writeFile(path.join(dataRoot, "voice-message", "custom-voices.json"), JSON.stringify({
+      schemaVersion: 1,
+      voices: [{
+        id: "global-minimax-voice",
+        name: "电话声",
+        provider: "minimax",
+        voiceId: "minimax-shared-voice",
+        apiKey: "global-development-key",
+        model: "speech-2.8-hd",
+      }],
+    }), "utf8"),
+  ]);
+
+  const qwenRuntime = resolveDirectVoiceRuntime({
+    dataRoot,
+    agentId: targetAgentId,
+    environment: { DASHSCOPE_API_KEY: "dashscope-key" },
+  });
+  assert.equal(qwenRuntime.tts.voice, "qwen-shared-voice");
+
+  await fs.writeFile(path.join(targetRoot, "voice-message", "config.json"), JSON.stringify({
+    schemaVersion: 3,
+    provider: "minimax",
+    voiceId: "minimax-shared-voice",
+    customVoiceId: "global-minimax-voice",
+    customVoiceSource: "global",
+  }), "utf8");
+  const calls = [];
+  const result = await runDirectVoiceMessage({
+    dataRoot,
+    agentId: targetAgentId,
+    ledgerPath: path.join(targetRoot, "cost-ledger", "events.jsonl"),
+    text: "给不同联系人使用同一个声音。",
+    fetchImpl: async (url, options = {}) => {
+      calls.push([String(url), options]);
+      return bytesResponse({
+        trace_id: "shared-minimax-trace",
+        base_resp: { status_code: 0, status_msg: "success" },
+        data: { audio: Buffer.from("shared-minimax-mp3").toString("hex") },
+      });
+    },
+    processRunner: async () => { throw new Error("MiniMax MP3 should not be converted again"); },
+  });
+  assert.equal(result.status, "ok");
+  assert.equal(calls[0][1].headers.Authorization, "Bearer global-development-key");
+  assert.equal(JSON.parse(calls[0][1].body).voice_setting.voice_id, "minimax-shared-voice");
+});
+
 test("local audio is converted to MP3 without TTS credentials or external delivery", async () => {
   const fixture = await createFixture();
   const agentId = stableAgentId(fixture.projectRoot);

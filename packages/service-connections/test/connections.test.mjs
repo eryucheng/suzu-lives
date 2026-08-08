@@ -61,3 +61,26 @@ test("named connection bindings reject incompatible types", async () => {
   assert.equal((await service.resolve("memory-embedding")).apiKey, opaque());
   await assert.rejects(() => service.bind("memory-processing", dash.connections[0].id), /不支持/u);
 });
+
+test("named connections surface an unreadable saved key without exposing it", async () => {
+  const root = await temporary();
+  const writer = createNamedApiConnectionService({ dataRoot: root, safeStorage: protector });
+  const created = await writer.save({ name: "阿里百炼", type: "dashscope", apiKey: opaque() });
+  const reader = createNamedApiConnectionService({
+    dataRoot: root,
+    safeStorage: {
+      isEncryptionAvailable: () => true,
+      encryptString: protector.encryptString,
+      decryptString: () => { throw new Error("cannot decrypt"); },
+    },
+  });
+  await reader.bind("sound", created.connections[0].id);
+  const snapshot = await reader.snapshot();
+  const connection = snapshot.connections[0];
+  assert.equal(connection.configured, false);
+  assert.equal(connection.credentialStatus, "unreadable");
+  const resolved = await reader.resolve("voice-design");
+  assert.equal(resolved.key, "");
+  assert.equal(resolved.credentialStatus, "unreadable");
+  assert.equal(JSON.stringify({ snapshot, resolved }).includes(opaque()), false);
+});
