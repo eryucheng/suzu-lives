@@ -8,13 +8,18 @@
   "type": "module",
   "main": "electron/main.mjs",
   "scripts": {
-    "start": "electron .",
+    "start": "concurrently -k \"vite --host 127.0.0.1 --port 5173 --strictPort\" \"wait-on http://127.0.0.1:5173 && cross-env SUZU_LIVES_RENDERER_URL=http://127.0.0.1:5173 electron .\"",
     "test": "node --test test/*.test.mjs",
     "dist": "electron-builder --win zip --x64"
   },
   "devDependencies": {
+    "@vitejs/plugin-react": "^6.0.4",
+    "concurrently": "^9.2.1",
+    "cross-env": "^7.0.3",
     "electron": "43.2.0",
-    "electron-builder": "26.15.3"
+    "electron-builder": "26.15.3",
+    "vite": "^8.2.0",
+    "wait-on": "^8.0.2"
   },
   "dependencies": {
     "@suzu-lives/agent-registry": "0.1.0",
@@ -35,6 +40,9 @@
     "@suzu-lives/voice-design": "0.1.0",
     "@suzu-lives/voice-message": "0.1.0",
     "qrcode": "1.5.4",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "suzu-design-system": "github:eryucheng/design-system#main",
     "ws": "8.18.3"
   },
   "build": {

@@ -26,6 +26,12 @@ export {
 } from "./prompt.mjs";
 
 export {
+  SESSION_COMPACTION_SCHEMA,
+  buildSessionCompactionInput,
+  parseSessionCompaction,
+} from "./session-summary.mjs";
+
+export {
   runCompaction,
 } from "./service.mjs";
 

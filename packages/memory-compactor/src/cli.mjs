@@ -6,7 +6,6 @@ import {
   resolveTranscriptPath,
   stableAgentId,
 } from "@suzu-lives/agent-registry";
-import { createOpenAiCompatibleEmbeddingProvider } from "@suzu-lives/memory-retriever";
 
 import { createClaudeCliGenerator } from "./claude-cli.mjs";
 import { runCompaction } from "./service.mjs";
@@ -53,30 +52,16 @@ export function memoryCompactorUsage() {
   return "suzu-lives memory-compact [--dry-run] [--project-root <Agent项目目录>] [--transcript <Claude会话JSONL>] [--data-root <软件数据目录>]";
 }
 
-function selectedConnection(value) {
-  if (!value || typeof value !== "object") return false;
-  return Boolean(
-    clean(value.id)
-    || clean(value.name)
-    || clean(value.baseUrl)
-    || clean(value.model)
-    || clean(value.apiKey || value.key)
-    || !["", "none"].includes(clean(value.source).toLowerCase()),
-  );
-}
-
 /**
- * Stable software entry for Suzu scheduled memory compaction. It never reads
- * manual_compactor configuration: an explicit --transcript wins, otherwise
- * the current Claude project-session directory is discovered.
+ * Stable software entry for Suzu scheduled conversation compaction. It never
+ * reads legacy long-term-memory configuration: an explicit --transcript wins,
+ * otherwise the current Claude project-session directory is discovered.
  */
 export async function runMemoryCompactorCli({
   args = process.argv.slice(2),
   stdout = process.stdout,
   homeDirectory,
-  connectionResolver = null,
   agentGeneratorFactory = createClaudeCliGenerator,
-  embeddingProviderFactory = createOpenAiCompatibleEmbeddingProvider,
 } = {}) {
   const options = parseOptions(args);
   const projectRoot = path.resolve(clean(options["project-root"]) || process.cwd());
@@ -96,30 +81,6 @@ export async function runMemoryCompactorCli({
   const generator = dryRun
     ? null
     : agentGeneratorFactory({ model: clean(options.model) });
-  let embeddingProvider = null;
-  if (!dryRun) {
-    const embeddingConnection = typeof connectionResolver === "function"
-      ? await connectionResolver({
-        kind: "memory-embedding",
-        dataRoot: softwareDataDirectory,
-        agentId,
-      })
-      : null;
-    if (selectedConnection(embeddingConnection)) {
-      const type = clean(embeddingConnection.type);
-      let baseUrl = clean(embeddingConnection.baseUrl).replace(/\/+$/u, "");
-      if (type === "dashscope") {
-        baseUrl = baseUrl.replace(/\/api\/v1$/u, "/compatible-mode/v1");
-      }
-      embeddingProvider = embeddingProviderFactory({
-        baseUrl,
-        apiKey: embeddingConnection.key || embeddingConnection.apiKey,
-        model: clean(embeddingConnection.model) || (type === "dashscope" ? "text-embedding-v4" : ""),
-        dimensions: 1024,
-        extraBody: { encoding_format: "float" },
-      });
-    }
-  }
   const result = await runCompaction({
     transcriptPath: transcript.path,
     agentId,
@@ -127,8 +88,6 @@ export async function runMemoryCompactorCli({
     memoryOwner: clean(options["memory-owner"]) || "Suzu",
     userName: clean(options["user-name"]) || "用户",
     generator,
-    structureGenerator: generator,
-    embeddingProvider,
     dryRun,
     now,
   });
