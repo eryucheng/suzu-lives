@@ -315,14 +315,14 @@ function commonFields(template) {
 
 function summaryWrapper({ memoryOwner = "记忆拥有者", userName = "对方" }, body) {
   return [
-    "This session is being continued from a user-managed memory checkpoint.",
-    `以下是${memoryOwner}自己的第一人称长期/中期记忆。“我”指${memoryOwner}，“${userName}”指对方。`,
+    "This session is being continued from a user-managed conversation summary.",
+    `以下是${memoryOwner}与${userName}此前对话的连续摘要。“我”指${memoryOwner}，“${userName}”指对方。`,
     "",
-    "<first_person_memory>",
+    "<conversation_summary>",
     clean(body),
-    "</first_person_memory>",
+    "</conversation_summary>",
     "",
-    "本记忆之后保留的是未经摘要的最近原始对话；发生冲突时，以较新的原始对话为准。",
+    "本摘要之后保留的是未经压缩的最近原始对话；发生冲突时，以较新的原始对话为准。",
     "直接延续当前关系和话题，不要提及压缩、摘要、JSONL、上下文刷新或重新加载。",
   ].join("\n");
 }
