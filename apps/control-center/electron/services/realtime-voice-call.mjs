@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 
 import WebSocket from "ws";
 
+import { appendUsageEvent } from "@suzu-lives/cost-ledger";
 import { resolveDirectVoiceRuntime, synthesizeDirectVoiceAudio } from "@suzu-lives/voice-message/direct-voice-message";
 
 const DEFAULT_ASR_MODEL = "qwen3-asr-flash-realtime";
@@ -101,6 +102,7 @@ export function createRealtimeVoiceCallService({
   chat,
   connectionsService,
   dataRootProvider = null,
+  appendLedger = appendUsageEvent,
   fetchImpl = globalThis.fetch,
   ledgerPathProvider = null,
   onEvent = () => {},
@@ -296,6 +298,27 @@ export function createRealtimeVoiceCallService({
     }
   };
 
+  const recordAsrUsage = async (call, message, transcript) => {
+    const utterance = call.asrUtterances.shift();
+    if (!utterance?.audioBytes) return;
+    await appendLedger(call.ledgerPath, {
+      agentId: call.agentId,
+      provider: "阿里云百炼",
+      model: call.asrModel,
+      source: "实时语音识别",
+      feature: "realtime-voice-call-asr",
+      requestId: clean(message.item_id || message.event_id) || `asr-${randomUUID()}`,
+      timestamp: utterance.timestamp,
+      units: {
+        inputAudioSeconds: utterance.audioBytes / (16_000 * 2),
+      },
+      metadata: {
+        language: clean(message.language) || "zh",
+        transcriptCharacters: [...clean(transcript)].length,
+      },
+    });
+  };
+
   const handleAsrMessage = (call, raw) => {
     if (!callIsActive(call)) return;
     let message;
@@ -312,6 +335,9 @@ export function createRealtimeVoiceCallService({
     }
     if (type === "conversation.item.input_audio_transcription.completed") {
       const text = bounded(clean(message.transcript || message.text), MAX_TRANSCRIPT_LENGTH);
+      void recordAsrUsage(call, message, text).catch((error) => {
+        if (callIsActive(call)) emitCall(call, "call-error", { message: `无法记录语音识别用量：${ttsErrorMessage(error)}` });
+      });
       if (text) void sendTranscript(call, text);
       return;
     }
@@ -321,6 +347,7 @@ export function createRealtimeVoiceCallService({
       return;
     }
     if (type === "conversation.item.input_audio_transcription.failed") {
+      call.asrUtterances.shift();
       const detail = clean(message.error?.message || message.error?.code || message.message);
       emitCall(call, "call-error", { message: `语音识别失败：${detail || "未知错误"}` });
       return;
@@ -459,7 +486,10 @@ export function createRealtimeVoiceCallService({
     const call = {
       agentId,
       asrApiKey,
+      asrModel: DEFAULT_ASR_MODEL,
       asrReady: false,
+      asrPendingAudioBytes: 0,
+      asrUtterances: [],
       asrUrl: realtimeAsrWebSocketUrl(dashScope?.baseUrl),
       closed: false,
       closing: false,
@@ -515,6 +545,7 @@ export function createRealtimeVoiceCallService({
         type: "input_audio_buffer.append",
         audio: pcm.toString("base64"),
       }));
+      call.asrPendingAudioBytes += pcm.length;
       call.hasBufferedAudio = true;
       return { accepted: true };
     } catch (error) {
@@ -534,6 +565,11 @@ export function createRealtimeVoiceCallService({
         event_id: `commit-${randomUUID()}`,
         type: "input_audio_buffer.commit",
       }));
+      call.asrUtterances.push({
+        audioBytes: call.asrPendingAudioBytes,
+        timestamp: new Date().toISOString(),
+      });
+      call.asrPendingAudioBytes = 0;
       call.hasBufferedAudio = false;
       return { accepted: true, committed: true };
     } catch (error) {
@@ -555,6 +591,8 @@ export function createRealtimeVoiceCallService({
     if (!call || clean(callId) !== call.id) return { accepted: true, stopped: false };
     if (call.ownerSenderId && clean(senderId) && call.ownerSenderId !== clean(senderId)) return { accepted: false, stopped: false };
     call.closing = true;
+    call.asrPendingAudioBytes = 0;
+    call.asrUtterances.length = 0;
     if (call.reconnectTimer) clearTimeout(call.reconnectTimer);
     call.reconnectTimer = null;
     const requestIds = [...call.requestIds];
@@ -575,6 +613,8 @@ export function createRealtimeVoiceCallService({
     const call = activeCall;
     if (call) {
       call.closing = true;
+      call.asrPendingAudioBytes = 0;
+      call.asrUtterances.length = 0;
       if (call.reconnectTimer) clearTimeout(call.reconnectTimer);
       call.reconnectTimer = null;
       clearReplyAudio(call);

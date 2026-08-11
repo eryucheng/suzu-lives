@@ -3,7 +3,6 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import readline from "node:readline";
 
-import { resolveTranscriptPath } from "@suzu-lives/agent-registry";
 import {
   DEFAULT_PRICE_CATALOG,
   calculateCost,
@@ -12,11 +11,14 @@ import {
   resolveCatalogModel,
 } from "@suzu-lives/cost-ledger";
 
+import { locateClaudeProjectDirectory } from "./conversation-reader.mjs";
+
 export const PRICE_CATALOG = DEFAULT_PRICE_CATALOG;
 
 const TIME_ZONE = "Asia/Shanghai";
 const MAX_EVENTS = 12_000;
 const META_PROMPT = /^(?:<system-reminder>|你知道现在是|你想起了之前的片段|你想起了之前|下面是与眼前话题|Context:|Skill root)/iu;
+const SESSION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
 
 function clean(value) {
   return String(value ?? "").trim();
@@ -44,6 +46,39 @@ function existsDirectory(directory) {
   } catch {
     return false;
   }
+}
+
+function contactScope(value = {}) {
+  const contactId = clean(value.contactId);
+  const contactName = clean(value.contactName);
+  const projectRoot = clean(value.projectRoot);
+  const sessionId = clean(value.sessionId);
+  if (!contactId || !contactName || !projectRoot || !SESSION_ID_PATTERN.test(sessionId)) return null;
+  return {
+    contactId,
+    contactName,
+    projectRoot: path.resolve(projectRoot),
+    sessionId,
+    usageLedgerPath: clean(value.usageLedgerPath),
+  };
+}
+
+function contactEventFields(contact) {
+  return {
+    contactId: clean(contact?.contactId),
+    contactName: clean(contact?.contactName) || "未归属联系人",
+  };
+}
+
+async function fixedContactTranscript(contact, { homeDirectory } = {}) {
+  const location = await locateClaudeProjectDirectory({
+    projectRoot: contact.projectRoot,
+    homeDirectory,
+  });
+  return {
+    projectRoot: location.projectRoot,
+    path: location.exists ? path.join(location.projectDir, `${contact.sessionId}.jsonl`) : "",
+  };
 }
 
 function dateKey(value) {
@@ -136,9 +171,7 @@ function pricedUsage({
   };
 }
 
-export { resolveTranscriptPath };
-
-async function scanTranscript(transcriptPath, customRevisions) {
+async function scanTranscript(transcriptPath, customRevisions, contact) {
   const result = {
     status: "missing",
     path: transcriptPath || "",
@@ -149,7 +182,7 @@ async function scanTranscript(transcriptPath, customRevisions) {
     warning: "",
   };
   if (!existsFile(transcriptPath)) {
-    result.warning = "没有找到主会话 JSONL。";
+    result.warning = "没有找到联系人会话 JSONL。";
     return result;
   }
 
@@ -196,10 +229,11 @@ async function scanTranscript(transcriptPath, customRevisions) {
     });
     const shape = assistantShape(record);
     result.events.push({
-      id: `transcript:${identity}`,
+      id: `transcript:${clean(contact?.contactId)}:${identity}`,
       timestamp: clean(record.timestamp),
       date: dateKey(record.timestamp),
-      source: "主会话",
+      ...contactEventFields(contact),
+      source: "对话",
       feature: shape.kind,
       provider: modelProvider(model),
       model,
@@ -234,7 +268,7 @@ async function listJsonFiles(directory) {
   return files;
 }
 
-async function scanVideoCache(projectRoot, customRevisions) {
+async function scanVideoCache(projectRoot, customRevisions, contact) {
   const directory = path.join(
     projectRoot,
     "scripts",
@@ -278,9 +312,10 @@ async function scanVideoCache(projectRoot, customRevisions) {
       customRevisions,
     });
     result.events.push({
-      id: `video:${identity}`,
+      id: `video:${clean(contact?.contactId)}:${identity}`,
       timestamp,
       date: dateKey(timestamp),
+      ...contactEventFields(contact),
       source: "视频理解",
       feature: clean(record.source).startsWith("douyin:") ? "抖音视频" : "视频分析",
       provider: modelProvider(model),
@@ -302,7 +337,7 @@ async function scanVideoCache(projectRoot, customRevisions) {
   return result;
 }
 
-async function scanUnifiedLedger(ledgerPath, customRevisions) {
+async function scanUnifiedLedger(ledgerPath, customRevisions, contact) {
   const stored = await readUsageEvents(ledgerPath, { limit: MAX_EVENTS });
   const result = {
     ...stored,
@@ -331,9 +366,10 @@ async function scanUnifiedLedger(ledgerPath, customRevisions) {
       customRevisions,
     });
     result.events.push({
-      id: `ledger:${identity}`,
+      id: `ledger:${clean(contact?.contactId)}:${identity}`,
       timestamp: clean(event.timestamp),
       date: dateKey(event.timestamp),
+      ...contactEventFields(contact),
       source: clean(event.source || event.feature || "统一流水"),
       feature: clean(event.feature || "API 调用"),
       provider: clean(event.provider) || modelProvider(event.model),
@@ -411,7 +447,11 @@ function summarize(events, today) {
     sourceMap.set(event.source, source);
 
     if (event.turnId) {
-      const conversation = conversationMap.get(event.turnId) || {
+      const contactId = clean(event.contactId);
+      const conversationKey = `${contactId || "unassigned"}:${event.turnId}`;
+      const conversation = conversationMap.get(conversationKey) || {
+        contactId,
+        contactName: clean(event.contactName) || "未归属联系人",
         turnId: event.turnId,
         prompt: event.turnPrompt || "未识别的会话轮次",
         firstAt: event.timestamp,
@@ -422,7 +462,7 @@ function summarize(events, today) {
       addEvent(conversation, event);
       conversation.lastAt = event.timestamp;
       for (const tool of event.toolNames || []) conversation.tools.add(tool);
-      conversationMap.set(event.turnId, conversation);
+      conversationMap.set(conversationKey, conversation);
     }
   }
 
@@ -434,96 +474,92 @@ function summarize(events, today) {
   return { all, today: todayTotal, month: monthTotal, daily, sources, conversations };
 }
 
-function sourceStatus(transcript, video, ledger) {
-  const ledgerEvents = Array.isArray(ledger.events) ? ledger.events : [];
-  const instrumented = (name, features, emptyDetail) => {
-    const featureSet = new Set(features);
-    const count = ledgerEvents.filter((event) => featureSet.has(event.feature)).length;
-    return {
-      name,
-      status: "ready",
-      detail: count ? `${count} 次统一流水记录` : emptyDetail,
-      path: ledger.path,
-      tracked: true,
-    };
+function sourceStatus(scans = []) {
+  const ledgerEvents = scans.flatMap((scan) => Array.isArray(scan.ledger?.events) ? scan.ledger.events : []);
+  const videoEvents = scans.flatMap((scan) => Array.isArray(scan.video?.events) ? scan.video.events : []);
+  const transcriptEvents = scans.flatMap((scan) => Array.isArray(scan.transcript?.events) ? scan.transcript.events : []);
+  const contactCount = new Set(scans.map((scan) => clean(scan.contactId)).filter(Boolean)).size;
+  const firstSourcePath = (key) => scans.map((scan) => clean(scan[key]?.path)).find(Boolean) || "";
+  const eventCount = (matches, extraEvents = []) => {
+    const identities = new Set();
+    for (const event of [...ledgerEvents, ...extraEvents]) {
+      if (!matches(event || {})) continue;
+      const localIdentity = clean(event.requestId) || clean(event.id) || [
+        clean(event.timestamp),
+        clean(event.source),
+        clean(event.feature),
+        clean(event.model),
+      ].join(":");
+      identities.add(`${clean(event.contactId)}:${localIdentity}`);
+    }
+    return identities.size;
   };
+  const connected = ({ id, name, count, sourcePath = firstSourcePath("ledger") }) => ({
+    id,
+    name,
+    status: "ready",
+    detail: `${contactCount} 个联系人${count ? `，已记录 ${count} 次调用。` : "，已接入；等待首次调用记录。"}`,
+    path: sourcePath,
+    tracked: true,
+  });
   return [
-    {
+    connected({
       id: "unified-ledger",
       name: "统一计费流水",
-      status: ledger.status,
-      detail: ledger.status === "ready"
-        ? `${ledger.events.length} 次统一记录`
-        : ledger.warning,
-      path: ledger.path,
-      tracked: true,
-    },
-    {
-      id: "main-transcript",
-      name: "主会话",
-      status: transcript.status,
-      detail: transcript.status === "ready"
-        ? `${transcript.events.length} 次模型请求`
-        : transcript.warning,
-      path: transcript.path,
-      tracked: true,
-    },
-    {
+      count: ledgerEvents.length,
+    }),
+    connected({
+      id: "conversation-transcript",
+      name: "联系人会话",
+      count: transcriptEvents.length,
+      sourcePath: firstSourcePath("transcript"),
+    }),
+    connected({
       id: "video-understanding",
       name: "视频理解",
-      status: video.status,
-      detail: video.status === "ready" ? `${video.events.length} 次历史请求` : video.warning,
-      path: video.path,
-      tracked: true,
-    },
-    {
-      id: "rag",
-      ...instrumented(
-        "RAG 向量",
-        ["rag-embedding-index", "rag-embedding-query"],
-        "已接入；下一次建库或召回后开始记录。",
-      ),
-    },
-    {
+      count: eventCount((event) => clean(event.source) === "视频理解" || clean(event.feature) === "video-understanding", videoEvents),
+      sourcePath: firstSourcePath("video") || firstSourcePath("ledger"),
+    }),
+    connected({
       id: "image-vision",
-      ...instrumented(
-        "图片识别",
-        ["image-vision"],
-        "已接入；下一次识图后开始记录。",
-      ),
-    },
-    {
+      name: "图片理解",
+      count: eventCount((event) => clean(event.source) === "图片识别" || clean(event.feature) === "image-vision"),
+    }),
+    connected({
       id: "image-generation",
-      ...instrumented(
-        "图片生成",
-        ["image-generation", "image-edit"],
-        "已接入；未配置单价的模型会保留调用量并显示未知金额。",
-      ),
-    },
-    {
+      name: "图片生成",
+      count: eventCount((event) => clean(event.source) === "图片生成" || clean(event.feature).startsWith("image-")),
+    }),
+    connected({
       id: "tts",
-      ...instrumented(
-        "语音合成",
-        ["voice-message-tts"],
-        "已接入；下一次成功合成后按字符数记录。",
-      ),
-    },
-    {
+      name: "语音合成",
+      count: eventCount((event) => clean(event.source) === "语音合成" || ["voice-message-tts", "realtime-voice-call-tts"].includes(clean(event.feature))),
+    }),
+    connected({
+      id: "realtime-asr",
+      name: "实时语音识别",
+      count: eventCount((event) => clean(event.feature) === "realtime-voice-call-asr"),
+    }),
+    connected({
       id: "compactor",
-      ...instrumented(
-        "记忆压缩器",
-        ["memory-compaction"],
-        "已接入；下一次压缩后开始记录，失败但已产生 usage 的请求也会保留。",
-      ),
-    },
-    {
+      name: "记忆整理",
+      count: eventCount((event) => ["memory-compactor", "memory-structurer"].includes(clean(event.source))),
+    }),
+    connected({
       id: "voice-design",
-      ...instrumented(
-        "音色设计",
-        ["voice-design"],
-        "已接入；未配置单价时保留调用量并显示未知金额。",
-      ),
-    },
+      name: "音色设计",
+      count: eventCount((event) => clean(event.feature) === "voice-design"),
+    }),
+    connected({
+      id: "memory-vector",
+      name: "记忆向量",
+      count: eventCount((event) => ["memory-embedding-indexer", "memory-retriever"].includes(clean(event.source)) || clean(event.feature).endsWith("-embedding")),
+    }),
+    connected({
+      id: "memory-analysis",
+      name: "记忆分析",
+      count: eventCount((event) => clean(event.source) === "memory-evaluation"),
+    }),
   ];
 }
 
@@ -532,9 +568,10 @@ function mergeEvents(...eventGroups) {
   for (const events of eventGroups) {
     for (const event of events) {
       if (!event?.timestamp) continue;
+      const scope = clean(event.contactId) || "unassigned";
       const identity = event.requestId
-        ? `request:${event.model}:${event.requestId}`
-        : `event:${event.id}`;
+        ? `request:${scope}:${event.model}:${event.requestId}`
+        : `event:${scope}:${event.id}`;
       byIdentity.set(identity, event);
     }
   }
@@ -543,68 +580,68 @@ function mergeEvents(...eventGroups) {
     .slice(-MAX_EVENTS);
 }
 
-export async function scanCostLedger(settings = {}, { homeDirectory } = {}) {
+export async function scanCostLedger(settings = {}, { contactScopes = [], homeDirectory } = {}) {
   const startedAt = Date.now();
-  const projectRoot = clean(settings.projectRoot);
   const customRevisions = settings.priceRevisions || [];
-  const usageLedgerPath = clean(settings.usageLedgerPath);
   const today = dateKey(new Date());
   const priceCatalog = priceCatalogView({
     catalog: PRICE_CATALOG,
     customRevisions,
   });
-  if (!projectRoot || !existsDirectory(projectRoot)) {
+  const contacts = Array.isArray(contactScopes)
+    ? contactScopes.map(contactScope).filter(Boolean)
+    : [];
+  if (!contacts.length) {
     return {
       status: "needs-project",
-      projectRoot,
-      transcriptPath: "",
       today,
-      usageLedgerPath,
+      contactScopes: [],
       priceCatalog,
-      warning: "请选择有效的 Agent 工作目录。",
+      warning: "请先创建至少一个联系人。",
     };
   }
 
-  const transcriptResolution = await resolveTranscriptPath(projectRoot, { homeDirectory });
-  const [transcript, video, ledger] = await Promise.all([
-    scanTranscript(transcriptResolution.path, customRevisions),
-    scanVideoCache(projectRoot, customRevisions),
-    scanUnifiedLedger(usageLedgerPath, customRevisions),
-  ]);
-  const events = mergeEvents(transcript.events, video.events, ledger.events);
+  const scans = await Promise.all(contacts.map(async (contact) => {
+    const transcriptResolution = await fixedContactTranscript(contact, { homeDirectory });
+    const [transcript, video, ledger] = await Promise.all([
+      scanTranscript(transcriptResolution.path, customRevisions, contact),
+      scanVideoCache(transcriptResolution.projectRoot, customRevisions, contact),
+      scanUnifiedLedger(contact.usageLedgerPath, customRevisions, contact),
+    ]);
+    return { ...contact, transcript, video, ledger };
+  }));
+  const events = mergeEvents(...scans.flatMap((scan) => [scan.transcript.events, scan.video.events, scan.ledger.events]));
   const summary = summarize(events, today);
+  const sum = (key, field) => scans.reduce((total, scan) => total + Number(scan[key]?.[field] || 0), 0);
   return {
     status: "ready",
-    projectRoot: path.resolve(projectRoot),
-    transcriptPath: transcript.path,
-    transcriptSource: transcriptResolution.source,
-    usageLedgerPath,
+    contactScopes: scans.map((scan) => ({ contactId: scan.contactId, contactName: scan.contactName })),
     today,
     currentMonth: monthKey(new Date()),
     scannedAt: new Date().toISOString(),
     durationMs: Date.now() - startedAt,
     events,
     summary,
-    sources: sourceStatus(transcript, video, ledger),
+    sources: sourceStatus(scans),
     diagnostics: {
       transcript: {
-        scannedRecords: transcript.scannedRecords,
-        malformedLines: transcript.malformedLines,
-        duplicateUsageRecords: transcript.duplicateUsageRecords,
+        scannedRecords: sum("transcript", "scannedRecords"),
+        malformedLines: sum("transcript", "malformedLines"),
+        duplicateUsageRecords: sum("transcript", "duplicateUsageRecords"),
       },
       video: {
-        scannedFiles: video.scannedFiles,
-        duplicateRequests: video.duplicateRequests,
+        scannedFiles: sum("video", "scannedFiles"),
+        duplicateRequests: sum("video", "duplicateRequests"),
       },
       ledger: {
-        scannedLines: ledger.scannedLines,
-        malformedLines: ledger.malformedLines,
-        duplicateRequests: ledger.duplicateRequests,
+        scannedLines: sum("ledger", "scannedLines"),
+        malformedLines: sum("ledger", "malformedLines"),
+        duplicateRequests: sum("ledger", "duplicateRequests"),
       },
     },
     priceCatalog,
-    warning: transcript.status !== "ready"
-      ? "主会话尚未接入；当前总额不包含 DeepSeek 对话费用。"
+    warning: scans.every((scan) => scan.transcript.status !== "ready")
+      ? "尚未识别到联系人会话记录；当前总额不包含 DeepSeek 对话费用。"
       : "",
   };
 }

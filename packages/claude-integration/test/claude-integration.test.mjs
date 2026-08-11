@@ -41,9 +41,9 @@ test("explicit registration preserves user files and writes the Suzu project def
   assert.doesNotMatch(claude, /suzu-lives:managed:start|suzu-lives:ability:/u);
   assert.match(abilities, /suzu-lives:abilities:start/u);
   assert.match(abilities, /suzu-lives:ability:image-vision/u);
-  assert.match(skill, /suzu-lives image-vision '<本地图片路径>' --question '<具体问题>'/u);
+  assert.match(skill, /suzu-lives capability image-vision analyze --input-json '<JSON>'/u);
   assert.doesNotMatch(skill, /--detail/u);
-  assert.match(skill, /--no-retry/u);
+  assert.match(skill, /noRetry/u);
   assert.doesNotMatch(skill, /--authorization-credential/u);
   assert.doesNotMatch(skill, new RegExp(project.replace(/[\\^$.*+?()[\]{}|]/gu, "\\$&"), "u"));
   assert.doesNotMatch(skill, /config\.local|registry\.local|D:\\Apps|ling/iu);
@@ -85,6 +85,33 @@ test("Suzu project defaults preserve user settings and replace only a prior Suzu
   assert.deepEqual(settings.env, { KEEP: "yes" });
   assert.equal(settings.hooks.UserPromptSubmit[0].hooks[0].command, "user-hook");
   assert.equal((await ensureSuzuClaudeProjectSettings({ projectRoot: project, launcher })).changed, false);
+});
+
+test("shared Claude project defaults replace the managed tool and network rules for every contact", async () => {
+  const project = await temporaryDirectory("suzu-project-shared-runtime-defaults-");
+  const settingsPath = path.join(project, ".claude", "settings.json");
+  await fs.mkdir(path.dirname(settingsPath), { recursive: true });
+  await fs.writeFile(settingsPath, JSON.stringify({
+    skipWebFetchPreflight: true,
+    permissions: { allow: ["Read"], deny: ["Bash(rm:*)"] },
+  }, null, 2), "utf8");
+
+  const projectDefaults = {
+    allowedTools: ["Bash(git status:*)"],
+    deniedTools: ["Read(./.env)"],
+    skipWebFetchPreflight: false,
+  };
+  await ensureSuzuClaudeProjectSettings({ projectRoot: project, launcher, projectDefaults });
+
+  const settings = JSON.parse(await fs.readFile(settingsPath, "utf8"));
+  assert.equal(settings.skipWebFetchPreflight, false);
+  assert.ok(settings.permissions.allow.includes("Bash(git status:*)"));
+  assert.deepEqual(settings.permissions.deny, ["Read(./.env)"]);
+  const projectDefaultsWithoutWhitelist = { ...projectDefaults, allowedTools: [] };
+  await ensureSuzuClaudeProjectSettings({ projectRoot: project, launcher, previousProjectDefaults: projectDefaults, projectDefaults: projectDefaultsWithoutWhitelist });
+  const updated = JSON.parse(await fs.readFile(settingsPath, "utf8"));
+  assert.equal(updated.permissions.allow.includes("Bash(git status:*)"), false);
+  assert.equal((await ensureSuzuClaudeProjectSettings({ projectRoot: project, launcher, projectDefaults: projectDefaultsWithoutWhitelist })).changed, false);
 });
 
 test("development launcher is accepted and replaces an outdated packaged CLI permission", async () => {
@@ -154,11 +181,11 @@ test("managed registration updates its own file but refuses a user-owned skill c
   assert.match(abilities, /Keep this paragraph\./u);
   assert.match(abilities, /image-vision/u);
   assert.match(abilities, /video-understanding/u);
-  assert.match(videoSkill, /suzu-lives video-understanding '<本地视频路径或 http\(s\) URL>' --question '<具体问题>'/u);
-  assert.match(videoSkill, /--cache-key/u);
-  assert.match(videoSkill, /--no-cache/u);
-  assert.match(videoSkill, /--keep-clip/u);
-  assert.match(videoSkill, /--dry-run/u);
+  assert.match(videoSkill, /suzu-lives capability video-understanding analyze --input-json '<JSON>'/u);
+  assert.match(videoSkill, /cacheKey/u);
+  assert.match(videoSkill, /noCache/u);
+  assert.match(videoSkill, /keepClip/u);
+  assert.match(videoSkill, /dryRun/u);
   assert.doesNotMatch(videoSkill, /--authorization-credential/u);
   assert.doesNotMatch(videoSkill, new RegExp(project.replace(/[\\^$.*+?()[\]{}|]/gu, "\\$&"), "u"));
   assert.doesNotMatch(videoSkill, /config\.local|registry\.local|D:\\Apps|ling/iu);
@@ -199,7 +226,6 @@ test("time-awareness is a managed perception registration without a project scri
 
   assert.equal(ability?.category, "perceive");
   assert.match(abilities, /suzu-lives:ability:time-awareness/u);
-  assert.match(abilities, /每次用户消息进入时注入本机日期/u);
   assert.match(skill, /suzu-lives:ability:time-awareness/u);
   assert.match(skill, /UserPromptSubmit/u);
   assert.doesNotMatch(skill, /timehook\.mjs/u);

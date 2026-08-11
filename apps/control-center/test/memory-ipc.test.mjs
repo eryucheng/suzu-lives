@@ -3,7 +3,7 @@ import test from "node:test";
 
 import { registerMemoryIpc } from "../electron/ipc/memory-ipc.mjs";
 
-test("memory IPC exposes audited structure proposal listing and resolution", async () => {
+test("memory IPC requires the embedded service and forwards React memory actions by contact", async () => {
   const handlers = new Map();
   const calls = [];
   const ipcMain = {
@@ -12,121 +12,58 @@ test("memory IPC exposes audited structure proposal listing and resolution", asy
     },
   };
   const memoryService = {
-    status: () => ({}),
-    search: () => ({}),
-    brainGraph: () => ({}),
-    list: () => ({}),
-    detail: () => ({}),
-    edit: () => ({}),
-    remove: () => ({}),
-    restore: () => ({}),
-    structureProposals(filters) {
-      calls.push(["list", filters]);
-      return [{ id: "proposal-1" }];
-    },
-    resolveStructure(payload) {
-      calls.push(["resolve", payload]);
-      return { status: "accepted" };
-    },
-    subjectAttributionProposals(filters) {
-      calls.push(["subject-list", filters]);
-      return [{ id: "subject-proposal-1" }];
-    },
-    resolveSubjectAttribution(payload) {
-      calls.push(["subject-resolve", payload]);
-      return { status: "dismissed" };
-    },
-    retrievalTraces(filters) {
-      calls.push(["traces", filters]);
-      return [{ id: "trace-1" }];
-    },
-    recordRetrievalFeedback(payload) {
-      calls.push(["feedback", payload]);
-      return { signal: payload.signal };
-    },
-    memoryRetrievalStats(filters) {
-      calls.push(["stats", filters]);
-      return [{ memoryId: "memory-1", selectedCount: 2 }];
-    },
-    edgeRetrievalStats(filters) {
-      calls.push(["edge-stats", filters]);
-      return [{ edgeId: "edge-1", traversedCount: 1 }];
-    },
-    plasticityPreview(filters) {
-      calls.push(["plasticity", filters]);
-      return { automaticAdjustmentAllowed: false };
-    },
+    status(scope) { calls.push(["status", scope]); return {}; },
+    search(query, scope) { calls.push(["search", query, scope]); return {}; },
+    brainGraph(scope) { calls.push(["brain", scope]); return {}; },
+    list(filters) { calls.push(["list", filters]); return {}; },
+    detail(memoryId, scope) { calls.push(["detail", memoryId, scope]); return {}; },
+    edit(memoryId, patch, reason, scope) { calls.push(["edit", memoryId, patch, reason, scope]); return {}; },
+    remove(memoryId, reason, scope) { calls.push(["remove", memoryId, reason, scope]); return {}; },
+    restore(memoryId, reason, scope) { calls.push(["restore", memoryId, reason, scope]); return {}; },
+    reviewOverview(filters) { calls.push(["overview", filters]); return {}; },
+    reviewProposal(payload) { calls.push(["proposal", payload]); return {}; },
+    resolveReview(payload) { calls.push(["resolve", payload]); return {}; },
+    revokeReviewRelation(payload) { calls.push(["revoke", payload]); return {}; },
+    recoverReviewInputBatch(payload) { calls.push(["recover", payload]); return {}; },
+    createReviewBackup(scope) { calls.push(["backup", scope]); return {}; },
   };
-  registerMemoryIpc({ ipcMain, memoryService, settingsService: null });
-  assert.deepEqual(
-    await handlers.get("memory:structure-proposals")(null, { reviewStates: ["pending"] }),
-    [{ id: "proposal-1" }],
+
+  assert.throws(
+    () => registerMemoryIpc({ ipcMain: { handle() {} } }),
+    /嵌入式长期记忆服务/u,
   );
-  assert.deepEqual(
-    await handlers.get("memory:resolve-structure")(null, {
-      proposalId: "proposal-1",
-      action: "accept",
-      note: "确认",
-    }),
-    { status: "accepted" },
-  );
-  assert.deepEqual(
-    await handlers.get("memory:subject-attribution-proposals")(null, {
-      reviewStates: ["pending"],
-    }),
-    [{ id: "subject-proposal-1" }],
-  );
-  assert.deepEqual(
-    await handlers.get("memory:resolve-subject-attribution")(null, {
-      proposalId: "subject-proposal-1",
-      action: "dismiss",
-      note: "来源含混",
-    }),
-    { status: "dismissed" },
-  );
-  assert.deepEqual(
-    await handlers.get("memory:retrieval-traces")(null, { resultStatus: "ready" }),
-    [{ id: "trace-1" }],
-  );
-  assert.deepEqual(
-    await handlers.get("memory:retrieval-feedback")(null, {
-      traceId: "trace-1",
-      signal: "helpful",
-      targetMemoryIds: ["memory-1"],
-      note: "有帮助",
-    }),
-    { signal: "helpful" },
-  );
-  assert.deepEqual(
-    await handlers.get("memory:retrieval-stats")(null, { memoryIds: ["memory-1"] }),
-    [{ memoryId: "memory-1", selectedCount: 2 }],
-  );
-  assert.deepEqual(
-    await handlers.get("memory:edge-retrieval-stats")(null, { edgeIds: ["edge-1"] }),
-    [{ edgeId: "edge-1", traversedCount: 1 }],
-  );
-  assert.deepEqual(
-    await handlers.get("memory:plasticity-preview")(null, { memoryIds: ["memory-1"] }),
-    { automaticAdjustmentAllowed: false },
-  );
+  registerMemoryIpc({ ipcMain, memoryService });
+
+  const contactId = "contact-suzu";
+  await handlers.get("memory:status")(null, { contactId });
+  await handlers.get("memory:search")(null, { query: "晚饭", contactId });
+  await handlers.get("memory:brain-graph")(null, { contactId });
+  await handlers.get("memory:list")(null, { contactId, limit: 20 });
+  await handlers.get("memory:detail")(null, { memoryId: "memory-1", contactId });
+  await handlers.get("memory:edit")(null, { memoryId: "memory-1", patch: { title: "新标题" }, reason: "修正", contactId });
+  await handlers.get("memory:delete")(null, { memoryId: "memory-1", reason: "重复", contactId });
+  await handlers.get("memory:restore")(null, { memoryId: "memory-1", reason: "恢复", contactId });
+  await handlers.get("memory:review-overview")(null, { contactId, reviewStates: ["pending"] });
+  await handlers.get("memory:review-proposal")(null, { type: "relation", proposalId: "review-1", contactId });
+  await handlers.get("memory:resolve-review")(null, { type: "structure", proposalId: "review-2", action: "accept", note: "确认", contactId });
+  await handlers.get("memory:revoke-review-relation")(null, { proposalId: "review-3", note: "撤销", contactId });
+  await handlers.get("memory:recover-review-input-batch")(null, { batchId: "batch-1", force: true, contactId });
+  await handlers.get("memory:create-review-backup")(null, { contactId });
+
   assert.deepEqual(calls, [
-    ["list", { reviewStates: ["pending"] }],
-    ["resolve", { proposalId: "proposal-1", action: "accept", note: "确认" }],
-    ["subject-list", { reviewStates: ["pending"] }],
-    ["subject-resolve", {
-      proposalId: "subject-proposal-1",
-      action: "dismiss",
-      note: "来源含混",
-    }],
-    ["traces", { resultStatus: "ready" }],
-    ["feedback", {
-      traceId: "trace-1",
-      signal: "helpful",
-      targetMemoryIds: ["memory-1"],
-      note: "有帮助",
-    }],
-    ["stats", { memoryIds: ["memory-1"] }],
-    ["edge-stats", { edgeIds: ["edge-1"] }],
-    ["plasticity", { memoryIds: ["memory-1"] }],
+    ["status", { contactId }],
+    ["search", "晚饭", { contactId }],
+    ["brain", { contactId }],
+    ["list", { contactId, limit: 20 }],
+    ["detail", "memory-1", { contactId }],
+    ["edit", "memory-1", { title: "新标题" }, "修正", { contactId }],
+    ["remove", "memory-1", "重复", { contactId }],
+    ["restore", "memory-1", "恢复", { contactId }],
+    ["overview", { contactId, reviewStates: ["pending"] }],
+    ["proposal", { type: "relation", proposalId: "review-1", contactId }],
+    ["resolve", { type: "structure", proposalId: "review-2", action: "accept", note: "确认", contactId }],
+    ["revoke", { proposalId: "review-3", note: "撤销", contactId }],
+    ["recover", { batchId: "batch-1", force: true, contactId }],
+    ["backup", { contactId }],
   ]);
 });

@@ -155,17 +155,10 @@ function normalizedSessionId(value) {
   return id;
 }
 
-function normalizedProjectRoot(value) {
-  const root = clean(value);
-  if (!root || !path.isAbsolute(root)) throw new WeChatLinkError("Claude 工作目录无效。");
-  return path.resolve(root);
-}
-
-function sessionEquals(link, sessionId, projectRoot) {
-  if (clean(link?.sessionId) !== clean(sessionId)) return false;
-  const left = path.resolve(clean(link?.projectRoot || "."));
-  const right = path.resolve(clean(projectRoot || "."));
-  return process.platform === "win32" ? left.toLowerCase() === right.toLowerCase() : left === right;
+function normalizedContactId(value) {
+  const id = clean(value);
+  if (!/^contact-[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u.test(id)) throw new WeChatLinkError("联系人标识无效。");
+  return id;
 }
 
 function normalizeDelivery(value = {}) {
@@ -180,14 +173,12 @@ function emptyPublicStore() {
 function normalizePublicLink(value = {}) {
   const raw = plainObject(value);
   const id = clean(raw.id);
-  const sessionId = clean(raw.sessionId);
-  const projectRoot = clean(raw.projectRoot);
-  if (!id || !sessionId || !projectRoot) return null;
+  const contactId = clean(raw.contactId);
+  if (!id || !contactId) return null;
   try {
     return {
       id,
-      sessionId: normalizedSessionId(sessionId),
-      projectRoot: normalizedProjectRoot(projectRoot),
+      contactId: normalizedContactId(contactId),
       accountId: clean(raw.accountId).slice(0, 300),
       linkedUserId: clean(raw.linkedUserId).slice(0, 300),
       baseUrl: normalizedBaseUrl(raw.baseUrl),
@@ -359,7 +350,7 @@ export function createWeChatLinkService({
   sleepImpl = sleep,
 } = {}) {
   if (!chat?.sendToSession || !chat?.steer || !chat?.stop || !chat?.subscribe) throw new WeChatLinkError("微信连接需要本机 Claude 会话服务。");
-  if (!reader?.resolveSession) throw new WeChatLinkError("微信连接需要原生 Claude 会话读取服务。");
+  if (!reader?.resolveContactSession || !reader?.contactIdForSession) throw new WeChatLinkError("微信连接需要联系人会话读取服务。");
   if (!clean(dataRoot) || !path.isAbsolute(clean(dataRoot))) throw new WeChatLinkError("无法定位 Suzu Lives 软件数据目录。");
   if (typeof fetchImpl !== "function") throw new WeChatLinkError("当前运行环境无法访问微信 iLink 服务。");
 
@@ -410,7 +401,7 @@ export function createWeChatLinkService({
 
   const publicLink = (link) => link ? {
     id: link.id,
-    sessionId: link.sessionId,
+    contactId: link.contactId,
     accountId: mask(link.accountId),
     linkedUserId: mask(link.linkedUserId),
     enabled: link.enabled !== false,
@@ -421,9 +412,9 @@ export function createWeChatLinkService({
     createdAt: link.createdAt || "",
   } : null;
 
-  const findLinkForSession = (sessionId, projectRoot) => publicStore.links.find((link) => sessionEquals(link, sessionId, projectRoot)) || null;
+  const findLinkForContact = (contactId) => publicStore.links.find((link) => link.contactId === clean(contactId)) || null;
   const findLinkById = (id) => publicStore.links.find((link) => link.id === id) || null;
-  const scopeForSession = async (sessionId) => reader.resolveSession(normalizedSessionId(sessionId));
+  const scopeForContact = async (contactId) => reader.resolveContactSession(normalizedContactId(contactId));
 
   const credentialsFor = (linkId) => {
     const raw = plainObject(credentialStore.links[linkId]);
@@ -607,20 +598,20 @@ export function createWeChatLinkService({
     return { kind, fileName, size: uploaded.rawSize };
   };
 
-  const inboundMediaDirectory = (link, key) => path.join(
+  const inboundMediaDirectory = (session, key) => path.join(
     resolveAgentConversationDataRoot({
       dataRoot,
-      projectRoot: link.projectRoot,
-      sessionId: normalizedSessionId(link.sessionId),
+      projectRoot: clean(session?.projectRoot),
+      sessionId: normalizedSessionId(session?.id),
     }),
     "inbound",
     createHash("sha256").update(key).digest("hex").slice(0, 32),
   );
 
-  const cacheInboundMedia = async (link, key, index, { kind, data, fileName, mimeType }) => {
+  const cacheInboundMedia = async (session, key, index, { kind, data, fileName, mimeType }) => {
     const content = Buffer.isBuffer(data) ? data : Buffer.from(data || []);
     if (!content.length) throw new WeChatLinkError("微信媒体文件为空。 ");
-    const directory = inboundMediaDirectory(link, key);
+    const directory = inboundMediaDirectory(session, key);
     const prefix = `${String(index + 1).padStart(2, "0")}-`;
     const savedName = kind === "image"
       ? `${prefix}wechat-image${imageExtension(mimeType)}`
@@ -638,7 +629,7 @@ export function createWeChatLinkService({
     };
   };
 
-  const collectInboundMedia = async (link, message, key, { signal } = {}) => {
+  const collectInboundMedia = async (session, message, key, { signal } = {}) => {
     const result = [];
     for (const item of inboundItems(message)) {
       if (result.length >= MAX_WECHAT_INBOUND_MEDIA_ITEMS) break;
@@ -667,7 +658,7 @@ export function createWeChatLinkService({
       try {
         const data = await downloadInboundMedia(encryptedQueryParam, aesKey, { signal });
         const mimeType = kind === "image" ? detectImageMime(data) : "application/octet-stream";
-        result.push(await cacheInboundMedia(link, key, result.length, {
+        result.push(await cacheInboundMedia(session, key, result.length, {
           kind,
           data,
           fileName,
@@ -724,7 +715,7 @@ export function createWeChatLinkService({
     catch (error) {
       link.lastError = clean(error?.message) || "无法回传微信命令结果。";
       await persist();
-      emit({ type: "error", linkId: link.id, sessionId: link.sessionId, message: link.lastError });
+      emit({ type: "error", linkId: link.id, contactId: link.contactId, message: link.lastError });
     }
   };
 
@@ -735,31 +726,32 @@ export function createWeChatLinkService({
     const key = messageKey(message);
     if (!key || link.recentMessageIds.includes(key)) return;
     const text = inboundText(message);
-    const media = await collectInboundMedia(link, message, key);
-    if (!text && !media.length) return;
     const contextToken = clean(message?.context_token ?? message?.contextToken);
     if (contextToken) saveCredentials(link.id, { contextToken });
     const command = parseSuzuConversationCommand(text);
     try {
+      const session = await scopeForContact(link.contactId);
+      const media = await collectInboundMedia(session, message, key);
+      if (!text && !media.length) return;
       if (command.action === "notice") {
         await commandResponse(link, command.message, contextToken);
       } else if (command.action === "stop") {
-        const result = chat.stop({ sessionId: link.sessionId, projectRoot: link.projectRoot });
+        const result = chat.stop({ sessionId: session.id, projectRoot: session.projectRoot });
         await commandResponse(link, clean(result?.message) || "正在停止当前 Claude Code 任务。", contextToken);
       } else if (command.action === "steer") {
         const result = await chat.steer({
           content: command.content,
-          sessionId: link.sessionId,
-          projectRoot: link.projectRoot,
-          hasTranscript: true,
+          sessionId: session.id,
+          projectRoot: session.projectRoot,
+          hasTranscript: session.hasTranscript === true,
         });
         await commandResponse(link, clean(result?.message) || "引导已送达。", contextToken);
       } else {
         const request = {
           content: command.content,
-          sessionId: link.sessionId,
-          projectRoot: link.projectRoot,
-          hasTranscript: true,
+          sessionId: session.id,
+          projectRoot: session.projectRoot,
+          hasTranscript: session.hasTranscript === true,
           kind: "message",
         };
         if (media.length) request.media = media;
@@ -769,13 +761,13 @@ export function createWeChatLinkService({
       link.lastReceivedAt = nowIso(now);
       link.lastError = "";
       await persist();
-      emit({ type: "received", linkId: link.id, sessionId: link.sessionId });
+      emit({ type: "received", linkId: link.id, contactId: link.contactId });
     } catch (error) {
       const messageText = clean(error?.message) || "无法处理这条微信消息。";
       link.lastError = messageText;
       await persist();
       await commandResponse(link, `这条消息没有送达：${messageText}`, contextToken);
-      emit({ type: "error", linkId: link.id, sessionId: link.sessionId, message: messageText });
+      emit({ type: "error", linkId: link.id, contactId: link.contactId, message: messageText });
     }
   };
 
@@ -796,9 +788,9 @@ export function createWeChatLinkService({
               base_info: { channel_version: CHANNEL_VERSION },
             }, { signal: controller.signal });
             if (Number(response?.errcode) === -14) {
-              link.lastError = "微信会话已过期，请在此会话设置中重新扫码。";
+              link.lastError = "微信连接已过期，请在这位联系人的设置中重新扫码。";
               await persist();
-              emit({ type: "expired", linkId: link.id, sessionId: link.sessionId, message: link.lastError });
+              emit({ type: "expired", linkId: link.id, contactId: link.contactId, message: link.lastError });
               break;
             }
             for (const message of Array.isArray(response?.msgs) ? response.msgs : []) await runInbound(link, message);
@@ -812,14 +804,14 @@ export function createWeChatLinkService({
             if (controller.signal.aborted) break;
             link.lastError = clean(error?.message) || "微信消息接收失败。";
             await persist();
-            emit({ type: "error", linkId: link.id, sessionId: link.sessionId, message: link.lastError });
+            emit({ type: "error", linkId: link.id, contactId: link.contactId, message: link.lastError });
             await sleepImpl(backoff, controller.signal);
             backoff = Math.min(POLL_BACKOFF_MAX_MS, backoff * 2);
           }
         }
       } finally {
         if (loops.get(linkId) === controller) loops.delete(linkId);
-        emit({ type: "status", linkId, sessionId: findLinkById(linkId)?.sessionId || "" });
+        emit({ type: "status", linkId, contactId: findLinkById(linkId)?.contactId || "" });
       }
     })();
   };
@@ -843,8 +835,7 @@ export function createWeChatLinkService({
     const baseUrl = normalizedBaseUrl(status?.baseurl ?? status?.base_url ?? status?.baseUrl ?? attempt.baseUrl);
     const link = {
       id: randomUUID(),
-      sessionId: attempt.sessionId,
-      projectRoot: attempt.projectRoot,
+      contactId: attempt.contactId,
       accountId,
       linkedUserId,
       baseUrl,
@@ -857,18 +848,18 @@ export function createWeChatLinkService({
       lastReceivedAt: "",
       lastSentAt: "",
     };
-    const priorLinks = publicStore.links.filter((item) => sessionEquals(item, attempt.sessionId, attempt.projectRoot));
+    const priorLinks = publicStore.links.filter((item) => item.contactId === attempt.contactId);
     for (const prior of priorLinks) {
       loops.get(prior.id)?.abort();
       delete credentialStore.links[prior.id];
     }
-    publicStore.links = publicStore.links.filter((item) => !sessionEquals(item, attempt.sessionId, attempt.projectRoot));
+    publicStore.links = publicStore.links.filter((item) => item.contactId !== attempt.contactId);
     publicStore.links.push(link);
     saveCredentials(link.id, { token, contextToken: "" });
     await persist();
     if (publicStore.enabled) startLoop(link.id);
     attempts.delete(attempt.id);
-    emit({ type: "connected", linkId: link.id, sessionId: link.sessionId });
+    emit({ type: "connected", linkId: link.id, contactId: link.contactId });
   };
 
   const runAttempt = async (attempt) => {
@@ -885,12 +876,12 @@ export function createWeChatLinkService({
           attempt.qrKey = next.qrKey;
           attempt.qrImageDataUrl = next.qrImageDataUrl;
           attempt.status = "waiting";
-          emit({ type: "qr", attemptId: attempt.id, sessionId: attempt.sessionId });
+          emit({ type: "qr", attemptId: attempt.id, contactId: attempt.contactId });
         } else {
           const nextStatus = ["scaned", "scanned"].includes(state) ? "scanned" : "waiting";
           if (nextStatus !== attempt.status) {
             attempt.status = nextStatus;
-            emit({ type: "qr", attemptId: attempt.id, sessionId: attempt.sessionId });
+            emit({ type: "qr", attemptId: attempt.id, contactId: attempt.contactId });
           }
         }
         await sleepImpl(1_000, attempt.controller.signal);
@@ -898,27 +889,29 @@ export function createWeChatLinkService({
       if (!disposed && !attempt.controller.signal.aborted) {
         attempt.status = "expired";
         attempt.error = "等待微信扫码超时，请重新生成二维码。";
-        emit({ type: "qr", attemptId: attempt.id, sessionId: attempt.sessionId });
+        emit({ type: "qr", attemptId: attempt.id, contactId: attempt.contactId });
       }
     } catch (error) {
       if (!attempt.controller.signal.aborted) {
         attempt.status = "error";
         attempt.error = clean(error?.message) || "微信二维码状态读取失败。";
-        emit({ type: "qr", attemptId: attempt.id, sessionId: attempt.sessionId });
+        emit({ type: "qr", attemptId: attempt.id, contactId: attempt.contactId });
       }
     }
   };
 
-  const begin = async ({ sessionId } = {}) => {
+  const begin = async ({ contactId } = {}) => {
     await ensureLoaded();
     if (publicStore.enabled !== true) throw new WeChatLinkError("请先在“能力 → 行动”中开启“连接微信”。 ");
-    const session = await scopeForSession(sessionId);
-    const oldAttempt = [...attempts.values()].find((item) => item.sessionId === session.id && sessionEquals(item, session.id, session.projectRoot));
+    const id = normalizedContactId(contactId);
+    const session = await scopeForContact(id);
+    const oldAttempt = [...attempts.values()].find((item) => item.contactId === id);
     if (oldAttempt) oldAttempt.controller.abort();
     const controller = new AbortController();
     const initial = await fetchQRCode(DEFAULT_BASE_URL, controller.signal);
     const attempt = {
       id: randomUUID(),
+      contactId: id,
       sessionId: session.id,
       projectRoot: session.projectRoot,
       baseUrl: DEFAULT_BASE_URL,
@@ -931,25 +924,25 @@ export function createWeChatLinkService({
     };
     attempts.set(attempt.id, attempt);
     void runAttempt(attempt);
-    emit({ type: "qr", attemptId: attempt.id, sessionId: session.id });
-    return snapshot({ sessionId: session.id });
+    emit({ type: "qr", attemptId: attempt.id, contactId: id });
+    return snapshot({ contactId: id });
   };
 
-  const snapshot = async ({ sessionId = "" } = {}) => {
+  const snapshot = async ({ contactId = "" } = {}) => {
     await ensureLoaded();
-    const id = clean(sessionId);
+    const id = clean(contactId);
     let link = null;
     let attempt = null;
     if (id) {
-      const session = await scopeForSession(id);
-      link = findLinkForSession(session.id, session.projectRoot);
-      attempt = [...attempts.values()].find((item) => sessionEquals(item, session.id, session.projectRoot)) || null;
+      await scopeForContact(id);
+      link = findLinkForContact(id);
+      attempt = [...attempts.values()].find((item) => item.contactId === id) || null;
     }
     return {
       enabled: publicStore.enabled === true,
       delivery: { ...publicStore.delivery },
-      linkedSessions: publicStore.links.length,
-      session: publicLink(link),
+      linkedContacts: publicStore.links.length,
+      contact: publicLink(link),
       pendingQr: attempt ? {
         id: attempt.id,
         status: attempt.status,
@@ -970,32 +963,34 @@ export function createWeChatLinkService({
     return snapshot();
   };
 
-  const setSessionEnabled = async ({ sessionId, enabled } = {}) => {
+  const setContactEnabled = async ({ contactId, enabled } = {}) => {
     await ensureLoaded();
-    const session = await scopeForSession(sessionId);
-    const link = findLinkForSession(session.id, session.projectRoot);
-    if (!link) throw new WeChatLinkError("当前会话还没有微信连接。 ");
+    const id = normalizedContactId(contactId);
+    await scopeForContact(id);
+    const link = findLinkForContact(id);
+    if (!link) throw new WeChatLinkError("这位联系人还没有微信连接。 ");
     link.enabled = enabled === true;
     link.updatedAt = nowIso(now);
     await persist();
     if (link.enabled && publicStore.enabled) startLoop(link.id);
     else loops.get(link.id)?.abort();
-    emit({ type: "status", linkId: link.id, sessionId: link.sessionId });
-    return snapshot({ sessionId: session.id });
+    emit({ type: "status", linkId: link.id, contactId: link.contactId });
+    return snapshot({ contactId: id });
   };
 
-  const disconnect = async ({ confirmed, sessionId } = {}) => {
+  const disconnect = async ({ confirmed, contactId } = {}) => {
     if (confirmed !== true) throw new WeChatLinkError("断开微信连接需要明确确认。 ");
     await ensureLoaded();
-    const session = await scopeForSession(sessionId);
-    const link = findLinkForSession(session.id, session.projectRoot);
-    if (!link) return snapshot({ sessionId: session.id });
+    const id = normalizedContactId(contactId);
+    await scopeForContact(id);
+    const link = findLinkForContact(id);
+    if (!link) return snapshot({ contactId: id });
     loops.get(link.id)?.abort();
     publicStore.links = publicStore.links.filter((item) => item.id !== link.id);
     delete credentialStore.links[link.id];
     await persist();
-    emit({ type: "disconnected", linkId: link.id, sessionId: link.sessionId });
-    return snapshot({ sessionId: session.id });
+    emit({ type: "disconnected", linkId: link.id, contactId: link.contactId });
+    return snapshot({ contactId: id });
   };
 
   const handleChatEvent = (event) => {
@@ -1006,54 +1001,58 @@ export function createWeChatLinkService({
     if (event.kind === "schedule" && !["agent-reply", "agent-media"].includes(event.type)) return;
     const projectRoot = clean(event.projectRoot);
     if (!projectRoot) return;
-    const links = publicStore.links.filter((link) => sessionEquals(link, event.sessionId, projectRoot) && link.enabled !== false);
-    if (!links.length || !publicStore.enabled) return;
-    if (event.type === "agent-media") {
-      const media = Array.isArray(event.media) ? event.media : [];
-      if (!media.length) return;
+    void (async () => {
+      const contactId = await reader.contactIdForSession({ sessionId: event.sessionId, projectRoot });
+      if (!contactId || !publicStore.enabled) return;
+      const links = publicStore.links.filter((link) => link.contactId === contactId && link.enabled !== false);
+      if (!links.length) return;
+      if (event.type === "agent-media") {
+        const media = Array.isArray(event.media) ? event.media : [];
+        if (!media.length) return;
+        for (const link of links) {
+          void queueTask(link, async () => {
+            for (const entry of media) await sendMedia(link, await readAgentMedia(entry));
+          }).catch(async (error) => {
+            link.lastError = clean(error?.message) || "微信文件发送失败。";
+            await persist().catch(() => undefined);
+            emit({ type: "error", linkId: link.id, contactId: link.contactId, message: link.lastError });
+          });
+        }
+        return;
+      }
       for (const link of links) {
-        void queueTask(link, async () => {
-          for (const entry of media) await sendMedia(link, await readAgentMedia(entry));
-        }).catch(async (error) => {
-          link.lastError = clean(error?.message) || "微信文件发送失败。";
+        let content = "";
+        let allowed = false;
+        if (event.type === "agent-reply") {
+          allowed = publicStore.delivery.agent === true;
+          content = clean(event.content);
+        } else if (event.type === "attachment") {
+          allowed = publicStore.delivery.attachments === true;
+          content = clean(event.content);
+        } else if (event.type === "tool") {
+          allowed = publicStore.delivery.tools === true;
+          content = clean(event.content);
+        } else if (event.type === "permission") {
+          allowed = publicStore.delivery.tools === true;
+          content = `Claude Code 正在等待工具权限：${clean(event.toolName) || "工具"}`;
+        } else if (event.type === "thinking") {
+          allowed = publicStore.delivery.thinking === true;
+          content = clean(event.content);
+        } else if (event.type === "usage") {
+          allowed = publicStore.delivery.tokens === true;
+          content = clean(event.content);
+        } else if (["error", "turn-stopped"].includes(event.type)) {
+          allowed = publicStore.delivery.system === true;
+          content = clean(event.message);
+        }
+        if (!allowed || !content) continue;
+        void queueDelivery(link, content).catch(async (error) => {
+          link.lastError = clean(error?.message) || "微信消息发送失败。";
           await persist().catch(() => undefined);
-          emit({ type: "error", linkId: link.id, sessionId: link.sessionId, message: link.lastError });
+          emit({ type: "error", linkId: link.id, contactId: link.contactId, message: link.lastError });
         });
       }
-      return;
-    }
-    for (const link of links) {
-      let content = "";
-      let allowed = false;
-      if (event.type === "agent-reply") {
-        allowed = publicStore.delivery.agent === true;
-        content = clean(event.content);
-      } else if (event.type === "attachment") {
-        allowed = publicStore.delivery.attachments === true;
-        content = clean(event.content);
-      } else if (event.type === "tool") {
-        allowed = publicStore.delivery.tools === true;
-        content = clean(event.content);
-      } else if (event.type === "permission") {
-        allowed = publicStore.delivery.tools === true;
-        content = `Claude Code 正在等待工具权限：${clean(event.toolName) || "工具"}`;
-      } else if (event.type === "thinking") {
-        allowed = publicStore.delivery.thinking === true;
-        content = clean(event.content);
-      } else if (event.type === "usage") {
-        allowed = publicStore.delivery.tokens === true;
-        content = clean(event.content);
-      } else if (["error", "turn-stopped"].includes(event.type)) {
-        allowed = publicStore.delivery.system === true;
-        content = clean(event.message);
-      }
-      if (!allowed || !content) continue;
-      void queueDelivery(link, content).catch(async (error) => {
-        link.lastError = clean(error?.message) || "微信消息发送失败。";
-        await persist().catch(() => undefined);
-        emit({ type: "error", linkId: link.id, sessionId: link.sessionId, message: link.lastError });
-      });
-    }
+    })().catch(() => undefined);
   };
 
   const unsubscribeChat = chat.subscribe(handleChatEvent);
@@ -1070,7 +1069,7 @@ export function createWeChatLinkService({
       listeners.clear();
     },
     saveSettings,
-    setSessionEnabled,
+    setContactEnabled,
     snapshot,
     start: startStoredLoops,
     subscribe: (listener) => {

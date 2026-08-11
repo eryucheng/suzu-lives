@@ -1,67 +1,69 @@
-import { createMemoryService } from "../services/memory-service.mjs";
+function plainObject(value) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+}
 
-export function registerMemoryIpc({ ipcMain, settingsService, memoryService }) {
-  const service = memoryService || createMemoryService({ settingsService });
-  ipcMain.handle("memory:status", () => service.status());
-  ipcMain.handle("memory:search", (_event, query) => service.search(String(query || "")));
-  ipcMain.handle("memory:brain-graph", () => service.brainGraph());
-  ipcMain.handle("memory:list", (_event, filters) => service.list(
-    filters && typeof filters === "object" ? filters : {},
-  ));
-  ipcMain.handle("memory:detail", (_event, memoryId) => service.detail(
-    String(memoryId || ""),
-  ));
+function memoryScope(value) {
+  const source = plainObject(value);
+  const contactId = String(source.contactId || "").trim();
+  return {
+    ...(contactId ? { contactId } : {}),
+  };
+}
+
+export function registerMemoryIpc({ ipcMain, memoryService }) {
+  if (!memoryService) throw new Error("记忆 IPC 需要嵌入式长期记忆服务。");
+  const service = memoryService;
+  ipcMain.handle("memory:status", (_event, scope) => service.status(plainObject(scope)));
+  ipcMain.handle("memory:search", (_event, value) => {
+    if (typeof value === "string") return service.search(value);
+    const source = plainObject(value);
+    return service.search(String(source.query || ""), memoryScope(source));
+  });
+  ipcMain.handle("memory:brain-graph", (_event, scope) => service.brainGraph(plainObject(scope)));
+  ipcMain.handle("memory:list", (_event, filters) => service.list(plainObject(filters)));
+  ipcMain.handle("memory:detail", (_event, value) => {
+    if (typeof value === "string") return service.detail(value);
+    const source = plainObject(value);
+    return service.detail(String(source.memoryId || ""), memoryScope(source));
+  });
   ipcMain.handle("memory:edit", (_event, payload) => service.edit(
     String(payload?.memoryId || ""),
     payload?.patch && typeof payload.patch === "object" ? payload.patch : {},
     String(payload?.reason || ""),
+    memoryScope(payload),
   ));
   ipcMain.handle("memory:delete", (_event, payload) => service.remove(
     String(payload?.memoryId || ""),
     String(payload?.reason || ""),
+    memoryScope(payload),
   ));
   ipcMain.handle("memory:restore", (_event, payload) => service.restore(
     String(payload?.memoryId || ""),
     String(payload?.reason || ""),
+    memoryScope(payload),
   ));
-  ipcMain.handle("memory:structure-proposals", (_event, filters) => (
-    service.structureProposals(filters && typeof filters === "object" ? filters : {})
-  ));
-  ipcMain.handle("memory:resolve-structure", (_event, payload) => service.resolveStructure({
+  ipcMain.handle("memory:review-overview", (_event, filters) => service.reviewOverview(plainObject(filters)));
+  ipcMain.handle("memory:review-proposal", (_event, payload) => service.reviewProposal({
+    type: String(payload?.type || ""),
+    proposalId: String(payload?.proposalId || ""),
+    ...memoryScope(payload),
+  }));
+  ipcMain.handle("memory:resolve-review", (_event, payload) => service.resolveReview({
+    type: String(payload?.type || ""),
     proposalId: String(payload?.proposalId || ""),
     action: String(payload?.action || ""),
     note: String(payload?.note || ""),
+    ...memoryScope(payload),
   }));
-  ipcMain.handle("memory:subject-attribution-proposals", (_event, filters) => (
-    service.subjectAttributionProposals(
-      filters && typeof filters === "object" ? filters : {},
-    )
-  ));
-  ipcMain.handle("memory:resolve-subject-attribution", (_event, payload) => (
-    service.resolveSubjectAttribution({
-      proposalId: String(payload?.proposalId || ""),
-      action: String(payload?.action || ""),
-      note: String(payload?.note || ""),
-    })
-  ));
-  ipcMain.handle("memory:retrieval-traces", (_event, filters) => (
-    service.retrievalTraces(filters && typeof filters === "object" ? filters : {})
-  ));
-  ipcMain.handle("memory:retrieval-feedback", (_event, payload) => (
-    service.recordRetrievalFeedback({
-      traceId: String(payload?.traceId || ""),
-      signal: String(payload?.signal || ""),
-      targetMemoryIds: Array.isArray(payload?.targetMemoryIds) ? payload.targetMemoryIds : [],
-      note: String(payload?.note || ""),
-    })
-  ));
-  ipcMain.handle("memory:retrieval-stats", (_event, filters) => (
-    service.memoryRetrievalStats(filters && typeof filters === "object" ? filters : {})
-  ));
-  ipcMain.handle("memory:edge-retrieval-stats", (_event, filters) => (
-    service.edgeRetrievalStats(filters && typeof filters === "object" ? filters : {})
-  ));
-  ipcMain.handle("memory:plasticity-preview", (_event, filters) => (
-    service.plasticityPreview(filters && typeof filters === "object" ? filters : {})
-  ));
+  ipcMain.handle("memory:revoke-review-relation", (_event, payload) => service.revokeReviewRelation({
+    proposalId: String(payload?.proposalId || ""),
+    note: String(payload?.note || ""),
+    ...memoryScope(payload),
+  }));
+  ipcMain.handle("memory:recover-review-input-batch", (_event, payload) => service.recoverReviewInputBatch({
+    batchId: String(payload?.batchId || ""),
+    force: payload?.force === true,
+    ...memoryScope(payload),
+  }));
+  ipcMain.handle("memory:create-review-backup", (_event, scope) => service.createReviewBackup(plainObject(scope)));
 }

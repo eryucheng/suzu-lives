@@ -13,21 +13,30 @@ const MAX_AGENT_MEDIA_ITEMS = 24;
 const MAX_AGENT_MEDIA_BYTES = 50 * 1024 * 1024;
 const MAX_INBOUND_MEDIA_ITEMS = 24;
 const MAX_INBOUND_MEDIA_BYTES = 50 * 1024 * 1024;
+const TEXT_STREAM_IDLE_TIMEOUT_MS = 3 * 60 * 1000;
+const TEXT_STREAM_CLOSE_GRACE_MS = 5_000;
+const VOICE_CALL_TURN_OPEN = "<suzu-voice-call-turn>";
+const VOICE_CALL_TURN_CLOSE = "</suzu-voice-call-turn>";
 const CONVERSATION_ATTACHMENT_RECEIPT = "suzu-conversation-attachment";
 const WECHAT_MEDIA_MANIFEST_OPEN = "<suzu-wechat-media>";
 const WECHAT_MEDIA_MANIFEST_CLOSE = "</suzu-wechat-media>";
 const CLAUDE_RUNTIME_FEATURE_DEFAULTS = Object.freeze({
+  bash: true,
+  edit: true,
+  glob: true,
+  grep: true,
   subagents: false,
   taskList: false,
   backgroundTasks: false,
   nativeCron: false,
   askUserQuestion: false,
+  write: true,
 });
 const VOICE_CALL_SYSTEM_PROMPT = [
-  "当前是 Suzu 内置语音通话。",
-  "请用自然、口语化、简短的中文回答；先给一两句可以独立朗读的短句。",
-  "不要朗读 Markdown、文件路径、工具过程、内部状态或“正在处理”。",
-  "如果确实需要操作工具，先用一句简短的话说明，再继续完成事情。",
+  `Suzu 会把实时语音通话的一轮输入包装为 ${VOICE_CALL_TURN_OPEN}JSON${VOICE_CALL_TURN_CLOSE}。`,
+  "仅在收到这个标记时，读取 JSON 中的 transcript 作为用户本轮说的话；用自然、口语化、简短的中文回答，先给一两句可以独立朗读的短句。",
+  "标记约束只适用于这一轮；后续没有该标记的普通文字消息保持正常回答方式。",
+  "不要提及这个标记、JSON、语音通话的内部机制，也不要朗读 Markdown、文件路径、工具过程、内部状态或“正在处理”。如确实需要操作工具，先用一句简短的话说明，再继续完成事情。",
 ].join("\n");
 const SELECTABLE_CLAUDE_ALLOWED_TOOLS = Object.freeze([
   ["read", "Read"],
@@ -50,11 +59,16 @@ function normalizeClaudeRuntimeFeatures(value = {}) {
   const source = value && typeof value === "object" && !Array.isArray(value) ? value : {};
   return {
     ...CLAUDE_RUNTIME_FEATURE_DEFAULTS,
+    bash: source.bash !== false,
+    edit: source.edit !== false,
+    glob: source.glob !== false,
+    grep: source.grep !== false,
     subagents: source.subagents === true,
     taskList: source.taskList === true,
     backgroundTasks: source.backgroundTasks === true,
     nativeCron: source.nativeCron === true,
     askUserQuestion: source.askUserQuestion === true,
+    write: source.write !== false,
   };
 }
 
@@ -268,6 +282,20 @@ function writeJson(child, value) {
   child.stdin.write(`${JSON.stringify(value)}\n`);
 }
 
+function boundedDelay(value, fallback) {
+  const delay = Number(value);
+  return Number.isFinite(delay) && delay > 0 ? Math.trunc(delay) : fallback;
+}
+
+function streamSignature(args) {
+  const source = Array.isArray(args) ? args : [];
+  const sessionFlag = source.at(-2);
+  const stable = ["--resume", "--session-id"].includes(sessionFlag)
+    ? source.slice(0, -2)
+    : source;
+  return JSON.stringify(stable);
+}
+
 function inboundMediaFileName(value, fallback) {
   const name = path.basename(clean(value)).replace(/[\r\n]/gu, "").slice(0, 300);
   return name || fallback;
@@ -314,6 +342,10 @@ function wechatMediaManifest(media, mediaSource = "wechat") {
       size: item.size,
     })),
   })}${WECHAT_MEDIA_MANIFEST_CLOSE}`;
+}
+
+function voiceCallInputContent(text) {
+  return `${VOICE_CALL_TURN_OPEN}\n${JSON.stringify({ source: "suzu-live-call", transcript: text })}\n${VOICE_CALL_TURN_CLOSE}`;
 }
 
 function claudeInputContent(text, media, mediaSource = "wechat") {
@@ -374,12 +406,23 @@ function isNoReply(value) {
 }
 
 /** The flags are deliberately limited to Claude Code's public stream protocol. */
-export function claudeCliArguments({ sessionId, hasTranscript = false, appendSystemPrompt = "", claudeRuntimeFeatures, allowedTools = [], workspaceDirectories = [] } = {}) {
+export function claudeCliArguments({ sessionId, hasTranscript = false, appendSystemPrompt = "", claudeRuntimeFeatures, claudeToolPermissions, allowedTools = [], workspaceDirectories = [] } = {}) {
   const id = clean(sessionId);
   if (!id) throw new ConversationChatError("缺少 Claude 会话标识。");
   const extraPrompt = clean(appendSystemPrompt);
   const features = normalizeClaudeRuntimeFeatures(claudeRuntimeFeatures);
+  const toolPermissions = claudeToolPermissions && typeof claudeToolPermissions === "object" && !Array.isArray(claudeToolPermissions)
+    ? claudeToolPermissions
+    : {};
   const disallowedTools = [
+    toolPermissions.read === false && "Read",
+    !features.glob && "Glob",
+    !features.grep && "Grep",
+    !features.edit && "Edit",
+    !features.write && "Write",
+    !features.bash && "Bash",
+    toolPermissions.webFetch === false && "WebFetch",
+    toolPermissions.webSearch === false && "WebSearch",
     !features.subagents && "Agent",
     !features.taskList && "TodoWrite",
     !features.askUserQuestion && "AskUserQuestion",
@@ -440,8 +483,11 @@ export function createConversationChatService({
   agentScheduleCommand = null,
   claudeWorkspaceDirectories = [],
   suzuCliCommand = "",
+  memoryRuntime = null,
   spawnImpl = spawn,
   onEvent = () => {},
+  idleStreamTimeoutMs = TEXT_STREAM_IDLE_TIMEOUT_MS,
+  idleStreamCloseGraceMs = TEXT_STREAM_CLOSE_GRACE_MS,
 } = {}) {
   if (!settingsService?.load) throw new ConversationChatError("会话聊天需要软件设置服务。");
   if (!reader?.ensureActiveSession) throw new ConversationChatError("会话聊天需要原生 Claude 会话读取服务。");
@@ -458,7 +504,10 @@ export function createConversationChatService({
   const knownTranscripts = new Set();
   const pendingTurns = new Map();
   const permissionRequests = new Map();
+  const reusableTextStreams = new Map();
   const startingSessions = new Set();
+  const textStreamIdleTimeout = boundedDelay(idleStreamTimeoutMs, TEXT_STREAM_IDLE_TIMEOUT_MS);
+  const textStreamCloseGrace = boundedDelay(idleStreamCloseGraceMs, TEXT_STREAM_CLOSE_GRACE_MS);
   let disposed = false;
 
   const queueFor = (sessionId, projectRoot) => {
@@ -486,16 +535,90 @@ export function createConversationChatService({
     });
   };
 
+  const clearTextStreamTimer = (stream, name) => {
+    const timer = stream?.[name];
+    if (!timer) return;
+    clearTimeout(timer);
+    stream[name] = null;
+  };
+
+  const releaseTextStream = (stream) => {
+    if (!stream) return;
+    clearTextStreamTimer(stream, "idleTimer");
+    clearTextStreamTimer(stream, "closeTimer");
+    stream.closed = true;
+    if (reusableTextStreams.get(stream.key) === stream) reusableTextStreams.delete(stream.key);
+  };
+
+  const closeTextStream = (stream, { force = false } = {}) => {
+    if (!stream || stream.closed || stream.closing) return;
+    clearTextStreamTimer(stream, "idleTimer");
+    stream.closing = true;
+    if (reusableTextStreams.get(stream.key) === stream) reusableTextStreams.delete(stream.key);
+    if (force) {
+      try { stream.child.kill?.("SIGTERM"); } catch { /* The process may already be stopping. */ }
+      return;
+    }
+    try {
+      if (!stream.child?.stdin || stream.child.stdin.destroyed || stream.child.stdin.writableEnded) throw new Error("Claude Code 输入流已经关闭。");
+      stream.child.stdin.end();
+    } catch {
+      try { stream.child.kill?.("SIGTERM"); } catch { /* The process may already be stopping. */ }
+      return;
+    }
+    stream.closeTimer = setTimeout(() => {
+      stream.closeTimer = null;
+      if (!stream.closed) {
+        try { stream.child.kill?.("SIGTERM"); } catch { /* The process may already be stopping. */ }
+      }
+    }, textStreamCloseGrace);
+    stream.closeTimer.unref?.();
+  };
+
+  const armTextStreamIdleClose = (stream) => {
+    if (disposed || !stream || stream.closed || stream.closing || stream.turn || pendingTurns.get(stream.key)?.length) return;
+    clearTextStreamTimer(stream, "idleTimer");
+    stream.idleTimer = setTimeout(() => {
+      stream.idleTimer = null;
+      if (!stream.turn && !pendingTurns.get(stream.key)?.length) closeTextStream(stream);
+    }, textStreamIdleTimeout);
+    stream.idleTimer.unref?.();
+  };
+
+  const textStreamIsWritable = (stream) => Boolean(
+    stream
+      && !stream.closed
+      && !stream.closing
+      && !stream.turn
+      && stream.child?.stdin
+      && !stream.child.stdin.destroyed
+      && !stream.child.stdin.writableEnded,
+  );
+
   const removePermissionRequests = (turn) => {
     for (const requestId of turn.permissionIds) permissionRequests.delete(requestId);
     turn.permissionIds.clear();
   };
 
-  const finishTurn = (turn, { error = "", interrupted = false } = {}) => {
+  const finishTurn = async (turn, { error = "", interrupted = false } = {}) => {
     if (turn.finished) return;
     turn.finished = true;
     activeTurns.delete(turn.key);
     removePermissionRequests(turn);
+    if (turn.memoryTurn) {
+      try {
+        if (interrupted || error || !clean(turn.text)) {
+          await memoryRuntime?.abortTurn?.(turn.memoryTurn);
+        } else {
+          await memoryRuntime?.completeTurn?.(turn.memoryTurn, {
+            assistantText: turn.text,
+            occurredAt: new Date().toISOString(),
+          });
+        }
+      } catch {
+        // A memory archive failure must not change the actual chat result.
+      }
+    }
     if (interrupted) {
       emit({
         type: "turn-stopped",
@@ -527,6 +650,39 @@ export function createConversationChatService({
       });
     }
     void pumpSession(turn.sessionId, turn.projectRoot);
+  };
+
+  const createTurn = (request, memoryTurn, child, textStream = null) => ({
+    agentMediaReceipts: new Set(),
+    auxiliaryEvents: new Set(),
+    child,
+    completed: false,
+    finished: false,
+    interrupted: false,
+    kind: request.kind,
+    lastAssistantText: "",
+    key: request.key,
+    memoryTurn,
+    permissionIds: new Set(),
+    projectRoot: request.projectRoot,
+    requestId: request.requestId,
+    resultError: "",
+    sessionId: request.sessionId,
+    settling: false,
+    stderr: "",
+    text: "",
+    textStream,
+  });
+
+  const settleTextStreamTurn = (stream, turn, outcome = {}) => {
+    if (!stream || stream.turn !== turn || turn.settling) return;
+    turn.settling = true;
+    void finishTurn(turn, outcome).finally(() => {
+      if (stream.turn !== turn) return;
+      stream.turn = null;
+      if (!stream.closed && !stream.closing) armTextStreamIdleClose(stream);
+      void pumpSession(turn.sessionId, turn.projectRoot);
+    });
   };
 
   const emitReply = (turn, type, done = false) => {
@@ -601,8 +757,8 @@ export function createConversationChatService({
     }
   };
 
-  const handleWireMessage = (turn, raw) => {
-    if (turn.interrupted) return;
+  const handleWireMessage = (turn, raw, textStream = null) => {
+    if (turn.interrupted || turn.settling || turn.finished) return;
     const type = clean(raw?.type);
     if (type === "system" && raw?.subtype === "init") {
       const commands = Array.isArray(raw?.slash_commands)
@@ -688,7 +844,101 @@ export function createConversationChatService({
     turn.completed = true;
     turn.resultError = raw?.is_error === true ? clean(raw?.result) || "Claude Code 没有完成这次回复。" : "";
     emitCompletedReply(turn);
+    if (textStream) {
+      settleTextStreamTurn(textStream, turn, { error: turn.resultError });
+      if (turn.resultError) closeTextStream(textStream);
+      return;
+    }
     try { turn.child.stdin?.end(); } catch { /* Closing after a final result is best effort. */ }
+  };
+
+  const finishTextStreamProcess = (stream, { code = null, signal = null, error = "" } = {}) => {
+    if (!stream || stream.closed) return;
+    const turn = stream.turn;
+    try { stream.output?.close(); } catch { /* Closing a completed reader is best effort. */ }
+    releaseTextStream(stream);
+    if (!turn) {
+      void pumpSession(stream.sessionId, stream.projectRoot);
+      return;
+    }
+    if (turn.settling || turn.finished) return;
+    if (turn.interrupted) {
+      settleTextStreamTurn(stream, turn, { interrupted: true });
+      return;
+    }
+    if (turn.completed || code === 0) {
+      if (!turn.completed) {
+        if (turn.text && clean(turn.text) !== clean(turn.lastAssistantText)) emitAgentReply(turn, turn.text);
+        emitCompletedReply(turn);
+      }
+      settleTextStreamTurn(stream, turn, { error: turn.resultError });
+      return;
+    }
+    const detail = clean(error || turn.stderr).replace(/\s+/gu, " ");
+    const reason = signal
+      ? `Claude Code 已停止（${signal}）。`
+      : `Claude Code 未能完成这次回复（退出代码 ${code ?? "未知"}）。`;
+    settleTextStreamTurn(stream, turn, { error: detail ? `${reason} ${detail}` : reason });
+  };
+
+  const createTextStream = (child, request, signature) => {
+    const stream = {
+      child,
+      closeTimer: null,
+      closed: false,
+      closing: false,
+      idleTimer: null,
+      key: request.key,
+      output: null,
+      projectRoot: request.projectRoot,
+      sessionId: request.sessionId,
+      signature,
+      turn: null,
+    };
+    reusableTextStreams.set(stream.key, stream);
+    const output = readline.createInterface({ input: child.stdout, crlfDelay: Infinity });
+    stream.output = output;
+    output.on("line", (line) => {
+      const turn = stream.turn;
+      if (!turn) return;
+      let raw;
+      try { raw = JSON.parse(line); } catch { return; }
+      handleWireMessage(turn, raw, stream);
+    });
+    child.stderr?.on?.("data", (chunk) => {
+      const turn = stream.turn;
+      if (turn) turn.stderr = bounded(`${turn.stderr}${String(chunk)}`, 6_000);
+    });
+    child.on?.("error", (error) => {
+      finishTextStreamProcess(stream, {
+        error: `无法运行本机 Claude Code：${processErrorMessage(error, "进程启动失败。")}`,
+      });
+      try { child.kill?.("SIGTERM"); } catch { /* The process may already be stopping. */ }
+    });
+    child.on?.("close", (code, signal) => finishTextStreamProcess(stream, { code, signal }));
+    return stream;
+  };
+
+  const startTextStreamTurn = (stream, request, memoryTurn) => {
+    clearTextStreamTimer(stream, "idleTimer");
+    const turn = createTurn(request, memoryTurn, stream.child, stream);
+    stream.turn = turn;
+    activeTurns.set(request.key, turn);
+    emit({
+      type: "turn-start",
+      requestId: turn.requestId,
+      sessionId: turn.sessionId,
+      projectRoot: turn.projectRoot,
+      kind: turn.kind,
+      timestamp: new Date().toISOString(),
+    });
+    try {
+      writeJson(stream.child, { type: "user", message: { role: "user", content: request.content } });
+      knownTranscripts.add(request.key);
+    } catch (error) {
+      settleTextStreamTurn(stream, turn, { error: processErrorMessage(error, "无法向 Claude Code 发送消息。") });
+      closeTextStream(stream, { force: true });
+    }
   };
 
   const validateContent = (value, { allowEmpty = false } = {}) => {
@@ -713,56 +963,88 @@ export function createConversationChatService({
       ? agentAttachmentCommand({ sessionId: request.sessionId, projectRoot: request.projectRoot })
       : "";
     const scheduleCommands = typeof agentScheduleCommand === "function"
-      ? agentScheduleCommand({ sessionId: request.sessionId, projectRoot: request.projectRoot })
+      ? await Promise.resolve(agentScheduleCommand({ sessionId: request.sessionId, projectRoot: request.projectRoot }))
       : null;
     const currentSettings = settingsService.load() || {};
     const claudeRuntimeFeatures = currentSettings.claudeRuntimeFeatures;
+    let memoryTurn = null;
+    if (["message", "call", "iphone-feedback"].includes(request.kind)
+      && clean(request.memoryText)
+      && typeof memoryRuntime?.prepareTurn === "function") {
+      try {
+        memoryTurn = await memoryRuntime.prepareTurn({
+          occurredAt: request.memoryOccurredAt,
+          projectRoot: request.projectRoot,
+          sessionId: request.sessionId,
+          turnId: request.requestId,
+          userText: request.memoryText,
+        });
+      } catch {
+        memoryTurn = null;
+      }
+    }
+    if (disposed) {
+      try { await memoryRuntime?.abortTurn?.(memoryTurn); } catch { /* A stopped chat needs no memory cursor. */ }
+      return;
+    }
+    const supportsVoiceCallTurns = ["message", "call"].includes(request.kind);
     const args = claudeCliArguments({
       sessionId: request.sessionId,
       hasTranscript: request.hasTranscript || knownTranscripts.has(request.key),
       claudeRuntimeFeatures,
+      claudeToolPermissions: currentSettings.claudeToolPermissions,
       allowedTools: claudeAllowedToolsForWorkspace(currentSettings.claudeToolPermissions, { suzuCliCommand }),
       workspaceDirectories: claudeWorkspaceDirectories,
       appendSystemPrompt: [
         wechatAttachmentSystemPrompt(attachmentCommand),
         scheduleSystemPrompt(scheduleCommands),
-        request.kind === "call" ? VOICE_CALL_SYSTEM_PROMPT : "",
+        supportsVoiceCallTurns ? VOICE_CALL_SYSTEM_PROMPT : "",
+        memoryTurn?.systemPrompt,
       ].filter(Boolean).join("\n\n"),
     });
+    // A recall prompt belongs to exactly one logical turn. Claude Code only
+    // accepts user records on an existing stream, so keep that turn one-shot
+    // instead of silently dropping or leaking its private memory context.
+    const canReuseConversationStream = supportsVoiceCallTurns && !clean(memoryTurn?.systemPrompt);
+    const signature = canReuseConversationStream ? streamSignature(args) : "";
+    const existingTextStream = reusableTextStreams.get(request.key);
+    if (canReuseConversationStream
+      && textStreamIsWritable(existingTextStream)
+      && existingTextStream.signature === signature) {
+      startTextStreamTurn(existingTextStream, request, memoryTurn);
+      return;
+    }
+    // A turn outside normal text/call, changed runtime options, or a turn-specific memory
+    // prompt needs a fresh Claude process. Retire only an idle text stream;
+    // an active stream is protected by the session queue.
+    if (existingTextStream && !existingTextStream.turn) closeTextStream(existingTextStream);
     let child;
     try {
       child = spawnImpl(command, args, {
         cwd: request.projectRoot,
-        env: claudeCliEnvironment({ claudeRuntimeFeatures }),
+        env: claudeCliEnvironment({
+          claudeRuntimeFeatures,
+        }),
         stdio: ["pipe", "pipe", "pipe"],
         windowsHide: true,
       });
     } catch (error) {
+      try { await memoryRuntime?.abortTurn?.(memoryTurn); } catch { /* The spawn error remains primary. */ }
       throw new ConversationChatError(`无法启动本机 Claude Code：${processErrorMessage(error, "启动失败。")}`);
     }
     if (!child?.stdin || !child?.stdout) {
       try { child?.kill?.(); } catch { /* The process may not have started. */ }
+      try { await memoryRuntime?.abortTurn?.(memoryTurn); } catch { /* The local pipe error remains primary. */ }
       throw new ConversationChatError("无法建立 Claude Code 的本地输入输出通道。");
     }
 
-    const turn = {
-      agentMediaReceipts: new Set(),
-      auxiliaryEvents: new Set(),
-      child,
-      completed: false,
-      finished: false,
-      interrupted: false,
-      kind: request.kind,
-      lastAssistantText: "",
-      key: request.key,
-      permissionIds: new Set(),
-      projectRoot: request.projectRoot,
-      requestId: request.requestId,
-      resultError: "",
-      sessionId: request.sessionId,
-      stderr: "",
-      text: "",
-    };
+    if (canReuseConversationStream) {
+      const textStream = createTextStream(child, request, signature);
+      startTextStreamTurn(textStream, request, memoryTurn);
+      return;
+    }
+
+    const turn = createTurn(request, memoryTurn, child);
     activeTurns.set(request.key, turn);
     emit({
       type: "turn-start",
@@ -782,7 +1064,7 @@ export function createConversationChatService({
       turn.stderr = bounded(`${turn.stderr}${String(chunk)}`, 6_000);
     });
     child.on?.("error", (error) => {
-      finishTurn(turn, turn.interrupted
+      void finishTurn(turn, turn.interrupted
         ? { interrupted: true }
         : { error: `无法运行本机 Claude Code：${processErrorMessage(error, "进程启动失败。")}` });
     });
@@ -790,7 +1072,7 @@ export function createConversationChatService({
       output.close();
       if (turn.finished) return;
       if (turn.interrupted) {
-        finishTurn(turn, { interrupted: true });
+        void finishTurn(turn, { interrupted: true });
         return;
       }
       if (turn.completed || code === 0) {
@@ -798,27 +1080,27 @@ export function createConversationChatService({
           if (turn.kind !== "schedule" && turn.text && clean(turn.text) !== clean(turn.lastAssistantText)) emitAgentReply(turn, turn.text);
           emitCompletedReply(turn);
         }
-        finishTurn(turn, { error: turn.resultError });
+        void finishTurn(turn, { error: turn.resultError });
         return;
       }
       const detail = clean(turn.stderr).replace(/\s+/gu, " ");
       const reason = signal
         ? `Claude Code 已停止（${signal}）。`
         : `Claude Code 未能完成这次回复（退出代码 ${code ?? "未知"}）。`;
-      finishTurn(turn, { error: detail ? `${reason} ${detail}` : reason });
+      void finishTurn(turn, { error: detail ? `${reason} ${detail}` : reason });
     });
     try {
       writeJson(child, { type: "user", message: { role: "user", content: request.content } });
       knownTranscripts.add(request.key);
     } catch (error) {
-      finishTurn(turn, { error: processErrorMessage(error, "无法向 Claude Code 发送消息。") });
+      void finishTurn(turn, { error: processErrorMessage(error, "无法向 Claude Code 发送消息。") });
       try { child.kill?.(); } catch { /* The error is already emitted to the conversation. */ }
     }
   };
 
   const pumpSession = async (sessionId, projectRoot, { propagateStartError = false } = {}) => {
     const key = turnKey(sessionId, projectRoot);
-    if (disposed || activeTurns.has(key) || startingSessions.has(key)) return;
+    if (disposed || activeTurns.has(key) || reusableTextStreams.get(key)?.turn || startingSessions.has(key)) return;
     const queue = pendingTurns.get(key);
     if (!queue?.length) return;
     const request = queue.shift();
@@ -864,10 +1146,12 @@ export function createConversationChatService({
     if (!isDirectory(projectStat)) throw new ConversationChatError("当前 Claude 工作目录不是文件夹。");
 
     const request = {
-      content: claudeInputContent(text, media, mediaSource),
+      content: claudeInputContent(kind === "call" ? voiceCallInputContent(text) : text, media, mediaSource),
       hasTranscript: Boolean(session.hasTranscript) || knownTranscripts.has(turnKey(session.id, session.projectRoot)),
       kind,
       key: turnKey(session.id, session.projectRoot),
+      memoryOccurredAt: new Date().toISOString(),
+      memoryText: text,
       projectRoot: session.projectRoot,
       requestId: clean(suppliedRequestId) || `suzu-${randomUUID()}`,
       sessionId: session.id,
@@ -876,7 +1160,10 @@ export function createConversationChatService({
     if (queue.length >= MAX_QUEUED_TURNS) {
       throw new ConversationChatError(`当前会话最多只能排队 ${MAX_QUEUED_TURNS} 条消息，请等待部分任务完成后再发送。`);
     }
-    const queued = activeTurns.has(request.key) || startingSessions.has(request.key) || queue.length > 0;
+    const queued = activeTurns.has(request.key)
+      || reusableTextStreams.get(request.key)?.turn
+      || startingSessions.has(request.key)
+      || queue.length > 0;
     queue.push(request);
     const queuePosition = queue.indexOf(request) + 1;
     emitQueue(session.id, session.projectRoot);
@@ -1009,8 +1296,15 @@ export function createConversationChatService({
     for (const turn of activeTurns.values()) {
       turn.finished = true;
       removePermissionRequests(turn);
+      try {
+        const aborting = memoryRuntime?.abortTurn?.(turn.memoryTurn);
+        void Promise.resolve(aborting).catch(() => undefined);
+      } catch {
+        // The local child process still needs to be stopped even if memory cleanup throws.
+      }
       try { turn.child.kill?.(); } catch { /* Only processes created by this service are touched. */ }
     }
+    for (const stream of [...reusableTextStreams.values()]) closeTextStream(stream, { force: true });
     activeTurns.clear();
     permissionRequests.clear();
   };

@@ -9,6 +9,7 @@ import { stableAgentId } from "@suzu-lives/agent-registry";
 import {
   SESSION_COMPACTION_SCHEMA,
   chooseCompactionPlan,
+  chooseTokenTailCompactionPlan,
   parseJsonlText,
   parseSessionCompaction,
   reconstructLogicalContext,
@@ -123,6 +124,25 @@ test("keeps recent raw dialogue and chooses a complete user boundary", () => {
   );
 });
 
+test("token-tail compaction uses the requested retained tail and only passes an exceeded token threshold", () => {
+  const entries = parseJsonlText(
+    `${sampleTranscript().map((item) => JSON.stringify(item)).join("\n")}\n`,
+  );
+  const context = reconstructLogicalContext(entries);
+  const manual = chooseTokenTailCompactionPlan(context, { recentRawTokensToKeep: 1 });
+  assert.equal(manual.action, "compact");
+  assert.equal(manual.mode, "token-tail");
+  assert.equal(manual.head.record.uuid, "recent-user");
+  assert.deepEqual(manual.preservedLogical.map((entry) => entry.record.uuid), ["recent-user", "recent-agent"]);
+
+  const waiting = chooseTokenTailCompactionPlan(context, {
+    minimumContextTokens: 20_000,
+    recentRawTokensToKeep: 1,
+  });
+  assert.equal(waiting.action, "skip");
+  assert.match(waiting.reason, /未超过 20000/u);
+});
+
 test("accepts only a nonempty session summary", () => {
   assert.deepEqual(parseSessionCompaction('{"summary":"继续讨论科技馆。"}'), {
     summary: "继续讨论科技馆。",
@@ -210,6 +230,39 @@ test("dry runs without invoking a generator or creating a long-term memory datab
     fs.existsSync(path.join(softwareDataDirectory, "agents", "agent-test", "memory", "memory.db")),
     false,
   );
+});
+
+test("keeps compactor reports separate when two Claude sessions use the same Agent", async () => {
+  const root = temporaryDirectory("suzu-conversation-compactor-sessions-");
+  const softwareDataDirectory = path.join(root, "software-data");
+  const firstTranscript = path.join(root, "first.jsonl");
+  const secondTranscript = path.join(root, "second.jsonl");
+  writeTranscript(firstTranscript);
+  writeTranscript(secondTranscript);
+
+  await runCompaction({
+    transcriptPath: firstTranscript,
+    agentId: "agent-test",
+    sessionId: "session-first",
+    softwareDataDirectory,
+    now: new Date("2026-07-30T02:00:00.000Z"),
+    dryRun: true,
+  });
+  await runCompaction({
+    transcriptPath: secondTranscript,
+    agentId: "agent-test",
+    sessionId: "session-second",
+    softwareDataDirectory,
+    now: new Date("2026-07-30T02:00:00.000Z"),
+    dryRun: true,
+  });
+
+  const workRoot = path.join(softwareDataDirectory, "agents", "agent-test", "memory", "compactor", "sessions");
+  const firstReport = JSON.parse(fs.readFileSync(path.join(workRoot, "session-first", "work", "last-run.json"), "utf8"));
+  const secondReport = JSON.parse(fs.readFileSync(path.join(workRoot, "session-second", "work", "last-run.json"), "utf8"));
+  assert.equal(firstReport.sessionId, "session-first");
+  assert.equal(secondReport.sessionId, "session-second");
+  assert.equal(fs.existsSync(path.join(softwareDataDirectory, "agents", "agent-test", "memory", "compactor", "work", "last-run.json")), false);
 });
 
 test("stable CLI uses only the conversation generator and never resolves an embedding provider", async () => {

@@ -19,7 +19,7 @@ npm install
 npm run start --workspace=suzu-lives-console
 ```
 
-默认 Claude Code 已由用户自行安装。首次打开时选择联系人 Agent 的工作目录；主会话从该联系人的 Claude 官方目录自动识别。
+默认 Claude Code 已由用户自行安装。首次打开时选择联系人 Agent 的工作目录；会话记录从该联系人的 Claude 官方目录自动识别。
 
 ## 验证与打包
 

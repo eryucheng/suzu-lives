@@ -11,78 +11,6 @@ async function temporaryDirectory(prefix) {
   return fs.mkdtemp(path.join(os.tmpdir(), prefix));
 }
 
-test("runtime settings preserve unknown Claude fields without loading the retired bridge config", async () => {
-  const root = await temporaryDirectory("suzu-runtime-");
-  const projectRoot = path.join(root, "agent");
-  const home = path.join(root, "home");
-  const deviceClaudePath = path.join(home, ".claude", "settings.json");
-  await fs.mkdir(path.join(projectRoot, ".claude"), { recursive: true });
-  await fs.mkdir(path.dirname(deviceClaudePath), { recursive: true });
-  await fs.writeFile(path.join(projectRoot, ".claude", "settings.json"), JSON.stringify({
-    hooks: { UserPromptSubmit: [{ hooks: [{ type: "command", command: "keep-this-hook" }] }] },
-    env: { PROJECT_ONLY: "present" },
-    alwaysThinkingEnabled: false,
-    skipWebFetchPreflight: false,
-    permissions: { allow: ["Read"] },
-    customField: { keep: true },
-  }, null, 2));
-  await fs.writeFile(deviceClaudePath, JSON.stringify({
-    env: {
-      ANTHROPIC_AUTH_TOKEN: "fixture-secret", KEEP: "present", ANTHROPIC_BASE_URL: "https://proxy.example.test",
-      ANTHROPIC_DEFAULT_SONNET_MODEL: "sonnet-before", ANTHROPIC_DEFAULT_SONNET_MODEL_NAME: "Sonnet Before",
-    },
-    includeCoAuthoredBy: false,
-    deviceCustomField: { keep: true },
-  }, null, 2));
-  const settings = { projectRoot };
-  const service = createAgentRuntimeConfigService({ settingsService: { load: () => settings }, homeDirectory: () => home });
-
-  const initial = await service.snapshot();
-  assert.equal(initial.claude.status, "ready");
-  assert.equal(initial.claude.settings.textService.hasAuthToken, true);
-  assert.equal(initial.claude.settings.alwaysThinkingEnabled, false);
-  assert.equal(initial.claude.deviceExists, true);
-  assert.equal(initial.claude.projectExists, true);
-  assert.equal(initial.claude.settings.textService.sonnet.name, "Sonnet Before");
-  assert.equal(Object.hasOwn(initial.claude.settings.textService, "authToken"), false);
-  assert.equal(Object.hasOwn(initial, "ccConnect"), false);
-
-  const afterClaude = await service.saveClaude({
-    allowedTools: "Read\nGrep", deniedTools: "Read(./.env)", baseUrl: "https://proxy.example.test",
-    authToken: "", alwaysThinkingEnabled: true, includeCoAuthoredBy: true, skipWebFetchPreflight: true,
-    sonnetModel: "sonnet-fixture", sonnetModelName: "Sonnet", opusModel: "opus-fixture", opusModelName: "Opus",
-    haikuModel: "haiku-fixture", haikuModelName: "Haiku",
-  });
-  assert.equal(afterClaude.claude.settings.alwaysThinkingEnabled, true);
-  assert.equal(afterClaude.claude.settings.textService.opus.model, "opus-fixture");
-  assert.equal(afterClaude.claude.settings.textService.hasAuthToken, true);
-  const projectClaudeFile = JSON.parse(await fs.readFile(path.join(projectRoot, ".claude", "settings.json"), "utf8"));
-  const deviceClaudeFile = JSON.parse(await fs.readFile(deviceClaudePath, "utf8"));
-  assert.equal(projectClaudeFile.hooks.UserPromptSubmit[0].hooks[0].command, "keep-this-hook");
-  assert.equal(projectClaudeFile.customField.keep, true);
-  assert.equal(projectClaudeFile.env.PROJECT_ONLY, "present");
-  assert.equal(projectClaudeFile.alwaysThinkingEnabled, true);
-  assert.equal(projectClaudeFile.skipWebFetchPreflight, true);
-  assert.equal(Object.hasOwn(projectClaudeFile, "model"), false);
-  assert.equal(Object.hasOwn(projectClaudeFile, "effortLevel"), false);
-  assert.equal(Object.hasOwn(projectClaudeFile.permissions, "defaultMode"), false);
-  assert.equal(deviceClaudeFile.env.ANTHROPIC_AUTH_TOKEN, "fixture-secret");
-  assert.equal(deviceClaudeFile.env.KEEP, "present");
-  assert.equal(deviceClaudeFile.includeCoAuthoredBy, true);
-  assert.equal(deviceClaudeFile.deviceCustomField.keep, true);
-  assert.equal(deviceClaudeFile.env.ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME, "Haiku");
-
-  await service.saveClaude({
-    preserveTextService: true,
-    allowedTools: "Read", deniedTools: "", alwaysThinkingEnabled: false,
-    includeCoAuthoredBy: false, skipWebFetchPreflight: false,
-  });
-  const preservedDeviceFile = JSON.parse(await fs.readFile(deviceClaudePath, "utf8"));
-  assert.equal(preservedDeviceFile.env.ANTHROPIC_AUTH_TOKEN, "fixture-secret");
-  assert.equal(preservedDeviceFile.env.ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME, "Haiku");
-
-});
-
 test("Claude Code API writes only the system-level Claude files and preserves unrelated settings", async () => {
   const root = await temporaryDirectory("suzu-claude-api-");
   const home = path.join(root, "home");
@@ -146,22 +74,14 @@ test("Claude Code API writes only the system-level Claude files and preserves un
   assert.ok(kimiModels.models.includes("kimi-for-coding"));
 });
 
-test("management keeps the Claude connection overview focused and does not render retired bridge controls", () => {
-  const runtime = {
-    claude: { status: "ready", exists: true, settings: { alwaysThinkingEnabled: true, includeCoAuthoredBy: false, skipWebFetchPreflight: false, allowedTools: ["Read"], deniedTools: [], textService: { baseUrl: "https://proxy.example.test", hasAuthToken: true, sonnet: { model: "sonnet", name: "Sonnet" }, opus: {}, haiku: {} } } },
-  };
-  const overview = renderAdmin({ state: { adminTab: "runtime", runtimeSection: "overview", agentRuntime: runtime, settings: { contactsRoot: "D:/Agents" } } });
-  const claude = renderAdmin({ state: { adminTab: "runtime", runtimeSection: "claude", agentRuntime: runtime } });
+test("management keeps runtime rules global and has no contact-specific Claude settings entry", () => {
+  const overview = renderAdmin({ state: { adminTab: "runtime", settings: { contactsRoot: "D:/Agents" } } });
   assert.match(overview, /data-admin-tab="runtime"/u);
-  assert.match(overview, /data-open-runtime-section="claude"/u);
-  assert.doesNotMatch(overview, /id="claudeRuntimeConfigForm"/u);
-  assert.match(claude, /id="claudeRuntimeConfigForm"/u);
-  assert.match(claude, /alwaysThinkingEnabled/u);
-  assert.match(claude, /skipWebFetchPreflight/u);
   assert.match(overview, /连接与运行/u);
-  assert.match(overview, /工作目录与默认规则/u);
-  assert.match(overview, /Agent 工作目录/u);
-  assert.doesNotMatch(`${overview}${claude}`, /fixture-secret/u);
+  assert.match(overview, /默认运行规则/u);
+  assert.match(overview, /Claude 工具权限/u);
+  assert.doesNotMatch(overview, /data-open-runtime-section|id="claudeRuntimeConfigForm"|当前联系人|当前项目/u);
+  assert.doesNotMatch(overview, /Agent 工作目录|fixture-secret/u);
 });
 
 test("Claude Code API page keeps secrets out of the renderer and exposes provider choices", () => {

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { normalizeClaudeRuntimeFeatures, normalizeClaudeToolPermissions, normalizeConversationPreferences, normalizeMemoryRecallEnabled, normalizeOnboardingCompleted, normalizeOnboardingMultimodalCompleted, registerSettingsIpc } from "../electron/ipc/settings-ipc.mjs";
+import { normalizeClaudeProjectDefaults, normalizeClaudeRuntimeFeatures, normalizeClaudeToolPermissions, normalizeConversationPreferences, normalizeMemoryRecallEnabled, normalizeOnboardingCompleted, normalizeOnboardingMultimodalCompleted, registerSettingsIpc } from "../electron/ipc/settings-ipc.mjs";
 import { renderManagedAgentRuntimeSettings, renderSettings } from "../src/features/settings/index.mjs";
 
 test("data settings show one unified storage location and a migration action", () => {
@@ -9,6 +9,7 @@ test("data settings show one unified storage location and a migration action", (
     state: {
       settingsTab: "data",
       settings: {
+        contactsRoot: "D:/Agents",
         dataRoot: "D:/Suzu Lives",
         dataStorage: { dataRoot: "D:/Suzu Lives", previousDataRoot: "C:/old/Suzu Lives" },
       },
@@ -19,6 +20,9 @@ test("data settings show one unified storage location and a migration action", (
   assert.match(html, /更换位置/u);
   assert.match(html, /旧位置的安全副本/u);
   assert.match(html, /data-remove-previous-data-copy/u);
+  assert.match(html, /Agent 工作目录/u);
+  assert.match(html, /data-select-contact-projects-root/u);
+  assert.match(html, /D:\/Agents/u);
   assert.doesNotMatch(html, /设置文件/u);
 });
 
@@ -31,14 +35,13 @@ test("software settings keeps only application controls", () => {
   assert.doesNotMatch(html, /Agent 工作目录|Claude 工具权限|Claude 内建能力|记忆召回/u);
 });
 
-test("management runtime settings owns the Agent workspace and default Claude rules", () => {
+test("management runtime settings keeps only default Claude rules", () => {
   const html = renderManagedAgentRuntimeSettings({
     state: { settings: { contactsRoot: "D:/Agents", claudeToolPermissions: { read: true, webFetch: false, webSearch: true }, claudeRuntimeFeatures: { subagents: true }, memoryRecallEnabled: false } },
   });
-  assert.match(html, /Agent 工作目录/u);
-  assert.match(html, /data-select-contact-projects-root/u);
-  assert.match(html, /D:\/Agents/u);
-  assert.match(html, /Claude 工具权限|Claude 内建能力|记忆召回/u);
+  assert.doesNotMatch(html, /Agent 工作目录|data-select-contact-projects-root|D:\/Agents/u);
+  assert.match(html, /Claude 工具权限|Claude 内建能力/u);
+  assert.doesNotMatch(html, /记忆召回/u);
 });
 
 test("first-run setup completion is persisted as a strict boolean and can be reopened from settings", () => {
@@ -56,16 +59,14 @@ test("first-run setup completion is persisted as a strict boolean and can be reo
   assert.match(html, /待完成/u);
 });
 
-test("memory recall is default-on and exposed as a direct runtime-management toggle", () => {
+test("memory recall remains default-on after leaving runtime management", () => {
   assert.equal(normalizeMemoryRecallEnabled(undefined), true);
   assert.equal(normalizeMemoryRecallEnabled(false), false);
   assert.equal(normalizeMemoryRecallEnabled("false"), true);
   const html = renderManagedAgentRuntimeSettings({
     state: { settingsTab: "general", settings: { memoryRecallEnabled: false } },
   });
-  assert.match(html, /记忆召回/u);
-  assert.match(html, /data-memory-recall-toggle/u);
-  assert.match(html, /已关闭（点击开启）/u);
+  assert.doesNotMatch(html, /记忆召回|data-memory-recall-toggle/u);
 });
 
 test("Claude read and web permissions are default-on and shown in runtime management", () => {
@@ -80,20 +81,47 @@ test("Claude read and web permissions are default-on and shown in runtime manage
   assert.match(html, /允许网页搜索/u);
 });
 
+test("shared Claude project defaults normalize the contact-wide tool and network rules", () => {
+  assert.deepEqual(normalizeClaudeProjectDefaults(), {
+    allowedTools: [],
+    deniedTools: [],
+    skipWebFetchPreflight: true,
+  });
+  assert.deepEqual(normalizeClaudeProjectDefaults({
+    allowedTools: "Bash(git status:*)\nBash(git status:*)",
+    deniedTools: "Read(./.env)\nRead(./.env)\nBash(rm:*)",
+    skipWebFetchPreflight: false,
+  }), {
+    allowedTools: ["Bash(git status:*)"],
+    deniedTools: ["Read(./.env)", "Bash(rm:*)"],
+    skipWebFetchPreflight: false,
+  });
+});
+
 test("Claude runtime features are default-off and exposed in runtime management", () => {
   assert.deepEqual(normalizeClaudeRuntimeFeatures(), {
+    bash: true,
+    edit: true,
+    glob: true,
+    grep: true,
     subagents: false,
     taskList: false,
     backgroundTasks: false,
     nativeCron: false,
     askUserQuestion: false,
+    write: true,
   });
-  assert.deepEqual(normalizeClaudeRuntimeFeatures({ subagents: true, nativeCron: true }), {
+  assert.deepEqual(normalizeClaudeRuntimeFeatures({ bash: false, glob: false, subagents: true, nativeCron: true }), {
+    bash: false,
+    edit: true,
+    glob: false,
+    grep: true,
     subagents: true,
     taskList: false,
     backgroundTasks: false,
     nativeCron: true,
     askUserQuestion: false,
+    write: true,
   });
   const html = renderManagedAgentRuntimeSettings({
     state: { settingsTab: "general", settings: { claudeRuntimeFeatures: { subagents: true } } },
@@ -131,16 +159,47 @@ test("changing Claude tool permissions syncs the contact projects", async () => 
   assert.deepEqual(syncCalls, [true]);
 });
 
-test("conversation time display preference is normalized and persisted as a safe enum", () => {
-  assert.deepEqual(normalizeConversationPreferences({ timeDisplay: "wechat" }), {
+test("changing shared Claude project defaults syncs the contact projects", async () => {
+  const handlers = new Map();
+  const syncCalls = [];
+  let stored = {};
+  registerSettingsIpc({
+    app: { relaunch: () => {}, exit: () => {} },
+    contactProjectsService: { syncClaudeProjectSettings: async () => { syncCalls.push(true); } },
+    dataStorageService: null,
+    dialog: { showOpenDialog: async () => ({ canceled: true }), showMessageBox: async () => ({ response: 1 }) },
+    getMainWindow: () => null,
+    ipcMain: { handle: (name, handler) => handlers.set(name, handler) },
+    shell: { showItemInFolder: () => {}, openPath: () => {} },
+    settingsService: {
+      load: () => stored,
+      safePatch: (value) => ({ claudeProjectDefaults: normalizeClaudeProjectDefaults(value.claudeProjectDefaults) }),
+      save: (next) => { stored = next; return stored; },
+      response: (settings) => settings,
+    },
+  });
+
+  const result = await handlers.get("settings:update")(null, { claudeProjectDefaults: { skipWebFetchPreflight: false } });
+  assert.deepEqual(result.claudeProjectDefaults, {
+    allowedTools: [],
+    deniedTools: [],
+    skipWebFetchPreflight: false,
+  });
+  assert.deepEqual(syncCalls, [true]);
+});
+
+test("conversation time display defaults to the centered mode and migrates the old enum", () => {
+  assert.deepEqual(normalizeConversationPreferences({ timeDisplay: "center" }), {
     attachments: true,
     tools: true,
     thinking: true,
     system: true,
     tokens: true,
-    timeDisplay: "wechat",
+    timeDisplay: "center",
   });
-  assert.equal(normalizeConversationPreferences({ timeDisplay: "anything-else" }).timeDisplay, "bubble");
+  assert.equal(normalizeConversationPreferences({ timeDisplay: "wechat" }).timeDisplay, "center");
+  assert.equal(normalizeConversationPreferences().timeDisplay, "center");
+  assert.equal(normalizeConversationPreferences({ timeDisplay: "bubble" }).timeDisplay, "bubble");
 });
 
 test("migration IPC schedules a restart only after directory and confirmation dialogs succeed", async () => {

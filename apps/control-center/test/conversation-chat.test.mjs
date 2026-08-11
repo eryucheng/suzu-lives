@@ -23,6 +23,10 @@ async function flush() {
   await new Promise((resolve) => setTimeout(resolve, 0));
 }
 
+async function wait(milliseconds) {
+  await new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
 class FakeChild extends EventEmitter {
   constructor() {
     super();
@@ -72,7 +76,7 @@ test("Claude Code stream arguments create or resume only the selected native ses
   assert.ok(allowed[allowed.indexOf("--allowed-tools") + 1].includes("Bash(suzu-lives *)"));
 });
 
-test("Claude runtime feature settings remove only the selected built-in tools and background features", () => {
+test("Claude runtime feature settings remove only disabled built-in tools and background features", () => {
   const enabled = {
     subagents: true,
     taskList: true,
@@ -89,11 +93,17 @@ test("Claude runtime feature settings remove only the selected built-in tools an
     CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1",
     CLAUDE_CODE_DISABLE_CRON: "1",
   });
+  const restricted = claudeCliArguments({
+    sessionId: "restricted",
+    claudeRuntimeFeatures: { bash: false, edit: false, glob: false, grep: false, write: false },
+    claudeToolPermissions: { read: false, webFetch: false, webSearch: false },
+  });
+  assert.equal(restricted[restricted.indexOf("--disallowed-tools") + 1], "Read,Glob,Grep,Edit,Write,Bash,WebFetch,WebSearch,Agent,TodoWrite,AskUserQuestion");
 });
 
 test("schedule prompt keeps the two companion capabilities independently scoped", () => {
   const proactiveOnly = scheduleSystemPrompt({
-    conversationAdd: "suzu-lives schedule add --session-id session-a",
+    conversationAdd: "suzu-lives schedule add --contact-id contact-suzu",
     list: "suzu-lives schedule list",
     remove: "suzu-lives schedule remove <任务ID>",
     proactiveChainPrompt: "用我的链式提示",
@@ -109,7 +119,6 @@ test("schedule prompt keeps the two companion capabilities independently scoped"
     remove: "suzu-lives schedule remove <任务ID>",
   });
   assert.match(merchantOnly, /远行商人/u);
-  assert.doesNotMatch(merchantOnly, /当前会话已在“主动关心”能力中启用/u);
 });
 
 test("chat starts the local Claude CLI and forwards its stream", async () => {
@@ -127,7 +136,7 @@ test("chat starts the local Claude CLI and forwards its stream", async () => {
   const service = createConversationChatService({
     agentAttachmentCommand: () => '"Suzu Lives Console.exe" --suzu-lives-cli conversation-attachment',
     agentScheduleCommand: () => ({
-      conversationAdd: '"Suzu Lives Console.exe" --suzu-lives-cli schedule add --data-root "D:\\\\suzu" --session-id "session-1" --project-root "D:\\\\project"',
+      conversationAdd: '"Suzu Lives Console.exe" --suzu-lives-cli schedule add --data-root "D:\\\\suzu" --contact-id "contact-suzu"',
       operationAdd: '"Suzu Lives Console.exe" --suzu-lives-cli schedule add --data-root "D:\\\\suzu"',
       list: '"Suzu Lives Console.exe" --suzu-lives-cli schedule list --data-root "D:\\\\suzu"',
       remove: '"Suzu Lives Console.exe" --suzu-lives-cli schedule remove',
@@ -213,6 +222,104 @@ test("chat starts the local Claude CLI and forwards its stream", async () => {
     fileName: "voice.mp3",
     size: 24,
   }]);
+});
+
+test("chat uses the embedded memory lifecycle without handing recall back to Claude Hooks", async () => {
+  const root = await temporaryDirectory("suzu-embedded-memory-");
+  const projectRoot = path.join(root, "project");
+  const homeDirectory = path.join(root, "home");
+  const commandPath = path.join(homeDirectory, ".local", "bin", "claude.exe");
+  await fs.mkdir(projectRoot, { recursive: true });
+  await fs.mkdir(path.dirname(commandPath), { recursive: true });
+  await fs.writeFile(commandPath, "fixture");
+  const calls = [];
+  const spawned = [];
+  const memoryRuntime = {
+    prepareTurn: async (value) => {
+      calls.push({ type: "prepare", value });
+      return { systemPrompt: "<suzu-long-term-memory>旧日片段</suzu-long-term-memory>" };
+    },
+    completeTurn: async (turn, value) => { calls.push({ type: "complete", turn, value }); },
+    abortTurn: async (turn) => { calls.push({ type: "abort", turn }); },
+  };
+  const service = createConversationChatService({
+    homeDirectory,
+    memoryRuntime,
+    reader: { ensureActiveSession: async () => ({ id: "session-memory", projectRoot, hasTranscript: false }) },
+    settingsService: { load: () => ({ projectRoot }) },
+    spawnImpl: (_command, args, options) => {
+      const child = new FakeChild();
+      spawned.push({ args, child, options });
+      return child;
+    },
+  });
+
+  await service.send({ content: "记得我们上次聊的事情吗？" });
+  assert.equal(calls[0]?.type, "prepare");
+  assert.equal(calls[0]?.value.userText, "记得我们上次聊的事情吗？");
+  const promptIndex = spawned[0].args.indexOf("--append-system-prompt");
+  assert.match(spawned[0].args[promptIndex + 1], /旧日片段/u);
+
+  spawned[0].child.emitJson({ type: "result", result: "我记得。" });
+  spawned[0].child.close();
+  await flush();
+  await flush();
+  const completed = calls.find((item) => item.type === "complete");
+  assert.equal(completed?.turn?.systemPrompt, "<suzu-long-term-memory>旧日片段</suzu-long-term-memory>");
+  assert.equal(completed?.value?.assistantText, "我记得。");
+  assert.equal(calls.some((item) => item.type === "abort"), false);
+});
+
+test("iPhone feedback is archived by embedded memory without treating scheduled prompts as user memory", async () => {
+  const root = await temporaryDirectory("suzu-embedded-memory-sources-");
+  const projectRoot = path.join(root, "project");
+  const homeDirectory = path.join(root, "home");
+  const commandPath = path.join(homeDirectory, ".local", "bin", "claude.exe");
+  await fs.mkdir(projectRoot, { recursive: true });
+  await fs.mkdir(path.dirname(commandPath), { recursive: true });
+  await fs.writeFile(commandPath, "fixture");
+  const prepared = [];
+  const spawned = [];
+  const service = createConversationChatService({
+    homeDirectory,
+    memoryRuntime: {
+      prepareTurn: async (value) => {
+        prepared.push(value);
+        return { systemPrompt: "<suzu-long-term-memory>反馈上下文</suzu-long-term-memory>" };
+      },
+      completeTurn: async () => undefined,
+      abortTurn: async () => undefined,
+    },
+    reader: { ensureActiveSession: async () => ({ id: "session-sources", projectRoot, hasTranscript: false }) },
+    settingsService: { load: () => ({ projectRoot }) },
+    spawnImpl: (_command, args, options) => {
+      const child = new FakeChild();
+      spawned.push({ args, child, options });
+      return child;
+    },
+  });
+
+  await service.sendToSession({
+    content: "这是 iPhone 反馈。",
+    sessionId: "session-sources",
+    projectRoot,
+    kind: "iphone-feedback",
+  });
+  assert.equal(prepared.length, 1);
+  spawned[0].child.emitJson({ type: "result", result: "收到反馈。" });
+  spawned[0].child.close();
+  await flush();
+
+  await service.sendToSession({
+    content: "<suzu-schedule-task>内部任务</suzu-schedule-task>",
+    sessionId: "session-sources",
+    projectRoot,
+    hasTranscript: true,
+    kind: "schedule",
+  });
+  assert.equal(prepared.length, 1);
+  spawned[1].child.close();
+  await flush();
 });
 
 test("scheduled turns hide NO_REPLY and deliver a visible answer only after completion", async () => {
@@ -346,16 +453,158 @@ test("messages in the same Claude session run in FIFO order", async () => {
   assert.equal(spawned.length, 1);
 
   spawned[0].child.emitJson({ type: "result", result: "第一条完成" });
-  spawned[0].child.close();
   await flush();
   await flush();
-  assert.equal(spawned.length, 2);
-  assert.deepEqual(JSON.parse(spawned[1].child.input.trim()), {
+  assert.equal(spawned.length, 1);
+  const sent = spawned[0].child.input.trim().split("\n").map((line) => JSON.parse(line));
+  assert.deepEqual(sent[1], {
     type: "user",
     message: { role: "user", content: "第二条" },
   });
-  assert.deepEqual(spawned[1].args.slice(-2), ["--resume", "queue-session"]);
+  assert.ok(spawned[0].args.includes("--session-id"));
   assert.ok(events.some((event) => event.type === "queue" && event.items.some((item) => item.requestId === second.requestId)));
+  spawned[0].child.emitJson({ type: "result", result: "第二条完成" });
+  await flush();
+  service.dispose();
+});
+
+test("plain text reuses one Claude stream and closes it after the idle timeout", async () => {
+  const root = await temporaryDirectory("suzu-chat-idle-stream-");
+  const projectRoot = path.join(root, "project");
+  const homeDirectory = path.join(root, "home");
+  const commandPath = path.join(homeDirectory, ".local", "bin", "claude.exe");
+  await fs.mkdir(projectRoot, { recursive: true });
+  await fs.mkdir(path.dirname(commandPath), { recursive: true });
+  await fs.writeFile(commandPath, "fixture");
+  const spawned = [];
+  const service = createConversationChatService({
+    settingsService: { load: () => ({ projectRoot }) },
+    reader: { ensureActiveSession: async () => ({ id: "idle-session", projectRoot, hasTranscript: true }) },
+    homeDirectory,
+    idleStreamTimeoutMs: 100,
+    idleStreamCloseGraceMs: 1_000,
+    spawnImpl: (_command, args) => {
+      const child = new FakeChild();
+      spawned.push({ args, child });
+      return child;
+    },
+  });
+
+  await service.send({ content: "第一句" });
+  assert.deepEqual(spawned[0].args.slice(-2), ["--resume", "idle-session"]);
+  spawned[0].child.emitJson({ type: "result", result: "第一句完成" });
+  await flush();
+  await flush();
+  assert.equal(spawned[0].child.stdin.writableEnded, false);
+
+  const second = await service.send({ content: "第二句" });
+  assert.equal(second.queued, false);
+  assert.equal(spawned.length, 1);
+  assert.deepEqual(spawned[0].child.input.trim().split("\n").map((line) => JSON.parse(line)).map((item) => item.message.content), ["第一句", "第二句"]);
+
+  spawned[0].child.emitJson({ type: "result", result: "第二句完成" });
+  await flush();
+  await wait(130);
+  assert.equal(spawned[0].child.stdin.writableEnded, true);
+  spawned[0].child.close();
+  service.dispose();
+});
+
+test("normal text and an active voice call share one Claude stream", async () => {
+  const root = await temporaryDirectory("suzu-chat-shared-stream-");
+  const projectRoot = path.join(root, "project");
+  const homeDirectory = path.join(root, "home");
+  const commandPath = path.join(homeDirectory, ".local", "bin", "claude.exe");
+  await fs.mkdir(projectRoot, { recursive: true });
+  await fs.mkdir(path.dirname(commandPath), { recursive: true });
+  await fs.writeFile(commandPath, "fixture");
+  const events = [];
+  const spawned = [];
+  const service = createConversationChatService({
+    settingsService: { load: () => ({ projectRoot }) },
+    reader: { ensureActiveSession: async () => ({ id: "shared-session", projectRoot, hasTranscript: true }) },
+    homeDirectory,
+    spawnImpl: (_command, args) => {
+      const child = new FakeChild();
+      spawned.push({ args, child });
+      return child;
+    },
+    onEvent: (event) => events.push(event),
+  });
+
+  await service.send({ content: "先打一条普通文字" });
+  const promptIndex = spawned[0].args.indexOf("--append-system-prompt");
+  assert.match(spawned[0].args[promptIndex + 1], /suzu-voice-call-turn/u);
+  spawned[0].child.emitJson({ type: "result", result: "普通文字完成" });
+  await flush();
+  await flush();
+
+  const call = await service.sendToSession({
+    content: "这是通话里说的一句",
+    sessionId: "shared-session",
+    projectRoot,
+    hasTranscript: true,
+    kind: "call",
+    requestId: "suzu-call-shared-stream",
+  });
+  assert.equal(call.queued, false);
+  assert.equal(spawned.length, 1);
+  const inputs = spawned[0].child.input.trim().split("\n").map((line) => JSON.parse(line));
+  assert.equal(inputs[0].message.content, "先打一条普通文字");
+  assert.match(inputs[1].message.content, /^<suzu-voice-call-turn>/u);
+  assert.match(inputs[1].message.content, /"transcript":"这是通话里说的一句"/u);
+
+  spawned[0].child.emitJson({ type: "result", result: "通话回复完成" });
+  await flush();
+  await flush();
+  assert.equal(events.find((event) => event.requestId === "suzu-call-shared-stream" && event.type === "reply")?.kind, "call");
+
+  await service.send({ content: "通话后继续打字" });
+  assert.equal(spawned.length, 1);
+  assert.equal(inputs.length, 2);
+  const thirdInput = JSON.parse(spawned[0].child.input.trim().split("\n")[2]);
+  assert.equal(thirdInput.message.content, "通话后继续打字");
+  service.dispose();
+});
+
+test("a turn-specific memory recall starts fresh instead of reusing stale stream context", async () => {
+  const root = await temporaryDirectory("suzu-chat-memory-stream-");
+  const projectRoot = path.join(root, "project");
+  const homeDirectory = path.join(root, "home");
+  const commandPath = path.join(homeDirectory, ".local", "bin", "claude.exe");
+  await fs.mkdir(projectRoot, { recursive: true });
+  await fs.mkdir(path.dirname(commandPath), { recursive: true });
+  await fs.writeFile(commandPath, "fixture");
+  const spawned = [];
+  let includeRecall = false;
+  const service = createConversationChatService({
+    settingsService: { load: () => ({ projectRoot }) },
+    reader: { ensureActiveSession: async () => ({ id: "memory-stream-session", projectRoot, hasTranscript: true }) },
+    homeDirectory,
+    memoryRuntime: {
+      prepareTurn: async () => ({ systemPrompt: includeRecall ? "<suzu-long-term-memory>本轮召回</suzu-long-term-memory>" : "" }),
+      completeTurn: async () => undefined,
+      abortTurn: async () => undefined,
+    },
+    spawnImpl: (_command, args) => {
+      const child = new FakeChild();
+      spawned.push({ args, child });
+      return child;
+    },
+  });
+
+  await service.send({ content: "不需要召回的第一句" });
+  spawned[0].child.emitJson({ type: "result", result: "第一句完成" });
+  await flush();
+  await flush();
+
+  includeRecall = true;
+  await service.send({ content: "需要按本轮召回的第二句" });
+  assert.equal(spawned.length, 2);
+  assert.equal(spawned[0].child.stdin.writableEnded, true);
+  const promptIndex = spawned[1].args.indexOf("--append-system-prompt");
+  assert.match(spawned[1].args[promptIndex + 1], /本轮召回/u);
+  spawned[1].child.close();
   service.dispose();
 });
 

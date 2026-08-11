@@ -17,6 +17,7 @@ import { card, emptyBlock, pageIntro, status } from "../../components/panel.mjs"
 import { icons } from "../shell/index.mjs";
 import { bindManagedAgentRuntimeSettingsEvents, renderManagedAgentRuntimeSettings } from "../settings/index.mjs";
 import { renderUsage } from "../usage/index.mjs";
+import { CAPABILITY_CATEGORIES, capabilityCategory, createWechatConnectionCapability, WECHAT_DELIVERY_OPTIONS, wechatConnectionSettings } from "../capabilities/overview.mjs";
 
 function avatarPreview(profile, fallback) {
   if (profile.avatarDataUrl) return `<img src="${escapeHtml(profile.avatarDataUrl)}" alt="${escapeHtml(profile.displayName)} 的头像">`;
@@ -112,42 +113,8 @@ function claudeCodeApiModelOptions(current, models) {
   return options.map((model) => `<option value="${escapeHtml(model)}"></option>`).join("");
 }
 
-const CAPABILITY_CATEGORIES = [
-  { id: "create", label: "创作", detail: "图片、声音与视觉资料" },
-  { id: "perceive", label: "感知", detail: "图片、视频、网页与时间" },
-  { id: "act", label: "行动", detail: "现实中的工具与联系" },
-  { id: "companion", label: "陪伴", detail: "日常互动与游戏" },
-];
-
-const WECHAT_DELIVERY_OPTIONS = [
-  ["agent", "Agent 的说话内容", "最终回复，默认投递"],
-  ["attachments", "Hook / 上下文", "当前会话流出现这类记录时投递"],
-  ["tools", "工具调用", "工具调用与权限等待"],
-  ["thinking", "思考内容", "仅在你明确需要时投递"],
-  ["system", "系统消息", "停止、错误和系统状态"],
-  ["tokens", "Token 用量", "本次回复的用量摘要"],
-];
-
 function wechatSnapshot(state) {
-  const raw = state.wechatSnapshot && typeof state.wechatSnapshot === "object" ? state.wechatSnapshot : {};
-  const delivery = raw.delivery && typeof raw.delivery === "object" ? raw.delivery : {};
-  return {
-    enabled: raw.enabled === true,
-    linkedSessions: Number(raw.linkedSessions) || 0,
-    delivery: Object.fromEntries(WECHAT_DELIVERY_OPTIONS.map(([key]) => [key, delivery[key] === undefined ? key === "agent" : delivery[key] === true])),
-  };
-}
-
-function wechatConnectionCapability(state) {
-  const current = wechatSnapshot(state);
-  return {
-    id: "wechat-connection",
-    name: "连接微信",
-    description: "把指定对话连接到手机微信；不创建 Claude Skill，也不依赖外部桥接器。",
-    category: "act",
-    enabled: current.enabled,
-    softwareConnector: true,
-  };
+  return wechatConnectionSettings(state.wechatSnapshot);
 }
 
 function renderWechatConnectionDetail(state) {
@@ -156,15 +123,7 @@ function renderWechatConnectionDetail(state) {
   const stateCopy = current.enabled
     ? "软件正在维护已绑定会话的微信长连接；每个聊天可在“··· → 设置”里扫码或断开。"
     : "关闭后会停止所有微信收发，但不会删除已绑定会话；再次开启即可恢复。";
-  return `<article class="capability-detail capability-detail--focus"><header class="capability-detail__header"><div><span class="reference-kicker">行动 / 软件连接</span><h2>连接微信</h2><p>微信文字会进入所绑定的本机 Claude 会话；每个二维码只连接当前会话。</p></div>${status(statusLabel, current.enabled ? "ready" : "muted")}</header><div class="capability-detail__switch"><div><strong>启用微信连接</strong><p>${escapeHtml(stateCopy)}</p></div><label class="capability-toggle"><input type="checkbox" data-toggle-wechat-connection ${current.enabled ? "checked" : ""} aria-label="${current.enabled ? "关闭" : "开启"}连接微信"><span aria-hidden="true"></span></label></div><div class="capability-detail__content"><section class="capability-setting-section"><header><span class="reference-kicker">DELIVERY</span><h3>投递到微信的内容</h3><p>这组设置独立于聊天页面的显示设置。默认只发送 Agent 的最终回复；工具权限始终需要回到桌面端确认。</p></header><div class="capability-form-grid">${WECHAT_DELIVERY_OPTIONS.map(([key, label, detail]) => `<label class="capability-checkbox"><input type="checkbox" data-wechat-delivery="${escapeHtml(key)}" ${current.delivery[key] ? "checked" : ""}><span><strong>${escapeHtml(label)}</strong><small>${escapeHtml(detail)}</small></span></label>`).join("")}</div></section><section class="capability-info-section"><div><span class="reference-kicker">SCOPE</span><h3>按会话绑定</h3><p>当前有 ${current.linkedSessions.toLocaleString("zh-CN")} 条会话连接。每个二维码只路由到生成它的联系人项目和 Claude 会话，可以用不同微信号绑定不同对话。</p></div></section></div></article>`;
-}
-
-function capabilityPresentation(capability) {
-  return { category: "act", ...capability };
-}
-
-function capabilityCategory(capability) {
-  return capabilityPresentation(capability).category;
+  return `<article class="capability-detail capability-detail--focus"><header class="capability-detail__header"><div><span class="reference-kicker">行动 / 软件连接</span><h2>连接微信</h2><p>微信文字会进入所绑定联系人的固定 Claude 对话；每个二维码只连接一位联系人。</p></div>${status(statusLabel, current.enabled ? "ready" : "muted")}</header><div class="capability-detail__switch"><div><strong>启用微信连接</strong><p>${escapeHtml(stateCopy)}</p></div><label class="capability-toggle"><input type="checkbox" data-toggle-wechat-connection ${current.enabled ? "checked" : ""} aria-label="${current.enabled ? "关闭" : "开启"}连接微信"><span aria-hidden="true"></span></label></div><div class="capability-detail__content"><section class="capability-setting-section"><header><span class="reference-kicker">DELIVERY</span><h3>投递到微信的内容</h3><p>这组设置独立于聊天页面的显示设置。默认只发送 Agent 的最终回复；工具权限始终需要回到桌面端确认。</p></header><div class="capability-form-grid">${WECHAT_DELIVERY_OPTIONS.map(([key, label, detail]) => `<label class="capability-checkbox"><input type="checkbox" data-wechat-delivery="${escapeHtml(key)}" ${current.delivery[key] ? "checked" : ""}><span><strong>${escapeHtml(label)}</strong><small>${escapeHtml(detail)}</small></span></label>`).join("")}</div></section><section class="capability-info-section"><div><span class="reference-kicker">SCOPE</span><h3>按联系人绑定</h3><p>当前有 ${Number(current.linkedContacts || 0).toLocaleString("zh-CN")} 位联系人连接。每个二维码只路由到该联系人的固定 Claude 对话。</p></div></section></div></article>`;
 }
 
 function capabilitySettings(capability) {
@@ -193,33 +152,24 @@ function settingsForm(id, body, submitLabel) {
   return `<form class="capability-settings-form capability-settings-form--full" data-capability-settings-form="${escapeHtml(id)}">${body}${footer}</form>`;
 }
 
-function companionScopeKey(sessionId, projectRoot) {
-  const id = String(sessionId || "").trim();
-  const root = String(projectRoot || "").trim().replaceAll("\\", "/").replace(/\/+$/u, "").toLowerCase();
-  return id && root ? `${root}\u0000${id}` : "";
-}
-
-function renderSessionDeliverySettings(capability, state, detail) {
+function renderContactDeliverySettings(capability, state, detail) {
   const saved = capabilitySettings(capability);
-  const snapshot = state.companionSessions || {};
-  const projectRoot = String(snapshot.projectRoot || "");
-  const enabled = new Set((Array.isArray(saved.enabledSessions) ? saved.enabledSessions : [])
-    .map((session) => companionScopeKey(session?.sessionId, session?.projectRoot))
-    .filter(Boolean));
-  const sessions = Array.isArray(snapshot.sessions) ? snapshot.sessions : [];
-  const body = sessions.length
-    ? `<div class="capability-form-grid">${sessions.map((session) => {
-      const key = companionScopeKey(session.id, projectRoot);
-      const active = enabled.has(key);
-      return `<label class="capability-checkbox wide"><input type="checkbox" data-session-delivery-enabled="${escapeHtml(capability.id)}" data-session-delivery-id="${escapeHtml(session.id)}" ${active ? "checked" : ""}><span><strong>${escapeHtml(session.title || "未命名对话")}</strong><small>${escapeHtml(session.preview || session.id)}</small></span></label>`;
+  const snapshot = state.companionContacts || {};
+  const enabled = new Set(Array.isArray(saved.enabledContactIds) ? saved.enabledContactIds : []);
+  const contacts = Array.isArray(snapshot.contacts) ? snapshot.contacts : [];
+  const body = contacts.length
+    ? `<div class="capability-form-grid">${contacts.map((contact) => {
+      const id = String(contact?.id || "").trim();
+      const active = enabled.has(id);
+      return `<label class="capability-checkbox wide"><input type="checkbox" data-contact-delivery-enabled="${escapeHtml(capability.id)}" data-contact-delivery-id="${escapeHtml(id)}" ${active ? "checked" : ""}><span><strong>${escapeHtml(contact?.name || "未命名联系人")}</strong><small>这位联系人的固定 Claude 对话</small></span></label>`;
     }).join("")}</div>`
-    : `<p class="capability-setting-empty">当前联系人还没有可选择的 Claude 会话。</p>`;
-  return capabilitySettingSection("会话范围", "在哪些会话中启用", detail, body);
+    : `<p class="capability-setting-empty">还没有可选择的联系人。</p>`;
+  return capabilitySettingSection("联系人范围", "向哪些联系人投递", detail, body);
 }
 
 function renderProactiveContactSettings(capability, state) {
   const saved = capabilitySettings(capability);
-  return settingsForm("proactive-contact", `${capabilitySettingSection("主动关心", "触发提示词", "这两段文字会在对应自动任务触发时交给 Agent；可以按你的相处方式修改。", `<div class="capability-form-grid"><label class="wide"><span>链式主动关心提示词</span><textarea name="chainPrompt" maxlength="12000">${escapeHtml(saved.chainPrompt || "")}</textarea></label><label class="wide"><span>临时回访提示词</span><textarea name="followUpPrompt" maxlength="12000">${escapeHtml(saved.followUpPrompt || "")}</textarea></label></div>`)}${renderSessionDeliverySettings(capability, state, "打开后，当前会话的定时任务才会触发；可以同时开启多个会话。")}`, "保存主动关心设置");
+  return settingsForm("proactive-contact", `${capabilitySettingSection("主动关心", "触发提示词", "这两段文字会在对应自动任务触发时交给 Agent；可以按你的相处方式修改。", `<div class="capability-form-grid"><label class="wide"><span>链式主动关心提示词</span><textarea name="chainPrompt" maxlength="12000">${escapeHtml(saved.chainPrompt || "")}</textarea></label><label class="wide"><span>临时回访提示词</span><textarea name="followUpPrompt" maxlength="12000">${escapeHtml(saved.followUpPrompt || "")}</textarea></label></div>`)}${renderContactDeliverySettings(capability, state, "打开后，这位联系人的定时任务才会触发；可以同时开启多位联系人。")}`, "保存主动关心设置");
 }
 
 function renderImageGenerationSettings(capability, state) {
@@ -299,7 +249,7 @@ function renderSiteAutomationSettings(capability, state) {
 function renderTravelingMerchantSettings(capability, state) {
   const saved = capabilitySettings(capability);
   const items = Array.isArray(saved.wantedItems) ? saved.wantedItems.join("\n") : "";
-  return settingsForm("traveling-merchant", `${capabilitySettingSection("远行商人", "关注与提醒", "输入想买的物品；检测到其中任意一项时，会按你的通知文案提醒。", `<div class="capability-form-grid"><label class="wide"><span>关注的物品</span><textarea name="wantedItems" maxlength="8000" placeholder="棱镜球&#10;炫彩蛋">${escapeHtml(items)}</textarea></label><label class="wide"><span>发现物品时的提醒</span><input name="notificationTemplate" value="${escapeHtml(saved.notificationTemplate || "远行商人这轮有：{items}，快去买")}" maxlength="1200"></label><label class="capability-checkbox"><input name="notifyOnError" type="checkbox" ${saved.notifyOnError !== false ? "checked" : ""}><span>检查失败时也提醒我</span></label><label class="wide"><span>失败提醒</span><input name="errorNotificationTemplate" value="${escapeHtml(saved.errorNotificationTemplate || "远行商人监控这轮检查失败了：{error}")}" maxlength="1200"></label></div>`)}${renderSessionDeliverySettings(capability, state, "打开后，这个会话会收到商人命中或已开启的失败提醒；可以同时开启多个会话。网页只抓取一次，再分别投递。 ")}${capabilityInfoSection("读取网页", "当前读取网页", saved.url || "尚未设置页面地址", '<button type="button" class="secondary-button" data-open-traveling-merchant-page>打开当前读取网页</button>')}<details class="capability-advanced"><summary><span>检查节奏</span><small>网站地址、超时与重试</small></summary><div class="capability-form-grid"><label class="wide"><span>页面地址</span><input name="url" value="${escapeHtml(saved.url || "")}" maxlength="500"></label><label><span>网页等待（秒）</span><input name="requestTimeoutSeconds" type="number" min="3" max="120" value="${escapeHtml(saved.requestTimeoutSeconds ?? 15)}"></label><label><span>重试次数</span><input name="maxAttempts" type="number" min="1" max="10" value="${escapeHtml(saved.maxAttempts ?? 3)}"></label><label><span>重试间隔（秒）</span><input name="retryDelaySeconds" type="number" min="0" max="300" value="${escapeHtml(saved.retryDelaySeconds ?? 20)}"></label></div></details>`, "保存远行商人设置");
+  return settingsForm("traveling-merchant", `${capabilitySettingSection("远行商人", "关注与提醒", "输入想买的物品；检测到其中任意一项时，会按你的通知文案提醒。", `<div class="capability-form-grid"><label class="wide"><span>关注的物品</span><textarea name="wantedItems" maxlength="8000" placeholder="棱镜球&#10;炫彩蛋">${escapeHtml(items)}</textarea></label><label class="wide"><span>发现物品时的提醒</span><input name="notificationTemplate" value="${escapeHtml(saved.notificationTemplate || "远行商人这轮有：{items}，快去买")}" maxlength="1200"></label><label class="capability-checkbox"><input name="notifyOnError" type="checkbox" ${saved.notifyOnError !== false ? "checked" : ""}><span>检查失败时也提醒我</span></label><label class="wide"><span>失败提醒</span><input name="errorNotificationTemplate" value="${escapeHtml(saved.errorNotificationTemplate || "远行商人监控这轮检查失败了：{error}")}" maxlength="1200"></label></div>`)}${renderContactDeliverySettings(capability, state, "打开后，这位联系人会收到商人命中或已开启的失败提醒；可以同时开启多位联系人。网页只抓取一次，再分别投递。 ")}${capabilityInfoSection("读取网页", "当前读取网页", saved.url || "尚未设置页面地址", '<button type="button" class="secondary-button" data-open-traveling-merchant-page>打开当前读取网页</button>')}<details class="capability-advanced"><summary><span>检查节奏</span><small>网站地址、超时与重试</small></summary><div class="capability-form-grid"><label class="wide"><span>页面地址</span><input name="url" value="${escapeHtml(saved.url || "")}" maxlength="500"></label><label><span>网页等待（秒）</span><input name="requestTimeoutSeconds" type="number" min="3" max="120" value="${escapeHtml(saved.requestTimeoutSeconds ?? 15)}"></label><label><span>重试次数</span><input name="maxAttempts" type="number" min="1" max="10" value="${escapeHtml(saved.maxAttempts ?? 3)}"></label><label><span>重试间隔（秒）</span><input name="retryDelaySeconds" type="number" min="0" max="300" value="${escapeHtml(saved.retryDelaySeconds ?? 20)}"></label></div></details>`, "保存远行商人设置");
 }
 
 function renderIphoneBridgeSettings(capability, state) {
@@ -307,7 +257,7 @@ function renderIphoneBridgeSettings(capability, state) {
   const status = saved.saved
     ? "邮件连接已配置。本地接收器会在软件运行时直接把反馈投递到下方勾选的会话。"
     : "请先在能力页完成 iPhone 邮件连接设置，然后再选择接收会话。";
-  return `${capabilityInfoSection("iPhone 反馈", "本地直接接收", status)}${renderSessionDeliverySettings(capability, state, "可以同时勾选多个会话；一封手机反馈会分别排进每个会话。这里只决定接收范围。")}`;
+  return `${capabilityInfoSection("iPhone 反馈", "本地直接接收", status)}${renderContactDeliverySettings(capability, state, "可以同时勾选多位联系人；一封手机反馈会分别排进每位联系人的固定对话。这里只决定接收范围。")}`;
 }
 
 function renderCapabilitySetting(capability, state) {
@@ -385,7 +335,7 @@ export function renderCapabilities({ state }) {
   const intro = pageIntro("CAPABILITIES", "能力", "从一个方向进入，再为每项能力单独设置。 ");
   if (state.capabilityPage === "external") return renderExternalCapabilities(state);
   if (!snapshot) return `${intro}${emptyBlock(icons.sliders, "正在读取能力", "这里会显示当前联系人可以使用的能力。")}`;
-  const capabilities = [...(snapshot.capabilities || []), wechatConnectionCapability(state)];
+  const capabilities = [...(snapshot.capabilities || []), createWechatConnectionCapability(state.wechatSnapshot)];
   const categoryIds = new Set(capabilities.map(capabilityCategory));
   const categories = CAPABILITY_CATEGORIES.filter((category) => categoryIds.has(category.id));
   if (!categories.length) return `${intro}${emptyBlock(icons.sliders, "还没有能力", "创建并选择联系人后，这里会显示可用能力。")}`;
@@ -447,48 +397,18 @@ function runtimeChoice(name, value, options) {
   return `<input type="hidden" name="${escapeHtml(name)}" value="${escapeHtml(value)}"><div class="runtime-choice" data-runtime-choice="${escapeHtml(name)}">${options.map(([id, label]) => `<button type="button" class="runtime-choice__option ${value === id ? "active" : ""}" data-runtime-choice-value="${escapeHtml(id)}">${escapeHtml(label)}</button>`).join("")}</div>`;
 }
 
-function listFieldValue(value) {
-  return Array.isArray(value) ? value.join("\n") : "";
-}
-
-function claudeModelSlot(name, value) {
-  return `<fieldset class="runtime-model-slot"><legend>${escapeHtml(name)}</legend><label><span>模型标识</span><input name="${escapeHtml(value.key)}Model" value="${escapeHtml(value.model || "")}" maxlength="200" placeholder="服务实际使用的模型名"></label><label><span>显示名称</span><input name="${escapeHtml(value.key)}ModelName" value="${escapeHtml(value.name || "")}" maxlength="200" placeholder="会话中显示的名称"></label></fieldset>`;
-}
-
-function renderClaudeRuntime(claude) {
-  if (claude?.status === "needs-project") return `<section class="runtime-config-card"><header><div><span class="reference-kicker">CLAUDE CODE</span><h2>Claude Code</h2><p>先在会话中创建并选择联系人，软件才知道要编辑哪一份项目配置。</p></div></header><button class="secondary-button" data-open-contact-conversation>前往会话</button></section>`;
-  if (!claude || ["invalid", "unavailable"].includes(claude.status)) return `<section class="runtime-config-card"><header><div><span class="reference-kicker">CLAUDE CODE</span><h2>Claude Code</h2><p>${escapeHtml(claude?.message || "暂时无法读取这份配置。")}</p></div></header></section>`;
-  const config = claude.settings || {};
-  const textService = config.textService || {};
-  const sourceCopy = claude.deviceExists
-    ? "文字模型服务沿用这台电脑的 Claude Code 设置；当前联系人只管理项目工具规则，已有设置会保留。"
-    : claude.exists
-      ? "这页管理当前联系人的 Claude 设置，已有项目设置会保留。"
-      : "保存后会在这台电脑和当前联系人项目创建所需的 Claude Code 设置。";
-  return `<section class="runtime-config-card runtime-config-card--detail"><header><div><span class="reference-kicker">CLAUDE CODE</span><h2>Claude Code</h2><p>${sourceCopy}</p></div>${status(claude.exists ? "已连接" : "准备设置", claude.exists ? "ready" : "muted")}</header><form id="claudeRuntimeConfigForm" class="runtime-config-form"><section class="runtime-config-form__section runtime-config-form__section--surface"><div class="runtime-section-heading"><div><h3>日常偏好</h3><p>影响 Claude Code 在当前联系人项目中的默认行为。</p></div></div><div class="runtime-config-form__grid"><label class="runtime-checkbox"><input name="alwaysThinkingEnabled" type="checkbox" ${config.alwaysThinkingEnabled ? "checked" : ""}><span>始终开启深度思考</span></label><label class="runtime-checkbox"><input name="includeCoAuthoredBy" type="checkbox" ${config.includeCoAuthoredBy ? "checked" : ""}><span>提交时包含 Claude 协作署名</span></label></div></section><section class="runtime-config-form__section runtime-config-form__section--surface"><div class="runtime-section-heading"><div><h3>文本模型服务</h3><p>只在当前 Claude Code 使用自定义服务或模型别名时调整；访问令牌不会回显。</p></div></div><div class="runtime-config-form__grid"><label class="wide"><span>服务地址</span><input name="baseUrl" value="${escapeHtml(textService.baseUrl || "")}" maxlength="500" placeholder="留空时沿用已有服务"></label><label><span>访问令牌</span><input name="authToken" type="password" autocomplete="new-password" maxlength="1000" placeholder="${textService.hasAuthToken ? "已保存；重新填写才会替换" : "按需要填写"}"></label><label class="runtime-checkbox"><input name="clearAuthToken" type="checkbox"><span>移除已保存的访问令牌</span></label></div><div class="runtime-model-grid">${claudeModelSlot("Sonnet", { key: "sonnet", ...(textService.sonnet || {}) })}${claudeModelSlot("Opus", { key: "opus", ...(textService.opus || {}) })}${claudeModelSlot("Haiku", { key: "haiku", ...(textService.haiku || {}) })}</div></section><details class="runtime-config-form__advanced"><summary><span>工具与网络规则</span><small>只有明确需要固定规则时才调整</small></summary><div class="runtime-config-form__grid"><label class="wide"><span>默认允许的工具</span><textarea name="allowedTools" maxlength="50000" placeholder="每行一个，例如：Read&#10;Grep">${escapeHtml(listFieldValue(config.allowedTools))}</textarea></label><label class="wide"><span>始终禁止的工具</span><textarea name="deniedTools" maxlength="50000" placeholder="每行一个，例如：Read(./.env)">${escapeHtml(listFieldValue(config.deniedTools))}</textarea></label><label class="runtime-checkbox wide"><input name="skipWebFetchPreflight" type="checkbox" ${config.skipWebFetchPreflight ? "checked" : ""}><span>跳过 Web Fetch 的预检</span></label></div></details><footer><button class="primary-button">保存 Claude Code 设置</button></footer></form></section>`;
-}
-
-function runtimeOverviewCard({ id, kicker, title, copy, stateLabel, stateTone }) {
-  return `<button type="button" class="runtime-connection-card" data-open-runtime-section="${escapeHtml(id)}"><span class="runtime-connection-card__symbol" aria-hidden="true">${id === "claude" ? "✦" : "↗"}</span><span class="runtime-connection-card__copy"><span class="reference-kicker">${escapeHtml(kicker)}</span><strong>${escapeHtml(title)}</strong><small>${escapeHtml(copy)}</small></span>${status(stateLabel, stateTone)}<span class="runtime-connection-card__enter">查看设置 <b aria-hidden="true">→</b></span></button>`;
-}
-
 function renderRuntimeSettings({ state }) {
-  const snapshot = state.agentRuntime;
-  const section = state.runtimeSection || "overview";
-  const intro = `<header class="runtime-settings__intro"><span class="reference-kicker">RUNTIME</span><h2>连接与运行</h2><p>管理所有联系人的默认运行规则，以及当前联系人项目的 Claude Code 设置；密钥不会在页面显示。</p></header>`;
-  if (section === "claude") return `<section class="runtime-settings">${intro}<div class="runtime-detail-head"><button type="button" class="text-button" data-return-runtime-overview>← 返回连接概览</button></div>${renderClaudeRuntime(snapshot?.claude)}</section>`;
+  const intro = `<header class="runtime-settings__intro"><span class="reference-kicker">RUNTIME</span><h2>连接与运行</h2><p>管理所有联系人共用的默认运行规则。</p></header>`;
   const defaults = renderManagedAgentRuntimeSettings({ state });
-  if (!snapshot) return `<section class="runtime-settings">${intro}${defaults}${emptyBlock(icons.sliders, "正在读取当前联系人配置", "选择一位联系人后，可以查看并调整它的 Claude Code 设置。")}</section>`;
-  const claude = snapshot.claude || {};
-  const claudeReady = claude.status === "ready" || claude.status === "available";
-  return `<section class="runtime-settings">${intro}${defaults}<div class="runtime-connection-grid">${runtimeOverviewCard({ id: "claude", kicker: "CLAUDE CODE", title: "Claude Code", copy: claudeReady ? "本机文字模型与当前联系人的工具权限。" : "选择联系人后，可以查看并调整当前项目。", stateLabel: claudeReady ? "已连接" : "需要设置", stateTone: claudeReady ? "ready" : "muted" })}</div></section>`;
+  return `<section class="runtime-settings">${intro}${defaults}</section>`;
 }
 
-const API_BINDINGS = [
+export const API_BINDINGS = [
   { id: "image-generation", label: "生图", detail: "视觉工作台、Agent 生图与手机拍照式生图", types: ["dashscope"], selected: (bindings) => bindings["image-workbench"] || "" },
   { id: "image-vision", label: "理解图像", detail: "图片理解能力", types: ["openai-compatible", "dashscope", "generic-api"], selected: (bindings) => bindings["image-vision"] || "" },
   { id: "sound", label: "声音", detail: "音色设计与文字转语音", types: ["dashscope"], selected: (bindings) => bindings["voice-design"] || bindings["voice-message"] || "" },
   { id: "video-understanding", label: "理解视频", detail: "视频理解能力", types: ["openai-compatible", "dashscope", "generic-api"], selected: (bindings) => bindings["video-understanding"] || "" },
+  { id: "memory-generation", label: "记忆整理", detail: "把对话整理为长期记忆和检索上下文", types: ["openai-compatible", "dashscope"], selected: (bindings) => bindings["memory-generation"] || "" },
   { id: "memory-embedding", label: "记忆向量", detail: "用于长期记忆的语义召回；百炼连接默认使用 text-embedding-v4（1024 维）", types: ["openai-compatible", "dashscope"], selected: (bindings) => bindings["memory-embedding"] || "" },
 ];
 
@@ -586,12 +506,6 @@ export async function loadApiServices(context) {
   context.render();
 }
 
-export async function loadAgentRuntimeConfig(context) {
-  try { context.state.agentRuntime = await context.api.agentRuntime.snapshot(); }
-  catch (error) { context.setNotice(error?.message || "无法读取连接与运行设置。"); }
-  context.render();
-}
-
 export async function loadClaudeCodeApi(context) {
   try { context.state.claudeCodeApi = await context.api.agentRuntime.claudeCodeApiSnapshot(); }
   catch (error) { context.setNotice(error?.message || "无法读取 Claude Code API 设置。"); }
@@ -614,12 +528,12 @@ export async function loadCapabilities(context) {
     try { context.state.wechatSnapshot = await context.api.wechat?.snapshot?.(); }
     catch (error) { context.setNotice(error?.message || "能力已读取，但暂时无法读取微信连接状态。 "); }
     try {
-      const conversation = await context.api.conversation.snapshot();
-      context.state.companionSessions = {
-        projectRoot: conversation?.projectRoot || "",
-        sessions: Array.isArray(conversation?.sessions) ? conversation.sessions : [],
+      const snapshot = await context.api.capabilities.companionTargets();
+      context.state.companionContacts = {
+        contacts: Array.isArray(snapshot?.contacts) ? snapshot.contacts : [],
+        status: snapshot?.status || "needs-root",
       };
-    } catch (error) { context.setNotice(error?.message || "能力已读取，但暂时无法读取会话范围。 "); }
+    } catch (error) { context.setNotice(error?.message || "能力已读取，但暂时无法读取联系人范围。 "); }
   }
   catch (error) { context.setNotice(error?.message || "无法读取能力清单。"); }
   context.render();
@@ -747,7 +661,7 @@ function bindIdentityAvatarCropEvents({ render, saveIdentity, setNotice, state }
   });
 }
 
-export function bindAgentEvents({ api, applyTheme, openOnboarding, refreshData, render, setAdminTab, setCapabilityPage, setCreatePage, setNotice, setRelationshipPage, setRuntimeSection, setView, state }) {
+export function bindAgentEvents({ api, applyTheme, openOnboarding, refreshData, render, setAdminTab, setCapabilityPage, setCreatePage, setNotice, setView, state }) {
   const saveIdentity = async (target, changes) => {
     const identity = cloneIdentity(state.settings);
     const profile = { ...profileForTarget(identity, target), ...changes };
@@ -761,26 +675,10 @@ export function bindAgentEvents({ api, applyTheme, openOnboarding, refreshData, 
     render();
     if (button.dataset.adminTab === "claude-code") await loadClaudeCodeApi({ api, render, setNotice, state });
     if (button.dataset.adminTab === "api-services") await loadApiServices({ api, render, setNotice, state });
-    if (button.dataset.adminTab === "runtime") await loadAgentRuntimeConfig({ api, render, setNotice, state });
   }));
   document.querySelectorAll("[data-open-admin]").forEach((button) => button.addEventListener("click", async () => {
     setAdminTab(button.dataset.openAdmin);
-    if (button.dataset.openAdmin === "runtime") setRuntimeSection("overview");
     setView("admin");
-    if (button.dataset.openAdmin === "runtime") await loadAgentRuntimeConfig({ api, render, setNotice, state });
-  }));
-  document.querySelectorAll("[data-open-contact-conversation]").forEach((button) => button.addEventListener("click", () => {
-    setView("relationships");
-    setRelationshipPage("conversation");
-  }));
-  document.querySelectorAll("[data-open-runtime-section]").forEach((button) => button.addEventListener("click", () => {
-    setAdminTab("runtime");
-    setRuntimeSection(button.dataset.openRuntimeSection);
-    setView("admin");
-  }));
-  document.querySelectorAll("[data-return-runtime-overview]").forEach((button) => button.addEventListener("click", () => {
-    setRuntimeSection("overview");
-    render();
   }));
   document.querySelectorAll("[data-runtime-choice]").forEach((group) => group.querySelectorAll("[data-runtime-choice-value]").forEach((button) => button.addEventListener("click", () => {
     const field = group.parentElement?.querySelector(`input[name="${group.dataset.runtimeChoice}"]`);
@@ -788,20 +686,6 @@ export function bindAgentEvents({ api, applyTheme, openOnboarding, refreshData, 
     field.value = button.dataset.runtimeChoiceValue;
     group.querySelectorAll("[data-runtime-choice-value]").forEach((item) => item.classList.toggle("active", item === button));
   })));
-  document.querySelector("#claudeRuntimeConfigForm")?.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const form = new FormData(event.currentTarget);
-    try {
-      state.agentRuntime = await api.agentRuntime.saveClaude({
-        allowedTools: form.get("allowedTools"), deniedTools: form.get("deniedTools"), preserveTextService: true,
-        alwaysThinkingEnabled: form.get("alwaysThinkingEnabled") === "on",
-        includeCoAuthoredBy: form.get("includeCoAuthoredBy") === "on",
-        skipWebFetchPreflight: form.get("skipWebFetchPreflight") === "on",
-      });
-      setNotice("Claude Code 设置已保存。");
-    } catch (error) { setNotice(error?.message || "无法保存 Claude Code 设置。"); }
-    render();
-  });
   const claudeCodeApiForm = document.querySelector("#claudeCodeApiForm");
   if (claudeCodeApiForm) {
     const apiCard = claudeCodeApiForm.closest(".runtime-config-card");
@@ -997,10 +881,7 @@ export function bindAgentEvents({ api, applyTheme, openOnboarding, refreshData, 
     setCapabilityActive(input.dataset.toggleCapability, input.checked);
   }));
   document.querySelector("[data-open-external-capabilities]")?.addEventListener("click", () => {
-    state.capabilityPage = "external";
-    state.capabilitySelectedId = "";
-    state.siteAutomationSelectedSiteId = "";
-    render();
+    setCapabilityPage("external");
   });
   document.querySelector("[data-import-external-capability]")?.addEventListener("click", async () => {
     if (!api.externalCapabilities?.importManifest) return;
@@ -1066,16 +947,16 @@ export function bindAgentEvents({ api, applyTheme, openOnboarding, refreshData, 
     } catch (error) { setNotice(error?.message || "无法打开远行商人网页。 "); }
     render();
   });
-  document.querySelectorAll("[data-session-delivery-enabled]").forEach((input) => input.addEventListener("change", async () => {
-    const capabilityId = input.dataset.sessionDeliveryEnabled;
-    const sessionId = input.dataset.sessionDeliveryId;
+  document.querySelectorAll("[data-contact-delivery-enabled]").forEach((input) => input.addEventListener("change", async () => {
+    const capabilityId = input.dataset.contactDeliveryEnabled;
+    const contactId = input.dataset.contactDeliveryId;
     try {
-      const response = await api.capabilities.saveSettings(capabilityId, { sessionId, sessionEnabled: input.checked });
+      const response = await api.capabilities.saveSettings(capabilityId, { contactId, contactEnabled: input.checked });
       if (response?.ok) {
         state.capabilitySnapshot = response.value;
-        setNotice(input.checked ? "这个会话已启用该投递能力。" : "这个会话已关闭该投递能力。 ");
-      } else setNotice(response?.error?.message || "无法更新会话开关。 ");
-    } catch (error) { setNotice(error?.message || "无法更新会话开关。 "); }
+        setNotice(input.checked ? "这位联系人已启用该投递能力。" : "这位联系人已关闭该投递能力。 ");
+      } else setNotice(response?.error?.message || "无法更新联系人开关。 ");
+    } catch (error) { setNotice(error?.message || "无法更新联系人开关。 "); }
     render();
   }));
   document.querySelectorAll("[data-capability-settings-form]").forEach((formElement) => formElement.addEventListener("submit", async (event) => {

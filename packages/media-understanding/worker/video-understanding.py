@@ -2,9 +2,9 @@
 # -*- coding: utf-8 -*-
 """Software-owned OpenAI-compatible video-understanding worker.
 
-The stable ``suzu-lives video-understanding`` command starts this worker.
+Suzu's host-neutral capability CLI starts this worker.
 Configuration, temporary clips, cache entries, retained clips, and usage
-events belong to Suzu Lives; no Claude project runtime is used.
+events belong to Suzu Lives; no Agent workspace runtime is used.
 """
 
 from __future__ import annotations

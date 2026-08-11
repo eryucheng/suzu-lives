@@ -3,7 +3,7 @@ import test from "node:test";
 
 import { registerTodayCalendarIpc } from "../electron/ipc/today-calendar-ipc.mjs";
 
-test("today calendar IPC exposes only its snapshot and private-event operations", async () => {
+test("today calendar IPC forwards scoped event operations", async () => {
   const handlers = new Map();
   const calls = [];
   registerTodayCalendarIpc({
@@ -16,6 +16,6 @@ test("today calendar IPC exposes only its snapshot and private-event operations"
   });
   assert.deepEqual(await handlers.get("today-calendar:snapshot")(), { status: "ready" });
   await handlers.get("today-calendar:save-event")(null, { name: "纪念日" });
-  await handlers.get("today-calendar:remove-event")(null, "event-1");
-  assert.deepEqual(calls, [["save", { name: "纪念日" }], ["remove", "event-1"]]);
+  await handlers.get("today-calendar:remove-event")(null, { contactId: "contact-suzu", id: "event-1" });
+  assert.deepEqual(calls, [["save", { name: "纪念日" }], ["remove", { contactId: "contact-suzu", id: "event-1" }]]);
 });

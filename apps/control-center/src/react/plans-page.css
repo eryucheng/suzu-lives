@@ -1,0 +1,297 @@
+.plans-react-page {
+  --plans-layout-max-width:1200px;
+  display:grid;
+  align-content:start;
+  gap:clamp(18px,2cqw,28px);
+  container-type:inline-size;
+  width:100%;
+  min-width:0;
+  max-width:var(--plans-layout-max-width);
+  margin:0 auto;
+}
+
+.plans-flow {
+  display:grid;
+  width:min(100%,900px);
+  grid-template-columns:repeat(3,minmax(0,1fr));
+  margin:0 auto;
+  padding:0;
+  list-style:none;
+}
+
+.plans-flow__step {
+  display:grid;
+  min-width:0;
+  gap:5px;
+  padding:0 clamp(14px,2cqw,28px);
+  text-align:center;
+}
+
+.plans-flow__step + .plans-flow__step {
+  border-left:1px solid color-mix(in srgb, var(--glass-border) 78%, transparent);
+}
+
+.plans-flow__step strong {
+  color:var(--text);
+  font-size:var(--font-size-md);
+}
+
+.plans-flow__step span {
+  color:var(--text-muted);
+  font-size:var(--font-size-xs);
+  line-height:1.55;
+}
+
+.plans-task-list {
+  display:grid;
+  min-width:0;
+  gap:clamp(12px,1.4cqw,18px);
+}
+
+.plans-task-card {
+  display:grid;
+  grid-template-columns:minmax(0,1fr) auto;
+  align-items:center;
+  column-gap:clamp(16px,2cqw,28px);
+  row-gap:var(--space-sm);
+  min-width:0;
+  padding:clamp(14px,1.4cqw,19px) clamp(16px,1.8cqw,24px);
+  transition:border-color .18s ease;
+}
+
+.plans-task-card.is-disabled {
+  border-color:color-mix(in srgb, var(--glass-border) 64%, var(--text-muted));
+}
+
+.plans-task-card__summary { display:grid; min-width:0; gap:6px; }
+
+.plans-task-card h2 {
+  margin:0;
+  overflow:hidden;
+  color:var(--text);
+  font-size:clamp(16px,1.35cqw,19px);
+  letter-spacing:-.3px;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+
+.plans-task-card__meta {
+  display:flex;
+  flex-wrap:wrap;
+  gap:3px var(--space-lg);
+  margin:0;
+}
+
+.plans-task-card__meta div {
+  display:flex;
+  min-width:0;
+  align-items:baseline;
+  gap:5px;
+}
+
+.plans-task-card__meta dt {
+  color:var(--text-muted);
+  font-size:var(--font-size-xs);
+}
+
+.plans-task-card__meta dd {
+  margin:0;
+  overflow:hidden;
+  color:var(--text-secondary);
+  font-size:var(--font-size-xs);
+  line-height:1.5;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+
+.plans-task-card__content {
+  display:flex;
+  min-width:0;
+  gap:5px;
+  margin:0;
+  color:var(--text-secondary);
+  font-size:var(--font-size-xs);
+  line-height:1.5;
+}
+
+.plans-task-card__content > span:first-child { flex:none; color:var(--text-muted); }
+
+.plans-task-card__content > span:last-child {
+  min-width:0;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+
+.plans-task-card__footer {
+  display:flex;
+  align-items:center;
+  justify-content:flex-end;
+  gap:var(--space-md);
+  margin:0;
+  padding:0;
+}
+
+.plans-task-card__switch {
+  display:flex;
+  min-width:0;
+  align-items:center;
+  gap:6px;
+  color:var(--text-secondary);
+  cursor:pointer;
+  font-size:var(--font-size-xs);
+  white-space:nowrap;
+}
+
+.plans-task-card__switch > span { color:var(--text-secondary); }
+
+.plans-task-card__error,
+.plans-editor-error {
+  margin:var(--space-sm) 0 0;
+  color:var(--danger);
+  font-size:var(--font-size-xs);
+  line-height:1.55;
+}
+
+.plans-task-card__error { grid-column:1 / -1; }
+
+.plans-empty { width:min(100%,850px); }
+
+.plans-create-button {
+  background:var(--panel);
+  border-color:var(--border);
+  box-shadow:none;
+  color:var(--text);
+}
+
+.plans-create-button:hover:not(:disabled) {
+  background:var(--panel-soft);
+  border-color:color-mix(in srgb, var(--accent) 42%, var(--border));
+}
+
+.plans-editor-form {
+  display:grid;
+  grid-template-columns:repeat(2,minmax(0,1fr));
+  gap:var(--space-md);
+}
+
+.plans-editor-field {
+  display:grid;
+  min-width:0;
+  gap:6px;
+  color:var(--text);
+  font-size:var(--font-size-xs);
+}
+
+.plans-editor-field--wide { grid-column:1 / -1; }
+.plans-editor-field span > small { color:var(--text-secondary); font-size:inherit; }
+
+.plans-editor-delay {
+  display:grid;
+  grid-column:1 / -1;
+  grid-template-columns:repeat(2,minmax(0,1fr));
+  gap:var(--space-md);
+}
+
+.plans-editor-script {
+  display:grid;
+  gap:var(--space-sm);
+  padding:var(--space-md);
+  border:1px solid var(--border);
+  border-radius:var(--radius-md);
+  background:var(--panel);
+}
+
+.plans-editor-script > div:first-child { display:grid; gap:3px; }
+.plans-editor-script > div:first-child > span { color:var(--text); font-size:var(--font-size-xs); }
+.plans-editor-script small { color:var(--text-secondary); font-size:var(--font-size-xs); line-height:1.5; }
+
+.plans-editor-form input,
+.plans-editor-form textarea,
+.plans-editor-form button[aria-haspopup="listbox"] {
+  background:var(--panel);
+  color:var(--text);
+  opacity:1;
+}
+
+.plans-editor-form input::placeholder,
+.plans-editor-form textarea::placeholder {
+  color:var(--text-secondary);
+  opacity:1;
+}
+
+.plans-editor-script__choice {
+  display:flex;
+  min-width:0;
+  align-items:center;
+  gap:var(--space-sm);
+}
+
+.plans-editor-script__choice code {
+  flex:1;
+  min-width:0;
+  overflow:hidden;
+  border:1px solid var(--border);
+  border-radius:var(--radius-sm);
+  background:var(--panel-soft);
+  color:var(--text);
+  font-family:inherit;
+  font-size:var(--font-size-xs);
+  text-overflow:ellipsis;
+  white-space:nowrap;
+  padding:8px 9px;
+}
+
+.plans-editor-actions {
+  display:flex;
+  width:100%;
+  justify-content:flex-end;
+  gap:var(--space-sm);
+}
+
+.plans-delete-dialog p { margin:0; }
+
+body:has(.plans-editor-form) [role="dialog"],
+body:has(.plans-delete-dialog) [role="dialog"] {
+  background:linear-gradient(
+    160deg,
+    color-mix(in srgb, var(--panel) 96%, transparent),
+    color-mix(in srgb, var(--panel) 90%, transparent)
+  );
+}
+
+body:has(.plans-editor-form) [role="dialog"]:has([aria-expanded="true"]) {
+  overflow:visible;
+}
+
+body:has(.plans-editor-form) [role="dialog"] > div:has([aria-expanded="true"]) {
+  position:relative;
+  z-index:1;
+  overflow:visible;
+}
+
+body:has(.plans-editor-form) [role="dialog"] [role="listbox"] {
+  z-index:2;
+  background:var(--panel);
+  color:var(--text);
+  opacity:1;
+}
+
+body:has(.plans-editor-form) [role="dialog"] [role="option"] {
+  color:var(--text);
+  opacity:1;
+}
+
+body:has(.plans-editor-form) [role="dialog"] [role="option"][aria-selected="true"] {
+  color:var(--accent);
+}
+
+@media (max-width:680px) {
+  .plans-flow { grid-template-columns:minmax(0,1fr); }
+  .plans-flow__step { padding:var(--space-md) 0; }
+  .plans-flow__step + .plans-flow__step { border-top:1px solid color-mix(in srgb, var(--glass-border) 78%, transparent); border-left:0; }
+  .plans-editor-form,
+  .plans-editor-delay { grid-template-columns:minmax(0,1fr); }
+  .plans-task-card { grid-template-columns:minmax(0,1fr); }
+  .plans-task-card__footer { justify-content:flex-start; flex-wrap:wrap; }
+}

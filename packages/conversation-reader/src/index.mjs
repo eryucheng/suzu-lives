@@ -16,6 +16,10 @@ const WECHAT_MEDIA_MANIFEST_CLOSE = "</suzu-wechat-media>";
 const SCHEDULE_TASK_OPEN = "<suzu-schedule-task>";
 const MERCHANT_TASK_OPEN = "<suzu-merchant-task>";
 const SUZU_MANAGED_SKILL_CONTEXT = /^Base directory for this skill:\s*[^\r\n]+[\s\S]*?<!--\s*suzu-lives:ability:[a-z0-9._-]+\s*-->/iu;
+const CLAUDE_RESUME_META_TEXT = "Continue from where you left off.";
+const CLAUDE_SYNTHETIC_NO_RESPONSE_TEXT = "No response requested.";
+const VOICE_CALL_TURN_OPEN = "<suzu-voice-call-turn>";
+const VOICE_CALL_TURN_CLOSE = "</suzu-voice-call-turn>";
 const SEARCH_CATEGORIES = new Set(["messages", "images", "files", "audio", "links", "date"]);
 const DATE_QUERY_PATTERN = /^\d{4}-\d{2}-\d{2}$/u;
 
@@ -203,11 +207,33 @@ function textWithWechatMedia(value) {
   return blocks;
 }
 
+function voiceCallTranscript(value) {
+  const source = String(value ?? "").trim();
+  if (!source.startsWith(VOICE_CALL_TURN_OPEN) || !source.endsWith(VOICE_CALL_TURN_CLOSE)) return null;
+  const encoded = source.slice(VOICE_CALL_TURN_OPEN.length, -VOICE_CALL_TURN_CLOSE.length).trim();
+  try {
+    const payload = JSON.parse(encoded);
+    return payload?.source === "suzu-live-call" && typeof payload.transcript === "string"
+      ? payload.transcript
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function textWithConversationProtocol(value, { media = false } = {}) {
+  const transcript = voiceCallTranscript(value);
+  const text = transcript === null ? String(value ?? "") : transcript;
+  return media
+    ? textWithWechatMedia(text)
+    : text ? [{ kind: "text", text: boundedText(text) }] : [];
+}
+
 function textParts(content) {
-  if (typeof content === "string") return content ? [{ kind: "text", text: boundedText(content) }] : [];
+  if (typeof content === "string") return content ? textWithConversationProtocol(content) : [];
   if (!Array.isArray(content)) return [];
   return content.flatMap((part) => {
-    if (part?.type === "text" && part.text) return textWithWechatMedia(part.text);
+    if (part?.type === "text" && part.text) return textWithConversationProtocol(part.text, { media: true });
     if (part?.type === "thinking") return [{ kind: "thinking", text: boundedText(part.thinking), preview: boundedText(part.thinking).slice(0, 80) }];
     if (part?.type === "tool_use") return [{ kind: "tool_use", name: boundedText(part.name || "工具"), summary: boundedText(part.input?.command || part.input?.file_path || part.input?.description || "").slice(0, 80), detail: formatJson(part.input || {}) }];
     if (part?.type === "tool_result") {
@@ -226,6 +252,32 @@ function isManagedSuzuSkillContext(content) {
       ? content.filter((part) => part?.type === "text").map((part) => String(part.text || ""))
       : [];
   return values.some((value) => SUZU_MANAGED_SKILL_CONTEXT.test(value));
+}
+
+function hasExactTextContent(content, expected) {
+  const values = typeof content === "string"
+    ? [content]
+    : Array.isArray(content)
+      ? content.filter((part) => part?.type === "text").map((part) => String(part.text || ""))
+      : [];
+  return values.length === 1 && values[0].trim() === expected;
+}
+
+function isClaudeResumeMetaRecord(record) {
+  const message = record?.message || {};
+  return record?.type === "user"
+    && (record?.isMeta === true || message?.isMeta === true)
+    && hasExactTextContent(message.content, CLAUDE_RESUME_META_TEXT);
+}
+
+function isClaudeSyntheticNoResponseRecord(record) {
+  const message = record?.message || {};
+  const parentUuid = clean(record?.parentUuid || message?.parentUuid);
+  const model = clean(message?.model || record?.model);
+  return record?.type === "assistant"
+    && parentUuid
+    && model === "<synthetic>"
+    && hasExactTextContent(message.content, CLAUDE_SYNTHETIC_NO_RESPONSE_TEXT);
 }
 
 function scheduledTaskNotice(content) {
@@ -258,6 +310,9 @@ export function buildDisplayMessages(records, maxMessages = 500) {
     let blocks = [];
     let label = "";
     if (type === "user") {
+      // Claude Code may append an internal `isMeta` resume marker. It is not
+      // person-authored chat content and has a paired synthetic assistant row.
+      if (isClaudeResumeMetaRecord(record)) continue;
       // Claude writes the full text of an auto-loaded Skill as a synthetic
       // user record. It is execution context, not something the person sent.
       if (isManagedSuzuSkillContext(message.content)) continue;
@@ -274,6 +329,7 @@ export function buildDisplayMessages(records, maxMessages = 500) {
       }
     }
     else if (type === "assistant") {
+      if (isClaudeSyntheticNoResponseRecord(record)) continue;
       kind = "assistant";
       blocks = textParts(message.content);
       if (noReplyBlocks(blocks)) continue;

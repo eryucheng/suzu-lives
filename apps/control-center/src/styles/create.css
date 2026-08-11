@@ -344,6 +344,10 @@
   font-size: 10px;
 }
 
+.create-select-react {
+  min-width: 0;
+}
+
 .reference-form .wide {
   grid-column: 1 / -1;
 }
@@ -948,6 +952,10 @@
   padding: 6px 8px;
 }
 
+.reference-group-filter__select {
+  min-width: 128px;
+}
+
 .reference-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(142px, 1fr));
@@ -1177,6 +1185,13 @@
 .reference-detail {
   overflow: hidden;
   border-color: color-mix(in srgb, var(--accent2) 30%, var(--line));
+}
+
+.reference-import-panel:has(.create-select-react:focus-within),
+.reference-detail:has(.create-select-react:focus-within) {
+  overflow: visible;
+  position: relative;
+  z-index: 2;
 }
 
 .reference-detail > summary {
@@ -1612,24 +1627,6 @@
   }
 }
 
-@media (max-width: 920px) {
-  .visual-workbench,
-  .voice-workspace {
-    grid-template-columns: 1fr;
-  }
-
-  .voice-history {
-    block-size: auto;
-    max-height: none;
-    max-block-size: none;
-    position: static;
-  }
-
-  .voice-candidate-list {
-    max-height: 520px;
-  }
-}
-
 @media (max-width: 680px) {
   .create-space-grid {
     grid-template-columns: 1fr;
@@ -1647,8 +1644,7 @@
     flex-direction: column;
   }
 
-  .reference-import-start,
-  .voice-candidate-actions {
+  .reference-import-start {
     justify-content: flex-start;
   }
 
@@ -1660,10 +1656,6 @@
     grid-template-columns: 1fr;
   }
 
-  .voice-candidate {
-    grid-template-columns: 1fr;
-    align-items: start;
-  }
 }
 
 @media (max-width: 560px) {
@@ -1729,4 +1721,196 @@
   .reference-detail-summary-note {
     display: none;
   }
+}
+
+/* The create pages are desktop workspaces: keep the compose/result relationship
+   stable under application zoom instead of turning it into a different vertical page. */
+.visual-workbench,
+.voice-workspace {
+  grid-template-columns: minmax(520px, 1.16fr) minmax(320px, .84fr);
+  align-items: start;
+  gap: 18px;
+  min-width: 920px;
+}
+
+.create-studio-page-header {
+  min-width: 920px;
+  flex-direction: row;
+  align-items: flex-end;
+}
+
+.create-studio-page-header .create-subpage-actions {
+  flex-wrap: nowrap;
+}
+
+.drawing-workbench {
+  max-width: 1200px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.drawing-compose-panel,
+.drawing-runs,
+.voice-design-panel,
+.voice-history {
+  border-radius: 20px;
+}
+
+.drawing-compose-panel,
+.voice-design-panel {
+  padding: 24px;
+}
+
+.drawing-runs,
+.voice-history {
+  position: sticky;
+  top: 18px;
+  min-height: 360px;
+  max-height: min(540px, calc(100dvh - 190px));
+}
+
+.drawing-runs {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 16px;
+  overflow: hidden;
+  padding: 24px;
+}
+
+.drawing-run-list {
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 3px;
+}
+
+.drawing-run,
+.voice-candidate {
+  border-radius: 14px;
+  padding: 14px;
+}
+
+.drawing-runs .drawing-run-empty,
+.voice-history-empty {
+  min-height: 0;
+}
+
+.drawing-references {
+  gap: 16px;
+  margin-top: 0;
+}
+
+.drawing-section-heading {
+  padding: 6px 2px 0;
+}
+
+.voice-workspace {
+  grid-template-columns: minmax(520px, 1.12fr) minmax(340px, .88fr);
+}
+
+.voice-history {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 16px;
+  block-size: min(540px, calc(100dvh - 190px));
+  max-block-size: min(540px, calc(100dvh - 190px));
+  padding: 24px;
+}
+
+.voice-candidate-list {
+  gap: 10px;
+  padding: 1px 3px 3px 1px;
+}
+
+.voice-candidate {
+  grid-template-columns: minmax(0, 1fr) minmax(184px, auto);
+  gap: 14px;
+}
+
+.voice-candidate-actions {
+  display: grid;
+  justify-items: end;
+  gap: 7px;
+}
+
+.voice-candidate-actions__main,
+.voice-candidate-actions__manage {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.voice-candidate-actions__manage .secondary-button {
+  color: var(--muted);
+}
+
+.voice-design-form textarea {
+  min-height: 104px;
+}
+
+@media (max-width: 920px) {
+  .visual-workbench,
+  .voice-workspace {
+    grid-template-columns: minmax(520px, 1.16fr) minmax(320px, .84fr);
+    min-width: 920px;
+  }
+
+  .voice-history {
+    position: sticky;
+    block-size: min(540px, calc(100dvh - 190px));
+    max-block-size: min(540px, calc(100dvh - 190px));
+  }
+
+  .voice-candidate-list {
+    max-height: none;
+  }
+}
+
+#createVisualReactRoot,
+#createAudioReactRoot {
+  display: contents;
+}
+
+.drawing-references .reference-workspace {
+  max-width: none;
+}
+
+.create-react-dialog-backdrop {
+  position: fixed;
+  z-index: 100;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: rgba(6, 8, 18, .66);
+  backdrop-filter: blur(7px);
+  padding: 16px;
+}
+
+.create-react-dialog {
+  width: min(620px, calc(100vw - 32px));
+  max-width: calc(100vw - 32px);
+  max-height: min(730px, calc(100dvh - 32px));
+  overflow: auto;
+  border: 1px solid color-mix(in srgb, var(--accent) 26%, var(--line));
+  border-radius: 19px;
+  background:
+    radial-gradient(circle at 94% 3%, rgba(139, 130, 255, .17), transparent 30%),
+    radial-gradient(circle at 5% 100%, rgba(69, 212, 191, .07), transparent 34%),
+    linear-gradient(145deg, color-mix(in srgb, var(--panel) 98%, #201d3c), var(--panel));
+  box-shadow: 0 28px 72px rgba(0, 0, 0, .38), inset 0 1px rgba(255, 255, 255, .05);
+  color: var(--text);
+}
+
+.create-react-dialog:has(.create-select-react:focus-within) {
+  overflow: visible;
+}
+
+.create-react-dialog > .voice-settings-copy:not(.custom-audio-copy) {
+  padding: 18px 18px 0;
+}
+
+.create-react-dialog > .voice-form-actions {
+  padding: 0 18px 18px;
 }

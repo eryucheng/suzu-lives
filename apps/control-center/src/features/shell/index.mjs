@@ -1,5 +1,5 @@
 import { dateTime, escapeHtml, money } from "../../core/formatters.mjs";
-import { card, emptyBlock, pageIntro, status } from "../../components/panel.mjs";
+import { pageIntro, status } from "../../components/panel.mjs";
 
 export const icons = {
   spark: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 1.7 5.3L19 10l-5.3 1.7L12 17l-1.7-5.3L5 10l5.3-1.7L12 3Z"/><path d="m19 15 .7 2.3L22 18l-2.3.7L19 21l-.7-2.3L16 18l2.3-.7L19 15Z"/></svg>',
@@ -172,42 +172,12 @@ function renderToday({ state }) {
     </section>${renderTodayInsights(state.data)}${renderEventEditor(state.todayEventEditor, selected)}`;
 }
 
-function scheduleTaskCard(task) {
-  const recurring = task?.kind === "cron";
-  const target = task?.target || {};
-  const purpose = recurring
-    ? `循环：${task.cron || "未设置 Cron"}`
-    : `触发时间：${dateTime(task.dueAt)}`;
-  const scope = recurring
-    ? target.name === "traveling-merchant" ? "远行商人 · 已开启会话" : "软件自动任务"
-    : target.sessionId ? `主动关心 · 会话 ${target.sessionId}` : "本机会话";
-  return actionCard({
-    title: task.description || (recurring ? "循环自动任务" : "一次性自动任务"),
-    purpose,
-    scope,
-    stateLabel: recurring ? "循环中" : "等待触发",
-    tone: "ready",
-    extra: `创建于 ${dateTime(task.createdAt)}`,
-  });
-}
-
-function renderPlans({ state }) {
-  const snapshot = state.scheduleSnapshot;
-  const tasks = Array.isArray(snapshot?.tasks) ? snapshot.tasks : [];
-  const schedule = snapshot === null
-    ? emptyBlock(icons.spark, "正在读取自动任务", "Suzu 正在读取本机保存的定时器与循环任务。")
-    : tasks.length
-      ? `<section class="action-list">${tasks.map(scheduleTaskCard).join("")}</section>`
-      : emptyBlock(icons.spark, "还没有自动任务", "主动关心和远行商人的自动任务会显示在这里。");
-  return `${pageIntro("PLANS", "计划，不只是待办列表", "这里会显示 Suzu 本机保存的定时器和循环任务。")}<section class="plan-rail"><div class="plan-node"><b>一次性</b><span>到时间后触发一次</span></div><div class="plan-line"></div><div class="plan-node future"><b>循环</b><span>按 Cron 到点执行</span></div><div class="plan-line"></div><div class="plan-node future"><b>投递</b><span>按能力设置决定会话范围</span></div></section>${schedule}`;
-}
 function renderActions() {
   return `${pageIntro("ACTIONS", "外部行动先让你看见，再让它发生", "行动只有在目的、影响范围与确认状态清晰时才值得执行。")}<div class="action-legend">${status("建议中", "muted")}${status("等待确认", "warning")}${status("执行中", "progress")}${status("已完成", "ready")}${status("失败可恢复", "danger")}</div><section class="action-list">${actionCard({ title: "等待可审批的行动", purpose: "外部渠道、设备和自动化准备好后，会在这里出现真实行动。", scope: "还没有可用来源", stateLabel: "准备中", tone: "muted", extra: "预计费用 / 数据访问：暂无数据" })}${actionCard({ title: "行动记录", purpose: "用于回看已确认行动的结果与恢复路径。", scope: "暂无执行记录", stateLabel: "只读", tone: "muted", extra: "只显示实际发生过的行动" })}</section>`;
 }
 
 export function renderShellView(view, context) {
   if (view === "today") return renderToday(context);
-  if (view === "plans") return renderPlans(context);
   return renderActions();
 }
 

@@ -79,8 +79,18 @@ function visionResponse(answer, { id = "vision-fixture", model = "fixture-vision
   return { status: 200, body: { id, model, usage, choices: [{ message: { content: answer } }] } };
 }
 
-async function invokeCli(args, environment = {}) {
-  return execFileAsync(process.execPath, [CLI, "image-vision", ...args], {
+function capabilityRequest(fixture, input, environment = {}) {
+  return { input, dataRoot: fixture.dataRoot, workspaceRoot: fixture.projectRoot, environment };
+}
+
+async function invokeCli({ input, dataRoot, workspaceRoot, environment = {} }) {
+  return execFileAsync(process.execPath, [
+    CLI,
+    "capability", "image-vision", "analyze",
+    "--input-json", JSON.stringify(input),
+    "--data-root", dataRoot,
+    "--workspace-root", workspaceRoot,
+  ], {
     cwd: PACKAGE_ROOT,
     env: isolatedEnvironment(environment),
   });
@@ -90,15 +100,18 @@ test("stable image-vision CLI preserves request shape and the software ledger", 
   const server = await startVisionServer(t, [visionResponse("画面中有一个测试像素。")]);
   const fixture = await createFixture({ baseUrl: server.baseUrl });
 
-  const result = await invokeCli([
-    fixture.imagePath,
-    "--question", "新问题优先吗？",
-    "--config", fixture.configPath,
-    "--data-root", fixture.dataRoot,
-    "--project-root", fixture.projectRoot,
-  ]);
+  const result = await invokeCli(capabilityRequest(fixture, {
+    path: fixture.imagePath,
+    question: "新问题优先吗？",
+    configPath: fixture.configPath,
+  }));
 
-  assert.equal(result.stdout, "画面中有一个测试像素。\n");
+  const response = JSON.parse(result.stdout);
+  assert.equal(response.schemaVersion, 1);
+  assert.equal(response.status, "ok");
+  assert.equal(response.capabilityId, "image-vision");
+  assert.equal(response.action, "analyze");
+  assert.equal(response.result.answer, "画面中有一个测试像素。");
   assert.equal(server.requests.length, 1);
   const request = server.requests[0];
   assert.equal(request.url, "/v1/chat/completions");
@@ -129,15 +142,13 @@ test("image-vision retries a safety refusal with the neutral visible-content pro
   ]);
   const fixture = await createFixture({ baseUrl: server.baseUrl });
 
-  const result = await invokeCli([
-    fixture.imagePath,
-    "--question", "要识别什么？",
-    "--config", fixture.configPath,
-    "--data-root", fixture.dataRoot,
-    "--project-root", fixture.projectRoot,
-  ]);
+  const result = await invokeCli(capabilityRequest(fixture, {
+    path: fixture.imagePath,
+    question: "要识别什么？",
+    configPath: fixture.configPath,
+  }));
 
-  assert.equal(result.stdout, "画面里有可见的人和物体。\n");
+  assert.equal(JSON.parse(result.stdout).result.answer, "画面里有可见的人和物体。");
   assert.equal(server.requests.length, 2);
   assert.equal(server.requests[0].body.messages[1].content[0].text, "要识别什么？");
   assert.match(server.requests[1].body.messages[1].content[0].text, /中性的可见内容描述/u);
@@ -147,19 +158,17 @@ test("image-vision preserves VISION and OpenAI-compatible environment overrides 
   const server = await startVisionServer(t, [visionResponse("环境变量连接生效。", { model: "provider-model" })]);
   const fixture = await createFixture({ baseUrl: "http://127.0.0.1:9" });
 
-  const result = await invokeCli([
-    fixture.imagePath,
-    "--question", "环境变量优先吗？",
-    "--config", fixture.configPath,
-    "--data-root", fixture.dataRoot,
-    "--project-root", fixture.projectRoot,
-  ], {
+  const result = await invokeCli(capabilityRequest(fixture, {
+    path: fixture.imagePath,
+    question: "环境变量优先吗？",
+    configPath: fixture.configPath,
+  }, {
     VISION_API_KEY: "environment-fixture-key",
     VISION_BASE_URL: `${server.baseUrl}/compatible`,
     VISION_MODEL: "environment-vision-model",
-  });
+  }));
 
-  assert.equal(result.stdout, "环境变量连接生效。\n");
+  assert.equal(JSON.parse(result.stdout).result.answer, "环境变量连接生效。");
   assert.equal(server.requests.length, 1);
   assert.equal(server.requests[0].url, "/compatible/v1/chat/completions");
   assert.equal(server.requests[0].headers.authorization, "Bearer environment-fixture-key");
@@ -173,7 +182,7 @@ test("image-vision forwards the selected named connection's key, address, and mo
   process.stdout.write = () => true;
   try {
     await runSuzuLivesCli({
-      args: ["image-vision", fixture.imagePath, "--question", "是否转发？", "--config", fixture.configPath, "--data-root", fixture.dataRoot, "--project-root", fixture.projectRoot],
+      args: ["capability", "image-vision", "analyze", "--input-json", JSON.stringify({ path: fixture.imagePath, question: "是否转发？", configPath: fixture.configPath }), "--data-root", fixture.dataRoot, "--workspace-root", fixture.projectRoot],
       connectionResolver: async ({ kind }) => kind === "image-vision" ? { key: "named-key", baseUrl: `${server.baseUrl}/named`, model: "named-model" } : null,
     });
   } finally {
@@ -185,7 +194,7 @@ test("image-vision forwards the selected named connection's key, address, and mo
   assert.equal(server.requests[0].body.model, "named-model");
 });
 
-test("image-vision honors --no-retry and keeps VISION_REFUSED as an honest failure boundary", async (t) => {
+test("image-vision honors noRetry and keeps a refusal as an honest failure boundary", async (t) => {
   const server = await startVisionServer(t, [
     visionResponse("抱歉，我不能分析这张图片。", { id: "no-retry" }),
     visionResponse("抱歉，我无法分析这张图片。", { id: "refused-first" }),
@@ -193,26 +202,29 @@ test("image-vision honors --no-retry and keeps VISION_REFUSED as an honest failu
   ]);
   const fixture = await createFixture({ baseUrl: server.baseUrl });
 
-  const noRetry = await invokeCli([
-    fixture.imagePath,
-    "--question", "先不重试。",
-    "--no-retry",
-    "--config", fixture.configPath,
-    "--data-root", fixture.dataRoot,
-    "--project-root", fixture.projectRoot,
-  ]);
-  assert.equal(noRetry.stdout, "抱歉，我不能分析这张图片。\n");
+  const noRetry = await invokeCli(capabilityRequest(fixture, {
+    path: fixture.imagePath,
+    question: "先不重试。",
+    noRetry: true,
+    configPath: fixture.configPath,
+  }));
+  assert.equal(JSON.parse(noRetry.stdout).result.answer, "抱歉，我不能分析这张图片。");
   assert.equal(server.requests.length, 1);
 
   await assert.rejects(
-    () => invokeCli([
-      fixture.imagePath,
-      "--question", "应当触发中性重试。",
-      "--config", fixture.configPath,
-      "--data-root", fixture.dataRoot,
-      "--project-root", fixture.projectRoot,
-    ]),
-    (error) => error.code === 4 && /VISION_ERROR：VISION_REFUSED/u.test(error.stderr),
+    () => invokeCli(capabilityRequest(fixture, {
+      path: fixture.imagePath,
+      question: "应当触发中性重试。",
+      configPath: fixture.configPath,
+    })),
+    (error) => {
+      const response = JSON.parse(error.stdout);
+      return error.code === 4
+        && response.status === "error"
+        && response.capabilityId === "image-vision"
+        && response.error.code === "vision_refused"
+        && /VISION_REFUSED/u.test(response.error.message);
+    },
   );
   assert.equal(server.requests.length, 3);
   const agentId = stableAgentId(fixture.projectRoot);

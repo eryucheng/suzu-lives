@@ -4,10 +4,13 @@ import path from "node:path";
 
 const TASK_VERSION = 1;
 const TASK_ID = /^schedule-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
+const CONTACT_ID = /^contact-[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
 const SESSION_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
 const MAX_PROMPT_LENGTH = 20_000;
 const MAX_DESCRIPTION_LENGTH = 500;
-const OPERATION_NAMES = new Set(["traveling-merchant"]);
+const OPERATION_NAMES = new Set(["traveling-merchant", "conversation-compactor"]);
+const COMPACTOR_TRIGGERS = new Set(["time", "token"]);
+const TASK_SOURCES = new Set(["agent", "manual", "system"]);
 
 export class ScheduleError extends Error {
   constructor(message) {
@@ -55,12 +58,120 @@ function sessionId(value) {
   return id;
 }
 
+function contactId(value) {
+  const id = clean(value);
+  if (!CONTACT_ID.test(id)) throw new ScheduleError("自动任务的联系人标识无效。 ");
+  return id;
+}
+
 function description(value, fallback) {
   const text = clean(value) || fallback;
   if (text.length > MAX_DESCRIPTION_LENGTH) {
     throw new ScheduleError(`自动任务说明不能超过 ${MAX_DESCRIPTION_LENGTH} 个字符。`);
   }
   return text;
+}
+
+function taskEnabled(value) {
+  if (value === undefined) return true;
+  if (typeof value !== "boolean") throw new ScheduleError("自动任务开关状态无效。 ");
+  return value;
+}
+
+function taskSource(value) {
+  const source = clean(value).toLowerCase() || "agent";
+  if (!TASK_SOURCES.has(source)) throw new ScheduleError("自动任务来源无效。 ");
+  return source;
+}
+
+function conversationTarget(value) {
+  if (value?.type !== "conversation") return null;
+  if (clean(value.sessionId) || clean(value.projectRoot) || Object.hasOwn(value, "hasTranscript")) {
+    throw new ScheduleError("对话自动任务只能指定联系人。 ");
+  }
+  return {
+    type: "conversation",
+    contactId: contactId(value.contactId),
+    prompt: requiredText(value.prompt, "自动任务提示词"),
+  };
+}
+
+function scriptTarget(value) {
+  if (value?.type !== "script") return null;
+  return {
+    type: "script",
+    scriptPath: absolutePath(value.scriptPath, "自动任务脚本路径"),
+  };
+}
+
+function operationTarget(value, kind = "") {
+  const operation = clean(value?.name).toLowerCase();
+  if (value?.type !== "operation" || !OPERATION_NAMES.has(operation)) return null;
+  if (operation === "traveling-merchant") {
+    if (kind && kind !== "cron") return null;
+    return { type: "operation", name: operation };
+  }
+  const trigger = clean(value?.trigger).toLowerCase();
+  if (!COMPACTOR_TRIGGERS.has(trigger)) return null;
+  if ((trigger === "time" && kind !== "cron") || (trigger === "token" && kind !== "once")) return null;
+  return {
+    type: "operation",
+    name: operation,
+    trigger,
+    sessionId: sessionId(value.sessionId),
+    projectRoot: absolutePath(value.projectRoot, "自动压缩工作目录"),
+  };
+}
+
+function normalizedTarget(kind, value) {
+  const conversation = conversationTarget(value);
+  if (conversation) return conversation;
+  const script = scriptTarget(value);
+  if (script) return script;
+  const operation = operationTarget(value, kind);
+  if (operation) return operation;
+  throw new ScheduleError(kind === "once" ? "一次性自动任务的执行目标无效。 " : "循环自动任务的执行目标无效。 ");
+}
+
+function creationTarget({
+  kind,
+  prompt,
+  scriptPath,
+  exec,
+  operationTrigger,
+  contactId: selectedContactId,
+  sessionId: selectedSessionId,
+  projectRoot,
+  source,
+}) {
+  const promptSource = clean(prompt);
+  const scriptSource = clean(scriptPath);
+  const operationSource = clean(exec).toLowerCase();
+  const count = [promptSource, scriptSource, operationSource].filter(Boolean).length;
+  if (count !== 1) throw new ScheduleError("自动任务必须且只能选择一个执行目标。 ");
+  if (promptSource) {
+    if (clean(selectedSessionId) || clean(projectRoot)) {
+      throw new ScheduleError("对话自动任务只能指定联系人。 ");
+    }
+    return conversationTarget({
+      type: "conversation",
+      contactId: selectedContactId,
+      prompt: promptSource,
+    });
+  }
+  if (scriptSource) return scriptTarget({ type: "script", scriptPath: scriptSource });
+  const operation = operationTarget({
+    type: "operation",
+    name: operationSource,
+    trigger: operationTrigger,
+    sessionId: selectedSessionId,
+    projectRoot,
+  }, kind);
+  if (!operation) throw new ScheduleError("--exec 的内置操作与触发方式无效。 ");
+  if (operation.name === "conversation-compactor" && source !== "system") {
+    throw new ScheduleError("记忆压缩器的自动任务只能由 Suzu 内部创建。 ");
+  }
+  return operation;
 }
 
 export function scheduleTasksDirectory(dataRoot) {
@@ -171,38 +282,34 @@ function validateStoredTask(value) {
   const createdAt = asDate(source.createdAt, "自动任务创建时间").toISOString();
   const taskDescription = description(source.description, kind === "once" ? "一次性自动任务" : "循环自动任务");
   const target = source.target && typeof source.target === "object" && !Array.isArray(source.target) ? source.target : null;
+  const enabled = taskEnabled(source.enabled);
+  const taskOrigin = taskSource(source.source);
   if (kind === "once") {
     const dueAt = asDate(source.dueAt, "自动任务触发时间").toISOString();
-    if (target?.type !== "conversation") throw new ScheduleError("一次性自动任务缺少会话目标。 ");
     return {
       version: TASK_VERSION,
       id,
       kind,
       createdAt,
       dueAt,
+      enabled,
+      source: taskOrigin,
       description: taskDescription,
-      target: {
-        type: "conversation",
-        sessionId: sessionId(target.sessionId),
-        projectRoot: absolutePath(target.projectRoot, "自动任务工作目录"),
-        prompt: requiredText(target.prompt, "自动任务提示词"),
-      },
+      target: normalizedTarget(kind, target),
     };
   }
   if (kind === "cron") {
     const cron = parseCronExpression(source.cron).source;
-    const operation = clean(target?.name).toLowerCase();
-    if (target?.type !== "operation" || !OPERATION_NAMES.has(operation)) {
-      throw new ScheduleError("循环自动任务的执行目标无效。 ");
-    }
     return {
       version: TASK_VERSION,
       id,
       kind,
       createdAt,
       cron,
+      enabled,
+      source: taskOrigin,
       description: taskDescription,
-      target: { type: "operation", name: operation },
+      target: normalizedTarget(kind, target),
     };
   }
   throw new ScheduleError("自动任务类型无效。 ");
@@ -236,11 +343,16 @@ export function scheduleTaskSummary(value) {
   return {
     id: task.id,
     kind: task.kind,
+    enabled: task.enabled,
+    source: task.source,
     description: task.description,
     createdAt: task.createdAt,
     ...(task.kind === "once" ? { dueAt: task.dueAt } : { cron: task.cron }),
     target: task.target.type === "conversation"
-      ? { type: task.target.type, sessionId: task.target.sessionId, projectRoot: task.target.projectRoot }
+      ? {
+        type: task.target.type,
+        contactId: task.target.contactId,
+      }
       : { ...task.target },
   };
 }
@@ -251,9 +363,13 @@ export async function createScheduleTask({
   cron = "",
   prompt = "",
   exec = "",
+  operationTrigger = "",
+  scriptPath = "",
+  contactId: selectedContactId = "",
   sessionId: selectedSessionId = "",
   projectRoot = "",
   description: taskDescription = "",
+  source = "",
   now = new Date(),
 } = {}) {
   const delaySource = clean(delay);
@@ -262,10 +378,10 @@ export async function createScheduleTask({
     throw new ScheduleError("自动任务必须且只能指定 --delay 或 --cron 其中一个。 ");
   }
   const createdAt = currentDate(now);
+  const taskOrigin = taskSource(source);
   const id = `schedule-${randomUUID()}`;
   let task;
   if (delaySource) {
-    if (clean(exec)) throw new ScheduleError("一次性自动任务只能使用 --prompt，不能使用 --exec。 ");
     const parsedDelay = parseDelay(delaySource);
     task = {
       version: TASK_VERSION,
@@ -273,26 +389,42 @@ export async function createScheduleTask({
       kind: "once",
       createdAt: createdAt.toISOString(),
       dueAt: new Date(createdAt.getTime() + parsedDelay.milliseconds).toISOString(),
+      enabled: true,
+      source: taskOrigin,
       description: description(taskDescription, "一次性自动任务"),
-      target: {
-        type: "conversation",
-        sessionId: sessionId(selectedSessionId),
-        projectRoot: absolutePath(projectRoot, "自动任务工作目录"),
-        prompt: requiredText(prompt, "自动任务提示词"),
-      },
+      target: creationTarget({
+        kind: "once",
+        prompt,
+        scriptPath,
+        exec,
+        operationTrigger,
+        contactId: selectedContactId,
+        sessionId: selectedSessionId,
+        projectRoot,
+        source: taskOrigin,
+      }),
     };
   } else {
-    if (clean(prompt)) throw new ScheduleError("循环自动任务只能使用 --exec，不能使用 --prompt。 ");
-    const operation = clean(exec).toLowerCase();
-    if (!OPERATION_NAMES.has(operation)) throw new ScheduleError("--exec 目前只支持 traveling-merchant。 ");
     task = {
       version: TASK_VERSION,
       id,
       kind: "cron",
       createdAt: createdAt.toISOString(),
       cron: parseCronExpression(cronSource).source,
+      enabled: true,
+      source: taskOrigin,
       description: description(taskDescription, "循环自动任务"),
-      target: { type: "operation", name: operation },
+      target: creationTarget({
+        kind: "cron",
+        prompt,
+        scriptPath,
+        exec,
+        operationTrigger,
+        contactId: selectedContactId,
+        sessionId: selectedSessionId,
+        projectRoot,
+        source: taskOrigin,
+      }),
     };
   }
   await writeTask(dataRoot, task);
@@ -327,6 +459,22 @@ export async function removeScheduleTask({ dataRoot, id } = {}) {
   }
 }
 
+export async function setScheduleTaskEnabled({ dataRoot, id, enabled } = {}) {
+  if (typeof enabled !== "boolean") throw new ScheduleError("自动任务开关状态无效。 ");
+  const filePath = taskFile(dataRoot, id);
+  let source;
+  try {
+    source = await fs.readFile(filePath, "utf8");
+  } catch (error) {
+    if (error?.code === "ENOENT") return null;
+    throw error;
+  }
+  const task = validateStoredTask(JSON.parse(source));
+  const next = { ...task, enabled };
+  await writeTask(dataRoot, next);
+  return next;
+}
+
 function parseCliOptions(values) {
   const options = {};
   const positional = [];
@@ -359,7 +507,7 @@ export async function runScheduleCli(values = [], { defaultDataRoot = "", now = 
   const action = clean(values[0]).toLowerCase();
   const { options, positional } = parseCliOptions(values.slice(1));
   if (action === "add") {
-    assertOnlyOptions(options, new Set(["data-root", "delay", "cron", "prompt", "exec", "session-id", "project-root", "desc"]));
+    assertOnlyOptions(options, new Set(["data-root", "delay", "cron", "prompt", "exec", "contact-id", "desc"]));
     if (positional.length) throw new ScheduleError("schedule add 不接受位置参数。 ");
     const task = await createScheduleTask({
       dataRoot: resolvedDataRoot(options, defaultDataRoot),
@@ -367,8 +515,7 @@ export async function runScheduleCli(values = [], { defaultDataRoot = "", now = 
       cron: options.cron,
       prompt: options.prompt,
       exec: options.exec,
-      sessionId: options["session-id"],
-      projectRoot: options["project-root"],
+      contactId: options["contact-id"],
       description: options.desc,
       now,
     });
@@ -438,6 +585,7 @@ export function createScheduleRunner({
     const tasks = await listScheduleTasks({ dataRoot: root });
     const work = [];
     for (const task of tasks) {
+      if (!task.enabled) continue;
       if (task.kind === "once") {
         const dueAt = asDate(task.dueAt, "自动任务触发时间");
         if (dueAt.getTime() <= startedAt.getTime()) {

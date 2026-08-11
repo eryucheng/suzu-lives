@@ -241,6 +241,63 @@ function chooseTokenHead(logical, targetTokens) {
   return -1;
 }
 
+function tokenTailPlan({ context, currentTokens, minimumContextTokens, rules }) {
+  const { logical } = context;
+  if (minimumContextTokens > 0 && currentTokens <= minimumContextTokens) {
+    return {
+      action: "skip",
+      reason: `当前上下文 ${currentTokens} tokens 未超过 ${minimumContextTokens}。`,
+      currentTokens,
+    };
+  }
+  const headIndex = chooseTokenHead(logical, rules.recentRawTokensToKeep);
+  if (headIndex < 0) {
+    return { action: "skip", reason: "找不到可作为保留起点的完整用户消息。", currentTokens };
+  }
+  const prefix = logical.slice(0, headIndex);
+  const preservedLogical = logical.slice(headIndex)
+    .filter((entry) => entry.record.uuid && !entry.record.isCompactSummary);
+  if (!prefix.length) return { action: "skip", reason: "切点以前没有可压缩内容。", currentTokens };
+  if (!preservedLogical.length) {
+    return { action: "skip", reason: "切点以后没有可保留原文。", currentTokens };
+  }
+  return {
+    action: "compact",
+    mode: "token-tail",
+    currentTokens,
+    headIndex,
+    prefix,
+    head: preservedLogical[0],
+    logicalTail: preservedLogical.at(-1),
+    preservedLogical,
+    rules,
+  };
+}
+
+/**
+ * Forces a compaction boundary based on the raw recent token tail instead of
+ * the legacy time-window decision. This is used by the desktop manual action
+ * and its per-session automation settings; the existing default planner keeps
+ * its previous behavior for all other callers.
+ */
+export function chooseTokenTailCompactionPlan(context, {
+  recentRawTokensToKeep,
+  minimumContextTokens = 0,
+} = {}) {
+  const rules = normalizeRules({ recentRawTokensToKeep });
+  const threshold = Number(minimumContextTokens);
+  if (!Number.isFinite(threshold) || threshold < 0) {
+    throw new Error("minimumContextTokens 必须是非负数字。 ");
+  }
+  const currentTokens = latestContextTokens(context.logical, context.compact);
+  return tokenTailPlan({
+    context,
+    currentTokens,
+    minimumContextTokens: threshold,
+    rules,
+  });
+}
+
 export function chooseCompactionPlan(context, now = new Date(), ruleOverrides = {}) {
   const { logical, compact } = context;
   const rules = normalizeRules(ruleOverrides);
@@ -264,8 +321,14 @@ export function chooseCompactionPlan(context, now = new Date(), ruleOverrides = 
         currentTokens,
       };
     }
-    mode = "token-tail";
-    headIndex = chooseTokenHead(logical, rules.recentRawTokensToKeep);
+    const plan = tokenTailPlan({
+      context,
+      currentTokens,
+      minimumContextTokens: rules.contextTokensTrigger,
+      rules,
+    });
+    if (plan.action === "skip") return plan;
+    return { ...plan, elapsedMs: elapsed };
   }
   if (headIndex < 0) {
     return { action: "skip", reason: "找不到可作为保留起点的完整用户消息。", currentTokens };
@@ -407,7 +470,7 @@ export function appendCompactRecords({
   now = new Date(),
 }) {
   if (fs.readFileSync(transcriptPath, "utf8") !== originalText) {
-    throw new Error("摘要生成期间主会话 JSONL 发生了变化；本次未写入。");
+    throw new Error("摘要生成期间会话 JSONL 发生了变化；本次未写入。");
   }
   fs.mkdirSync(backupDirectory, { recursive: true });
   const backupPath = path.join(

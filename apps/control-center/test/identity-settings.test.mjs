@@ -52,11 +52,3 @@ test("the owner avatar uses the square crop dialog before saving", () => {
   assert.match(view, /data-confirm-identity-avatar-crop/u);
   assert.match(view, /方框内的正方形区域会作为头像保存/u);
 });
-
-test("management directs contact creation back to the conversation instead of an identity page", () => {
-  const view = renderAdmin({ state: { adminTab: "runtime", runtimeSection: "claude", agentRuntime: { claude: { status: "needs-project" } } } });
-
-  assert.match(view, /data-open-contact-conversation/u);
-  assert.match(view, /前往会话/u);
-  assert.doesNotMatch(view, /data-open-admin="agent">选择联系人/u);
-});
