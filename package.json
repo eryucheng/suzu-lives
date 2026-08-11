@@ -13,6 +13,7 @@
   },
   "workspaces": [
     "apps/*",
-    "packages/*"
+    "packages/*",
+    "external/suzu-memory/packages/*"
   ]
 }

@@ -13,7 +13,7 @@ async function temporaryDirectory(prefix) {
 test("contacts are normal Claude projects directly below the selected contacts root", async () => {
   const contactsRoot = await temporaryDirectory("suzu-contact-projects-");
   const canonicalRoot = await fs.realpath(contactsRoot);
-  let settings = { contactsRoot, projectRoot: "D:/old-project", conversationSessionId: "old-session" };
+  let settings = { contactsRoot, projectRoot: "D:/old-project" };
   const service = createContactProjectsService({
     settingsService: { load: () => settings, save: (next) => { settings = next; return settings; } },
   });
@@ -25,14 +25,18 @@ test("contacts are normal Claude projects directly below the selected contacts r
   assert.match(path.basename(projectRoot), /^contact-[a-f0-9-]{36}$/u);
   assert.equal(path.dirname(projectRoot), canonicalRoot);
   assert.equal(settings.projectRoot, projectRoot);
-  assert.equal(settings.conversationSessionId, "");
+  assert.equal(settings.preferredContactId, created.activeContact.id);
+  assert.equal(created.preferredContact.id, created.activeContact.id);
   assert.equal(await fs.readFile(path.join(projectRoot, "CLAUDE.md"), "utf8"), "# 小苏\n");
   const metadata = JSON.parse(await fs.readFile(path.join(projectRoot, ".suzu-lives", "contact.json"), "utf8"));
   assert.equal(metadata.version, 1);
   assert.equal(metadata.id, created.activeContact.id);
   assert.equal(metadata.name, "小苏");
   assert.ok(Number.isFinite(Date.parse(metadata.createdAt)));
+  assert.match(metadata.sessionId, /^[0-9a-f-]{36}$/u);
+  assert.equal(created.activeContact.sessionId, metadata.sessionId);
   assert.deepEqual(created.contacts.map((contact) => contact.name), ["小苏"]);
+  await service.select({ id: created.activeContact.id });
 
   await fs.mkdir(path.join(contactsRoot, "not-a-contact"));
   const snapshot = await service.snapshot();
@@ -40,11 +44,43 @@ test("contacts are normal Claude projects directly below the selected contacts r
   const duplicate = await service.create({ name: "小苏" });
   assert.equal(duplicate.activeContact.name, "小苏");
   assert.notEqual(duplicate.activeContact.id, created.activeContact.id);
+  assert.equal(duplicate.preferredContact.id, created.activeContact.id);
+});
+
+test("first created contact becomes the default and changing it does not select a different chat", async () => {
+  const contactsRoot = await temporaryDirectory("suzu-contact-preferred-");
+  let settings = { contactsRoot, projectRoot: "", preferredContactId: "" };
+  const service = createContactProjectsService({
+    settingsService: { load: () => settings, save: (next) => { settings = next; return settings; } },
+  });
+
+  const first = await service.create({ name: "Suzu" });
+  const second = await service.create({ name: "工作" });
+  const overwriteCreatedAt = async (contact, createdAt) => {
+    const file = path.join(contact.activeContact.projectRoot, ".suzu-lives", "contact.json");
+    const metadata = JSON.parse(await fs.readFile(file, "utf8"));
+    metadata.createdAt = createdAt;
+    await fs.writeFile(file, `${JSON.stringify(metadata, null, 2)}\n`, "utf8");
+  };
+  await overwriteCreatedAt(first, "2026-08-01T00:00:00.000Z");
+  await overwriteCreatedAt(second, "2026-08-02T00:00:00.000Z");
+  settings = { ...settings, preferredContactId: "" };
+
+  const initialized = await service.snapshot();
+  assert.equal(initialized.preferredContact.id, first.activeContact.id);
+  assert.equal(settings.preferredContactId, "");
+
+  await service.select({ id: first.activeContact.id });
+  const changed = await service.setPreferred({ id: second.activeContact.id });
+  assert.equal(changed.activeContact.id, first.activeContact.id);
+  assert.equal(changed.preferredContact.id, second.activeContact.id);
+  assert.equal(settings.projectRoot, first.activeContact.projectRoot);
+  assert.equal(settings.preferredContactId, second.activeContact.id);
 });
 
 test("contacts use generated project folders even for notes that cannot be Windows file names", async () => {
   const contactsRoot = await temporaryDirectory("suzu-contact-generated-folder-");
-  let settings = { contactsRoot, projectRoot: "", conversationSessionId: "" };
+  let settings = { contactsRoot, projectRoot: "" };
   const service = createContactProjectsService({
     settingsService: { load: () => settings, save: (next) => { settings = next; return settings; } },
   });
@@ -56,7 +92,7 @@ test("contacts use generated project folders even for notes that cannot be Windo
 
 test("new and existing contacts receive the shared Claude project defaults through the injected writer", async () => {
   const contactsRoot = await temporaryDirectory("suzu-contact-project-settings-");
-  let settings = { contactsRoot, projectRoot: "", conversationSessionId: "" };
+  let settings = { contactsRoot, projectRoot: "" };
   const calls = [];
   const service = createContactProjectsService({
     settingsService: { load: () => settings, save: (next) => { settings = next; return settings; } },
@@ -87,7 +123,7 @@ test("changing the contacts root clears the active project instead of importing 
   const firstRoot = await temporaryDirectory("suzu-contact-first-");
   const secondRoot = await temporaryDirectory("suzu-contact-second-");
   const canonicalSecondRoot = await fs.realpath(secondRoot);
-  let settings = { contactsRoot: firstRoot, projectRoot: path.join(firstRoot, "existing"), conversationSessionId: "old-session" };
+  let settings = { contactsRoot: firstRoot, projectRoot: path.join(firstRoot, "existing") };
   const service = createContactProjectsService({
     settingsService: { load: () => settings, save: (next) => { settings = next; return settings; } },
   });
@@ -96,6 +132,6 @@ test("changing the contacts root clears the active project instead of importing 
   assert.equal(snapshot.status, "ready");
   assert.equal(snapshot.contacts.length, 0);
   assert.equal(settings.contactsRoot, canonicalSecondRoot);
+  assert.equal(settings.preferredContactId, "");
   assert.equal(settings.projectRoot, "");
-  assert.equal(settings.conversationSessionId, "");
 });

@@ -8,7 +8,7 @@
   "type": "module",
   "main": "electron/main.mjs",
   "scripts": {
-    "start": "concurrently -k \"vite --host 127.0.0.1 --port 5173 --strictPort\" \"wait-on http://127.0.0.1:5173 && cross-env SUZU_LIVES_RENDERER_URL=http://127.0.0.1:5173 electron .\"",
+    "start": "node scripts/start-desktop.mjs",
     "test": "node --test test/*.test.mjs",
     "dist": "electron-builder --win zip --x64"
   },
@@ -32,6 +32,7 @@
     "@suzu-lives/image-workbench": "0.1.0",
     "@suzu-lives/iphone-bridge": "0.1.0",
     "@suzu-lives/memory-core": "0.1.0",
+    "@suzu-lives/memory-compactor": "0.1.0",
     "@suzu-lives/memory-retriever": "0.1.0",
     "@suzu-lives/memory-visualization": "0.1.0",
     "@suzu-lives/service-connections": "0.1.0",
@@ -39,6 +40,10 @@
     "@suzu-lives/visual-reference-library": "0.1.0",
     "@suzu-lives/voice-design": "0.1.0",
     "@suzu-lives/voice-message": "0.1.0",
+    "@suzu-memory/host-adapter": "0.1.0",
+    "@suzu-memory/ingestion": "0.1.0",
+    "@suzu-memory/providers": "0.1.0",
+    "@suzu-memory/service": "0.1.0",
     "qrcode": "1.5.4",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",

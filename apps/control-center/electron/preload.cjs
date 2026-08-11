@@ -1,6 +1,9 @@
 const { contextBridge, ipcRenderer } = require("electron");
 
 contextBridge.exposeInMainWorld("suzuConsole", {
+  windowChrome: {
+    applyTheme: (theme) => ipcRenderer.invoke("window-chrome:apply-theme", theme),
+  },
   settings: {
     get: () => ipcRenderer.invoke("settings:get"),
     selectProject: () => ipcRenderer.invoke("settings:select-project"),
@@ -15,10 +18,11 @@ contextBridge.exposeInMainWorld("suzuConsole", {
   todayCalendar: {
     snapshot: () => ipcRenderer.invoke("today-calendar:snapshot"),
     saveEvent: (value) => ipcRenderer.invoke("today-calendar:save-event", value),
-    removeEvent: (id) => ipcRenderer.invoke("today-calendar:remove-event", id),
+    removeEvent: (value) => ipcRenderer.invoke("today-calendar:remove-event", value),
   },
   capabilities: {
     snapshot: () => ipcRenderer.invoke("capabilities:snapshot"),
+    companionTargets: () => ipcRenderer.invoke("capabilities:companion-targets"),
     register: (id) => ipcRenderer.invoke("capabilities:register", id),
     setActive: (id, enabled) => ipcRenderer.invoke("capabilities:set-active", { id, enabled }),
     enable: (id) => ipcRenderer.invoke("capabilities:enable", id),
@@ -33,9 +37,7 @@ contextBridge.exposeInMainWorld("suzuConsole", {
     remove: (id, confirmed = false) => ipcRenderer.invoke("external-capabilities:remove", { id, confirmed }),
   },
   agentRuntime: {
-    snapshot: () => ipcRenderer.invoke("agent-runtime:snapshot"),
     claudeCodeApiSnapshot: () => ipcRenderer.invoke("agent-runtime:claude-code-api-snapshot"),
-    saveClaude: (value) => ipcRenderer.invoke("agent-runtime:save-claude", value),
     saveClaudeCodeApi: (value) => ipcRenderer.invoke("agent-runtime:save-claude-code-api", value),
     fetchClaudeCodeModels: (value) => ipcRenderer.invoke("agent-runtime:fetch-claude-code-models", value),
   },
@@ -48,8 +50,8 @@ contextBridge.exposeInMainWorld("suzuConsole", {
     openMediaDirectory: (value) => ipcRenderer.invoke("conversation:open-media-directory", value),
     create: () => ipcRenderer.invoke("conversation:create"),
     createContact: (value) => ipcRenderer.invoke("conversation:create-contact", value),
-    select: (sessionId) => ipcRenderer.invoke("conversation:select", sessionId),
     selectContact: (value) => ipcRenderer.invoke("conversation:select-contact", value),
+    setPreferredContact: (value) => ipcRenderer.invoke("conversation:set-preferred-contact", value),
     send: (value) => ipcRenderer.invoke("conversation:send", value),
     stop: (value) => ipcRenderer.invoke("conversation:stop", value),
     steer: (value) => ipcRenderer.invoke("conversation:steer", value),
@@ -68,14 +70,24 @@ contextBridge.exposeInMainWorld("suzuConsole", {
       return () => ipcRenderer.removeListener("conversation:event", listener);
     },
   },
+  conversationCompactor: {
+    snapshot: (value = {}) => ipcRenderer.invoke("conversation-compactor:snapshot", value),
+    save: (value) => ipcRenderer.invoke("conversation-compactor:save", value),
+    check: (value) => ipcRenderer.invoke("conversation-compactor:check", value),
+    run: (value) => ipcRenderer.invoke("conversation-compactor:run", value),
+  },
   schedule: {
     snapshot: () => ipcRenderer.invoke("schedule:snapshot"),
+    selectScript: () => ipcRenderer.invoke("schedule:select-script"),
+    create: (value) => ipcRenderer.invoke("schedule:create", value),
+    setEnabled: (value) => ipcRenderer.invoke("schedule:set-enabled", value),
+    remove: (value) => ipcRenderer.invoke("schedule:remove", value),
   },
   wechat: {
     snapshot: (value) => ipcRenderer.invoke("wechat:snapshot", value),
     begin: (value) => ipcRenderer.invoke("wechat:begin", value),
     saveSettings: (value) => ipcRenderer.invoke("wechat:save-settings", value),
-    setSessionEnabled: (value) => ipcRenderer.invoke("wechat:set-session-enabled", value),
+    setContactEnabled: (value) => ipcRenderer.invoke("wechat:set-contact-enabled", value),
     disconnect: (value) => ipcRenderer.invoke("wechat:disconnect", value),
     onEvent: (callback) => {
       if (typeof callback !== "function") return () => {};
@@ -127,62 +139,43 @@ contextBridge.exposeInMainWorld("suzuConsole", {
     preview: (id) => ipcRenderer.invoke("voice-design:preview", id),
   },
   memory: {
-    status: () => ipcRenderer.invoke("memory:status"),
-    search: (query) => ipcRenderer.invoke("memory:search", query),
-    brainGraph: () => ipcRenderer.invoke("memory:brain-graph"),
+    status: (scope = {}) => ipcRenderer.invoke("memory:status", scope),
+    search: (query, scope = {}) => ipcRenderer.invoke("memory:search", { query, ...scope }),
+    brainGraph: (scope = {}) => ipcRenderer.invoke("memory:brain-graph", scope),
     list: (filters) => ipcRenderer.invoke("memory:list", filters),
-    detail: (memoryId) => ipcRenderer.invoke("memory:detail", memoryId),
-    edit: (memoryId, patch, reason = "") => ipcRenderer.invoke(
+    detail: (memoryId, scope = {}) => ipcRenderer.invoke("memory:detail", { memoryId, ...scope }),
+    edit: (memoryId, patch, reason = "", scope = {}) => ipcRenderer.invoke(
       "memory:edit",
-      { memoryId, patch, reason },
+      { memoryId, patch, reason, ...scope },
     ),
-    remove: (memoryId, reason = "") => ipcRenderer.invoke(
+    remove: (memoryId, reason = "", scope = {}) => ipcRenderer.invoke(
       "memory:delete",
-      { memoryId, reason },
+      { memoryId, reason, ...scope },
     ),
-    restore: (memoryId, reason = "") => ipcRenderer.invoke(
+    restore: (memoryId, reason = "", scope = {}) => ipcRenderer.invoke(
       "memory:restore",
-      { memoryId, reason },
+      { memoryId, reason, ...scope },
     ),
-    structureProposals: (filters = {}) => ipcRenderer.invoke(
-      "memory:structure-proposals",
+    reviewOverview: (filters = {}) => ipcRenderer.invoke(
+      "memory:review-overview",
       filters,
     ),
-    resolveStructure: (proposalId, action, note = "") => ipcRenderer.invoke(
-      "memory:resolve-structure",
-      { proposalId, action, note },
+    reviewProposal: (type, proposalId, scope = {}) => ipcRenderer.invoke(
+      "memory:review-proposal",
+      { type, proposalId, ...scope },
     ),
-    subjectAttributionProposals: (filters = {}) => ipcRenderer.invoke(
-      "memory:subject-attribution-proposals",
-      filters,
+    resolveReview: (type, proposalId, action, note = "", scope = {}) => ipcRenderer.invoke(
+      "memory:resolve-review",
+      { type, proposalId, action, note, ...scope },
     ),
-    resolveSubjectAttribution: (proposalId, action, note = "") => ipcRenderer.invoke(
-      "memory:resolve-subject-attribution",
-      { proposalId, action, note },
+    revokeReviewRelation: (proposalId, note = "", scope = {}) => ipcRenderer.invoke(
+      "memory:revoke-review-relation",
+      { proposalId, note, ...scope },
     ),
-    retrievalTraces: (filters = {}) => ipcRenderer.invoke(
-      "memory:retrieval-traces",
-      filters,
+    recoverReviewInputBatch: (batchId, force = false, scope = {}) => ipcRenderer.invoke(
+      "memory:recover-review-input-batch",
+      { batchId, force, ...scope },
     ),
-    recordRetrievalFeedback: (traceId, signal, targetMemoryIds = [], note = "") => (
-      ipcRenderer.invoke("memory:retrieval-feedback", {
-        traceId,
-        signal,
-        targetMemoryIds,
-        note,
-      })
-    ),
-    retrievalStats: (filters = {}) => ipcRenderer.invoke(
-      "memory:retrieval-stats",
-      filters,
-    ),
-    edgeRetrievalStats: (filters = {}) => ipcRenderer.invoke(
-      "memory:edge-retrieval-stats",
-      filters,
-    ),
-    plasticityPreview: (filters = {}) => ipcRenderer.invoke(
-      "memory:plasticity-preview",
-      filters,
-    ),
+    createReviewBackup: (scope = {}) => ipcRenderer.invoke("memory:create-review-backup", scope),
   },
 });

@@ -50,6 +50,7 @@ export {
   appendCompactRecords,
   buildCompactRecords,
   chooseCompactionPlan,
+  chooseTokenTailCompactionPlan,
   estimateTextTokens,
   parseJsonText,
   parseJsonlText,

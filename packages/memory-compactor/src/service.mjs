@@ -13,12 +13,14 @@ import {
   appendCompactRecords,
   buildCompactRecords,
   chooseCompactionPlan,
+  chooseTokenTailCompactionPlan,
   parseJsonlText,
   reconstructLogicalContext,
 } from "./transcript.mjs";
 
 const PACKAGE_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const DEFAULT_PROMPT_PATH = path.join(PACKAGE_ROOT, "resources", "system-prompt.md");
+const SESSION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
 
 function clean(value) {
   return String(value ?? "").trim();
@@ -39,18 +41,27 @@ function resolvePaths({
   softwareDataDirectory,
   agentId,
   usageLedgerPath,
+  sessionId = "",
 }) {
   const dataRoot = path.resolve(clean(softwareDataDirectory));
   const agentRoot = path.join(dataRoot, "agents", agentId);
   const compactorRoot = path.join(agentRoot, "memory", "compactor");
+  const normalizedSessionId = clean(sessionId);
+  if (normalizedSessionId && !SESSION_ID_PATTERN.test(normalizedSessionId)) {
+    throw new Error("runCompaction 的 sessionId 无效。 ");
+  }
+  const sessionRoot = normalizedSessionId
+    ? path.join(compactorRoot, "sessions", normalizedSessionId)
+    : compactorRoot;
   return {
     dataRoot,
     agentRoot,
     usageLedgerPath: usageLedgerPath
       ? path.resolve(usageLedgerPath)
       : path.join(agentRoot, "cost-ledger", "events.jsonl"),
-    workDirectory: path.join(compactorRoot, "work"),
-    backupDirectory: path.join(compactorRoot, "backups"),
+    sessionId: normalizedSessionId,
+    workDirectory: path.join(sessionRoot, "work"),
+    backupDirectory: path.join(sessionRoot, "backups"),
   };
 }
 
@@ -66,8 +77,12 @@ export async function runCompaction({
   generator = null,
   dryRun = false,
   now = new Date(),
+  sessionId = "",
   summaryOverride = "",
+  systemPrompt = "",
   systemPromptPath = DEFAULT_PROMPT_PATH,
+  strategy = "default",
+  minimumContextTokens = 0,
 } = {}) {
   const normalizedAgentId = clean(agentId);
   if (!normalizedAgentId) throw new Error("runCompaction 需要 agentId。");
@@ -85,17 +100,25 @@ export async function runCompaction({
     softwareDataDirectory,
     agentId: normalizedAgentId,
     usageLedgerPath,
+    sessionId,
   });
   fs.mkdirSync(paths.workDirectory, { recursive: true });
 
   const originalText = fs.readFileSync(normalizedTranscriptPath, "utf8");
   const entries = parseJsonlText(originalText, normalizedTranscriptPath);
   const context = reconstructLogicalContext(entries);
-  const plan = chooseCompactionPlan(context, executionTime, rules);
+  const selectedStrategy = clean(strategy).toLowerCase() || "default";
+  if (!new Set(["default", "token-tail"]).has(selectedStrategy)) {
+    throw new Error("runCompaction 的 strategy 无效。 ");
+  }
+  const plan = selectedStrategy === "token-tail"
+    ? chooseTokenTailCompactionPlan(context, { ...rules, minimumContextTokens })
+    : chooseCompactionPlan(context, executionTime, rules);
   if (plan.action === "skip") {
     const report = {
       status: "skipped",
       transcriptPath: normalizedTranscriptPath,
+      ...(paths.sessionId ? { sessionId: paths.sessionId } : {}),
       ...plan,
       checkedAt: executionTime.toISOString(),
     };
@@ -115,6 +138,7 @@ export async function runCompaction({
     const report = {
       status: "dry-run",
       transcriptPath: normalizedTranscriptPath,
+      ...(paths.sessionId ? { sessionId: paths.sessionId } : {}),
       mode: plan.mode,
       currentTokens: plan.currentTokens,
       headUuid: plan.head.record.uuid,
@@ -144,10 +168,10 @@ export async function runCompaction({
     if (typeof generator !== "function") {
       throw new Error("实际压缩需要 generator，或提供 summaryOverride 进行本地模拟。");
     }
-    const systemPrompt = fs.readFileSync(systemPromptPath, "utf8").trim();
+    const selectedSystemPrompt = clean(systemPrompt) || fs.readFileSync(systemPromptPath, "utf8").trim();
     generation = await generator({
       input,
-      systemPrompt,
+      systemPrompt: selectedSystemPrompt,
       schema: SESSION_COMPACTION_SCHEMA,
       schemaName: "conversation-compaction-v1",
     });
@@ -202,6 +226,7 @@ export async function runCompaction({
   const report = {
     status: "written",
     transcriptPath: normalizedTranscriptPath,
+    ...(paths.sessionId ? { sessionId: paths.sessionId } : {}),
     backupPath: compactWrite.backupPath,
     mode: plan.mode,
     currentTokens: plan.currentTokens,

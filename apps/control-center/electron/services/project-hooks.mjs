@@ -4,10 +4,6 @@ import path from "node:path";
 export class ProjectHooksError extends Error {}
 
 const HOOK_MARKER = "--suzu-lives-hook";
-const HOOKS = [
-  { event: "UserPromptSubmit", role: "user-prompt", timeout: 10 },
-  { event: "Stop", role: "assistant-stop", timeout: 5 },
-];
 const TIME_AWARENESS_HOOK = { event: "UserPromptSubmit", role: "time-awareness", timeout: 5 };
 
 function clean(value) { return String(value ?? "").trim(); }
@@ -122,25 +118,6 @@ function removeEvent(entries, role) {
   return removeMatchingHooks(entries, (hook) => managedHook(hook, role));
 }
 
-export async function installProjectHooks({ projectRoot: selectedProjectRoot, command, dataRoot, fsOps = fs } = {}) {
-  const executable = clean(command); const rootData = clean(dataRoot);
-  if (!path.isAbsolute(executable) || !rootData || !path.isAbsolute(rootData)) throw new ProjectHooksError("无法定位打包后的 Suzu Lives Hook 启动入口或软件数据目录。");
-  const root = await projectRoot(selectedProjectRoot, fsOps);
-  const claudeDirectory = path.join(root, ".claude");
-  await safeDirectory(fsOps, root, claudeDirectory, { create: true });
-  const settingsPath = path.join(claudeDirectory, "settings.json");
-  const stored = await readSettings(fsOps, root, settingsPath);
-  const settings = structuredClone(stored.value);
-  const hooks = settings.hooks === undefined ? {} : settings.hooks;
-  assertHooksContainer(hooks);
-  for (const hook of HOOKS) {
-    hooks[hook.event] = updateEvent(hooks[hook.event] || [], hookDefinition({ command: executable, dataRoot: rootData, role: hook.role, timeout: hook.timeout }), hook.role);
-  }
-  settings.hooks = hooks;
-  await writeSettingsAtomic(fsOps, root, settingsPath, settings);
-  return { status: "installed", settingsPath, events: HOOKS.map((hook) => hook.event) };
-}
-
 export async function inspectTimeAwarenessHook({ projectRoot: selectedProjectRoot, fsOps = fs } = {}) {
   const root = await projectRoot(selectedProjectRoot, fsOps);
   const claudeDirectory = path.join(root, ".claude");
@@ -201,57 +178,20 @@ export async function uninstallTimeAwarenessHook({ projectRoot: selectedProjectR
   return { status: "uninstalled", settingsPath };
 }
 
-export async function uninstallProjectHooks({ projectRoot: selectedProjectRoot, fsOps = fs } = {}) {
-  const root = await projectRoot(selectedProjectRoot, fsOps);
-  const claudeDirectory = path.join(root, ".claude");
-  const directoryStat = await lstatIfPresent(fsOps, claudeDirectory);
-  if (!directoryStat) return { status: "not-installed", settingsPath: path.join(claudeDirectory, "settings.json") };
-  await safeDirectory(fsOps, root, claudeDirectory);
-  const settingsPath = path.join(claudeDirectory, "settings.json");
-  const stored = await readSettings(fsOps, root, settingsPath);
-  if (!stored.exists) return { status: "not-installed", settingsPath };
-  const settings = structuredClone(stored.value);
-  if (settings.hooks === undefined) return { status: "not-installed", settingsPath };
-  assertHooksContainer(settings.hooks);
-  let changed = false;
-  for (const hook of HOOKS) {
-    const entries = settings.hooks[hook.event] || [];
-    const next = removeEvent(entries, hook.role);
-    if (next.length !== entries.length || JSON.stringify(next) !== JSON.stringify(entries)) changed = true;
-    if (next.length) settings.hooks[hook.event] = next;
-    else delete settings.hooks[hook.event];
-  }
-  if (!Object.keys(settings.hooks).length) delete settings.hooks;
-  if (!changed) return { status: "not-installed", settingsPath };
-  await writeSettingsAtomic(fsOps, root, settingsPath, settings);
-  return { status: "uninstalled", settingsPath };
-}
-
 export function createProjectHooksService({ settingsService, executablePath, packaged = false, fsOps = fs } = {}) {
   if (!settingsService?.load || !settingsService?.response) throw new ProjectHooksError("项目 Hook 服务需要软件设置服务。");
-  const context = () => {
+  const context = ({ projectRoot: requestedProjectRoot = "" } = {}) => {
     const settings = settingsService.load();
     const response = settingsService.response(settings);
-    return { projectRoot: settings.projectRoot, dataRoot: response.dataRoot };
+    return { projectRoot: clean(requestedProjectRoot) || settings.projectRoot, dataRoot: response.dataRoot };
   };
   return {
-    install: () => {
+    inspectTimeAwareness: (options = {}) => inspectTimeAwarenessHook({ projectRoot: context(options).projectRoot, fsOps }),
+    installTimeAwareness: (options = {}) => {
       if (!packaged) throw new ProjectHooksError("开发环境不会写入项目 Hook；请使用打包后的 Suzu Lives 安装。 ");
-      const current = context();
-      return installProjectHooks({ projectRoot: current.projectRoot, command: executablePath, dataRoot: current.dataRoot, fsOps });
-    },
-    uninstall: () => uninstallProjectHooks({ projectRoot: context().projectRoot, fsOps }),
-    inspectTimeAwareness: () => inspectTimeAwarenessHook({ projectRoot: context().projectRoot, fsOps }),
-    installTimeAwareness: () => {
-      if (!packaged) throw new ProjectHooksError("开发环境不会写入项目 Hook；请使用打包后的 Suzu Lives 安装。 ");
-      const current = context();
+      const current = context(options);
       return installTimeAwarenessHook({ projectRoot: current.projectRoot, command: executablePath, dataRoot: current.dataRoot, fsOps });
     },
-    uninstallTimeAwareness: () => uninstallTimeAwarenessHook({ projectRoot: context().projectRoot, fsOps }),
+    uninstallTimeAwareness: (options = {}) => uninstallTimeAwarenessHook({ projectRoot: context(options).projectRoot, fsOps }),
   };
-}
-
-export function registerProjectHooksIpc({ ipcMain, projectHooksService }) {
-  ipcMain.handle("project-hooks:install", () => projectHooksService.install());
-  ipcMain.handle("project-hooks:uninstall", () => projectHooksService.uninstall());
 }

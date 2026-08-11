@@ -179,6 +179,35 @@
         }
       ]
     },
+    "qwen3-asr-flash-realtime": {
+      "label": "Qwen3 ASR Flash Realtime",
+      "provider": "阿里云百炼",
+      "currency": "CNY",
+      "aliases": [
+        "qwen3-asr-flash-realtime",
+        "qwen3-asr-flash-realtime-2026-02-10",
+        "qwen3-asr-flash-realtime-2025-10-27"
+      ],
+      "sourceUrl": "https://help.aliyun.com/zh/model-studio/qwen3-asr-flash-realtime",
+      "rateDefinitions": {
+        "inputAudioSeconds": {
+          "label": "输入音频时长",
+          "unitLabel": "元 / 秒",
+          "per": 1
+        }
+      },
+      "revisions": [
+        {
+          "id": "official-current",
+          "effectiveFrom": "1970-01-01T00:00:00.000Z",
+          "publishedAt": "2026-08-10",
+          "label": "北京地域当前官方公开价",
+          "rates": {
+            "inputAudioSeconds": 0.00033
+          }
+        }
+      ]
+    },
     "qwen-voice-design": {
       "label": "Qwen Voice Design",
       "provider": "阿里云百炼",

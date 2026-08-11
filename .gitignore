@@ -4,6 +4,9 @@ dist/
 dist-*/
 apps/*/dist/
 apps/*/dist-preview/
+apps/*/renderer/
+.playwright-cli/
+output/playwright/
 *.log
 logs/
 

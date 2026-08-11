@@ -4,6 +4,7 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 
 import { CAPABILITY_DEFINITIONS, getCapabilityDefinition } from "@suzu-lives/capability-registry";
+import { internalCapabilityCliUsage } from "@suzu-lives/capability-registry/internal-cli";
 import { PROACTIVE_CONTACT_ID, PROACTIVE_CONTACT_NAME, renderProactiveContactSkill } from "@suzu-lives/proactive-contact";
 import { renderTravelingMerchantSkill, travelingMerchantDefaultConfig, TRAVELING_MERCHANT_ID, TRAVELING_MERCHANT_NAME } from "@suzu-lives/traveling-merchant";
 
@@ -37,11 +38,11 @@ const AGENT_ABILITY_CATALOG = Object.freeze([
   { id: "image-generation", name: "图像生成", description: "生成、编辑图片，并可结合视觉参考。", category: "create", setting: { route: "api", label: "设置图片" } },
   { id: "phone-camera", name: "手机拍照式图像", description: "生成具有手机拍摄感的图片。", category: "create", setting: { route: "api", label: "设置图片" } },
   { id: "visual-reference-manager", name: "视觉参考库", description: "整理、检索并应用视觉参考。", category: "create", setting: { route: "visual", label: "打开视觉工作台" } },
+  { id: TIME_AWARENESS_ID, name: "时间感知", description: "按会话以设定的间隔感知本机日期、星期与当前时间。", category: "perceive" },
   { id: "image-vision", name: "图像理解", description: "理解一张明确提供的本地图片。", category: "perceive", setting: { route: "api", label: "设置图像理解" } },
   { id: "video-understanding", name: "视频理解", description: "理解一段明确提供的视频。", category: "perceive", setting: { route: "api", label: "设置视频理解" } },
-  { id: TIME_AWARENESS_ID, name: "时间感知", description: "每次收到消息时感知本机日期、星期与当前时间。", category: "perceive" },
   { id: "voice-message", name: "语音消息", description: "将文字或已有音频通过既有通道发送。", category: "create", setting: { route: "audio", label: "打开音色设计" } },
-  { id: "web-browser", name: "网页浏览", description: "使用软件拥有的浏览器处理已登录网页。", category: "perceive" },
+  { id: "web-browser", name: "网页浏览", description: "使用软件拥有的浏览器处理已登录网页。", category: "act" },
   { id: "site-automation", name: "网页自动化", description: "为每个已接入的网站单独管理可用动作。", category: "act" },
   { id: "iphone-bridge", name: "iPhone 互通", description: "调用 Suzu Lives 中配置的 iPhone 快捷指令。", category: "act" },
   { id: "proactive-contact", name: "主动关心", description: "在 Suzu 运行期间用自动任务安排主动联系。", category: "companion" },
@@ -224,6 +225,35 @@ function normalizeSelectableClaudeToolPermissions(value = {}) {
   };
 }
 
+function normalizeClaudeToolRules(value) {
+  const source = Array.isArray(value) ? value : [];
+  const rules = [];
+  const seen = new Set();
+  for (const item of source) {
+    if (typeof item !== "string") continue;
+    const tool = clean(item);
+    if (!tool || tool.length > 500 || seen.has(tool)) continue;
+    seen.add(tool);
+    rules.push(tool);
+    if (rules.length >= 120) break;
+  }
+  return rules;
+}
+
+function normalizeClaudeProjectDefaults(value) {
+  if (value === undefined) return null;
+  const source = record(value) ? value : {};
+  return {
+    allowedTools: normalizeClaudeToolRules(source.allowedTools),
+    deniedTools: normalizeClaudeToolRules(source.deniedTools),
+    skipWebFetchPreflight: source.skipWebFetchPreflight !== false,
+  };
+}
+
+function sameStringList(left, right) {
+  return left.length === right.length && left.every((item, index) => item === right[index]);
+}
+
 function parseClaudeProjectSettings(content) {
   const source = String(content || "").trim();
   if (!source) return {};
@@ -282,18 +312,30 @@ function sameDirectory(left, right) {
     : normalizedLeft === normalizedRight;
 }
 
-function updateSuzuClaudeProjectSettings(existing, { command, toolPermissions, workspaceDirectories } = {}) {
+function updateSuzuClaudeProjectSettings(existing, { command, previousProjectDefaults, projectDefaults, toolPermissions, workspaceDirectories } = {}) {
   const settings = parseClaudeProjectSettings(existing.content);
   if (settings.permissions !== undefined && !record(settings.permissions)) {
     throw new ClaudeIntegrationError(".claude/settings.json 的 permissions 必须是对象，未修改 Claude 项目设置。 ");
   }
   const permissions = { ...(settings.permissions || {}) };
+  const normalizedProjectDefaults = normalizeClaudeProjectDefaults(projectDefaults);
+  const previousAllowedTools = new Set(normalizedProjectDefaults
+    ? (normalizeClaudeProjectDefaults(previousProjectDefaults)?.allowedTools || [])
+    : []);
+  const allowedTools = new Set(normalizedProjectDefaults?.allowedTools || []);
   if (permissions.allow !== undefined && !Array.isArray(permissions.allow)) {
     throw new ClaudeIntegrationError(".claude/settings.json 的 permissions.allow 必须是数组，未修改 Claude 项目设置。 ");
   }
   const existingAllow = permissions.allow || [];
   if (existingAllow.some((item) => typeof item !== "string")) {
     throw new ClaudeIntegrationError(".claude/settings.json 的 permissions.allow 只能包含字符串，未修改 Claude 项目设置。 ");
+  }
+  if (normalizedProjectDefaults && permissions.deny !== undefined && !Array.isArray(permissions.deny)) {
+    throw new ClaudeIntegrationError(".claude/settings.json 的 permissions.deny 必须是数组，未修改 Claude 项目设置。 ");
+  }
+  const existingDeny = normalizedProjectDefaults ? (permissions.deny || []) : [];
+  if (normalizedProjectDefaults && existingDeny.some((item) => typeof item !== "string")) {
+    throw new ClaudeIntegrationError(".claude/settings.json 的 permissions.deny 只能包含字符串，未修改 Claude 项目设置。 ");
   }
   if (settings.additionalDirectories !== undefined && !Array.isArray(settings.additionalDirectories)) {
     throw new ClaudeIntegrationError(".claude/settings.json 的 additionalDirectories 必须是数组，未修改 Claude 项目设置。 ");
@@ -315,6 +357,10 @@ function updateSuzuClaudeProjectSettings(existing, { command, toolPermissions, w
   const selectablePermissionsSeen = new Set();
   let changed = false;
   for (const item of existingAllow) {
+    if (previousAllowedTools.has(item) && !allowedTools.has(item)) {
+      changed = true;
+      continue;
+    }
     if (isSuzuCliBashPermission(item) && item !== currentSuzuPermission) {
       changed = true;
       continue;
@@ -348,23 +394,39 @@ function updateSuzuClaudeProjectSettings(existing, { command, toolPermissions, w
     nextAllow.push(permission);
     changed = true;
   }
+  for (const permission of allowedTools) {
+    if (nextAllow.includes(permission)) continue;
+    nextAllow.push(permission);
+    changed = true;
+  }
   const nextDirectories = [...existingDirectories];
   for (const directory of sharedDirectories) {
     if (nextDirectories.some((item) => sameDirectory(item, directory))) continue;
     nextDirectories.push(directory);
     changed = true;
   }
-  if (settings.skipWebFetchPreflight !== true) changed = true;
+  if (normalizedProjectDefaults && settings.skipWebFetchPreflight !== normalizedProjectDefaults.skipWebFetchPreflight) changed = true;
+  if (normalizedProjectDefaults && !sameStringList(existingDeny, normalizedProjectDefaults.deniedTools)) changed = true;
+  if (!normalizedProjectDefaults && settings.skipWebFetchPreflight !== true) changed = true;
   if (permissions.defaultMode !== "acceptEdits") changed = true;
 
   if (!changed) return { changed: false, content: existing.content };
+  const nextPermissions = { ...permissions, defaultMode: "acceptEdits", allow: nextAllow };
+  if (normalizedProjectDefaults) {
+    if (normalizedProjectDefaults.deniedTools.length) nextPermissions.deny = normalizedProjectDefaults.deniedTools;
+    else delete nextPermissions.deny;
+  }
   return {
     changed: true,
     content: `${JSON.stringify({
       ...settings,
-      skipWebFetchPreflight: true,
+      ...(normalizedProjectDefaults
+        ? {
+          skipWebFetchPreflight: normalizedProjectDefaults.skipWebFetchPreflight,
+        }
+        : { skipWebFetchPreflight: true }),
       ...(settings.additionalDirectories !== undefined || nextDirectories.length ? { additionalDirectories: nextDirectories } : {}),
-      permissions: { ...permissions, defaultMode: "acceptEdits", allow: nextAllow },
+      permissions: nextPermissions,
     }, null, 2)}\n`,
   };
 }
@@ -383,7 +445,7 @@ async function resolveSafeProjectRoot(projectRoot, fsOps) {
   return fsOps.realpath(requestedRoot);
 }
 
-async function prepareSuzuClaudeProjectSettings({ root, command, toolPermissions, workspaceDirectories, fsOps }) {
+async function prepareSuzuClaudeProjectSettings({ root, command, previousProjectDefaults, projectDefaults, toolPermissions, workspaceDirectories, fsOps }) {
   const claudeDirectory = await ensureSafeDirectory(fsOps, root, [".claude"]);
   const settingsPath = path.join(claudeDirectory, "settings.json");
   await assertSafeFile(fsOps, root, settingsPath, ".claude/settings.json");
@@ -391,14 +453,14 @@ async function prepareSuzuClaudeProjectSettings({ root, command, toolPermissions
   return {
     settingsPath,
     existing,
-    updated: updateSuzuClaudeProjectSettings(existing, { command, toolPermissions, workspaceDirectories }),
+    updated: updateSuzuClaudeProjectSettings(existing, { command, previousProjectDefaults, projectDefaults, toolPermissions, workspaceDirectories }),
   };
 }
 
-export async function ensureSuzuClaudeProjectSettings({ projectRoot, launcher = {}, toolPermissions, workspaceDirectories, fsOps = fs } = {}) {
+export async function ensureSuzuClaudeProjectSettings({ projectRoot, launcher = {}, previousProjectDefaults, projectDefaults, toolPermissions, workspaceDirectories, fsOps = fs } = {}) {
   const command = assertLauncher(launcher);
   const root = await resolveSafeProjectRoot(projectRoot, fsOps);
-  const prepared = await prepareSuzuClaudeProjectSettings({ root, command, toolPermissions, workspaceDirectories, fsOps });
+  const prepared = await prepareSuzuClaudeProjectSettings({ root, command, previousProjectDefaults, projectDefaults, toolPermissions, workspaceDirectories, fsOps });
   if (prepared.updated.changed) await writeAtomically(fsOps, root, prepared.settingsPath, prepared.updated.content);
   return {
     settingsPath: prepared.settingsPath,
@@ -487,9 +549,9 @@ export function renderClaudeManagedBlock({ abilityIds, command = "suzu-lives" } 
     .sort();
   const directAbilityIds = new Set(["image-vision", "video-understanding", TIME_AWARENESS_ID, "voice-message", "image-generation", "phone-camera", "visual-reference-manager", "web-browser", "site-automation", "iphone-bridge", PROACTIVE_CONTACT_ID, TRAVELING_MERCHANT_ID]);
   const bullets = ids.map((id) => {
-    if (id === "image-vision") return `- <!-- suzu-lives:ability:${id} --> \`${id}\`：使用 \`${launcher} image-vision <local-image>\` 调用软件拥有的兼容执行器。`;
-    if (id === "video-understanding") return `- <!-- suzu-lives:ability:${id} --> \`${id}\`：使用 \`${launcher} video-understanding <local-video-or-http-url>\` 调用软件拥有的兼容执行器。`;
-    if (id === TIME_AWARENESS_ID) return `- <!-- suzu-lives:ability:${id} --> \`${id}\`：由 Suzu 在每次用户消息进入时注入本机日期、星期和当前时间；不需要手动调用命令。`;
+    if (id === "image-vision") return `- <!-- suzu-lives:ability:${id} --> \`${id}\`：使用 \`${internalCapabilityCliUsage({ launcher, capabilityId: id })}\` 调用软件拥有的标准能力执行器。`;
+    if (id === "video-understanding") return `- <!-- suzu-lives:ability:${id} --> \`${id}\`：使用 \`${internalCapabilityCliUsage({ launcher, capabilityId: id })}\` 调用软件拥有的标准能力执行器。`;
+    if (id === TIME_AWARENESS_ID) return `- <!-- suzu-lives:ability:${id} --> \`${id}\`：由 Suzu 在每次用户消息进入时检查本机日期、星期和当前时间；按软件中设定的会话间隔注入。`;
     if (id === "voice-message") return `- <!-- suzu-lives:ability:${id} --> \`${id}\`：使用 \`${launcher} voice-message <text>\` 调用软件拥有的兼容执行器。`;
     if (id === "image-generation") return `- <!-- suzu-lives:ability:${id} --> \`${id}\`：使用 \`${launcher} image-generation --prompt <visible-scene>\` 调用软件拥有的图像引擎。`;
     if (id === "phone-camera") return `- <!-- suzu-lives:ability:${id} --> \`${id}\`：使用 \`${launcher} phone-camera --shot <rear|selfie|mirror> --scene <visible-scene>\` 生成手机拍照式图片。`;
@@ -502,9 +564,9 @@ export function renderClaudeManagedBlock({ abilityIds, command = "suzu-lives" } 
     return `- <!-- suzu-lives:ability:${id} --> \`${id}\`：使用 \`${launcher} ability status --id ${id}\` 先确认软件状态。`;
   }).join("\n");
   const notices = [];
-  if (ids.includes("image-vision")) notices.push(`\`image-vision\` 使用独立的软件拥有命令，不通过 \`ability plan\` 或 \`ability invoke\`；它仍只读取明确给出的本地图片和软件数据目录中的配置。`);
-  if (ids.includes("video-understanding")) notices.push(`\`video-understanding\` 使用独立的软件拥有命令，不通过 \`ability plan\` 或 \`ability invoke\`；它只处理明确给出的本地视频或 http(s) URL，并把临时片段、缓存、保留片段和配置限制在软件数据目录。`);
-  if (ids.includes(TIME_AWARENESS_ID)) notices.push(`\`time-awareness\` 通过 Suzu 受管的 \`UserPromptSubmit\` Hook 注入本轮当前本地时间；它不读取消息正文、不联网、不写入聊天记录，也不替代其他同事件 Hook。`);
+  if (ids.includes("image-vision")) notices.push(`\`image-vision\` 使用 Suzu 的标准 \`capability <id> <action> --input-json\` 协议，不通过旧 \`ability plan\` 或 \`ability invoke\`；它仍只读取明确给出的本地图片和软件数据目录中的配置。`);
+  if (ids.includes("video-understanding")) notices.push(`\`video-understanding\` 使用 Suzu 的标准 \`capability <id> <action> --input-json\` 协议，不通过旧 \`ability plan\` 或 \`ability invoke\`；它只处理明确给出的本地视频或 http(s) URL，并把临时片段、缓存、保留片段和配置限制在软件数据目录。`);
+  if (ids.includes(TIME_AWARENESS_ID)) notices.push(`\`time-awareness\` 通过 Suzu 受管的 \`UserPromptSubmit\` Hook 检查本轮当前本地时间；同一 Claude 会话仅按软件中设定的间隔写入新的时间提醒。它不读取消息正文、不联网、不替代其他同事件 Hook。`);
   if (ids.includes("voice-message")) notices.push(`\`voice-message\` 使用独立的软件拥有命令，不通过 \`ability plan\` 或 \`ability invoke\`；它只在软件数据目录中生成 MP3，再由当前 Suzu 会话的附件交付命令显示和投递。`);
   if (ids.includes("image-generation")) notices.push(`\`image-generation\` 使用独立的软件拥有命令，不通过 \`ability plan\` 或 \`ability invoke\`；默认后端、运行记录、候选图片与连接配置仍只位于当前 Agent 的软件数据目录。`);
   if (ids.includes("phone-camera")) notices.push(`\`phone-camera\` 使用独立的软件拥有命令，不通过 \`ability plan\` 或 \`ability invoke\`；它只生成用户说明的手机拍照式画面，失败不会静默切换后端。`);
@@ -519,15 +581,17 @@ export function renderClaudeManagedBlock({ abilityIds, command = "suzu-lives" } 
 }
 
 function renderTimeAwarenessSkill() {
-  return `---\nname: suzu-lives-time-awareness\ndescription: 让 Agent 在每次用户消息进入时直接感知本机当前日期、星期和时间。\n---\n\n<!-- suzu-lives:ability:time-awareness -->\n# 时间感知\n\n这是 Suzu Lives 生成的受管能力。开启后，软件会在每次 \`UserPromptSubmit\` 时把当前电脑本地日期、星期与时间作为本轮上下文注入。\n\n它是自动能力，不需要、也不要为了询问“现在几点”再调用终端或旧脚本。注入内容只描述当前时刻，不是用户或 Agent 的历史对话；回答时间相关问题时以本轮注入的时间为准。\n\n时间 Hook 不读取消息正文、不联网、不调用模型、不写入聊天记录；它会与其他 \`UserPromptSubmit\` Hook（例如 RAG）并列运行。不要改用旧项目脚本。\n`;
+  return `---\nname: suzu-lives-time-awareness\ndescription: 让 Agent 按会话以 Suzu Lives 设定的间隔感知本机当前日期、星期和时间。\n---\n\n<!-- suzu-lives:ability:time-awareness -->\n# 时间感知\n\n这是 Suzu Lives 生成的受管能力。开启后，软件会在每次 \`UserPromptSubmit\` 时检查当前电脑本地日期、星期与时间；同一 Claude 会话达到 Suzu Lives 中设定的间隔后，才把新的时间作为本轮上下文注入。\n\n它是自动能力，不需要、也不要为了询问“现在几点”再调用终端或旧脚本。注入内容只描述当前时刻，不是用户或 Agent 的历史对话；回答时间相关问题时以最近一次注入的时间为准。\n\n时间 Hook 不读取消息正文、不联网、不调用模型；它只在 Suzu 的会话私有数据中记录最近一次注入时间，并会与其他 \`UserPromptSubmit\` Hook（例如 RAG）并列运行。不要改用旧项目脚本。\n`;
 }
 
 function renderImageVisionSkill(launcher) {
-  return `---\nname: suzu-lives-image-vision\ndescription: 通过 Suzu Lives 的稳定入口理解一张明确给出的本地图片。\n---\n\n<!-- suzu-lives:ability:image-vision -->\n# 图像理解\n\n这是 Suzu Lives 生成的轻量注册文件，不包含功能源码、安装路径、配置、缓存或凭据。\n\n仅在需要理解用户明确提供的单张本地图片时调用：\n\n\`${launcher} image-vision '<本地图片路径>' --question '<具体问题>'\`\n\n软件会读取自身数据目录中的图像理解配置并调用其视觉连接。可用 \`--config '<软件数据目录内的配置>'\` 选择该目录内的配置；\`--no-retry\` 会关闭被上游拒绝时的中性描述重试。\n\n不要绕过软件入口，也不要把配置、密钥或图片复制进 Claude 项目；若返回 \`VISION_REFUSED\` 或 \`VISION_ERROR\`，如实说明上游拒绝或配置/图片问题，不要补写看不见的内容。\n`;
+  const command = internalCapabilityCliUsage({ launcher, capabilityId: "image-vision" });
+  return `---\nname: suzu-lives-image-vision\ndescription: 通过 Suzu Lives 的标准能力 CLI 理解一张明确给出的本地图片。\n---\n\n<!-- suzu-lives:ability:image-vision -->\n# 图像理解\n\n这是 Suzu Lives 生成的轻量注册文件，不包含功能源码、安装路径、配置、缓存或凭据。\n\n仅在需要理解用户明确提供的单张本地图片时调用：\n\n\`${command}\`\n\n其中 \`<JSON>\` 例如 \`{"path":"<本地图片路径>","question":"<具体问题>"}\`。输入只接受 \`path\`、\`question\`、\`configPath\`、\`noRetry\`；\`configPath\` 必须位于软件数据目录内，\`noRetry: true\` 会关闭被上游拒绝时的中性描述重试。成功和失败都会在 stdout 返回统一 JSON：\`schemaVersion\`、\`status\`、\`capabilityId\`、\`action\` 与 \`result\` 或 \`error\`。\n\n不要绕过软件入口，也不要把配置、密钥或图片复制进 Claude 项目；若错误码为 \`vision_refused\`、\`upstream_error\` 或 \`invalid_request\`，如实说明问题，不要补写看不见的内容。\n`;
 }
 
 function renderVideoUnderstandingSkill(launcher) {
-  return `---\nname: suzu-lives-video-understanding\ndescription: 通过 Suzu Lives 的稳定入口理解一段明确给出的本地视频或 http(s) 视频。\n---\n\n<!-- suzu-lives:ability:video-understanding -->\n# 视频理解\n\n这是 Suzu Lives 生成的轻量注册文件，不包含功能源码、安装路径、配置、缓存或凭据。\n\n仅在需要理解用户明确提供的视频内容时调用：\n\n\`${launcher} video-understanding '<本地视频路径或 http(s) URL>' --question '<具体问题>'\`\n\n软件会检查 FFmpeg/FFprobe，准备受大小限制的 MP4 片段，并读取自身数据目录中的视频模型配置。可选 \`--cache-key '<上游稳定标识>'\` 与实际片段内容共同确定缓存；\`--no-cache\` 忽略且不写入缓存，\`--keep-clip\` 仅把准备后的片段保留到软件数据目录，\`--dry-run\` 只准备和校验视频、不需要 API Key 且不会请求模型。可用 \`--config '<软件数据目录内的配置>'\` 选择该目录内的配置。\n\n不要绕过软件入口，也不要把配置、密钥、缓存或视频复制进 Claude 项目；若返回 \`clip_too_large\`、\`dependency_missing\`、\`api_error\` 或其他稳定错误码，如实说明视频、工具或软件配置问题，不要补写未看到或未听到的内容。\n`;
+  const command = internalCapabilityCliUsage({ launcher, capabilityId: "video-understanding" });
+  return `---\nname: suzu-lives-video-understanding\ndescription: 通过 Suzu Lives 的标准能力 CLI 理解一段明确给出的本地视频或 http(s) 视频。\n---\n\n<!-- suzu-lives:ability:video-understanding -->\n# 视频理解\n\n这是 Suzu Lives 生成的轻量注册文件，不包含功能源码、安装路径、配置、缓存或凭据。\n\n仅在需要理解用户明确提供的视频内容时调用：\n\n\`${command}\`\n\n其中 \`<JSON>\` 例如 \`{"source":"<本地视频路径或 http(s) URL>","question":"<具体问题>"}\`。输入只接受 \`source\`、\`question\`、\`cacheKey\`、\`configPath\`、\`noCache\`、\`keepClip\`、\`dryRun\`。软件会检查 FFmpeg/FFprobe，准备受大小限制的 MP4 片段；\`dryRun: true\` 只准备和校验视频，不请求模型。\`configPath\` 必须位于软件数据目录内。成功和失败都会在 stdout 返回统一 JSON：\`schemaVersion\`、\`status\`、\`capabilityId\`、\`action\` 与 \`result\` 或 \`error\`。\n\n不要绕过软件入口，也不要把配置、密钥、缓存或视频复制进 Claude 项目；若返回 \`clip_too_large\`、\`dependency_missing\`、\`api_error\` 或其他稳定错误码，如实说明视频、工具或软件配置问题，不要补写未看到或未听到的内容。\n`;
 }
 
 function renderVoiceMessageSkill(launcher) {

@@ -1,7 +1,7 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { app, BrowserWindow, Menu, safeStorage } from "electron";
+import { app, BrowserWindow, ipcMain, Menu, safeStorage } from "electron";
 
 import { runSuzuLivesCli } from "@suzu-lives/claude-integration/agent-cli";
 import { asDashScopeImageConnection, createDashScopeConnectionService, createImageVisionCredentialService, createNamedApiConnectionService, createVideoUnderstandingCredentialService } from "@suzu-lives/service-connections";
@@ -13,6 +13,10 @@ import { createDataStorageLocationService } from "./services/data-storage-locati
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const APP_ROOT = path.resolve(HERE, "..");
 const APP_ICON = path.join(APP_ROOT, "assets", "app-icon.png");
+const RENDERER_ROOT = path.join(APP_ROOT, "renderer");
+const WINDOW_CHROME_HEIGHT = 64;
+const DEV_RENDERER_URL = String(process.env.SUZU_LIVES_RENDERER_URL || "").trim();
+const DEV_RENDERER_ORIGIN = "http://127.0.0.1:5173";
 
 // Keep Electron's own profile alongside Suzu's settings and operational data.
 // The separate Roaming locator only records this root so a later launch can find it.
@@ -23,9 +27,52 @@ app.setPath("userData", dataStorageService.dataRoot);
 
 let mainWindow = null;
 
+function normalizeTheme(value) {
+  return value === "light" ? "light" : "dark";
+}
+
+function titleBarOverlay(theme) {
+  const light = normalizeTheme(theme) === "light";
+  return {
+    color: light ? "#f5f7fb" : "#0c0f1c",
+    symbolColor: light ? "#1c2435" : "#f3f5fb",
+    height: WINDOW_CHROME_HEIGHT,
+  };
+}
+
+function trustedDevelopmentRendererUrl(value) {
+  if (!DEV_RENDERER_URL || app.isPackaged) return false;
+  try {
+    const expected = new URL(DEV_RENDERER_URL);
+    const candidate = new URL(String(value || ""));
+    return expected.origin === DEV_RENDERER_ORIGIN
+      && candidate.origin === DEV_RENDERER_ORIGIN;
+  } catch {
+    return false;
+  }
+}
+
+function rendererUrl(theme) {
+  if (!trustedDevelopmentRendererUrl(DEV_RENDERER_URL)) return "";
+  const url = new URL(DEV_RENDERER_URL);
+  url.searchParams.set("theme", normalizeTheme(theme));
+  return url.toString();
+}
+
+function applyWindowChromeTheme(window, theme) {
+  if (!window || window.isDestroyed()) return false;
+  const normalized = normalizeTheme(theme);
+  window.setBackgroundColor(normalized === "light" ? "#eef2f7" : "#090b12");
+  if (process.platform !== "darwin" && typeof window.setTitleBarOverlay === "function") {
+    window.setTitleBarOverlay(titleBarOverlay(normalized));
+  }
+  return true;
+}
+
 function isSuzuRendererUrl(value) {
   try {
-    return new URL(String(value || "")).protocol === "file:";
+    const url = new URL(String(value || ""));
+    return url.protocol === "file:" || trustedDevelopmentRendererUrl(url.toString());
   } catch {
     return false;
   }
@@ -48,7 +95,7 @@ function configureMicrophonePermission(webContents) {
 }
 
 function createWindow(settingsService) {
-  const startupTheme = settingsService.load().theme;
+  const startupTheme = normalizeTheme(settingsService.load().theme);
   mainWindow = new BrowserWindow({
     width: 1460,
     height: 920,
@@ -58,19 +105,21 @@ function createWindow(settingsService) {
     backgroundColor: startupTheme === "light" ? "#eef2f7" : "#090b12",
     icon: APP_ICON,
     autoHideMenuBar: true,
-    title: "Suzu Lives Console",
+    title: "Suzu Lives",
+    titleBarStyle: "hidden",
+    ...(process.platform !== "darwin" ? { titleBarOverlay: titleBarOverlay(startupTheme) } : {}),
     webPreferences: {
       preload: path.join(HERE, "preload.cjs"),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: true,
+      webSecurity: false,
     },
   });
 
   configureMicrophonePermission(mainWindow.webContents);
-  mainWindow.loadFile(path.join(APP_ROOT, "src", "index.html"), {
-    query: { theme: startupTheme },
-  });
+  const developmentUrl = rendererUrl(startupTheme);
+  if (developmentUrl) mainWindow.loadURL(developmentUrl);
+  else mainWindow.loadFile(path.join(RENDERER_ROOT, "index.html"), { query: { theme: startupTheme } });
   mainWindow.once("ready-to-show", () => mainWindow?.show());
   mainWindow.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   mainWindow.webContents.on("will-navigate", (event) => event.preventDefault());
@@ -121,7 +170,6 @@ if (cliArgumentIndex !== -1) {
   app.whenReady()
     .then(() => runProjectHookCli({
       args: process.argv.slice(hookArgumentIndex + 1),
-      connectionResolver: cliConnectionResolver,
     }))
     .finally(() => app.quit());
 } else {
@@ -148,6 +196,10 @@ if (cliArgumentIndex !== -1) {
       wechatAttachmentCli: cliLauncherCommand,
       cliLauncherCommand,
       claudeWorkspaceDirectories: [claudeWorkspaceRoot()],
+    });
+    ipcMain.handle("window-chrome:apply-theme", (event, theme) => {
+      if (event.sender !== mainWindow?.webContents) return false;
+      return applyWindowChromeTheme(mainWindow, theme);
     });
     createWindow(settingsService);
     app.on("activate", () => {

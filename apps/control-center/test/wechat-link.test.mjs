@@ -62,7 +62,7 @@ test("WeChat text delivery splits blank paragraphs before the iLink size limit",
   assert.equal(Array.from(chunks[1]).length, 1);
 });
 
-test("WeChat links stay scoped to one native Claude session and relay text", async () => {
+test("WeChat links persist a contact scope and relay through its fixed Claude session", async () => {
   const root = await temporaryDirectory("suzu-wechat-link-");
   const projectRoot = path.join(root, "project");
   await fs.mkdir(projectRoot, { recursive: true });
@@ -77,17 +77,20 @@ test("WeChat links stay scoped to one native Claude session and relay text", asy
   const chat = {
     sendToSession: async (value) => { deliveredToClaude.push(value); return { accepted: true }; },
     steer: async () => ({ accepted: true, message: "引导已送达。" }),
-    stop: () => ({ accepted: true, stopped: false, message: "当前会话没有正在执行的 Claude Code 任务。" }),
+    stop: () => ({ accepted: true, stopped: false, message: "当前联系人没有正在执行的 Claude Code 任务。" }),
     subscribe: (listener) => {
       chatSubscribers.add(listener);
       return () => chatSubscribers.delete(listener);
     },
   };
   const reader = {
-    resolveSession: async (sessionId) => {
-      assert.equal(sessionId, "session-1");
-      return { id: "session-1", projectRoot, hasTranscript: true };
+    resolveContactSession: async (contactId) => {
+      assert.equal(contactId, "contact-suzu");
+      return { contactId, id: "session-1", projectRoot, hasTranscript: true };
     },
+    contactIdForSession: async ({ sessionId, projectRoot: eventProjectRoot }) => (
+      sessionId === "session-1" && eventProjectRoot === projectRoot ? "contact-suzu" : ""
+    ),
   };
   const fetchImpl = async (target, init = {}) => {
     const url = new URL(String(target));
@@ -144,7 +147,7 @@ test("WeChat links stay scoped to one native Claude session and relay text", asy
   const service = createWeChatLinkService({ chat, dataRoot: root, fetchImpl, reader });
 
   assert.equal((await service.snapshot()).enabled, true);
-  const pending = await service.begin({ sessionId: "session-1" });
+  const pending = await service.begin({ contactId: "contact-suzu" });
   assert.match(pending.pendingQr?.imageDataUrl || "", /^data:image\/png;base64,/u);
   releaseConfirmation();
   await waitFor(() => deliveredToClaude.length === 1, "微信入站消息没有进入 Claude 会话队列");
@@ -219,6 +222,10 @@ test("WeChat links stay scoped to one native Claude session and relay text", asy
 
   const credentialFile = await fs.readFile(path.join(root, "wechat-link", "credentials.json"), "utf8");
   assert.match(credentialFile, /bot-token-fixture/);
+  const links = JSON.parse(await fs.readFile(path.join(root, "wechat-link", "connections.json"), "utf8"));
+  assert.equal(links.links[0].contactId, "contact-suzu");
+  assert.equal(Object.hasOwn(links.links[0], "sessionId"), false);
+  assert.equal(Object.hasOwn(links.links[0], "projectRoot"), false);
   service.dispose();
 });
 
@@ -295,11 +302,16 @@ test("WeChat images and files enter the bound Claude session while only supplied
     chat,
     dataRoot: root,
     fetchImpl,
-    reader: { resolveSession: async () => ({ id: "session-media", projectRoot, hasTranscript: true }) },
+    reader: {
+      resolveContactSession: async (contactId) => ({ contactId, id: "session-media", projectRoot, hasTranscript: true }),
+      contactIdForSession: async ({ sessionId, projectRoot: eventProjectRoot }) => (
+        sessionId === "session-media" && eventProjectRoot === projectRoot ? "contact-media" : ""
+      ),
+    },
   });
 
   await service.saveSettings({ enabled: true });
-  const pending = await service.begin({ sessionId: "session-media" });
+  const pending = await service.begin({ contactId: "contact-media" });
   assert.match(pending.pendingQr?.imageDataUrl || "", /^data:image\/png;base64,/u);
   releaseConfirmation();
   await waitFor(() => deliveredToClaude.length === 1, "微信媒体没有进入 Claude 会话队列");
@@ -336,7 +348,10 @@ test("an agent attachment without a matching WeChat link stays local and is not 
     },
     dataRoot: root,
     fetchImpl: async () => { fetchCalls += 1; throw new Error("unlinked media must not call WeChat"); },
-    reader: { resolveSession: async () => ({ id: "session-unlinked", projectRoot, hasTranscript: true }) },
+    reader: {
+      resolveContactSession: async (contactId) => ({ contactId, id: "session-unlinked", projectRoot, hasTranscript: true }),
+      contactIdForSession: async () => "",
+    },
   });
   const emitted = [];
   service.subscribe((event) => emitted.push(event));

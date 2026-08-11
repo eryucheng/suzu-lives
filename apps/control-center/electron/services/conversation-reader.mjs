@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -20,6 +19,13 @@ export class ConversationReaderError extends Error {
 
 function clean(value) {
   return String(value ?? "").trim();
+}
+
+function projectScopeKey(value) {
+  const source = clean(value);
+  if (!source || !path.isAbsolute(source)) return "";
+  const resolved = path.resolve(source);
+  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
 }
 
 function compactText(value, limit = 60) {
@@ -160,25 +166,21 @@ export function createConversationReader({
   settingsService,
   fsOps = fs,
   homeDirectory = os.homedir(),
-  createSessionId = randomUUID,
 } = {}) {
   if (!settingsService?.load) throw new ConversationReaderError("会话读取需要软件设置服务。");
 
   let activePath = "";
   let activeProjectRoot = "";
   let selectionVersion = 0;
-  let selectedSessionId = "";
   let tail = null;
   const drafts = new Map();
   const summaries = new Map();
 
-  const persistSelection = (settings, sessionId) => {
-    selectedSessionId = sessionId;
+  const markSelectionChanged = () => {
     selectionVersion += 1;
-    if (typeof settingsService.save === "function") settingsService.save({ ...settings, conversationSessionId: sessionId });
   };
 
-  const listSessions = async (location) => {
+  const listSessions = async (location, { includeSessionId = "" } = {}) => {
     if (!location.exists) return [];
     let entries;
     try { entries = await fsOps.readdir(location.projectDir, { withFileTypes: true }); }
@@ -193,10 +195,12 @@ export function createConversationReader({
       if (!stat) continue;
       candidates.push({ id, filePath, stat });
     }
-    const ordered = candidates
-      .sort((left, right) => right.stat.mtimeMs - left.stat.mtimeMs)
-      .slice(0, MAX_SESSION_FILES);
-    return Promise.all(ordered.map(async ({ id, filePath, stat }) => {
+    const ordered = candidates.sort((left, right) => right.stat.mtimeMs - left.stat.mtimeMs);
+    const visible = ordered.slice(0, MAX_SESSION_FILES);
+    const fixedId = clean(includeSessionId);
+    const fixed = isSessionId(fixedId) ? ordered.find((session) => session.id === fixedId) || null : null;
+    if (fixed && !visible.some((session) => session.id === fixed.id)) visible.push(fixed);
+    return Promise.all(visible.map(async ({ id, filePath, stat }) => {
       const signature = `${stat.size}:${stat.mtimeMs}`;
       const cached = summaries.get(filePath);
       const preview = cached?.signature === signature ? cached.preview : await sessionSummary(fsOps, filePath);
@@ -232,13 +236,14 @@ export function createConversationReader({
       activePath = "";
       tail = null;
       drafts.clear();
-      selectedSessionId = clean(settings.conversationSessionId);
       selectionVersion += 1;
     }
-    const native = await listSessions(location);
-    for (const session of native) drafts.delete(session.id);
+    const activeContactSessionId = clean(contacts.activeContact?.sessionId);
+    const native = await listSessions(location, { includeSessionId: activeContactSessionId });
+    const fixedNative = native.filter((session) => session.id === activeContactSessionId);
+    for (const session of fixedNative) drafts.delete(session.id);
     const localDrafts = [...drafts.values()]
-      .filter((session) => session.projectRoot === location.projectRoot)
+      .filter((session) => session.projectRoot === location.projectRoot && session.id === activeContactSessionId)
       .sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt));
     return {
       settings,
@@ -246,27 +251,29 @@ export function createConversationReader({
       contacts: Array.isArray(contacts.contacts) ? contacts.contacts.map(publicContact).filter(Boolean) : [],
       contactsRoot: clean(contacts.contactsRoot),
       activeContact: publicContact(contacts.activeContact),
-      sessions: [...localDrafts, ...native],
+      activeContactSessionId,
+      preferredContactId: clean(contacts.preferredContact?.id),
+      sessions: [...localDrafts, ...fixedNative],
     };
   };
 
   const currentSession = (currentCatalog) => {
-    const wanted = selectedSessionId || clean(currentCatalog.settings.conversationSessionId);
-    return currentCatalog.sessions.find((session) => session.id === wanted) || currentCatalog.sessions[0] || null;
+    const sessionId = clean(currentCatalog?.activeContactSessionId);
+    return isSessionId(sessionId)
+      ? currentCatalog.sessions.find((session) => session.id === sessionId) || null
+      : null;
   };
 
   const createDraft = async (providedCatalog = null) => {
     const currentCatalog = providedCatalog || await catalog();
     if (!currentCatalog.projectRoot) throw new ConversationReaderError("请先选择 Claude 工作目录。");
-    let id = "";
-    for (let attempt = 0; attempt < 5; attempt += 1) {
-      const candidate = clean(createSessionId());
-      if (isSessionId(candidate) && !currentCatalog.sessions.some((session) => session.id === candidate)) {
-        id = candidate;
-        break;
-      }
+    const id = clean(currentCatalog.activeContactSessionId);
+    if (!isSessionId(id)) throw new ConversationReaderError("当前联系人尚未绑定 Claude 会话。 ");
+    const existing = currentCatalog.sessions.find((session) => session.id === id) || null;
+    if (existing) {
+      markSelectionChanged();
+      return existing;
     }
-    if (!id) throw new ConversationReaderError("无法创建新的 Claude 会话标识。");
     const now = new Date().toISOString();
     const draft = {
       id,
@@ -280,7 +287,7 @@ export function createConversationReader({
       draft: true,
     };
     drafts.set(id, draft);
-    persistSelection(currentCatalog.settings, id);
+    markSelectionChanged();
     return draft;
   };
 
@@ -293,6 +300,7 @@ export function createConversationReader({
         contacts: currentCatalog.contacts,
         contactsRoot: currentCatalog.contactsRoot,
         activeContact: currentCatalog.activeContact,
+        preferredContactId: currentCatalog.preferredContactId,
         projectRoot: "",
         projectDir: "",
         sessions: [],
@@ -314,6 +322,7 @@ export function createConversationReader({
         contacts: currentCatalog.contacts,
         contactsRoot: currentCatalog.contactsRoot,
         activeContact: currentCatalog.activeContact,
+        preferredContactId: currentCatalog.preferredContactId,
         projectRoot: currentCatalog.projectRoot,
         projectDir: currentCatalog.projectDir,
         sessions: currentCatalog.sessions,
@@ -342,6 +351,7 @@ export function createConversationReader({
         contacts: currentCatalog.contacts,
         contactsRoot: currentCatalog.contactsRoot,
         activeContact: currentCatalog.activeContact,
+        preferredContactId: currentCatalog.preferredContactId,
         projectRoot: currentCatalog.projectRoot,
         projectDir: currentCatalog.projectDir,
         sessions: currentCatalog.sessions,
@@ -361,6 +371,7 @@ export function createConversationReader({
       contacts: currentCatalog.contacts,
       contactsRoot: currentCatalog.contactsRoot,
       activeContact: currentCatalog.activeContact,
+      preferredContactId: currentCatalog.preferredContactId,
       projectRoot: currentCatalog.projectRoot,
       projectDir: currentCatalog.projectDir,
       sessions: currentCatalog.sessions,
@@ -384,6 +395,7 @@ export function createConversationReader({
       contactsRoot: current.contactsRoot,
       contacts: current.contacts,
       activeContact: current.activeContact,
+      preferredContactId: current.preferredContactId,
       projectRoot: current.projectRoot,
       projectDir: current.projectDir,
       sessions: current.sessions.map(publicSession),
@@ -398,20 +410,7 @@ export function createConversationReader({
     };
   };
 
-  const select = async (sessionId) => {
-    const id = clean(sessionId);
-    const currentCatalog = await catalog();
-    if (!isSessionId(id) || !currentCatalog.sessions.some((session) => session.id === id)) {
-      throw new ConversationReaderError("所选 Claude 会话不存在于当前工作目录。");
-    }
-    persistSelection(currentCatalog.settings, id);
-    return snapshot();
-  };
-
-  const create = async () => {
-    await createDraft();
-    return snapshot();
-  };
+  const create = async () => { throw new ConversationReaderError("每个联系人只保留一个 Claude 会话；如需新对话，请新建联系人。 "); };
 
   const createContact = async ({ name } = {}) => {
     if (!contactProjectsService?.create) throw new ConversationReaderError("当前版本未接入联系人项目服务。 ");
@@ -425,6 +424,99 @@ export function createConversationReader({
     return snapshot();
   };
 
+  const setPreferredContact = async ({ id } = {}) => {
+    if (!contactProjectsService?.setPreferred) throw new ConversationReaderError("当前版本未接入联系人项目服务。 ");
+    await contactProjectsService.setPreferred({ id });
+    return snapshot();
+  };
+
+  /** Lists every contact's one fixed Claude session without changing the active chat. */
+  const compactorSnapshot = async () => {
+    if (!contactProjectsService?.snapshot) throw new ConversationReaderError("当前版本未接入联系人项目服务。 ");
+    const contactsSnapshot = await contactProjectsService.snapshot();
+    const contacts = Array.isArray(contactsSnapshot?.contacts) ? contactsSnapshot.contacts : [];
+    const catalog = [];
+    for (const contact of contacts) {
+      const projectRoot = clean(contact?.projectRoot);
+      if (!projectRoot) continue;
+      const location = await locateClaudeProjectDirectory({
+        projectRoot,
+        fsOps,
+        homeDirectory,
+      });
+      const fixedSessionId = clean(contact?.sessionId);
+      const sessions = isSessionId(fixedSessionId)
+        ? (await listSessions(location, { includeSessionId: fixedSessionId }))
+          .filter((session) => session.id === fixedSessionId)
+        : [];
+      catalog.push({
+        ...publicContact(contact),
+        sessions: sessions.map(publicSession),
+      });
+    }
+    return {
+      status: clean(contactsSnapshot?.status) || "missing",
+      activeContact: publicContact(contactsSnapshot?.activeContact),
+      preferredContactId: clean(contactsSnapshot?.preferredContact?.id),
+      activeSessionId: clean(contactsSnapshot?.activeContact?.sessionId),
+      contacts: catalog,
+    };
+  };
+
+  /**
+   * Resolves a persisted Claude session from an owned contact project without
+   * accepting a renderer-provided project path or changing the active contact.
+   */
+  const resolveCompactorSession = async ({ contactId } = {}) => {
+    if (!contactProjectsService?.snapshot) throw new ConversationReaderError("当前版本未接入联系人项目服务。 ");
+    const id = clean(contactId);
+    const contactsSnapshot = await contactProjectsService.snapshot();
+    const contact = Array.isArray(contactsSnapshot?.contacts)
+      ? contactsSnapshot.contacts.find((item) => clean(item?.id) === id) || null
+      : null;
+    if (!contact?.projectRoot) throw new ConversationReaderError("所选联系人不存在或无法读取。 ");
+    const location = await locateClaudeProjectDirectory({
+      projectRoot: contact.projectRoot,
+      fsOps,
+      homeDirectory,
+    });
+    const fixedSessionId = clean(contact.sessionId);
+    if (!isSessionId(fixedSessionId)) throw new ConversationReaderError("所选联系人尚未绑定 Claude 会话。 ");
+    const session = (await listSessions(location, { includeSessionId: fixedSessionId }))
+      .find((item) => item.id === fixedSessionId) || null;
+    if (!session?.filePath) throw new ConversationReaderError("所选 Claude 会话不存在或还没有可压缩的聊天记录。 ");
+    return {
+      id: session.id,
+      projectRoot: location.projectRoot,
+      transcriptPath: session.filePath,
+      hasTranscript: true,
+      contact: publicContact(contact),
+    };
+  };
+
+  /**
+   * Resolves a compactor scope emitted by the local chat runtime. The runtime
+   * still has to match one owned contact project; it cannot point compaction at
+   * an arbitrary local transcript.
+   */
+  const resolveCompactorSessionForRuntime = async ({ sessionId, projectRoot } = {}) => {
+    if (!contactProjectsService?.snapshot) throw new ConversationReaderError("当前版本未接入联系人项目服务。 ");
+    const nativeSessionId = clean(sessionId);
+    const runtimeProject = projectScopeKey(projectRoot);
+    if (!isSessionId(nativeSessionId) || !runtimeProject) {
+      throw new ConversationReaderError("自动压缩范围无效。 ");
+    }
+    const contactsSnapshot = await contactProjectsService.snapshot();
+    const contact = Array.isArray(contactsSnapshot?.contacts)
+      ? contactsSnapshot.contacts.find((item) => (
+        projectScopeKey(item?.projectRoot) === runtimeProject
+        && clean(item?.sessionId) === nativeSessionId
+      )) || null
+      : null;
+    if (!contact?.id) throw new ConversationReaderError("自动压缩目标不属于任何联系人。 ");
+    return resolveCompactorSession({ contactId: contact.id });
+  };
+
   const ensureActiveSession = async () => {
     const currentCatalog = await catalog();
     const session = currentSession(currentCatalog) || await createDraft(currentCatalog);
@@ -435,19 +527,46 @@ export function createConversationReader({
     };
   };
 
-  /** Resolve a selected session without letting a renderer choose its working directory. */
-  const resolveSession = async (sessionId) => {
-    const id = clean(sessionId);
-    const currentCatalog = await catalog();
-    const session = currentCatalog.sessions.find((item) => item.id === id) || null;
-    if (!isSessionId(id) || !session || !currentCatalog.projectRoot) {
-      throw new ConversationReaderError("所选 Claude 会话不存在于当前工作目录。");
-    }
+  /** Resolve the fixed conversation owned by a contact without changing the active contact. */
+  const resolveContactSession = async (contactId) => {
+    if (!contactProjectsService?.snapshot) throw new ConversationReaderError("当前版本未接入联系人项目服务。 ");
+    const id = clean(contactId);
+    const contacts = await contactProjectsService.snapshot();
+    const contact = Array.isArray(contacts?.contacts)
+      ? contacts.contacts.find((item) => clean(item?.id) === id) || null
+      : null;
+    if (!contact?.projectRoot) throw new ConversationReaderError("所选联系人不存在或无法读取。 ");
+    const location = await locateClaudeProjectDirectory({
+      projectRoot: contact.projectRoot,
+      fsOps,
+      homeDirectory,
+    });
+    const sessionId = clean(contact.sessionId);
+    if (!isSessionId(sessionId)) throw new ConversationReaderError("所选联系人尚未绑定 Claude 会话。 ");
+    const sessions = await listSessions(location, { includeSessionId: sessionId });
+    const session = sessions.find((item) => item.id === sessionId) || null;
     return {
-      id: session.id,
-      projectRoot: currentCatalog.projectRoot,
-      hasTranscript: Boolean(session.filePath),
+      contactId: contact.id,
+      id: sessionId,
+      projectRoot: location.projectRoot,
+      hasTranscript: Boolean(session?.filePath),
     };
+  };
+
+  /** Maps an internal runtime session back to its owning fixed contact. */
+  const contactIdForSession = async ({ sessionId, projectRoot } = {}) => {
+    if (!contactProjectsService?.snapshot) return "";
+    const nativeSessionId = clean(sessionId);
+    const scope = projectScopeKey(projectRoot);
+    if (!isSessionId(nativeSessionId) || !scope) return "";
+    const contacts = await contactProjectsService.snapshot();
+    const contact = Array.isArray(contacts?.contacts)
+      ? contacts.contacts.find((item) => (
+        clean(item?.sessionId) === nativeSessionId
+        && projectScopeKey(item?.projectRoot) === scope
+      )) || null
+      : null;
+    return clean(contact?.id);
   };
 
   const search = async (query) => {
@@ -474,7 +593,7 @@ export function createConversationReader({
   const focus = async ({ lineNumber, messageId } = {}) => {
     const current = await context();
     if (current.status !== "ready" || !current.filePath) {
-      throw new ConversationReaderError("当前会话没有可定位的聊天记录。");
+      throw new ConversationReaderError("当前联系人没有可定位的聊天记录。");
     }
     const result = await readTranscriptWindow(current.filePath, lineNumber, { before: 28, after: 28 });
     return {
@@ -486,5 +605,5 @@ export function createConversationReader({
     };
   };
 
-  return { context, create, createContact, ensureActiveSession, focus, resolveSession, search, select, selectContact, snapshot };
+  return { compactorSnapshot, contactIdForSession, context, create, createContact, ensureActiveSession, focus, resolveCompactorSession, resolveCompactorSessionForRuntime, resolveContactSession, search, selectContact, setPreferredContact, snapshot };
 }

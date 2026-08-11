@@ -6,8 +6,14 @@ import {
   resolveSuzuLivesDataRoot,
   stableAgentId,
 } from "@suzu-lives/agent-registry";
-import { DirectImageVisionError, runDirectImageVision } from "@suzu-lives/media-understanding/direct-image-vision";
-import { DirectVideoUnderstandingError, runDirectVideoUnderstanding } from "@suzu-lives/media-understanding/direct-video-understanding";
+import {
+  executeInternalCapability,
+  InternalCapabilityCliError,
+  internalCapabilityErrorDetails,
+  internalCapabilityFailure,
+  internalCapabilitySuccess,
+  parseInternalCapabilityRequest,
+} from "@suzu-lives/capability-registry/internal-cli";
 import { DirectVoiceMessageError, runDirectVoiceMessage } from "@suzu-lives/voice-message/direct-voice-message";
 import { runScheduleCli } from "@suzu-lives/task-scheduler";
 import { runTravelingMerchantCli, TravelingMerchantError } from "@suzu-lives/traveling-merchant";
@@ -62,8 +68,8 @@ function help() {
       "suzu-lives phone-camera --shot <rear|selfie|mirror> --scene <visible-scene> [--ref <asset-or-set>] [--dry-run]",
       "suzu-lives image-generation --prompt <visible-scene> [--backend <api|comfyui>] [--workflow <id>] [--ref <role=path>] [--send]",
       "suzu-lives visual-reference-manager init|list|show|validate|apply [--data-root <software-data-root>]",
-      "suzu-lives image-vision <local-image> [--question <question>] [--config <software-data-config>] [--no-retry] [--data-root <software-data-root>]",
-      "suzu-lives video-understanding <local-video-or-http-url> [--question <question>] [--cache-key <stable-key>] [--config <software-data-config>] [--no-cache] [--keep-clip] [--dry-run] [--data-root <software-data-root>]",
+      "suzu-lives capability image-vision analyze --input-json '<JSON>' [--data-root <software-data-root>] [--workspace-root <workspace>]",
+      "suzu-lives capability video-understanding analyze --input-json '<JSON>' [--data-root <software-data-root>] [--workspace-root <workspace>]",
       "suzu-lives voice-message [text] [--audio-file <local-audio>] [--config <software-data-config>] [--timeout-ms <ms>] [--inspect] [--data-root <software-data-root>]",
       "suzu-lives traveling-merchant [--dry-run] [--force] [--fixture <local-html>] [--test-notification] [--config <software-data-config>] [--data-root <software-data-root>]",
       "suzu-lives web-browser [--check] [--data-root <software-data-root>] [--project-root <agent-project>]",
@@ -86,18 +92,6 @@ function help() {
       "suzu-lives ability invoke --id <ability-id> --request-json '<JSON>' --authorization-credential <software-issued-single-use-credential> [--data-root <software-data-root>]",
     ],
   };
-}
-
-function assertImageVisionOptions(options) {
-  const allowed = new Set(["question", "detail", "config", "no-retry", "data-root", "project-root"]);
-  const unknown = Object.keys(options).filter((key) => !allowed.has(key));
-  if (unknown.length) throw new DirectImageVisionError(`image-vision 不支持选项 --${unknown[0]}。`, { exitCode: 4 });
-}
-
-function assertVideoUnderstandingOptions(options) {
-  const allowed = new Set(["question", "cache-key", "config", "no-cache", "keep-clip", "dry-run", "data-root", "project-root"]);
-  const unknown = Object.keys(options).filter((key) => !allowed.has(key));
-  if (unknown.length) throw new DirectVideoUnderstandingError(`video-understanding 不支持选项 --${unknown[0]}。`, { exitCode: 4 });
 }
 
 const MAX_CONVERSATION_ATTACHMENT_BYTES = 50 * 1024 * 1024;
@@ -209,61 +203,48 @@ function assertVoiceMessageOptions(options) {
   if (unknown.length) throw new DirectVoiceMessageError(`voice-message 不支持选项 --${unknown[0]}。`, { code: "invalid_request", exitCode: 4 });
 }
 
-async function runImageVisionCommand({ options, positional, connectionResolver = null }) {
-  assertImageVisionOptions(options);
-  if (positional.length !== 2 || !String(positional[1] || "").trim()) {
-    throw new DirectImageVisionError("image-vision 需要且只接受一个本地图片路径。", { exitCode: 4 });
+async function runInternalCapabilityCommand(values, { connectionResolver = null } = {}) {
+  let capabilityId = "";
+  let action = "";
+  try {
+    const { options, positional } = parseOptions(values);
+    capabilityId = String(positional[0] || "").trim().toLowerCase();
+    action = String(positional[1] || "").trim().toLowerCase();
+    const request = parseInternalCapabilityRequest({ positional, options });
+    capabilityId = request.capabilityId;
+    action = request.action;
+    const dataRoot = softwareDataRoot(request.dataRoot || process.env.SUZU_LIVES_DATA_ROOT || "");
+    const workspaceRoot = request.workspaceRoot || process.cwd();
+    const agentId = stableAgentId(workspaceRoot);
+    if (!agentId) {
+      throw new InternalCapabilityCliError("无法定位当前 Agent 工作区的软件身份。", { code: "runtime_identity_missing", exitCode: 10 });
+    }
+    const connection = typeof connectionResolver === "function"
+      ? await connectionResolver({ kind: capabilityId, dataRoot, agentId })
+      : null;
+    const result = await executeInternalCapability({
+      request,
+      runtime: {
+        dataRoot,
+        agentId,
+        ledgerPath: path.join(resolveAgentDataRoot({ dataRoot, agentId }), "cost-ledger", "events.jsonl"),
+        connection,
+        environment: process.env,
+      },
+    });
+    return {
+      format: "internal-capability",
+      result: internalCapabilitySuccess({ capabilityId, action, result }),
+      exitCode: 0,
+    };
+  } catch (error) {
+    const details = internalCapabilityErrorDetails(error);
+    return {
+      format: "internal-capability",
+      result: internalCapabilityFailure({ capabilityId, action, code: details.code, message: details.message }),
+      exitCode: details.exitCode,
+    };
   }
-  const dataRoot = softwareDataRoot(options["data-root"] || process.env.SUZU_LIVES_DATA_ROOT || "");
-  const projectRoot = options["project-root"] || process.cwd();
-  const agentId = stableAgentId(projectRoot);
-  if (!agentId) throw new DirectImageVisionError("无法定位当前 Claude 项目的软件身份。", { exitCode: 10 });
-  const ledgerPath = path.join(resolveAgentDataRoot({ dataRoot, agentId }), "cost-ledger", "events.jsonl");
-  const connection = typeof connectionResolver === "function" ? await connectionResolver({ kind: "image-vision", dataRoot, agentId }) : null;
-  const environment = { ...process.env };
-  if (connection?.key) environment.VISION_API_KEY = connection.key;
-  if (connection?.baseUrl) environment.VISION_BASE_URL = connection.baseUrl;
-  if (connection?.model) environment.VISION_MODEL = connection.model;
-  return runDirectImageVision({
-    dataRoot,
-    ledgerPath,
-    agentId,
-    imagePath: positional[1],
-    question: options.question || "",
-    configPath: options.config || "",
-    noRetry: options["no-retry"] === true,
-    environment,
-  });
-}
-
-async function runVideoUnderstandingCommand({ options, positional, connectionResolver = null }) {
-  assertVideoUnderstandingOptions(options);
-  if (positional.length !== 2 || !String(positional[1] || "").trim()) {
-    throw new DirectVideoUnderstandingError("video-understanding 需要且只接受一个本地视频路径或 http(s) URL。", { exitCode: 4 });
-  }
-  const dataRoot = softwareDataRoot(options["data-root"] || process.env.SUZU_LIVES_DATA_ROOT || "");
-  const projectRoot = options["project-root"] || process.cwd();
-  const agentId = stableAgentId(projectRoot);
-  if (!agentId) throw new DirectVideoUnderstandingError("无法定位当前 Claude 项目的软件身份。", { exitCode: 10 });
-  const ledgerPath = path.join(resolveAgentDataRoot({ dataRoot, agentId }), "cost-ledger", "events.jsonl");
-  const connection = typeof connectionResolver === "function" ? await connectionResolver({ kind: "video-understanding", dataRoot, agentId }) : null;
-  const environment = { ...process.env };
-  if (connection?.key) environment.VIDEO_UNDERSTANDING_API_KEY = connection.key;
-  if (connection?.baseUrl) environment.VIDEO_UNDERSTANDING_BASE_URL = connection.baseUrl;
-  if (connection?.model) environment.VIDEO_UNDERSTANDING_MODEL = connection.model;
-  return runDirectVideoUnderstanding({
-    dataRoot,
-    ledgerPath,
-    agentId,
-    videoPath: positional[1],
-    question: options.question || "",
-    cacheKey: options["cache-key"] || "",
-    configPath: options.config || "",
-    noCache: options["no-cache"] === true,
-    keepClip: options["keep-clip"] === true,
-    dryRun: options["dry-run"] === true,
-    environment,
-  });
 }
 
 async function runVoiceMessageCommand({ options, positional, connectionResolver = null }) {
@@ -402,21 +383,12 @@ async function main({ connectionResolver = null } = {}) {
       defaultDataRoot: softwareDataRoot(process.env.SUZU_LIVES_DATA_ROOT || ""),
     });
   }
+  if (process.argv[2] === "capability") {
+    return runInternalCapabilityCommand(process.argv.slice(3), { connectionResolver });
+  }
   const { options, positional } = parseOptions(process.argv.slice(2), {
-    booleanOptions: process.argv[2] === "image-vision"
-      ? ["no-retry"]
-      : process.argv[2] === "video-understanding"
-        ? ["no-cache", "keep-clip", "dry-run"]
-        : process.argv[2] === "voice-message"
-          ? ["inspect"]
-        : [],
+    booleanOptions: process.argv[2] === "voice-message" ? ["inspect"] : [],
   });
-  if (positional[0] === "image-vision") {
-    return { format: "image-vision", result: await runImageVisionCommand({ options, positional, connectionResolver }) };
-  }
-  if (positional[0] === "video-understanding") {
-    return { format: "video-understanding", result: await runVideoUnderstandingCommand({ options, positional, connectionResolver }) };
-  }
   if (positional[0] === "voice-message") {
     return { format: "voice-message", result: await runVoiceMessageCommand({ options, positional, connectionResolver }) };
   }
@@ -476,17 +448,18 @@ export async function runSuzuLivesCli({ args = process.argv.slice(2), connection
   process.argv = [...originalArgv.slice(0, 2), ...args];
   try {
     const result = await main({ connectionResolver });
+    if (result?.format === "internal-capability") {
+      emit(result.result);
+      process.exitCode = result.exitCode;
+      if (result.exitCode) {
+        const error = result.result.error || {};
+        process.stderr.write(`CAPABILITY_ERROR ${error.code || "internal_error"}: ${error.message || "内部能力执行失败。"}\n`);
+      }
+      return result.result;
+    }
     if (result?.format === "image-generation" || result?.format === "visual-reference-manager") {
       emit(result.result);
       return result;
-    }
-    if (result?.format === "image-vision") {
-      process.stdout.write(`${result.result.answer}\n`);
-      return;
-    }
-    if (result?.format === "video-understanding") {
-      emit(result.result);
-      return;
     }
     if (result?.format === "voice-message") {
       emit(result.result);
@@ -509,22 +482,6 @@ export async function runSuzuLivesCli({ args = process.argv.slice(2), connection
     if (process.argv[2] === "phone-camera") {
       process.stderr.write(`PHOTO_ERROR: ${error?.message || String(error)}\n`);
       process.exitCode = 1;
-      return null;
-    }
-    if (error instanceof DirectImageVisionError) {
-      process.stderr.write(error.stderr || `VISION_ERROR：${error.message}\n`);
-      process.exitCode = error.exitCode || 4;
-      return null;
-    }
-    if (error instanceof DirectVideoUnderstandingError) {
-      const stderr = String(error.stderr || "").trim();
-      if (stderr) process.stderr.write(`${stderr}\n`);
-      else process.stderr.write(`${JSON.stringify({
-        status: "error",
-        code: error.exitCode === 4 ? "invalid_request" : "unexpected_error",
-        message: error.message,
-      }, null, 2)}\n`);
-      process.exitCode = error.exitCode || 4;
       return null;
     }
     if (error instanceof DirectVoiceMessageError) {

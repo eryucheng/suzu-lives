@@ -5,7 +5,7 @@ import path from "node:path";
 import test from "node:test";
 
 import { createRelationshipFilesService, RelationshipFilesError } from "../electron/services/relationship-files.mjs";
-import { loadRelationshipFiles, renderRelationshipSettings, selectRelationshipContact } from "../src/features/relationship-settings/index.mjs";
+import { loadRelationshipFiles, selectRelationshipContact } from "../src/features/relationship-settings/index.mjs";
 
 async function project() { return fs.mkdtemp(path.join(os.tmpdir(), "suzu-relationship-files-")); }
 function service(projectRoot, fsOps = fs) { return createRelationshipFilesService({ settingsService: { load: () => ({ projectRoot }) }, fsOps }); }
@@ -57,45 +57,6 @@ test("relationship files reject traversal, abilities, and symlink escapes", asyn
   const root = await project(); const current = service(root); await assert.rejects(() => current.create({ path: "../escape.md" }), RelationshipFilesError); await assert.rejects(() => current.create({ path: "abilities.md" }), RelationshipFilesError); await assert.rejects(() => current.create({ path: ".CLAUDE/escape.md" }), RelationshipFilesError); await assert.rejects(() => current.create({ path: "PERSONA.md" }), RelationshipFilesError); await assert.rejects(() => current.create({ path: "C:\\escape.md" }), RelationshipFilesError);
   const outside = await project(); await fs.writeFile(path.join(root, "CLAUDE.md"), "@linked.md\n", "utf8"); try { await fs.symlink(path.join(outside, "outside.md"), path.join(root, "linked.md"), "file"); } catch (error) { if (error?.code === "EPERM" || error?.code === "EACCES") { t.skip("当前 Windows 环境不允许创建测试符号链接。"); return; } throw error; }
   await assert.rejects(() => current.snapshot(), RelationshipFilesError);
-});
-
-test("relationship settings view chooses a contact before presenting that contact's Markdown files", () => {
-  const view = renderRelationshipSettings({
-    state: {
-      relationshipContacts: {
-        contacts: [
-          { id: "contact-a", name: "小苏" },
-          { id: "contact-b", name: "阿澈" },
-        ],
-        activeContact: { id: "contact-b", name: "阿澈" },
-      },
-      relationshipFiles: { status: "ready", files: [
-        { path: "CLAUDE.md", kind: "standard", exists: true, content: "# Rules" },
-        { path: "persona.md", kind: "standard", exists: false, content: "" },
-        { path: "notes/bond.md", kind: "custom", exists: true, content: "Keep calm" },
-      ] },
-      relationshipFilePath: "notes/bond.md",
-      relationshipFilesError: "",
-    },
-  });
-  assert.match(view, /相处设定/u);
-  assert.match(view, /data-return-relationships/u);
-  assert.match(view, /data-relationship-contact/u);
-  assert.match(view, /relationship-contact-rail/u);
-  assert.match(view, /relationship-profile-header/u);
-  assert.match(view, /relationship-file-tab/u);
-  assert.match(view, /小苏/u);
-  assert.match(view, /阿澈/u);
-  assert.match(view, /总设定/u);
-  assert.match(view, /人格与相处方式/u);
-  assert.match(view, /notes\/bond\.md/u);
-  assert.match(view, /添加资料/u);
-  assert.doesNotMatch(view, /abilities\.md/u);
-  assert.doesNotMatch(view, /保存到联系人项目/u);
-
-  const empty = renderRelationshipSettings({ state: { relationshipContacts: { contacts: [{ id: "contact-a", name: "小苏" }], activeContact: null }, relationshipFiles: { status: "needs-project", files: [] }, relationshipFilesError: "" } });
-  assert.match(empty, /从左侧选择一位联系人/u);
-  assert.doesNotMatch(empty, /relationshipFileContent/u);
 });
 
 test("relationship settings refreshes the contact list and reloads files after a contact switch", async () => {

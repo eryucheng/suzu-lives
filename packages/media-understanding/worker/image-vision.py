@@ -2,9 +2,9 @@
 # -*- coding: utf-8 -*-
 """Software-owned OpenAI-compatible image-vision worker.
 
-The stable ``suzu-lives image-vision`` command starts this worker and writes
-its usage through Suzu Lives' ledger. It never reads an external directory or a
-project-local configuration file.
+Suzu's host-neutral capability CLI starts this worker and writes its usage
+through Suzu Lives' ledger. It never reads an external directory or a
+workspace-local configuration file.
 """
 
 from __future__ import annotations

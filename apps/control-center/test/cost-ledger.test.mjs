@@ -22,6 +22,21 @@ function writeClaudeSession({ projectRoot, homeDirectory, records, name = "sessi
   return transcript;
 }
 
+function contactScope({
+  contactId = "contact-suzu",
+  contactName = "Suzu",
+  projectRoot,
+  usageLedgerPath = "",
+} = {}) {
+  return {
+    contactId,
+    contactName,
+    projectRoot,
+    sessionId: "session",
+    usageLedgerPath,
+  };
+}
+
 test("scans DeepSeek transcript usage and groups one conversation", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "suzu-console-test-"));
   const projectRoot = path.join(root, "contact-project");
@@ -51,14 +66,17 @@ test("scans DeepSeek transcript usage and groups one conversation", async () => 
     },
   ] });
 
-  const result = await scanCostLedger({
-    projectRoot,
-  }, { homeDirectory });
+  const result = await scanCostLedger({}, {
+    contactScopes: [contactScope({ projectRoot })],
+    homeDirectory,
+  });
   assert.equal(result.status, "ready");
   assert.equal(result.events.length, 1);
   assert.equal(result.summary.all.requestCount, 1);
   assert.equal(result.summary.conversations.length, 1);
   assert.equal(result.summary.conversations[0].prompt, "帮我看看今天花了多少钱");
+  assert.equal(result.events[0].contactName, "Suzu");
+  assert.equal(result.summary.conversations[0].contactName, "Suzu");
   assert.ok(Math.abs(result.summary.all.amountCny - 9.025) < 0.000001);
 });
 
@@ -91,8 +109,6 @@ test("applies a software price revision from its effective time", async () => {
     },
   ] });
   const result = await scanCostLedger({
-    projectRoot,
-    usageLedgerPath: path.join(root, "runtime", "events.jsonl"),
     priceRevisions: [
       {
         modelId: "deepseek-v4-pro",
@@ -104,7 +120,13 @@ test("applies a software price revision from its effective time", async () => {
         },
       },
     ],
-  }, { homeDirectory });
+  }, {
+    contactScopes: [contactScope({
+      projectRoot,
+      usageLedgerPath: path.join(root, "runtime", "events.jsonl"),
+    })],
+    homeDirectory,
+  });
   assert.equal(result.events.length, 1);
   assert.ok(Math.abs(result.summary.all.amountCny - 5) < 0.000001);
 });
@@ -126,11 +148,55 @@ test("includes events written through the unified ledger", async () => {
       total_tokens: 1_000_000,
     },
   });
-  const result = await scanCostLedger({
-    projectRoot,
-    usageLedgerPath: ledgerPath,
-  }, { homeDirectory });
+  const result = await scanCostLedger({}, {
+    contactScopes: [contactScope({ projectRoot, usageLedgerPath: ledgerPath })],
+    homeDirectory,
+  });
   assert.equal(result.events.length, 1);
   assert.equal(result.events[0].source, "RAG 向量");
+  assert.equal(result.events[0].contactName, "Suzu");
   assert.ok(Math.abs(result.summary.all.amountCny - 0.5) < 0.000001);
+});
+
+test("aggregates every fixed contact session without mixing their conversation rows", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "suzu-console-all-contacts-"));
+  const homeDirectory = path.join(root, "home");
+  const suzuProjectRoot = path.join(root, "suzu-project");
+  const workProjectRoot = path.join(root, "work-project");
+  const records = (reply) => [
+    {
+      type: "user",
+      uuid: "turn-shared",
+      timestamp: "2026-08-01T00:00:00.000Z",
+      message: { role: "user", content: "同一个轮次标识也要分联系人统计" },
+    },
+    {
+      type: "assistant",
+      uuid: "reply-shared",
+      timestamp: "2026-08-01T00:00:02.000Z",
+      message: {
+        role: "assistant",
+        id: "request-shared",
+        model: "deepseek-v4-pro",
+        content: [{ type: "text", text: reply }],
+        usage: { input_tokens: 1, output_tokens: 1 },
+      },
+    },
+  ];
+  writeClaudeSession({ projectRoot: suzuProjectRoot, homeDirectory, records: records("Suzu 的回复") });
+  writeClaudeSession({ projectRoot: workProjectRoot, homeDirectory, records: records("工作会话的回复") });
+
+  const result = await scanCostLedger({}, {
+    contactScopes: [
+      contactScope({ contactId: "contact-suzu", contactName: "Suzu", projectRoot: suzuProjectRoot }),
+      contactScope({ contactId: "contact-work", contactName: "工作", projectRoot: workProjectRoot }),
+    ],
+    homeDirectory,
+  });
+
+  assert.equal(result.events.length, 2);
+  assert.deepEqual(result.events.map((event) => event.contactName).sort(), ["Suzu", "工作"]);
+  assert.equal(result.summary.all.requestCount, 2);
+  assert.equal(result.summary.conversations.length, 2);
+  assert.deepEqual(result.summary.conversations.map((item) => item.contactName).sort(), ["Suzu", "工作"]);
 });

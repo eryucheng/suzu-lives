@@ -33,6 +33,7 @@ class FakeSocket extends EventEmitter {
 
 test("realtime call uses the configured contact voice and streams ASR audio", async () => {
   const events = [];
+  const ledgerEvents = [];
   const sentTurns = [];
   const stoppedTurns = [];
   let chatSubscriber = null;
@@ -57,6 +58,7 @@ test("realtime call uses the configured contact voice and streams ASR audio", as
     connectionsService: { resolveDashScope: async () => ({ key: "dashscope-key", baseUrl: "https://dashscope.aliyuncs.com/api/v1" }) },
     dataRootProvider: () => "D:/suzu-data",
     ledgerPathProvider: () => "D:/suzu-data/usage.json",
+    appendLedger: async (ledgerPath, event) => ledgerEvents.push({ ledgerPath, event }),
     onEvent: (event) => events.push(event),
     reader: {
       snapshot: async () => ({ activeContact: { agentId: "agent-suzu", name: "Suzu" } }),
@@ -106,6 +108,10 @@ test("realtime call uses the configured contact voice and streams ASR audio", as
   assert.equal(sentTurns[0].kind, "call");
   assert.equal(sentTurns[0].content, "你好，能听见吗？");
   assert.match(sentTurns[0].requestId, /^suzu-call-/u);
+  assert.equal(ledgerEvents.length, 1);
+  assert.equal(ledgerEvents[0].ledgerPath, "D:/suzu-data/usage.json");
+  assert.equal(ledgerEvents[0].event.feature, "realtime-voice-call-asr");
+  assert.equal(ledgerEvents[0].event.units.inputAudioSeconds, audio.byteLength / 32_000);
 
   chatSubscriber({
     type: "reply-stream",
@@ -134,8 +140,10 @@ test("realtime call uses the configured contact voice and streams ASR audio", as
   assert.ok(events.some((event) => event.type === "call-clear-audio"));
   assert.equal(stoppedTurns.at(-1).requestId, sentTurns[0].requestId);
 
+  const stopsBeforeHangup = stoppedTurns.length;
   const stopped = await service.stop({ callId: started.callId, senderId: "renderer-1" });
   assert.deepEqual(stopped, { accepted: true, stopped: true });
+  assert.equal(stoppedTurns.length, stopsBeforeHangup);
   assert.ok(events.some((event) => event.type === "call-ended"));
   assert.deepEqual(
     service.pushAudio({

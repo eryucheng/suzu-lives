@@ -189,6 +189,7 @@ const BINDING_TYPES = {
   "image-vision": ["openai-compatible", "dashscope", "generic-api"],
   "video-understanding": ["openai-compatible", "dashscope", "generic-api"],
   "memory-embedding": ["openai-compatible", "dashscope"],
+  "memory-generation": ["openai-compatible", "dashscope"],
 };
 const BINDING_GROUPS = {
   "image-generation": ["image-workbench", "image-generation", "phone-camera"],

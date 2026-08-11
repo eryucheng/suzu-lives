@@ -733,6 +733,40 @@
   padding-top: 4px;
 }
 
+.content--conversation .conversation-contact-context-menu {
+  position: fixed;
+  z-index: 90;
+  width: 196px;
+  box-sizing: border-box;
+  border: 1px solid rgba(255, 255, 255, .13);
+  border-radius: 11px;
+  background: #20252e;
+  box-shadow: 0 16px 34px rgba(0, 0, 0, .28);
+  padding: 6px;
+}
+
+.content--conversation .conversation-contact-context-menu button {
+  width: 100%;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: #edf1f6;
+  cursor: pointer;
+  font: 13px/1.2 inherit;
+  padding: 11px 12px;
+  text-align: left;
+}
+
+.content--conversation .conversation-contact-context-menu button:hover:not(:disabled) {
+  background: rgba(88, 212, 153, .13);
+  color: #baf4d4;
+}
+
+.content--conversation .conversation-contact-context-menu button:disabled {
+  color: #8791a1;
+  cursor: default;
+}
+
 .content--conversation .conversation-pane {
   position: relative;
   display: flex;
@@ -823,216 +857,6 @@
 
 .content--conversation .conversation-icon-button:active {
   transform: scale(.9);
-}
-
-.conversation-call-overlay {
-  position: fixed;
-  z-index: 80;
-  inset: 0;
-  display: grid;
-  place-items: center;
-  background: rgba(6, 8, 13, .56);
-  backdrop-filter: blur(11px);
-  padding: 22px;
-}
-
-.conversation-call-dialog {
-  width: min(100%, 390px);
-  overflow: hidden;
-  border: 1px solid rgba(126, 239, 185, .2);
-  border-radius: 25px;
-  background:
-    radial-gradient(circle at 50% 16%, rgba(97, 220, 177, .16), transparent 37%),
-    linear-gradient(160deg, #202a31, #12161d 74%);
-  box-shadow: 0 26px 90px rgba(0, 0, 0, .48), inset 0 1px rgba(255, 255, 255, .07);
-  color: #f4f7f7;
-}
-
-.conversation-call-dialog > header {
-  display: flex;
-  height: 48px;
-  align-items: center;
-  justify-content: space-between;
-  color: #aeb9bf;
-  font-size: 12px;
-  letter-spacing: .3px;
-  padding: 0 14px;
-}
-
-.conversation-call-dialog__minimize {
-  width: 30px;
-  height: 30px;
-  border: 0;
-  border-radius: 50%;
-  background: transparent;
-  color: #cbd4d8;
-  cursor: pointer;
-  font: inherit;
-  font-size: 26px;
-  line-height: 1;
-  transition: background .16s ease, color .16s ease;
-}
-
-.conversation-call-dialog__minimize:hover {
-  background: rgba(255, 255, 255, .09);
-  color: #fff;
-}
-
-.conversation-call-dialog__person {
-  display: grid;
-  justify-items: center;
-  padding: 17px 28px 0;
-  text-align: center;
-}
-
-.conversation-call-dialog__avatar {
-  display: grid;
-  width: 88px;
-  height: 88px;
-  place-items: center;
-  overflow: hidden;
-  border: 2px solid rgba(135, 239, 191, .56);
-  border-radius: 50%;
-  background: #2b3940;
-  box-shadow: 0 0 0 7px rgba(100, 232, 181, .08), 0 0 32px rgba(82, 222, 165, .2);
-  color: #c9f4de;
-  font-size: 25px;
-  font-weight: 700;
-}
-
-.conversation-call-dialog__avatar img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-
-.conversation-call-dialog__person h2 {
-  max-width: 260px;
-  margin: 18px 0 4px;
-  overflow: hidden;
-  color: #fff;
-  font-size: 22px;
-  font-weight: 650;
-  letter-spacing: -.25px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.conversation-call-dialog__status {
-  margin: 0;
-  color: #aebcc0;
-  font-size: 12px;
-}
-
-.conversation-call-dialog__status.is-speaking {
-  color: #8cf0bd;
-}
-
-.conversation-call-dialog__status.is-error {
-  color: #ffafae;
-}
-
-.conversation-call-dialog__wave {
-  display: flex;
-  height: 54px;
-  align-items: center;
-  justify-content: center;
-  gap: 5px;
-  margin: 16px 0 8px;
-}
-
-.conversation-call-dialog__wave i {
-  display: block;
-  width: 4px;
-  height: 11px;
-  border-radius: 99px;
-  background: linear-gradient(#9ff4c7, #4abf9f);
-  box-shadow: 0 0 9px rgba(94, 232, 180, .34);
-  transform-origin: center;
-  animation: conversation-call-wave 1.08s ease-in-out infinite alternate;
-}
-
-.conversation-call-dialog__wave i:nth-child(2) { height: 24px; animation-delay: -.62s; }
-.conversation-call-dialog__wave i:nth-child(3) { height: 39px; animation-delay: -.17s; }
-.conversation-call-dialog__wave i:nth-child(4) { height: 29px; animation-delay: -.77s; }
-.conversation-call-dialog__wave i:nth-child(5) { height: 46px; animation-delay: -.39s; }
-.conversation-call-dialog__wave i:nth-child(6) { height: 31px; animation-delay: -.85s; }
-.conversation-call-dialog__wave i:nth-child(7) { height: 17px; animation-delay: -.28s; }
-
-.conversation-call-dialog__transcript {
-  display: grid;
-  min-height: 59px;
-  gap: 5px;
-  margin: 0 24px;
-  border: 1px solid rgba(255, 255, 255, .08);
-  border-radius: 14px;
-  background: rgba(0, 0, 0, .13);
-  color: #dbe4e5;
-  padding: 12px 14px;
-}
-
-.conversation-call-dialog__transcript span {
-  color: #8e9ba3;
-  font-size: 10px;
-}
-
-.conversation-call-dialog__transcript strong {
-  color: #e9eff0;
-  font-size: 13px;
-  font-weight: 520;
-  line-height: 1.45;
-}
-
-.conversation-call-dialog__error {
-  margin: 10px 24px 0;
-  color: #ffbbb9;
-  font-size: 11px;
-  line-height: 1.45;
-}
-
-.conversation-call-dialog footer {
-  display: flex;
-  justify-content: center;
-  padding: 23px 24px 26px;
-}
-
-.conversation-call-dialog__hangup {
-  display: inline-flex;
-  min-width: 114px;
-  min-height: 42px;
-  align-items: center;
-  justify-content: center;
-  gap: 7px;
-  border: 0;
-  border-radius: 21px;
-  background: linear-gradient(145deg, #dd5e64, #b83d46);
-  box-shadow: 0 8px 20px rgba(194, 61, 72, .27);
-  color: #fff;
-  cursor: pointer;
-  font: inherit;
-  font-size: 13px;
-  font-weight: 620;
-  transition: filter .16s ease, transform .16s ease;
-}
-
-.conversation-call-dialog__hangup svg {
-  width: 17px;
-  height: 17px;
-  fill: none;
-  stroke: currentColor;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  stroke-width: 1.9;
-  transform: rotate(134deg);
-}
-
-.conversation-call-dialog__hangup:hover { filter: brightness(1.08); }
-.conversation-call-dialog__hangup:active { transform: scale(.96); }
-.conversation-call-dialog__hangup:disabled { cursor: wait; filter: grayscale(.3); opacity: .66; }
-
-@keyframes conversation-call-wave {
-  from { transform: scaleY(.45); opacity: .58; }
-  to { transform: scaleY(1); opacity: 1; }
 }
 
 .content--conversation .conversation-menu {
@@ -1141,7 +965,6 @@
   overflow: hidden;
   background: #101216;
   color: #eff2f6;
-  animation: conversation-search-in .16s ease-out;
 }
 
 .content--conversation .conversation-search-panel__header {
@@ -1527,6 +1350,34 @@
   font-weight: 650;
 }
 
+.content--conversation .conversation-session-settings__contact-name {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.content--conversation .conversation-session-settings__contact-name strong {
+  margin-top: 0;
+}
+
+.content--conversation .conversation-session-settings__note-button {
+  min-height: 24px;
+  border: 1px solid rgba(255, 255, 255, .16);
+  border-radius: 6px;
+  background: #252a33;
+  color: #cbd2dd;
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  padding: 3px 8px;
+}
+
+.content--conversation .conversation-session-settings__note-button:hover {
+  border-color: rgba(91, 214, 154, .58);
+  color: #eff7f2;
+}
+
 .content--conversation .conversation-session-settings__close {
   display: grid;
   width: 28px;
@@ -1755,7 +1606,8 @@
   padding: 24px;
 }
 
-.content--conversation .conversation-contact-create-overlay {
+.content--conversation .conversation-contact-create-overlay,
+.content--conversation .conversation-contact-note-overlay {
   position: fixed;
   z-index: 50;
   inset: 0;
@@ -1892,7 +1744,8 @@
   text-align: right;
 }
 
-.content--conversation .conversation-contact-create-dialog {
+.content--conversation .conversation-contact-create-dialog,
+.content--conversation .conversation-contact-note-dialog {
   display: grid;
   width: min(410px, calc(100vw - 32px));
   gap: 16px;
@@ -1905,27 +1758,32 @@
 }
 
 .content--conversation .conversation-contact-create-dialog > header,
-.content--conversation .conversation-contact-create-dialog footer {
+.content--conversation .conversation-contact-create-dialog footer,
+.content--conversation .conversation-contact-note-dialog > header,
+.content--conversation .conversation-contact-note-dialog footer {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
 }
 
-.content--conversation .conversation-contact-create-dialog > header span {
+.content--conversation .conversation-contact-create-dialog > header span,
+.content--conversation .conversation-contact-note-dialog > header span {
   display: block;
   color: #8f9aab;
   font-size: 10px;
   letter-spacing: .7px;
 }
 
-.content--conversation .conversation-contact-create-dialog h2 {
+.content--conversation .conversation-contact-create-dialog h2,
+.content--conversation .conversation-contact-note-dialog h2 {
   margin: 4px 0 0;
   color: #f3f5f8;
   font-size: 17px;
 }
 
-.content--conversation .conversation-contact-create-dialog > header button {
+.content--conversation .conversation-contact-create-dialog > header button,
+.content--conversation .conversation-contact-note-dialog > header button {
   display: grid;
   width: 30px;
   height: 30px;
@@ -1939,23 +1797,27 @@
   font: 23px/1 sans-serif;
 }
 
-.content--conversation .conversation-contact-create-dialog > header button:hover {
+.content--conversation .conversation-contact-create-dialog > header button:hover,
+.content--conversation .conversation-contact-note-dialog > header button:hover {
   background: rgba(255, 255, 255, .15);
   color: #fff;
 }
 
-.content--conversation .conversation-contact-create-dialog label {
+.content--conversation .conversation-contact-create-dialog label,
+.content--conversation .conversation-contact-note-dialog label {
   display: grid;
   gap: 8px;
 }
 
-.content--conversation .conversation-contact-create-dialog label > span {
+.content--conversation .conversation-contact-create-dialog label > span,
+.content--conversation .conversation-contact-note-dialog label > span {
   color: #cbd2dd;
   font-size: 12px;
   font-weight: 650;
 }
 
-.content--conversation .conversation-contact-create-dialog input {
+.content--conversation .conversation-contact-create-dialog input,
+.content--conversation .conversation-contact-note-dialog textarea {
   width: 100%;
   box-sizing: border-box;
   border: 1px solid rgba(255, 255, 255, .16);
@@ -1967,7 +1829,14 @@
   padding: 11px 12px;
 }
 
-.content--conversation .conversation-contact-create-dialog input:focus {
+.content--conversation .conversation-contact-note-dialog textarea {
+  min-height: 128px;
+  line-height: 1.5;
+  resize: vertical;
+}
+
+.content--conversation .conversation-contact-create-dialog input:focus,
+.content--conversation .conversation-contact-note-dialog textarea:focus {
   border-color: rgba(91, 214, 154, .75);
 }
 
@@ -2616,6 +2485,25 @@
   color: #07c160;
 }
 
+:root[data-theme="light"] .content--conversation .conversation-contact-context-menu {
+  border-color: #dfe1e5;
+  background: #fff;
+  box-shadow: 0 16px 34px rgba(31, 39, 53, .16);
+}
+
+:root[data-theme="light"] .content--conversation .conversation-contact-context-menu button {
+  color: #2b313c;
+}
+
+:root[data-theme="light"] .content--conversation .conversation-contact-context-menu button:hover:not(:disabled) {
+  background: #edf8f2;
+  color: #14724d;
+}
+
+:root[data-theme="light"] .content--conversation .conversation-contact-context-menu button:disabled {
+  color: #9aa0a9;
+}
+
 :root[data-theme="light"] .content--conversation .conversation-contact__avatar,
 :root[data-theme="light"] .content--conversation .conversation-avatar {
   background: #e3e5e9;
@@ -2651,30 +2539,6 @@
   box-shadow: 0 0 0 1px rgba(39, 151, 99, .16), 0 0 18px rgba(44, 171, 111, .15);
   color: #147849;
 }
-
-:root[data-theme="light"] .conversation-call-overlay {
-  background: rgba(244, 247, 250, .55);
-}
-
-:root[data-theme="light"] .conversation-call-dialog {
-  border-color: rgba(30, 125, 85, .18);
-  background: radial-gradient(circle at 50% 16%, rgba(98, 219, 167, .23), transparent 39%), linear-gradient(160deg, #f9fffc, #edf3f2 74%);
-  box-shadow: 0 26px 90px rgba(42, 69, 66, .21), inset 0 1px #fff;
-  color: #26363a;
-}
-
-:root[data-theme="light"] .conversation-call-dialog > header,
-:root[data-theme="light"] .conversation-call-dialog__status,
-:root[data-theme="light"] .conversation-call-dialog__transcript span {
-  color: #6e7d82;
-}
-
-:root[data-theme="light"] .conversation-call-dialog__minimize { color: #5c6c70; }
-:root[data-theme="light"] .conversation-call-dialog__minimize:hover { background: rgba(21, 65, 54, .08); color: #173c34; }
-:root[data-theme="light"] .conversation-call-dialog__person h2,
-:root[data-theme="light"] .conversation-call-dialog__transcript strong { color: #213239; }
-:root[data-theme="light"] .conversation-call-dialog__avatar { background: #daeee6; color: #166d4e; }
-:root[data-theme="light"] .conversation-call-dialog__transcript { border-color: rgba(22, 78, 63, .11); background: rgba(255, 255, 255, .56); color: #425257; }
 
 :root[data-theme="light"] .content--conversation .conversation-menu {
   border-color: #e4e4e4;
@@ -2898,6 +2762,17 @@
   color: #25272d;
 }
 
+:root[data-theme="light"] .content--conversation .conversation-session-settings__note-button {
+  border-color: #dedfe2;
+  background: #fff;
+  color: #555963;
+}
+
+:root[data-theme="light"] .content--conversation .conversation-session-settings__note-button:hover {
+  border-color: #75d6a1;
+  color: #1d744a;
+}
+
 :root[data-theme="light"] .content--conversation .conversation-session-settings__note input {
   border-color: #dedfe2;
   background: #fafafa;
@@ -2924,7 +2799,8 @@
   background: rgba(231, 234, 241, .62);
 }
 
-:root[data-theme="light"] .content--conversation .conversation-contact-create-overlay {
+:root[data-theme="light"] .content--conversation .conversation-contact-create-overlay,
+:root[data-theme="light"] .content--conversation .conversation-contact-note-overlay {
   background: rgba(231, 234, 241, .62);
 }
 
@@ -2939,7 +2815,8 @@
   color: #32353c;
 }
 
-:root[data-theme="light"] .content--conversation .conversation-contact-create-dialog {
+:root[data-theme="light"] .content--conversation .conversation-contact-create-dialog,
+:root[data-theme="light"] .content--conversation .conversation-contact-note-dialog {
   border-color: #e0e2e6;
   background: #fff;
   box-shadow: 0 28px 72px rgba(0, 0, 0, .18);
@@ -2953,7 +2830,8 @@
   color: #32353c;
 }
 
-:root[data-theme="light"] .content--conversation .conversation-contact-create-dialog h2 {
+:root[data-theme="light"] .content--conversation .conversation-contact-create-dialog h2,
+:root[data-theme="light"] .content--conversation .conversation-contact-note-dialog h2 {
   color: #25272d;
 }
 
@@ -2962,6 +2840,7 @@
 }
 
 :root[data-theme="light"] .content--conversation .conversation-contact-create-dialog > header span,
+:root[data-theme="light"] .content--conversation .conversation-contact-note-dialog > header span,
 :root[data-theme="light"] .content--conversation .conversation-contact-create-dialog > p {
   color: #7a808a;
 }
@@ -2972,12 +2851,14 @@
   color: #7a808a;
 }
 
-:root[data-theme="light"] .content--conversation .conversation-contact-create-dialog > header button {
+:root[data-theme="light"] .content--conversation .conversation-contact-create-dialog > header button,
+:root[data-theme="light"] .content--conversation .conversation-contact-note-dialog > header button {
   background: #f0f1f2;
   color: #646a73;
 }
 
-:root[data-theme="light"] .content--conversation .conversation-contact-create-dialog > header button:hover {
+:root[data-theme="light"] .content--conversation .conversation-contact-create-dialog > header button:hover,
+:root[data-theme="light"] .content--conversation .conversation-contact-note-dialog > header button:hover {
   background: #e3e4e6;
   color: #25272d;
 }
@@ -3005,11 +2886,13 @@
   color: #4e535c;
 }
 
-:root[data-theme="light"] .content--conversation .conversation-contact-create-dialog label > span {
+:root[data-theme="light"] .content--conversation .conversation-contact-create-dialog label > span,
+:root[data-theme="light"] .content--conversation .conversation-contact-note-dialog label > span {
   color: #4e535c;
 }
 
-:root[data-theme="light"] .content--conversation .conversation-contact-create-dialog input {
+:root[data-theme="light"] .content--conversation .conversation-contact-create-dialog input,
+:root[data-theme="light"] .content--conversation .conversation-contact-note-dialog textarea {
   border-color: #dedfe2;
   background: #fafafa;
   color: #25272d;
@@ -3184,320 +3067,7 @@
   }
 }
 
-.relationship-settings-view { display: grid; max-width: 1120px; gap: 14px; }
-.relationship-settings-error, .relationship-settings-empty { display: flex; align-items: center; gap: 9px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); color: var(--muted); font-size: 11px; line-height: 1.55; padding: 12px 14px; }
-.relationship-settings-error { border-color: color-mix(in srgb, var(--danger) 45%, var(--line)); color: var(--danger); }
-.relationship-settings-empty { min-height: 120px; justify-content: center; text-align: center; }
-.relationship-settings-workspace { display: grid; grid-template-columns: minmax(196px, .28fr) minmax(0, 1fr); min-height: 560px; gap: 14px; }
-.relationship-contact-rail, .relationship-profile-workspace, .relationship-editor { min-width: 0; border: 1px solid var(--line); border-radius: 16px; background: var(--panel); }
-.relationship-contact-rail { display: grid; align-content: start; gap: 9px; padding: 12px; }
-.relationship-contact-rail__heading { display: flex; align-items: center; justify-content: space-between; color: var(--text); font-size: 12px; padding: 2px 3px 7px; }
-.relationship-contact-rail__heading span { color: var(--muted2); font-size: 10px; }
-.relationship-contact-rail__list { display: grid; gap: 5px; }
-.relationship-contact-item { display: grid; grid-template-columns: 34px minmax(0, 1fr); width: 100%; align-items: center; gap: 9px; border: 1px solid transparent; border-radius: 11px; background: transparent; color: var(--text); cursor: pointer; font: inherit; padding: 8px; text-align: left; transition: border-color .16s ease, background .16s ease, transform .16s ease; }
-.relationship-contact-item__avatar, .relationship-profile-header__avatar { display: grid; overflow: hidden; place-items: center; border-radius: 10px; background: color-mix(in srgb, var(--accent) 17%, var(--panel-soft)); color: var(--accent2); font-size: 14px; font-weight: 720; }
-.relationship-contact-item__avatar { width: 34px; height: 34px; }
-.relationship-contact-item__avatar img, .relationship-profile-header__avatar img { width: 100%; height: 100%; object-fit: cover; }
-.relationship-contact-item__copy { display: grid; min-width: 0; gap: 3px; }
-.relationship-contact-item__copy strong { overflow: hidden; font-size: 12px; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
-.relationship-contact-item__copy small { color: var(--muted2); font-size: 10px; }
-.relationship-contact-item.active { border-color: color-mix(in srgb, var(--accent) 52%, var(--line)); background: linear-gradient(100deg, color-mix(in srgb, var(--accent) 16%, transparent), color-mix(in srgb, var(--accent2) 8%, transparent)); }
-.relationship-contact-item.active .relationship-contact-item__copy small { color: var(--accent2); }
-.relationship-profile-workspace { display: grid; align-content: start; gap: 14px; padding: 14px; }
-.relationship-profile-workspace > .relationship-settings-empty { min-height: 100%; }
-.relationship-profile-header { display: flex; align-items: center; gap: 11px; min-width: 0; border-bottom: 1px solid var(--line); padding: 2px 2px 14px; }
-.relationship-profile-header__avatar { width: 42px; height: 42px; flex: 0 0 auto; border-radius: 13px; font-size: 17px; }
-.relationship-profile-header > div { display: grid; min-width: 0; gap: 3px; }
-.relationship-profile-header > div > span, .relationship-editor-heading span, .relationship-create-form span { color: var(--muted2); font-size: 10px; }
-.relationship-profile-header h2 { overflow: hidden; margin: 0; color: var(--text); font-size: 18px; font-weight: 690; text-overflow: ellipsis; white-space: nowrap; }
-.relationship-file-toolbar { position: relative; display: flex; min-width: 0; align-items: flex-start; justify-content: space-between; gap: 12px; }
-.relationship-file-tabs { display: flex; min-width: 0; flex: 1; flex-wrap: wrap; gap: 6px; }
-.relationship-file-tab { min-width: 0; border: 1px solid var(--line); border-radius: 999px; background: var(--panel-soft); color: var(--muted); cursor: pointer; font: 11px/1.2 inherit; padding: 7px 10px; transition: border-color .16s ease, background .16s ease, color .16s ease, transform .16s ease; }
-.relationship-file-tab.active { border-color: color-mix(in srgb, var(--accent) 50%, var(--line)); background: color-mix(in srgb, var(--accent) 15%, var(--panel-soft)); color: var(--text); }
-.relationship-editor { display: grid; min-height: 430px; grid-template-rows: auto minmax(290px, 1fr); gap: 10px; padding: 12px; }
-.relationship-editor-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-.relationship-editor-heading > div { display: grid; gap: 3px; }
-.relationship-editor-heading strong { color: var(--text); font-size: 14px; }
-.relationship-editor textarea, .relationship-create-form textarea { width: 100%; min-height: 0; resize: vertical; border: 1px solid var(--line); border-radius: 10px; background: var(--panel-soft); color: var(--text); font: 12px/1.6 Consolas, monospace; padding: 11px; }
-.relationship-create { position: relative; color: var(--muted); font-size: 11px; }
-.relationship-create summary { border: 1px solid var(--line); border-radius: 999px; background: var(--panel-soft); color: var(--text); cursor: pointer; font-size: 11px; list-style: none; padding: 7px 10px; }
-.relationship-create summary::-webkit-details-marker { display: none; }
-.relationship-create summary::before { color: var(--accent2); content: "+ "; }
-.relationship-create[open] summary { border-color: color-mix(in srgb, var(--accent) 48%, var(--line)); }
-.relationship-create-form { position: absolute; z-index: 2; top: calc(100% + 8px); right: 0; display: grid; width: min(340px, calc(100vw - 76px)); gap: 9px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); box-shadow: 0 14px 34px rgba(0, 0, 0, .24); padding: 12px; }
-.relationship-create-form label { display: grid; gap: 5px; }
-.relationship-create-form input { min-width: 0; }
-.relationship-create-form textarea { height: 96px; }
-.relationship-create-form button { justify-self: start; }
-.relationship-contact-item:hover, .relationship-file-tab:hover { border-color: color-mix(in srgb, var(--accent2) 45%, var(--line)); transform: translateY(-1px); }
-.relationship-contact-item:focus-visible, .relationship-file-tab:focus-visible, .relationship-create summary:focus-visible, .relationship-create-form input:focus-visible, .relationship-create-form textarea:focus-visible, .relationship-editor textarea:focus-visible { outline: 2px solid color-mix(in srgb, var(--accent2) 70%, transparent); outline-offset: 2px; }
-
-.relationship-overview {
-  display: grid;
-  grid-template-columns: minmax(0, 1.45fr) minmax(255px, .9fr);
-  grid-template-rows: repeat(3, minmax(154px, 1fr));
-  gap: 14px;
-  max-width: 1120px;
-}
-
-.relationship-card {
-  position: relative;
-  min-width: 0;
-  overflow: hidden;
-  border: 1px solid var(--line);
-  border-radius: 18px;
-  background: linear-gradient(145deg, color-mix(in srgb, var(--panel) 94%, #1b2132), var(--panel));
-  box-shadow: 0 14px 38px rgba(0, 0, 0, .14), inset 0 1px rgba(255, 255, 255, .025);
-  transition: transform .2s ease, border-color .2s ease, box-shadow .2s ease, background .2s ease;
-}
-
-.relationship-card--conversation {
-  display: flex;
-  min-height: 336px;
-  grid-row: span 3;
-  flex-direction: column;
-  justify-content: space-between;
-  border-color: rgba(139, 130, 255, .32);
-  background: radial-gradient(circle at 87% 13%, rgba(69, 212, 191, .18), transparent 25%), radial-gradient(circle at 80% 82%, rgba(139, 130, 255, .22), transparent 38%), linear-gradient(145deg, #1a2034, #121625 68%, #111522);
-  color: var(--text);
-  cursor: pointer;
-  padding: 24px 25px;
-  text-align: left;
-}
-
-.relationship-card--conversation::before,
-.relationship-card--conversation::after {
-  position: absolute;
-  pointer-events: none;
-  content: "";
-}
-
-.relationship-card--conversation::before {
-  right: -20px;
-  bottom: -82px;
-  width: 260px;
-  height: 260px;
-  border: 1px solid rgba(139, 130, 255, .2);
-  border-radius: 50%;
-  box-shadow: 0 0 0 34px rgba(139, 130, 255, .035), 0 0 0 68px rgba(69, 212, 191, .025);
-  opacity: .7;
-  transition: opacity .2s ease, transform .2s ease;
-}
-
-.relationship-card--conversation::after {
-  inset: 12px;
-  border: 1px solid rgba(255, 255, 255, .055);
-  border-radius: 13px;
-}
-
-.relationship-card__topline,
-.relationship-card__footer,
-.relationship-card__secondary-head,
-.relationship-card__state {
-  position: relative;
-  z-index: 1;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.relationship-card__eyebrow {
-  color: var(--accent2);
-  font-size: 9px;
-  font-weight: 720;
-  letter-spacing: 1.45px;
-}
-
-.relationship-card__headline {
-  position: relative;
-  z-index: 1;
-  display: grid;
-  gap: 8px;
-  max-width: 390px;
-  margin-top: auto;
-  margin-bottom: 17px;
-}
-
-.relationship-card__title {
-  font-size: 30px;
-  font-weight: 710;
-  letter-spacing: -.85px;
-}
-
-.relationship-card__subtitle {
-  color: #c4cadc;
-  font-size: 13px;
-  line-height: 1.55;
-}
-
-.relationship-card__detail {
-  position: relative;
-  z-index: 1;
-  max-width: 405px;
-  border-top: 1px solid rgba(255, 255, 255, .09);
-  color: var(--muted);
-  font-size: 11px;
-  line-height: 1.6;
-  padding-top: 13px;
-}
-
-.relationship-card__footer {
-  margin-top: 19px;
-  color: var(--muted2);
-  font-size: 10px;
-}
-
-.relationship-card__arrow {
-  display: grid;
-  width: 31px;
-  height: 31px;
-  flex: 0 0 auto;
-  place-items: center;
-  border: 1px solid rgba(69, 212, 191, .28);
-  border-radius: 10px;
-  background: rgba(69, 212, 191, .08);
-  color: var(--accent2);
-  font-size: 16px;
-  transition: transform .2s ease, background .2s ease;
-}
-
-.relationship-card--memory,
-.relationship-card--settings,
-.relationship-card--people {
-  display: flex;
-  min-height: 154px;
-  flex-direction: column;
-  justify-content: space-between;
-  padding: 18px 20px;
-}
-
-.relationship-card--memory {
-  background: radial-gradient(circle at 92% 8%, rgba(139, 130, 255, .14), transparent 30%), linear-gradient(145deg, color-mix(in srgb, var(--panel) 95%, #1d2039), var(--panel));
-  color: var(--text);
-  cursor: pointer;
-  font: inherit;
-  text-align: left;
-}
-
-.relationship-card--settings {
-  background: radial-gradient(circle at 92% 10%, rgba(69, 212, 191, .1), transparent 28%), linear-gradient(145deg, color-mix(in srgb, var(--panel) 96%, #172826), var(--panel));
-  color: var(--text);
-  cursor: pointer;
-  font: inherit;
-  text-align: left;
-}
-
-.relationship-card--people {
-  background: radial-gradient(circle at 92% 10%, rgba(69, 212, 191, .1), transparent 28%), linear-gradient(145deg, color-mix(in srgb, var(--panel) 96%, #172826), var(--panel));
-}
-
-.relationship-card__secondary-head {
-  align-items: flex-start;
-}
-
-.relationship-card h2 {
-  margin: 6px 0 0;
-  font-size: 16px;
-  font-weight: 680;
-  letter-spacing: -.25px;
-}
-
-.relationship-card > p {
-  position: relative;
-  z-index: 1;
-  margin: 10px 0 auto;
-  color: var(--muted);
-  font-size: 11px;
-  line-height: 1.55;
-}
-
-.relationship-card__state {
-  padding-top: 11px;
-  border-top: 1px solid var(--line);
-  color: var(--muted2);
-  font-size: 10px;
-}
-
-.relationship-card__state > span:last-child {
-  color: var(--accent);
-  font-size: 14px;
-  letter-spacing: 2px;
-}
-
-@media (hover: hover) {
-  .relationship-card:hover {
-    border-color: color-mix(in srgb, var(--accent) 38%, var(--line));
-    box-shadow: 0 19px 43px rgba(0, 0, 0, .2), inset 0 1px rgba(255, 255, 255, .06);
-    transform: translateY(-2px);
-  }
-
-  .relationship-card--conversation:hover {
-    border-color: rgba(111, 209, 198, .48);
-    box-shadow: 0 22px 50px rgba(0, 0, 0, .25), 0 0 0 1px rgba(139, 130, 255, .1), inset 0 1px rgba(255, 255, 255, .075);
-    transform: translateY(-3px);
-  }
-
-  .relationship-card--conversation:hover::before {
-    opacity: 1;
-    transform: translate(-5px, -5px);
-  }
-
-  .relationship-card--conversation:hover .relationship-card__arrow {
-    background: rgba(69, 212, 191, .15);
-    transform: translateX(2px);
-  }
-}
-
-.relationship-card--conversation:focus,
-.relationship-card--memory:focus,
-.relationship-card--settings:focus {
-  outline: 0;
-}
-
-.relationship-card--conversation:focus-visible,
-.relationship-card--memory:focus-visible,
-.relationship-card--settings:focus-visible {
-  border-color: var(--accent2);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent2) 24%, transparent), 0 22px 50px rgba(0, 0, 0, .25), inset 0 1px rgba(255, 255, 255, .075);
-}
-
-:root[data-theme="light"] .relationship-card--conversation {
-  background: radial-gradient(circle at 87% 13%, rgba(20, 157, 148, .17), transparent 26%), radial-gradient(circle at 80% 82%, rgba(98, 94, 214, .15), transparent 40%), linear-gradient(145deg, #f6f5ff, #eef2fb 68%, #edf8f7);
-}
-
-:root[data-theme="light"] .relationship-card__subtitle {
-  color: #4e5770;
-}
-
-:root[data-theme="light"] .relationship-card__detail {
-  border-top-color: rgba(27, 38, 59, .12);
-}
-
-:root[data-theme="light"] .relationship-card--conversation::after {
-  border-color: rgba(27, 38, 59, .075);
-}
-
-@media (max-width: 820px) {
-  .relationship-settings-workspace { grid-template-columns: 1fr; min-height: 0; }
-  .relationship-contact-rail__list { display: flex; max-width: 100%; overflow-x: auto; padding-bottom: 2px; }
-  .relationship-contact-item { min-width: 154px; }
-  .relationship-profile-workspace { min-height: 480px; }
-  .relationship-overview {
-    grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: none;
-  }
-
-  .relationship-card--conversation {
-    min-height: 285px;
-    grid-row: auto;
-  }
-}
-
 @media (prefers-reduced-motion: reduce) {
-  .relationship-card,
-  .relationship-card--conversation::before,
-  .relationship-card__arrow,
   .content--conversation .conversation-icon-button,
   .content--conversation .conversation-composer__tool,
   .content--conversation .conversation-send-button {
@@ -3508,8 +3078,7 @@
   .content--conversation .conversation-search,
   .content--conversation .conversation-settings,
   .content--conversation .conversation-session-settings,
-  .content--conversation .conversation-emoji-panel,
-  .conversation-call-dialog__wave i {
+  .content--conversation .conversation-emoji-panel {
     animation: none;
   }
 }

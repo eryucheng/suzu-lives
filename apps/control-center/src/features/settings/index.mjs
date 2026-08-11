@@ -10,9 +10,12 @@ function settingsTabs(activeTab) {
   return `<div class="admin-tabs" aria-label="设置分类">${tabs.map(([id, label]) => `<button class="admin-tab ${activeTab === id ? "active" : ""}" data-settings-tab="${id}">${label}</button>`).join("")}</div>`;
 }
 
+function agentWorkspaceRow(settings) {
+  return settingRow("Agent 工作目录", "新建联系人时，Suzu 会在这个目录下自动创建独立 Claude 项目。", settings.contactsRoot || "尚未选择", '<button class="secondary-button" data-select-contact-projects-root>选择目录</button>');
+}
+
 export function renderManagedAgentRuntimeSettings({ state }) {
   const settings = state.settings || {};
-  const memoryRecallEnabled = settings.memoryRecallEnabled !== false;
   const claudeToolPermissions = settings.claudeToolPermissions || {};
   const permissionControls = [["read", "允许读取文件"], ["webFetch", "允许网页抓取"], ["webSearch", "允许网页搜索"]]
     .map(([key, label]) => `<label class="settings-permission-check"><input type="checkbox" data-claude-tool-permission="${key}" ${claudeToolPermissions[key] !== false ? "checked" : ""}><span>${label}</span></label>`)
@@ -21,7 +24,11 @@ export function renderManagedAgentRuntimeSettings({ state }) {
   const runtimeFeatureControls = [["subagents", "允许子 Agent"], ["taskList", "允许任务清单"], ["backgroundTasks", "允许后台任务"], ["nativeCron", "允许 Claude 原生 Cron"], ["askUserQuestion", "允许选择题追问"]]
     .map(([key, label]) => `<label class="settings-permission-check"><input type="checkbox" data-claude-runtime-feature="${key}" ${claudeRuntimeFeatures[key] === true ? "checked" : ""}><span>${label}</span></label>`)
     .join("");
-  return `<section class="runtime-global-settings"><header class="runtime-global-settings__intro"><span class="reference-kicker">AGENT DEFAULTS</span><h2>工作目录与默认规则</h2><p>这些设置会作为所有联系人项目的默认运行规则。</p></header><section class="settings-list">${settingRow("Agent 工作目录", "新建联系人时，Suzu 会在这个目录下自动创建独立 Claude 项目。", settings.contactsRoot || "尚未选择", '<button class="secondary-button" data-select-contact-projects-root>选择目录</button>')}${settingRow("Claude 工具权限", "所有联系人项目的默认允许项；修改后会同步写入每个联系人的 Claude 设置。", `<span class="settings-permission-options">${permissionControls}</span>`, "", true)}${settingRow("Claude 内建能力", "默认均关闭；只影响从 Suzu 发起的 Claude 会话，不会改变免确认权限或终端里直接启动的 Claude。", `<span class="settings-permission-options">${runtimeFeatureControls}</span>`, "", true)}${settingRow("记忆召回", "控制 Claude 的 UserPromptSubmit Hook 是否向 Agent 注入长期记忆。关闭后不会删除记忆库。", `<button class="secondary-button" data-memory-recall-toggle aria-pressed="${memoryRecallEnabled}">${memoryRecallEnabled ? "已开启（点击关闭）" : "已关闭（点击开启）"}</button>`, "", true)}</section></section>`;
+  const baseCapabilityStates = [["读取文件", claudeToolPermissions.read !== false], ["查找文件", true], ["搜索文件内容", true], ["修改文件", true], ["新建或覆盖文件", true], ["执行终端命令", true], ["网页抓取", claudeToolPermissions.webFetch !== false], ["网页搜索", claudeToolPermissions.webSearch !== false]]
+    .map(([label, enabled]) => `<span class="settings-permission-check"><span>${label}</span><em>${enabled ? "已开启" : "已关闭"}</em></span>`)
+    .join("");
+  const runtimeCapabilities = `<details><summary>点击展开查看</summary><div class="settings-permission-options">${baseCapabilityStates}</div><div class="settings-permission-options">${runtimeFeatureControls}</div></details>`;
+  return `<section class="runtime-global-settings"><header class="runtime-global-settings__intro"><span class="reference-kicker">AGENT DEFAULTS</span><h2>默认运行规则</h2><p>这些设置会作为所有联系人项目的默认运行规则。</p></header><section class="settings-list">${settingRow("Claude 工具权限", "所有联系人项目的默认允许项；修改后会同步写入每个联系人的 Claude 设置。", `<span class="settings-permission-options">${permissionControls}</span>`, "", true)}${settingRow("Claude 内建能力", "点击查看当前 Suzu 对话可用的基础工具，以及按需开启的扩展能力。", runtimeCapabilities, "", true)}</section></section>`;
 }
 
 function renderGeneral({ state }) {
@@ -41,7 +48,7 @@ function renderData({ state }) {
   const migrationFailure = failedMigration
     ? `<section class="settings-transfer settings-transfer--warning"><div><span class="reference-kicker">迁移未完成</span><h2>数据仍保留在原位置</h2><p>${escapeHtml(failedMigration.message || "请重新选择一个新的保存位置。")}</p></div></section>`
     : "";
-  return `<section class="settings-list">${settingRow("数据存储位置", "设置、API 连接、Agent 数据、生成内容和本地缓存都会保存在这里。", dataRoot, `<span class="storage-actions"><button class="secondary-button" data-show-path="${escapeHtml(dataRoot)}">打开位置</button><button class="primary-button" data-change-data-location>更换位置</button></span>`)}</section>${previousCopy ? `<section class="settings-list settings-list--followup">${previousCopy}</section>` : ""}${migrationFailure}`;
+  return `<section class="settings-list">${settingRow("数据存储位置", "设置、API 连接、Agent 数据、生成内容和本地缓存都会保存在这里。", dataRoot, `<span class="storage-actions"><button class="secondary-button" data-show-path="${escapeHtml(dataRoot)}">打开位置</button><button class="primary-button" data-change-data-location>更换位置</button></span>`)}${agentWorkspaceRow(settings)}</section>${previousCopy ? `<section class="settings-list settings-list--followup">${previousCopy}</section>` : ""}${migrationFailure}`;
 }
 
 export function renderSettings(context) {
@@ -72,18 +79,6 @@ export function bindManagedAgentRuntimeSettingsEvents(context) {
     }
   });
   document.querySelector("[data-open-onboarding]")?.addEventListener("click", () => context.openOnboarding?.());
-  document.querySelector("[data-memory-recall-toggle]")?.addEventListener("click", async (event) => {
-    const button = event.currentTarget;
-    button.disabled = true;
-    try {
-      const enabled = context.state.settings?.memoryRecallEnabled !== false;
-      context.state.settings = await context.api.settings.update({ memoryRecallEnabled: !enabled });
-      context.render();
-    } catch (error) {
-      context.setNotice(`无法更新记忆召回开关：${error?.message || error}`);
-      button.disabled = false;
-    }
-  });
   document.querySelectorAll("[data-claude-tool-permission]").forEach((input) => input.addEventListener("change", async (event) => {
     const control = event.currentTarget;
     const key = control.dataset.claudeToolPermission;

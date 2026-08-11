@@ -46,7 +46,7 @@ function sessionDirectory(dataRoot, session) {
       sessionId: clean(session?.id),
     });
   } catch {
-    throw new ConversationSessionSettingsError("Claude 会话或项目目录无效。 ");
+    throw new ConversationSessionSettingsError("联系人数据目录无效。 ");
   }
 }
 
@@ -63,18 +63,18 @@ export function createConversationSessionSettingsService({
   now = () => new Date(),
   reader,
 } = {}) {
-  if (!reader?.resolveSession) throw new ConversationSessionSettingsError("会话设置需要原生 Claude 会话读取服务。 ");
+  if (!reader?.resolveContactSession) throw new ConversationSessionSettingsError("联系人设置需要联系人读取服务。 ");
   if (!clean(dataRoot) || !path.isAbsolute(clean(dataRoot))) throw new ConversationSessionSettingsError("无法定位 Suzu Lives 软件数据目录。 ");
 
-  const snapshot = async ({ sessionId } = {}) => {
-    const session = await reader.resolveSession(sessionId);
+  const snapshot = async ({ contactId } = {}) => {
+    const session = await reader.resolveContactSession(contactId);
     const directory = sessionDirectory(dataRoot, session);
     const entry = await readJson(fsOps, path.join(directory, "session.json"));
-    return { sessionId: session.id, note: entry.note, updatedAt: entry.updatedAt };
+    return { contactId: clean(session.contactId ?? contactId), note: entry.note, updatedAt: entry.updatedAt };
   };
 
-  const save = async ({ sessionId, note } = {}) => {
-    const session = await reader.resolveSession(sessionId);
+  const save = async ({ contactId, note } = {}) => {
+    const session = await reader.resolveContactSession(contactId);
     const directory = sessionDirectory(dataRoot, session);
     const entry = {
       version: 1,
@@ -82,14 +82,14 @@ export function createConversationSessionSettingsService({
       updatedAt: timestamp(now),
     };
     await writeJsonAtomic(fsOps, path.join(directory, "session.json"), entry);
-    return { sessionId: session.id, note: entry.note, updatedAt: entry.updatedAt };
+    return { contactId: clean(session.contactId ?? contactId), note: entry.note, updatedAt: entry.updatedAt };
   };
 
-  const mediaDirectory = async ({ sessionId } = {}) => {
-    const session = await reader.resolveSession(sessionId);
+  const mediaDirectory = async ({ contactId } = {}) => {
+    const session = await reader.resolveContactSession(contactId);
     const directory = path.join(sessionDirectory(dataRoot, session), "attachments");
     await fsOps.mkdir(directory, { recursive: true });
-    return { sessionId: session.id, directory };
+    return { contactId: clean(session.contactId ?? contactId), directory };
   };
 
   return { mediaDirectory, save, snapshot };

@@ -10,28 +10,33 @@ import { createContactProjectsService } from "../services/contact-projects.mjs";
 
 const DEFAULT_SETTINGS = Object.freeze({
   contactsRoot: "",
+  preferredContactId: "",
   projectRoot: "",
-  conversationSessionId: "",
   onboardingCompleted: false,
   onboardingMultimodalCompleted: false,
   memoryRecallEnabled: true,
   claudeToolPermissions: { read: true, webFetch: true, webSearch: true },
   claudeRuntimeFeatures: {
+    bash: true,
+    edit: true,
+    glob: true,
+    grep: true,
     subagents: false,
     taskList: false,
     backgroundTasks: false,
     nativeCron: false,
     askUserQuestion: false,
+    write: true,
   },
   theme: "dark",
   agentId: "",
   priceRevisions: [],
   identity: {
-    owner: { displayName: "我", avatarDataUrl: "" },
+    owner: { displayName: "我", avatarDataUrl: "", gender: "", signature: "" },
     defaultAgent: { displayName: "Suzu", avatarDataUrl: "" },
     agents: {},
   },
-  conversationPreferences: { attachments: true, tools: true, thinking: true, system: true, tokens: true, timeDisplay: "bubble" },
+  conversationPreferences: { attachments: true, tools: true, thinking: true, system: true, tokens: true, timeDisplay: "center" },
 });
 
 const MAX_AVATAR_DATA_URL_LENGTH = 2_800_000;
@@ -48,6 +53,17 @@ function normalizeProfile(value, fallbackName) {
   };
 }
 
+const OWNER_GENDERS = new Set(["", "female", "male"]);
+
+function normalizeOwnerProfile(value) {
+  const gender = String(value?.gender || "");
+  return {
+    ...normalizeProfile(value, "我"),
+    gender: OWNER_GENDERS.has(gender) ? gender : "",
+    signature: String(value?.signature || "").trim().slice(0, 120),
+  };
+}
+
 function normalizeIdentity(value = {}) {
   const agents = {};
   if (value.agents && typeof value.agents === "object" && !Array.isArray(value.agents)) {
@@ -56,7 +72,7 @@ function normalizeIdentity(value = {}) {
     }
   }
   return {
-    owner: normalizeProfile(value.owner, "我"),
+    owner: normalizeOwnerProfile(value.owner),
     defaultAgent: normalizeProfile(value.defaultAgent, "Suzu"),
     agents,
   };
@@ -69,7 +85,7 @@ export function normalizeConversationPreferences(value = {}) {
     thinking: value.thinking !== false,
     system: value.system !== false,
     tokens: value.tokens !== false,
-    timeDisplay: value.timeDisplay === "wechat" ? "wechat" : "bubble",
+    timeDisplay: value.timeDisplay === "bubble" ? "bubble" : "center",
   };
 }
 
@@ -94,14 +110,47 @@ export function normalizeClaudeToolPermissions(value = {}) {
   };
 }
 
+function normalizeClaudeToolRuleList(value) {
+  const source = Array.isArray(value)
+    ? value
+    : typeof value === "string"
+      ? value.split(/\r?\n|,/u)
+      : [];
+  const rules = [];
+  const seen = new Set();
+  for (const item of source) {
+    if (typeof item !== "string") continue;
+    const rule = item.trim();
+    if (!rule || rule.length > 500 || seen.has(rule)) continue;
+    seen.add(rule);
+    rules.push(rule);
+    if (rules.length >= 120) break;
+  }
+  return rules;
+}
+
+export function normalizeClaudeProjectDefaults(value = {}) {
+  const source = value && typeof value === "object" && !Array.isArray(value) ? value : {};
+  return {
+    allowedTools: normalizeClaudeToolRuleList(source.allowedTools),
+    deniedTools: normalizeClaudeToolRuleList(source.deniedTools),
+    skipWebFetchPreflight: source.skipWebFetchPreflight !== false,
+  };
+}
+
 export function normalizeClaudeRuntimeFeatures(value = {}) {
   const source = value && typeof value === "object" && !Array.isArray(value) ? value : {};
   return {
+    bash: source.bash !== false,
+    edit: source.edit !== false,
+    glob: source.glob !== false,
+    grep: source.grep !== false,
     subagents: source.subagents === true,
     taskList: source.taskList === true,
     backgroundTasks: source.backgroundTasks === true,
     nativeCron: source.nativeCron === true,
     askUserQuestion: source.askUserQuestion === true,
+    write: source.write !== false,
   };
 }
 
@@ -113,9 +162,9 @@ function readJson(filePath, fallback = {}) {
   }
 }
 
-function normalizeConversationSessionId(value) {
-  const id = String(value || "").trim();
-  return /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u.test(id) ? id : "";
+function normalizePreferredContactId(value) {
+  const id = String(value || "").trim().toLowerCase();
+  return /^contact-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/u.test(id) ? id : "";
 }
 
 function normalizeSettings(value = {}) {
@@ -123,14 +172,16 @@ function normalizeSettings(value = {}) {
   // Until a contacts root is selected, no project may remain active.
   const hasContactsRoot = Boolean(contactsRoot);
   const projectRoot = hasContactsRoot ? String(value.projectRoot || "").trim() : "";
+  const hasClaudeProjectDefaults = Object.hasOwn(value, "claudeProjectDefaults");
   return {
     contactsRoot,
+    preferredContactId: hasContactsRoot ? normalizePreferredContactId(value.preferredContactId) : "",
     projectRoot,
-    conversationSessionId: hasContactsRoot ? normalizeConversationSessionId(value.conversationSessionId) : "",
     onboardingCompleted: normalizeOnboardingCompleted(value.onboardingCompleted),
     onboardingMultimodalCompleted: normalizeOnboardingMultimodalCompleted(value.onboardingMultimodalCompleted),
     memoryRecallEnabled: normalizeMemoryRecallEnabled(value.memoryRecallEnabled),
     claudeToolPermissions: normalizeClaudeToolPermissions(value.claudeToolPermissions),
+    ...(hasClaudeProjectDefaults ? { claudeProjectDefaults: normalizeClaudeProjectDefaults(value.claudeProjectDefaults) } : {}),
     claudeRuntimeFeatures: normalizeClaudeRuntimeFeatures(value.claudeRuntimeFeatures),
     theme: value.theme === "light" ? "light" : "dark",
     agentId: stableAgentId(projectRoot),
@@ -145,11 +196,11 @@ function safePatch(value) {
   const patch = {};
   if (Object.hasOwn(value, "contactsRoot")) patch.contactsRoot = String(value.contactsRoot || "");
   if (Object.hasOwn(value, "projectRoot")) patch.projectRoot = String(value.projectRoot || "");
-  if (Object.hasOwn(value, "conversationSessionId")) patch.conversationSessionId = normalizeConversationSessionId(value.conversationSessionId);
   if (Object.hasOwn(value, "onboardingCompleted")) patch.onboardingCompleted = normalizeOnboardingCompleted(value.onboardingCompleted);
   if (Object.hasOwn(value, "onboardingMultimodalCompleted")) patch.onboardingMultimodalCompleted = normalizeOnboardingMultimodalCompleted(value.onboardingMultimodalCompleted);
   if (Object.hasOwn(value, "memoryRecallEnabled")) patch.memoryRecallEnabled = normalizeMemoryRecallEnabled(value.memoryRecallEnabled);
   if (Object.hasOwn(value, "claudeToolPermissions")) patch.claudeToolPermissions = normalizeClaudeToolPermissions(value.claudeToolPermissions);
+  if (Object.hasOwn(value, "claudeProjectDefaults")) patch.claudeProjectDefaults = normalizeClaudeProjectDefaults(value.claudeProjectDefaults);
   if (Object.hasOwn(value, "claudeRuntimeFeatures")) patch.claudeRuntimeFeatures = normalizeClaudeRuntimeFeatures(value.claudeRuntimeFeatures);
   if (Object.hasOwn(value, "theme")) patch.theme = value.theme === "light" ? "light" : "dark";
   if (Object.hasOwn(value, "priceRevisions")) patch.priceRevisions = sanitizePriceRevisions(value.priceRevisions);
@@ -210,7 +261,9 @@ export function registerSettingsIpc({ app, contactProjectsService = null, dataSt
     const current = settingsService.load();
     const patch = settingsService.safePatch(value);
     const settings = settingsService.save({ ...current, ...patch });
-    if (Object.hasOwn(patch, "claudeToolPermissions")) await contacts.syncClaudeProjectSettings();
+    if (Object.hasOwn(patch, "claudeToolPermissions") || Object.hasOwn(patch, "claudeProjectDefaults")) {
+      await contacts.syncClaudeProjectSettings({ previousProjectDefaults: current.claudeProjectDefaults });
+    }
     return settingsService.response(settings);
   });
   ipcMain.handle("settings:change-data-location", async () => {

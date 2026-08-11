@@ -1,5 +1,5 @@
 export function registerWechatIpc({ app, ipcMain, wechatService }) {
-  if (!wechatService?.begin || !wechatService?.disconnect || !wechatService?.saveSettings || !wechatService?.setSessionEnabled || !wechatService?.snapshot) {
+  if (!wechatService?.begin || !wechatService?.disconnect || !wechatService?.saveSettings || !wechatService?.setContactEnabled || !wechatService?.snapshot) {
     throw new Error("微信连接服务不可用。");
   }
   let sender = null;
@@ -22,9 +22,9 @@ export function registerWechatIpc({ app, ipcMain, wechatService }) {
     rememberSender(event);
     return wechatService.saveSettings(value);
   });
-  ipcMain.handle("wechat:set-session-enabled", async (event, value) => {
+  ipcMain.handle("wechat:set-contact-enabled", async (event, value) => {
     rememberSender(event);
-    return wechatService.setSessionEnabled(value);
+    return wechatService.setContactEnabled(value);
   });
   ipcMain.handle("wechat:disconnect", async (event, value) => {
     rememberSender(event);

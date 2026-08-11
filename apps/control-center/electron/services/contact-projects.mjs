@@ -8,6 +8,7 @@ const CONTACT_FILE = "CLAUDE.md";
 const CONTACT_METADATA_DIRECTORY = ".suzu-lives";
 const CONTACT_METADATA_FILE = "contact.json";
 const CONTACT_ID_PATTERN = /^contact-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/iu;
+const SESSION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
 const MAX_CONTACTS = 160;
 const MAX_CONTACT_NAME_LENGTH = 80;
 
@@ -47,6 +48,11 @@ function normalizeContactId(value) {
   return id;
 }
 
+function normalizeSessionId(value) {
+  const id = clean(value);
+  return SESSION_ID_PATTERN.test(id) ? id : "";
+}
+
 async function ordinaryDirectory(fsOps, directory, message) {
   const target = path.resolve(clean(directory));
   let stat;
@@ -78,7 +84,13 @@ async function contactMetadata(fsOps, projectRoot) {
   catch { return null; }
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
   try {
-    return { id: normalizeContactId(raw.id), name: normalizeContactName(raw.name) };
+    const createdAt = clean(raw.createdAt);
+    return {
+      id: normalizeContactId(raw.id),
+      name: normalizeContactName(raw.name),
+      createdAt: Number.isFinite(Date.parse(createdAt)) ? createdAt : "",
+      sessionId: normalizeSessionId(raw.sessionId),
+    };
   } catch {
     return null;
   }
@@ -103,8 +115,21 @@ async function contactAt(fsOps, root, value) {
     name: metadata.name,
     agentId: stableAgentId(realProjectRoot),
     projectRoot: realProjectRoot,
+    createdAt: metadata.createdAt,
+    sessionId: metadata.sessionId,
     updatedAt: stat.mtime instanceof Date ? stat.mtime.toISOString() : "",
   };
+}
+
+function firstCreatedContact(contacts) {
+  const timestamp = (contact) => {
+    const value = Date.parse(clean(contact?.createdAt));
+    if (Number.isFinite(value)) return value;
+    const fallback = Date.parse(clean(contact?.updatedAt));
+    return Number.isFinite(fallback) ? fallback : Number.POSITIVE_INFINITY;
+  };
+  return [...contacts].sort((left, right) => timestamp(left) - timestamp(right)
+    || clean(left?.id).localeCompare(clean(right?.id)))[0] || null;
 }
 
 async function writeTextAtomic(fsOps, target, value) {
@@ -119,6 +144,16 @@ function initialClaudeFile(name) {
   return `# ${name}\n`;
 }
 
+function contactMetadataText({ id, name, createdAt, sessionId = "" } = {}) {
+  return `${JSON.stringify({
+    version: 1,
+    id,
+    name,
+    createdAt,
+    ...(normalizeSessionId(sessionId) ? { sessionId: normalizeSessionId(sessionId) } : {}),
+  }, null, 2)}\n`;
+}
+
 /**
  * Owns the contact catalogue below a user-selected root. A contact's visible
  * remark is project metadata; its Claude project folder is a generated ID so
@@ -129,6 +164,7 @@ export function createContactProjectsService({
   ensureClaudeProjectSettings = null,
   fsOps = fs,
   createContactId = () => `contact-${randomUUID()}`,
+  createSessionId = randomUUID,
 } = {}) {
   if (!settingsService?.load || !settingsService?.save) {
     throw new ContactProjectsError("联系人项目服务需要软件设置服务。 ");
@@ -153,16 +189,16 @@ export function createContactProjectsService({
     return contacts.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt) || left.name.localeCompare(right.name, "zh-CN"));
   };
 
-  const ensureProjectSettings = async (projectRoot) => {
+  const ensureProjectSettings = async (projectRoot, options = {}) => {
     if (typeof ensureClaudeProjectSettings !== "function") return { status: "not-configured" };
     try {
-      return await ensureClaudeProjectSettings({ projectRoot });
+      return await ensureClaudeProjectSettings({ projectRoot, ...options });
     } catch (error) {
       throw new ContactProjectsError(`无法写入联系人 Claude 项目设置：${clean(error?.message) || "未知错误"}`);
     }
   };
 
-  const syncClaudeProjectSettings = async () => {
+  const syncClaudeProjectSettings = async (options = {}) => {
     const configured = clean(settingsService.load()?.contactsRoot);
     if (!configured) return { status: "not-configured", contacts: [], errors: [] };
     const root = await contactsRoot();
@@ -172,7 +208,7 @@ export function createContactProjectsService({
     const errors = [];
     for (const contact of contacts) {
       try {
-        results.push({ id: contact.id, projectRoot: contact.projectRoot, ...(await ensureProjectSettings(contact.projectRoot)) });
+        results.push({ id: contact.id, projectRoot: contact.projectRoot, ...(await ensureProjectSettings(contact.projectRoot, options)) });
       } catch (error) {
         errors.push({ id: contact.id, projectRoot: contact.projectRoot, message: clean(error?.message) || "未知错误" });
       }
@@ -183,7 +219,7 @@ export function createContactProjectsService({
   const snapshot = async () => {
     const settings = settingsService.load();
     if (!clean(settings.contactsRoot)) {
-      return { status: "needs-root", contactsRoot: "", contacts: [], activeContact: null };
+      return { status: "needs-root", contactsRoot: "", contacts: [], activeContact: null, preferredContact: null };
     }
     const root = await contactsRoot();
     const contacts = await list(root);
@@ -191,13 +227,15 @@ export function createContactProjectsService({
     const activeContact = selectedRoot
       ? contacts.find((contact) => samePath(contact.projectRoot, selectedRoot)) || null
       : null;
-    return { status: "ready", contactsRoot: root, contacts, activeContact };
+    const preferredContact = contacts.find((contact) => contact.id === clean(settings.preferredContactId))
+      || firstCreatedContact(contacts);
+    return { status: "ready", contactsRoot: root, contacts, activeContact, preferredContact };
   };
 
   const selectRoot = async (directory) => {
     const root = await ordinaryDirectory(fsOps, directory, "选择的联系人项目目录不可用。 ");
     const settings = settingsService.load();
-    settingsService.save({ ...settings, contactsRoot: root, projectRoot: "", conversationSessionId: "" });
+    settingsService.save({ ...settings, contactsRoot: root, preferredContactId: "", projectRoot: "" });
     await syncClaudeProjectSettings();
     return snapshot();
   };
@@ -208,13 +246,31 @@ export function createContactProjectsService({
     if (!contact) throw new ContactProjectsError("所选联系人不存在或不是由 Suzu 创建的 Claude 项目。 ");
     await ensureProjectSettings(contact.projectRoot);
     const settings = settingsService.load();
-    settingsService.save({ ...settings, projectRoot: contact.projectRoot, conversationSessionId: "" });
+    settingsService.save({ ...settings, projectRoot: contact.projectRoot });
+    return snapshot();
+  };
+
+  const setPreferred = async ({ id } = {}) => {
+    const root = await contactsRoot();
+    const contact = await contactAt(fsOps, root, id);
+    if (!contact) throw new ContactProjectsError("所选联系人不存在或不是由 Suzu 创建的 Claude 项目。 ");
+    const settings = settingsService.load();
+    settingsService.save({ ...settings, preferredContactId: contact.id });
     return snapshot();
   };
 
   const create = async ({ name } = {}) => {
     const root = await contactsRoot();
     const normalizedName = normalizeContactName(name);
+    let sessionId = "";
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const candidate = normalizeSessionId(createSessionId());
+      if (candidate) {
+        sessionId = candidate;
+        break;
+      }
+    }
+    if (!sessionId) throw new ContactProjectsError("无法生成联系人 Claude 会话标识。 ");
     let id = "";
     let projectRoot = "";
     for (let attempt = 0; attempt < 5; attempt += 1) {
@@ -237,20 +293,24 @@ export function createContactProjectsService({
       throw new ContactProjectsError(`无法初始化 CLAUDE.md：${clean(error?.message) || "未知错误"}`);
     }
     try {
-      await writeTextAtomic(fsOps, path.join(projectRoot, CONTACT_METADATA_DIRECTORY, CONTACT_METADATA_FILE), `${JSON.stringify({
-        version: 1,
+      await writeTextAtomic(fsOps, path.join(projectRoot, CONTACT_METADATA_DIRECTORY, CONTACT_METADATA_FILE), contactMetadataText({
         id,
         name: normalizedName,
         createdAt: new Date().toISOString(),
-      }, null, 2)}\n`);
+        sessionId,
+      }));
     } catch (error) {
       throw new ContactProjectsError(`无法保存联系人备注：${clean(error?.message) || "未知错误"}`);
     }
     await ensureProjectSettings(projectRoot);
     const settings = settingsService.load();
-    settingsService.save({ ...settings, projectRoot, conversationSessionId: "" });
+    settingsService.save({
+      ...settings,
+      preferredContactId: clean(settings.preferredContactId) || id,
+      projectRoot,
+    });
     return snapshot();
   };
 
-  return { create, select, selectRoot, snapshot, syncClaudeProjectSettings };
+  return { create, select, selectRoot, setPreferred, snapshot, syncClaudeProjectSettings };
 }

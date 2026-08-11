@@ -74,13 +74,13 @@ test("WeChat is a software-level action and never becomes a Claude Skill", () =>
       capabilityCategory: "act",
       capabilitySelectedId: "wechat-connection",
       capabilitySnapshot: { capabilities: [] },
-      wechatSnapshot: { enabled: true, linkedSessions: 2, delivery: { agent: true, tools: true } },
+      wechatSnapshot: { enabled: true, linkedContacts: 2, delivery: { agent: true, tools: true } },
     },
   });
   assert.match(view, /连接微信/u);
   assert.match(view, /data-toggle-wechat-connection checked/u);
   assert.match(view, /data-wechat-delivery="agent" checked/u);
-  assert.match(view, /联系人项目和 Claude 会话/u);
+  assert.match(view, /每个二维码只路由到该联系人的固定 Claude 对话/u);
   assert.doesNotMatch(view, /data-toggle-capability="wechat-connection"/u);
 });
 
@@ -117,12 +117,16 @@ test("the capabilities page exposes a separate external-capability entry and saf
 });
 
 test("abilities live in the primary sidebar instead of management tabs", async () => {
-  const sidebar = await fs.readFile(new URL("../src/index.html", import.meta.url), "utf8");
+  const sidebar = await fs.readFile(new URL("../src/react/app-shell.jsx", import.meta.url), "utf8");
+  const router = await fs.readFile(new URL("../src/react/app-router.jsx", import.meta.url), "utf8");
   const app = await fs.readFile(new URL("../src/app.mjs", import.meta.url), "utf8");
   const management = renderAdmin({ state: { adminTab: "overview" } });
 
-  assert.match(sidebar, /data-view="capabilities"[^>]*>[\s\S]*?<span>能力<\/span>/u);
-  assert.match(app, /state\.view === "capabilities"[\s\S]*?renderCapabilities\(context\)/u);
+  assert.match(sidebar, /const PRIMARY_NAVIGATION = \[[\s\S]*?view: "capabilities", label: "能力"[\s\S]*?\];/u);
+  assert.match(sidebar, /<SideNavItem/u);
+  assert.match(app, /state\.view === "capabilities"/u);
+  assert.match(router, /<CapabilitiesPage/u);
+  assert.doesNotMatch(app, /renderCapabilities\(context\)/u);
   assert.match(app, /function setCapabilityPage\(page, category = "", abilityId = ""\)/u);
   assert.doesNotMatch(management, /data-admin-tab="capabilities"/u);
 });
@@ -200,10 +204,10 @@ test("capability registration writes only after the service receives an explicit
   assert.equal(result.registration.abilityId, "image-vision");
   assert.equal((claude.match(/^@abilities\.md$/gmu) || []).length, 1);
   assert.match(abilities, /suzu-lives:ability:image-vision/u);
-  assert.match(skill, /suzu-lives image-vision/u);
+  assert.match(skill, /suzu-lives capability image-vision analyze/u);
 });
 
-test("the first ability visit safely enables the catalog once and preserves later switches", async () => {
+test("the first ability visit enables safe defaults while leaving the time Hook manual", async () => {
   const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "suzu-default-capabilities-project-"));
   const dataRoot = await fs.mkdtemp(path.join(os.tmpdir(), "suzu-default-capabilities-data-"));
   const agentId = stableAgentId(projectRoot);
@@ -213,13 +217,95 @@ test("the first ability visit safely enables the catalog once and preserves late
   const initialized = await service.initializeDefaults();
   assert.equal(initialized.initialized, true);
   assert.equal(initialized.errors.length, 0);
-  assert.ok(initialized.snapshot.capabilities.every((item) => item.enabled === true));
+  assert.ok(initialized.snapshot.capabilities.filter((item) => item.id !== "time-awareness").every((item) => item.enabled === true));
+  assert.equal(initialized.snapshot.capabilities.find((item) => item.id === "time-awareness")?.enabled, false);
   assert.equal(JSON.parse(await fs.readFile(path.join(dataRoot, "agents", agentId, "capabilities", "defaults-v1.json"), "utf8")).initialized, true);
 
   await service.setActive({ id: "phone-camera", enabled: false });
   const again = await service.initializeDefaults();
   assert.equal(again.initialized, false);
   assert.equal(again.snapshot.capabilities.find((item) => item.id === "phone-camera").enabled, false);
+});
+
+test("time awareness saves one interval and installs Hooks for selected contacts", async () => {
+  const primaryProject = await fs.mkdtemp(path.join(os.tmpdir(), "suzu-time-primary-project-"));
+  const secondaryProject = await fs.mkdtemp(path.join(os.tmpdir(), "suzu-time-secondary-project-"));
+  const dataRoot = await fs.mkdtemp(path.join(os.tmpdir(), "suzu-time-data-"));
+  const settings = { projectRoot: primaryProject, dataRoot, agentId: stableAgentId(primaryProject) };
+  const hooks = {
+    installed: new Set(),
+    inspectTimeAwareness: async ({ projectRoot } = {}) => ({ installed: hooks.installed.has(path.resolve(projectRoot)) }),
+    installTimeAwareness: async ({ projectRoot } = {}) => { hooks.installed.add(path.resolve(projectRoot)); },
+    uninstallTimeAwareness: async ({ projectRoot } = {}) => { hooks.installed.delete(path.resolve(projectRoot)); },
+  };
+  const service = createCapabilitiesService({
+    settingsService: { load: () => settings, response: () => ({ dataRoot }) },
+    existsCommand: () => true,
+    projectHooksService: hooks,
+    contactProjectsService: {
+      snapshot: async () => ({
+        status: "ready",
+        contacts: [
+          { id: "contact-primary", name: "Suzu", projectRoot: primaryProject },
+          { id: "contact-secondary", name: "工作", projectRoot: secondaryProject },
+        ],
+      }),
+    },
+  });
+
+  await service.saveSettings({ id: "time-awareness", value: { intervalMinutes: 25 } });
+  await service.saveSettings({ id: "time-awareness", value: { contactId: "contact-primary", contactEnabled: true } });
+  await service.saveSettings({ id: "time-awareness", value: { contactId: "contact-secondary", contactEnabled: true } });
+  const configPath = path.join(dataRoot, "capabilities", "time-awareness", "config.json");
+  assert.deepEqual(JSON.parse(await fs.readFile(configPath, "utf8")), {
+    version: 1,
+    intervalMinutes: 25,
+    enabledContactIds: ["contact-primary", "contact-secondary"],
+  });
+  assert.equal(hooks.installed.has(path.resolve(primaryProject)), true);
+  assert.equal(hooks.installed.has(path.resolve(secondaryProject)), true);
+  assert.equal(await fs.access(path.join(primaryProject, ".claude", "skills", "time-awareness", "SKILL.md")).then(() => true, () => false), true);
+
+  await service.saveSettings({ id: "time-awareness", value: { contactId: "contact-secondary", contactEnabled: false } });
+  const saved = service.snapshot().capabilities.find((item) => item.id === "time-awareness")?.savedSettings;
+  assert.deepEqual(saved.enabledContactIds, ["contact-primary"]);
+  assert.equal(hooks.installed.has(path.resolve(secondaryProject)), false);
+  assert.equal(await fs.access(path.join(secondaryProject, ".claude", "skills", "time-awareness", "SKILL.md")).then(() => true, () => false), false);
+});
+
+test("proactive automatic maintenance follows the proactive capability switch", async () => {
+  const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "suzu-proactive-maintenance-project-"));
+  const dataRoot = await fs.mkdtemp(path.join(os.tmpdir(), "suzu-proactive-maintenance-data-"));
+  const settings = { projectRoot, dataRoot, agentId: stableAgentId(projectRoot) };
+  const maintenanceRequests = [];
+  const service = createCapabilitiesService({
+    settingsService: { load: () => settings, response: () => ({ dataRoot }) },
+    existsCommand: () => true,
+    onProactiveContactMaintenanceRequested: (request) => maintenanceRequests.push(request),
+    contactProjectsService: {
+      snapshot: async () => ({ status: "ready", contacts: [{ id: "contact-a", name: "联系人 A" }] }),
+    },
+  });
+  const configPath = path.join(dataRoot, "automation", "proactive-contact", "config.json");
+
+  await service.setActive({ id: "proactive-contact", enabled: true });
+  assert.equal(JSON.parse(await fs.readFile(configPath, "utf8")).autoMaintain, true);
+  assert.deepEqual(maintenanceRequests, [{ scope: null, delayMs: 60_000 }]);
+
+  await service.saveSettings({ id: "proactive-contact", value: { autoMaintain: false } });
+  assert.equal(JSON.parse(await fs.readFile(configPath, "utf8")).autoMaintain, false);
+
+  await service.setActive({ id: "proactive-contact", enabled: false });
+  assert.equal(JSON.parse(await fs.readFile(configPath, "utf8")).autoMaintain, false);
+
+  const enabled = await service.setActive({ id: "proactive-contact", enabled: true });
+  assert.equal(enabled.snapshot.capabilities.find((item) => item.id === "proactive-contact")?.savedSettings.autoMaintain, true);
+
+  await service.saveSettings({ id: "proactive-contact", value: { contactId: "contact-a", contactEnabled: true } });
+  assert.deepEqual(maintenanceRequests.at(-1), {
+    scope: { contactId: "contact-a" },
+    delayMs: 60_000,
+  });
 });
 
 test("managed registrations refresh a stale launcher without re-enabling a removed ability", async () => {
@@ -273,7 +359,7 @@ test("phone camera and traveling merchant settings use the existing software-sid
   assert.match(merchantView, /棱镜球/u);
 });
 
-test("session delivery settings keep multiple targets in their own capability configs", async () => {
+test("contact delivery settings keep multiple contacts in their own capability configs", async () => {
   const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "suzu-companion-project-"));
   const dataRoot = await fs.mkdtemp(path.join(os.tmpdir(), "suzu-companion-data-"));
   const agentId = stableAgentId(projectRoot);
@@ -283,27 +369,41 @@ test("session delivery settings keep multiple targets in their own capability co
     settingsService: { load: () => settings, response: () => ({ dataRoot }) },
     existsCommand: () => true,
     openExternal: async (url) => { opened.push(url); },
+    contactProjectsService: {
+      snapshot: async () => ({
+        status: "ready",
+        contacts: [
+          { id: "contact-a", name: "联系人 A" },
+          { id: "contact-b", name: "联系人 B" },
+        ],
+      }),
+    },
+    resolveContactSession: async (contactId) => ({
+      id: contactId === "contact-a" ? "session-a" : "session-b",
+      projectRoot,
+      hasTranscript: true,
+    }),
   });
 
   await service.saveSettings({ id: "proactive-contact", value: { chainPrompt: "链式提示", followUpPrompt: "回访提示" } });
-  await service.saveSettings({ id: "proactive-contact", value: { sessionId: "session-a", sessionEnabled: true } });
-  await service.saveSettings({ id: "proactive-contact", value: { sessionId: "session-b", sessionEnabled: true } });
-  await service.saveSettings({ id: "traveling-merchant", value: { sessionId: "session-a", sessionEnabled: true } });
-  await service.saveSettings({ id: "traveling-merchant", value: { sessionId: "session-b", sessionEnabled: true } });
+  await service.saveSettings({ id: "proactive-contact", value: { contactId: "contact-a", contactEnabled: true } });
+  await service.saveSettings({ id: "proactive-contact", value: { contactId: "contact-b", contactEnabled: true } });
+  await service.saveSettings({ id: "traveling-merchant", value: { contactId: "contact-a", contactEnabled: true } });
+  await service.saveSettings({ id: "traveling-merchant", value: { contactId: "contact-b", contactEnabled: true } });
   await service.register("iphone-bridge");
-  await service.saveSettings({ id: "iphone-bridge", value: { sessionId: "session-a", sessionEnabled: true } });
-  await service.saveSettings({ id: "iphone-bridge", value: { sessionId: "session-b", sessionEnabled: true } });
+  await service.saveSettings({ id: "iphone-bridge", value: { contactId: "contact-a", contactEnabled: true } });
+  await service.saveSettings({ id: "iphone-bridge", value: { contactId: "contact-b", contactEnabled: true } });
 
-  assert.equal(service.isCompanionSessionEnabled({ abilityId: "proactive-contact", sessionId: "session-a", projectRoot }), true);
-  assert.equal(service.isCompanionSessionEnabled({ abilityId: "proactive-contact", sessionId: "session-b", projectRoot }), true);
-  assert.equal(service.enabledCompanionSessions("traveling-merchant").length, 2);
-  assert.equal(service.enabledIphoneBridgeSessions().length, 2);
+  assert.equal(service.isCompanionContactEnabled({ abilityId: "proactive-contact", contactId: "contact-a" }), true);
+  assert.equal(service.isCompanionContactEnabled({ abilityId: "proactive-contact", contactId: "contact-b" }), true);
+  assert.equal((await service.enabledCompanionSessions("traveling-merchant")).length, 2);
+  assert.equal((await service.enabledIphoneBridgeSessions()).length, 2);
   const proactive = JSON.parse(await fs.readFile(path.join(dataRoot, "automation", "proactive-contact", "config.json"), "utf8"));
   assert.equal(proactive.chainPrompt, "链式提示");
   assert.equal(proactive.followUpPrompt, "回访提示");
-  assert.equal(proactive.enabledSessions.length, 2);
+  assert.deepEqual(proactive.enabledContactIds, ["contact-a", "contact-b"]);
   const iphoneDelivery = JSON.parse(await fs.readFile(path.join(dataRoot, "automation", "iphone-bridge", "config.json"), "utf8"));
-  assert.equal(iphoneDelivery.enabledSessions.length, 2);
+  assert.deepEqual(iphoneDelivery.enabledContactIds, ["contact-a", "contact-b"]);
 
   const snapshot = service.snapshot();
   const companionView = renderCapabilities({ state: {
@@ -311,38 +411,66 @@ test("session delivery settings keep multiple targets in their own capability co
     capabilityCategory: "companion",
     capabilitySelectedId: "proactive-contact",
     capabilitySnapshot: snapshot,
-    companionSessions: {
-      projectRoot,
-      sessions: [
-        { id: "session-a", title: "会话 A", preview: "第一条" },
-        { id: "session-b", title: "会话 B", preview: "第二条" },
-      ],
-    },
+    companionContacts: { contacts: [{ id: "contact-a", name: "联系人 A" }, { id: "contact-b", name: "联系人 B" }] },
   } });
   assert.match(companionView, /链式提示/u);
-  assert.match(companionView, /data-session-delivery-enabled="proactive-contact"/u);
-  assert.match(companionView, /会话 A/u);
+  assert.match(companionView, /data-contact-delivery-enabled="proactive-contact"/u);
+  assert.match(companionView, /联系人 A/u);
 
   const iphoneView = renderCapabilities({ state: {
     capabilityPage: "detail",
     capabilityCategory: "act",
     capabilitySelectedId: "iphone-bridge",
     capabilitySnapshot: snapshot,
-    companionSessions: {
-      projectRoot,
-      sessions: [
-        { id: "session-a", title: "会话 A", preview: "第一条" },
-        { id: "session-b", title: "会话 B", preview: "第二条" },
-      ],
-    },
+    companionContacts: { contacts: [{ id: "contact-a", name: "联系人 A" }, { id: "contact-b", name: "联系人 B" }] },
   } });
   assert.match(iphoneView, /本地直接接收/u);
-  assert.match(iphoneView, /data-session-delivery-enabled="iphone-bridge"/u);
-  assert.match(iphoneView, /可以同时勾选多个会话/u);
+  assert.match(iphoneView, /data-contact-delivery-enabled="iphone-bridge"/u);
+  assert.match(iphoneView, /可以同时勾选多位联系人/u);
 
   const page = await service.openTravelingMerchantPage();
   assert.equal(opened[0], page.url);
   assert.match(page.url, /^https:\/\//u);
+});
+
+test("companion delivery stores a selected contact without resolving its Claude session", async () => {
+  const activeProjectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "suzu-companion-active-project-"));
+  const targetProjectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "suzu-companion-target-project-"));
+  const dataRoot = await fs.mkdtemp(path.join(os.tmpdir(), "suzu-companion-target-data-"));
+  const settings = { projectRoot: activeProjectRoot, dataRoot };
+  const resolverCalls = [];
+  const service = createCapabilitiesService({
+    settingsService: { load: () => settings, response: () => ({ dataRoot }) },
+    existsCommand: () => true,
+    contactProjectsService: {
+      snapshot: async () => ({
+        status: "ready",
+        contacts: [
+          { id: "contact-active", name: "当前联系人", projectRoot: activeProjectRoot },
+          { id: "contact-target", name: "阿澈", projectRoot: targetProjectRoot },
+        ],
+      }),
+    },
+    resolveContactSession: async (contactId) => {
+      resolverCalls.push(contactId);
+      if (contactId !== "contact-target") throw new Error("unexpected contact");
+      return { id: "target-session", projectRoot: targetProjectRoot };
+    },
+  });
+
+  const targets = await service.companionTargets();
+  assert.deepEqual(targets.contacts.map(({ id, name }) => ({ id, name })), [
+    { id: "contact-active", name: "当前联系人" },
+    { id: "contact-target", name: "阿澈" },
+  ]);
+
+  await service.saveSettings({ id: "proactive-contact", value: { contactId: "contact-target", contactEnabled: true } });
+  const configPath = path.join(dataRoot, "automation", "proactive-contact", "config.json");
+  assert.deepEqual(JSON.parse(await fs.readFile(configPath, "utf8")).enabledContactIds, ["contact-target"]);
+
+  await service.saveSettings({ id: "proactive-contact", value: { contactId: "contact-target", contactEnabled: false } });
+  assert.deepEqual(JSON.parse(await fs.readFile(configPath, "utf8")).enabledContactIds, []);
+  assert.deepEqual(resolverCalls, []);
 });
 
 test("each configurable ability saves only its real software-side settings and never exposes stored secrets", async () => {
@@ -429,7 +557,7 @@ test("voice-message keeps selected voices per contact, safely falls back from le
   assert.equal(saved.selectionSource, "legacy-unavailable");
   await assert.rejects(
     () => service.saveSettings({ id: "voice-message", value: { voiceId: "legacy-a", timeoutMs: 41000 } }),
-    /不属于当前联系人的候选库/u,
+    /不属于当前项目的候选库/u,
   );
   await service.saveSettings({ id: "voice-message", value: { voiceId: "voice-b", timeoutMs: 41000 } });
 
@@ -454,7 +582,7 @@ test("voice-message keeps selected voices per contact, safely falls back from le
   assert.equal(saved.selectionSource, "missing-contact");
   await assert.rejects(
     () => service.saveSettings({ id: "voice-message", value: { voiceId: "voice-b", timeoutMs: 41000 } }),
-    /存在的当前联系人项目/u,
+    /选择可用项目/u,
   );
 });
 

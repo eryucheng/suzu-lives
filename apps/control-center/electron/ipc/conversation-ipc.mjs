@@ -7,6 +7,21 @@ function clean(value) {
   return String(value ?? "").trim();
 }
 
+function plainObject(value) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+}
+
+function contactSettingsValue(value, { includeNote = false } = {}) {
+  const source = plainObject(value);
+  if (Object.hasOwn(source, "sessionId") || Object.hasOwn(source, "projectRoot")) {
+    throw new Error("联系人设置只接受 contactId。 ");
+  }
+  return {
+    contactId: clean(source.contactId),
+    ...(includeNote ? { note: source.note } : {}),
+  };
+}
+
 function quotedArgument(value) {
   const source = clean(value);
   return source && !/["\r\n]/u.test(source) ? `"${source}"` : "";
@@ -17,6 +32,7 @@ export function registerConversationIpc({
   contactProjectsService = null,
   connectionsService,
   ipcMain,
+  memoryRuntime = null,
   settingsService,
   shell,
   wechatAttachmentCli = "",
@@ -41,19 +57,19 @@ export function registerConversationIpc({
       ? `${invocation} conversation-attachment --data-root ${rootArgument} --project-root ${projectArgument} --session-id ${sessionArgument}`
       : `${invocation} conversation-attachment`;
   };
-  const scheduleCommand = ({ sessionId, projectRoot } = {}) => {
+  const scheduleCommand = async ({ sessionId, projectRoot } = {}) => {
     const invocation = clean(wechatAttachmentCli);
     const dataRoot = clean(settingsService.response(settingsService.load()).dataRoot);
     const rootArgument = quotedArgument(dataRoot);
-    const sessionArgument = quotedArgument(sessionId);
-    const projectArgument = quotedArgument(projectRoot);
     if (!invocation || !rootArgument) return null;
     const proactive = proactiveContactSettings() || {};
-    const proactiveEnabled = isProactiveContactEnabled({ sessionId, projectRoot }) === true;
+    const contactId = await reader.contactIdForSession({ sessionId, projectRoot });
+    const contactArgument = quotedArgument(contactId);
+    const proactiveEnabled = await Promise.resolve(isProactiveContactEnabled({ contactId })) === true;
     const merchantEnabled = hasTravelingMerchantRecipients() === true;
     return {
-      conversationAdd: proactiveEnabled && sessionArgument && projectArgument
-        ? `${invocation} schedule add --data-root ${rootArgument} --session-id ${sessionArgument} --project-root ${projectArgument}`
+      conversationAdd: proactiveEnabled && contactArgument
+        ? `${invocation} schedule add --data-root ${rootArgument} --contact-id ${contactArgument}`
         : "",
       operationAdd: merchantEnabled ? `${invocation} schedule add --data-root ${rootArgument}` : "",
       list: `${invocation} schedule list --data-root ${rootArgument}`,
@@ -71,6 +87,7 @@ export function registerConversationIpc({
     suzuCliCommand: wechatAttachmentCli,
     settingsService,
     reader,
+    memoryRuntime,
     onEvent: (payload) => {
       if (sender && !sender.isDestroyed()) sender.send("conversation:event", payload);
     },
@@ -94,18 +111,18 @@ export function registerConversationIpc({
   ipcMain.handle("conversation:focus", (_event, value) => reader.focus(value));
   ipcMain.handle("conversation:session-settings-snapshot", async (event, value) => {
     sender = event.sender;
-    return sessionSettings.snapshot(value);
+    return sessionSettings.snapshot(contactSettingsValue(value));
   });
   ipcMain.handle("conversation:save-session-settings", async (event, value) => {
     sender = event.sender;
-    return sessionSettings.save(value);
+    return sessionSettings.save(contactSettingsValue(value, { includeNote: true }));
   });
   ipcMain.handle("conversation:open-media-directory", async (event, value) => {
     sender = event.sender;
     if (typeof shell?.openPath !== "function") throw new Error("当前环境无法打开本地文件夹。 ");
-    const media = await sessionSettings.mediaDirectory(value);
+    const media = await sessionSettings.mediaDirectory(contactSettingsValue(value));
     const error = await shell.openPath(media.directory);
-    if (error) throw new Error(`无法打开会话文件目录：${error}`);
+    if (error) throw new Error(`无法打开联系人媒体目录：${error}`);
     return media;
   });
   ipcMain.handle("conversation:create", async (event) => {
@@ -120,9 +137,9 @@ export function registerConversationIpc({
     sender = event.sender;
     return reader.selectContact(value);
   });
-  ipcMain.handle("conversation:select", async (event, sessionId) => {
+  ipcMain.handle("conversation:set-preferred-contact", async (event, value) => {
     sender = event.sender;
-    return reader.select(sessionId);
+    return reader.setPreferredContact(value);
   });
   ipcMain.handle("conversation:send", async (event, value) => {
     sender = event.sender;

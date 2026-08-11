@@ -1,5 +1,5 @@
 const FALLBACK_IDENTITY = Object.freeze({
-  owner: { displayName: "我", avatarDataUrl: "" },
+  owner: { displayName: "我", avatarDataUrl: "", gender: "", signature: "" },
   defaultAgent: { displayName: "Suzu", avatarDataUrl: "" },
   agents: {},
 });

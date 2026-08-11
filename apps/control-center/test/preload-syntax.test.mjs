@@ -44,7 +44,12 @@ test("Electron preload exposes the memory bridge", async () => {
 
   const bridge = exposures.get("suzuConsole");
   assert.equal(typeof bridge?.memory?.brainGraph, "function");
-  assert.equal(typeof bridge?.memory?.resolveStructure, "function");
+  assert.equal(typeof bridge?.memory?.reviewOverview, "function");
+  assert.equal(typeof bridge?.memory?.reviewProposal, "function");
+  assert.equal(typeof bridge?.memory?.resolveReview, "function");
+  assert.equal(typeof bridge?.memory?.revokeReviewRelation, "function");
+  assert.equal(typeof bridge?.memory?.recoverReviewInputBatch, "function");
+  assert.equal(typeof bridge?.memory?.createReviewBackup, "function");
   assert.equal(typeof bridge?.conversation?.stop, "function");
   assert.equal(typeof bridge?.conversation?.steer, "function");
   assert.equal(typeof bridge?.conversation?.call?.start, "function");
@@ -53,44 +58,76 @@ test("Electron preload exposes the memory bridge", async () => {
   assert.equal(typeof bridge?.conversation?.call?.interrupt, "function");
   assert.equal(typeof bridge?.conversation?.call?.stop, "function");
   assert.equal(typeof bridge?.conversation?.sessionSettingsSnapshot, "function");
+  assert.equal(typeof bridge?.conversationCompactor?.snapshot, "function");
+  assert.equal(typeof bridge?.conversationCompactor?.save, "function");
+  assert.equal(typeof bridge?.conversationCompactor?.check, "function");
+  assert.equal(typeof bridge?.conversationCompactor?.run, "function");
+  assert.equal(typeof bridge?.capabilities?.companionTargets, "function");
   assert.equal(typeof bridge?.wechat?.begin, "function");
   assert.equal(typeof bridge?.wechat?.saveSettings, "function");
   assert.equal(typeof bridge?.voiceDesign?.saveContactVoice, "function");
   assert.equal(typeof bridge?.externalCapabilities?.importManifest, "function");
   assert.equal(typeof bridge?.externalCapabilities?.setEnabled, "function");
-  await bridge.memory.resolveStructure("proposal-1", "accept", "确认");
-  assert.equal(calls[0].channel, "memory:resolve-structure");
-  assert.deepEqual(JSON.parse(JSON.stringify(calls[0].args[0])), {
-    proposalId: "proposal-1",
-    action: "accept",
-    note: "确认",
-  });
   await bridge.conversation.stop({ sessionId: "session-1" });
   await bridge.conversation.steer({ content: "请改为只读" });
-  assert.equal(calls[1].channel, "conversation:stop");
-  assert.equal(calls[2].channel, "conversation:steer");
+  assert.equal(calls[0].channel, "conversation:stop");
+  assert.equal(calls[1].channel, "conversation:steer");
   await bridge.conversation.call.start();
   await bridge.conversation.call.commit({ callId: "call-1" });
   await bridge.conversation.call.interrupt({ callId: "call-1" });
   await bridge.conversation.call.stop({ callId: "call-1" });
   bridge.conversation.call.audio({ callId: "call-1", audio: new ArrayBuffer(0) });
-  assert.equal(calls[3].channel, "conversation:call-start");
-  assert.equal(calls[4].channel, "conversation:call-commit");
-  assert.equal(calls[5].channel, "conversation:call-interrupt");
-  assert.equal(calls[6].channel, "conversation:call-stop");
-  assert.equal(calls[7].channel, "conversation:call-audio");
-  await bridge.conversation.sessionSettingsSnapshot({ sessionId: "session-1" });
-  await bridge.wechat.begin({ sessionId: "session-1" });
+  assert.equal(calls[2].channel, "conversation:call-start");
+  assert.equal(calls[3].channel, "conversation:call-commit");
+  assert.equal(calls[4].channel, "conversation:call-interrupt");
+  assert.equal(calls[5].channel, "conversation:call-stop");
+  assert.equal(calls[6].channel, "conversation:call-audio");
+  await bridge.conversation.sessionSettingsSnapshot({ contactId: "contact-suzu" });
+  await bridge.wechat.begin({ contactId: "contact-suzu" });
   await bridge.wechat.saveSettings({ enabled: true });
-  assert.equal(calls[8].channel, "conversation:session-settings-snapshot");
-  assert.equal(calls[9].channel, "wechat:begin");
-  assert.equal(calls[10].channel, "wechat:save-settings");
+  assert.equal(calls[7].channel, "conversation:session-settings-snapshot");
+  assert.equal(calls[8].channel, "wechat:begin");
+  assert.equal(calls[9].channel, "wechat:save-settings");
   await bridge.externalCapabilities.importManifest();
   await bridge.externalCapabilities.setEnabled("sample.capability", true);
-  assert.equal(calls[11].channel, "external-capabilities:import");
-  assert.equal(calls[12].channel, "external-capabilities:set-enabled");
-  assert.deepEqual(JSON.parse(JSON.stringify(calls[12].args[0])), { id: "sample.capability", enabled: true });
+  assert.equal(calls[10].channel, "external-capabilities:import");
+  assert.equal(calls[11].channel, "external-capabilities:set-enabled");
+  assert.deepEqual(JSON.parse(JSON.stringify(calls[11].args[0])), { id: "sample.capability", enabled: true });
   await bridge.voiceDesign.saveContactVoice({ contactId: "contact-suzu", provider: "qwen", voiceId: "voice-kept" });
-  assert.equal(calls[13].channel, "voice-design:save-contact-voice");
-  assert.deepEqual(JSON.parse(JSON.stringify(calls[13].args[0])), { contactId: "contact-suzu", provider: "qwen", voiceId: "voice-kept" });
+  assert.equal(calls[12].channel, "voice-design:save-contact-voice");
+  assert.deepEqual(JSON.parse(JSON.stringify(calls[12].args[0])), { contactId: "contact-suzu", provider: "qwen", voiceId: "voice-kept" });
+  await bridge.capabilities.companionTargets();
+  assert.equal(calls[13].channel, "capabilities:companion-targets");
+  await bridge.memory.reviewOverview({ reviewStates: ["pending"] });
+  await bridge.memory.reviewProposal("relation", "review-1");
+  await bridge.memory.resolveReview("structure", "review-2", "accept", "确认");
+  await bridge.memory.revokeReviewRelation("review-3", "撤销");
+  await bridge.memory.recoverReviewInputBatch("batch-1", true);
+  await bridge.memory.createReviewBackup();
+  assert.deepEqual(calls.slice(-6).map((call) => call.channel), [
+    "memory:review-overview",
+    "memory:review-proposal",
+    "memory:resolve-review",
+    "memory:revoke-review-relation",
+    "memory:recover-review-input-batch",
+    "memory:create-review-backup",
+  ]);
+  assert.deepEqual(JSON.parse(JSON.stringify(calls.at(-3).args[0])), {
+    proposalId: "review-3",
+    note: "撤销",
+  });
+  assert.deepEqual(JSON.parse(JSON.stringify(calls.at(-2).args[0])), {
+    batchId: "batch-1",
+    force: true,
+  });
+  await bridge.conversationCompactor.snapshot({ contactId: "contact-suzu" });
+  await bridge.conversationCompactor.save({ contactId: "contact-suzu", prompt: "联系人专属提示词" });
+  await bridge.conversationCompactor.check({ contactId: "contact-suzu" });
+  await bridge.conversationCompactor.run({ contactId: "contact-suzu" });
+  assert.deepEqual(calls.slice(-4).map((call) => call.channel), [
+    "conversation-compactor:snapshot",
+    "conversation-compactor:save",
+    "conversation-compactor:check",
+    "conversation-compactor:run",
+  ]);
 });

@@ -3,58 +3,13 @@
   <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; media-src 'self' blob: data:; connect-src 'self'">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'__SUZU_DEV_INLINE_STYLE__; img-src 'self' data:; media-src 'self' blob: data: file:; connect-src 'self' http://127.0.0.1:5173 ws://127.0.0.1:5173">
     <title>Suzu Lives</title>
-    <link rel="stylesheet" href="./styles.css">
   </head>
   <body>
-    <div id="app" class="app-shell">
-      <aside class="sidebar">
-        <div class="brand">
-          <div class="brand-mark"><img src="../assets/app-icon.png" alt=""></div>
-          <div>
-            <div class="brand-name">Suzu Lives</div>
-            <div class="brand-subtitle">A life with agents</div>
-          </div>
-        </div>
-
-        <nav class="nav" aria-label="主导航">
-          <button class="nav-item active" data-view="today"><span class="nav-icon" data-icon="spark"></span><span>今天</span></button>
-          <button class="nav-item" data-view="relationships"><span class="nav-icon" data-icon="people"></span><span>关系</span></button>
-          <button class="nav-item" data-view="plans"><span class="nav-icon" data-icon="calendar"></span><span>计划</span></button>
-          <button class="nav-item" data-view="create"><span class="nav-icon" data-icon="palette"></span><span>创造</span></button>
-          <button class="nav-item" data-view="capabilities"><span class="nav-icon" data-icon="sliders"></span><span>能力</span></button>
-          <button class="nav-item" data-view="actions"><span class="nav-icon" data-icon="play"></span><span>行动</span></button>
-        </nav>
-
-        <div class="sidebar-bottom">
-          <button class="nav-item" data-view="admin"><span class="nav-icon" data-icon="sliders"></span><span>管理</span></button>
-          <button class="nav-item" data-view="settings"><span class="nav-icon" data-icon="gear"></span><span>设置</span></button>
-        </div>
-      </aside>
-
-      <main class="main">
-        <header class="topbar">
-          <button id="agentSelector" class="agent-selector" title="编辑当前联系人身份与头像">
-            <span class="agent-avatar"><img id="agentAvatarImage" class="hidden" alt=""><span id="agentAvatarInitial">S</span></span>
-            <span class="agent-selector-copy"><small>当前联系人</small><strong id="projectName">未选择</strong></span>
-            <span class="chevron" data-icon="chevron"></span>
-          </button>
-          <div class="global-command" aria-label="全局询问或搜索入口" title="问 Suzu 或搜索：功能准备中">
-            <span data-icon="search"></span><span>问 Suzu 或搜索</span><kbd>⌘ K</kbd>
-          </div>
-          <div class="topbar-actions">
-            <button id="approvalButton" class="approval-button" title="前往行动"><span data-icon="shield"></span><span>待审批</span><b>—</b></button>
-            <button id="refreshButton" class="icon-button" title="刷新已接入的本地数据"><span data-icon="refresh"></span></button>
-          </div>
-        </header>
-
-        <div id="notice" class="notice hidden"></div>
-        <section id="content" class="content" aria-live="polite"></section>
-      </main>
-    </div>
+    <div id="app"></div>
 
     <div id="loading" class="loading-overlay hidden"><div class="loader"></div><div id="loadingText">正在读取本地状态…</div></div>
-    <script type="module" src="./app.mjs"></script>
+    <script type="module" src="./main.jsx"></script>
   </body>
 </html>

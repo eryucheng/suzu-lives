@@ -41,6 +41,39 @@ test("managed Skill context injected by Claude never becomes a user chat bubble"
   assert.deepEqual(messages.map((message) => message.blocks[0].text), ["还好，你能发语音给我听吗"]);
 });
 
+test("Claude internal resume records stay out of chat without hiding real matching text", () => {
+  const messages = buildDisplayMessages([
+    { type: "user", uuid: "real-user", message: { content: "Continue from where you left off." } },
+    { type: "user", uuid: "resume-meta", isMeta: true, message: { content: "Continue from where you left off." } },
+    {
+      type: "assistant",
+      parentUuid: "resume-meta",
+      message: { model: "<synthetic>", content: [{ type: "text", text: "No response requested." }] },
+    },
+    {
+      type: "assistant",
+      parentUuid: "real-user",
+      message: { model: "claude-test", content: [{ type: "text", text: "No response requested." }] },
+    },
+    { type: "user", message: { content: "这是真实的下一句话。" } },
+  ]);
+  assert.deepEqual(messages.map((message) => [message.kind, message.blocks[0].text]), [
+    ["user", "Continue from where you left off."],
+    ["assistant", "No response requested."],
+    ["user", "这是真实的下一句话。"],
+  ]);
+});
+
+test("voice call protocol rows render only the spoken transcript", () => {
+  const messages = buildDisplayMessages([{
+    type: "user",
+    message: {
+      content: "<suzu-voice-call-turn>\n{\"source\":\"suzu-live-call\",\"transcript\":\"你好，能听见我说话吗？\"}\n</suzu-voice-call-turn>",
+    },
+  }]);
+  assert.deepEqual(messages.map((message) => message.blocks[0].text), ["你好，能听见我说话吗？"]);
+});
+
 test("search categories return real media and date records that can be reopened around their source line", async () => {
   const imagePath = path.join(os.tmpdir(), "suzu-search-image.png");
   const filePath = await fixture([

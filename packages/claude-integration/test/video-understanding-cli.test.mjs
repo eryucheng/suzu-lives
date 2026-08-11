@@ -135,8 +135,18 @@ function jsonVideoResponse(summary, { id = "video-json", model = "fixture-video-
   };
 }
 
-async function invokeCli(args, environment = {}) {
-  return execFileAsync(process.execPath, [CLI, "video-understanding", ...args], {
+function capabilityRequest(fixture, input, environment = {}) {
+  return { input, dataRoot: fixture.dataRoot, workspaceRoot: fixture.projectRoot, environment };
+}
+
+async function invokeCli({ input, dataRoot, workspaceRoot, environment = {} }) {
+  return execFileAsync(process.execPath, [
+    CLI,
+    "capability", "video-understanding", "analyze",
+    "--input-json", JSON.stringify(input),
+    "--data-root", dataRoot,
+    "--workspace-root", workspaceRoot,
+  ], {
     cwd: PACKAGE_ROOT,
     env: isolatedEnvironment(environment),
   });
@@ -154,17 +164,20 @@ test("stable video-understanding CLI keeps the OpenAI-compatible request, conten
     jsonVideoResponse("--no-cache 的新观察。"),
   ]);
   const fixture = await createFixture({ baseUrl: `${server.baseUrl}/compatible` });
-  const commonArgs = [
-    "https://video.example.test/clip.mp4?private=query#fragment",
-    "--question", "这一段实际发生了什么？",
-    "--cache-key", "upstream-clip-42",
-    "--config", fixture.configPath,
-    "--data-root", fixture.dataRoot,
-    "--project-root", fixture.projectRoot,
-  ];
+  const commonInput = {
+    source: "https://video.example.test/clip.mp4?private=query#fragment",
+    question: "这一段实际发生了什么？",
+    cacheKey: "upstream-clip-42",
+    configPath: fixture.configPath,
+  };
   const environment = { SUZU_TEST_VIDEO_PREPARED_CLIP: fixture.preparedClip };
 
-  const first = JSON.parse((await invokeCli([...commonArgs, "--keep-clip"], environment)).stdout);
+  const firstEnvelope = JSON.parse((await invokeCli(capabilityRequest(fixture, { ...commonInput, keepClip: true }, environment))).stdout);
+  assert.equal(firstEnvelope.schemaVersion, 1);
+  assert.equal(firstEnvelope.status, "ok");
+  assert.equal(firstEnvelope.capabilityId, "video-understanding");
+  assert.equal(firstEnvelope.action, "analyze");
+  const first = firstEnvelope.result;
   assert.equal(first.status, "ok");
   assert.equal(first.summary, "第一份视频观察。");
   assert.equal(first.cached, false);
@@ -193,13 +206,13 @@ test("stable video-understanding CLI keeps the OpenAI-compatible request, conten
   const stored = JSON.parse(await fs.readFile(cachePath, "utf8"));
   assert.equal(stored.summary, "第一份视频观察。");
 
-  const cached = JSON.parse((await invokeCli(commonArgs, environment)).stdout);
+  const cached = JSON.parse((await invokeCli(capabilityRequest(fixture, commonInput, environment))).stdout).result;
   assert.equal(cached.status, "ok");
   assert.equal(cached.cached, true);
   assert.equal(cached.summary, "第一份视频观察。");
   assert.equal(server.requests.length, 1);
 
-  const bypassed = JSON.parse((await invokeCli([...commonArgs, "--no-cache"], environment)).stdout);
+  const bypassed = JSON.parse((await invokeCli(capabilityRequest(fixture, { ...commonInput, noCache: true }, environment))).stdout).result;
   assert.equal(bypassed.status, "ok");
   assert.equal(bypassed.cached, false);
   assert.equal(bypassed.summary, "--no-cache 的新观察。");
@@ -220,14 +233,12 @@ test("stable video-understanding CLI keeps the OpenAI-compatible request, conten
 
 test("video-understanding dry-run uses fake tools, needs no API Key, and retains only data-root clips", async () => {
   const fixture = await createFixture({ apiKey: "" });
-  const result = JSON.parse((await invokeCli([
-    fixture.videoPath,
-    "--dry-run",
-    "--keep-clip",
-    "--config", fixture.configPath,
-    "--data-root", fixture.dataRoot,
-    "--project-root", fixture.projectRoot,
-  ], { SUZU_TEST_VIDEO_PREPARED_CLIP: fixture.preparedClip })).stdout);
+  const result = JSON.parse((await invokeCli(capabilityRequest(fixture, {
+    source: fixture.videoPath,
+    dryRun: true,
+    keepClip: true,
+    configPath: fixture.configPath,
+  }, { SUZU_TEST_VIDEO_PREPARED_CLIP: fixture.preparedClip }))).stdout).result;
 
   assert.equal(result.status, "dry-run");
   assert.equal(result.cached, false);
@@ -245,17 +256,15 @@ test("video-understanding dry-run uses fake tools, needs no API Key, and retains
 test("video-understanding preserves VIDEO_UNDERSTANDING environment overrides over public config fields", async (t) => {
   const server = await startVideoServer(t, [sseVideoResponse("环境变量连接生效。", { model: "provider-response" })]);
   const fixture = await createFixture();
-  const result = JSON.parse((await invokeCli([
-    fixture.videoPath,
-    "--config", fixture.configPath,
-    "--data-root", fixture.dataRoot,
-    "--project-root", fixture.projectRoot,
-  ], {
+  const result = JSON.parse((await invokeCli(capabilityRequest(fixture, {
+    source: fixture.videoPath,
+    configPath: fixture.configPath,
+  }, {
     SUZU_TEST_VIDEO_PREPARED_CLIP: fixture.preparedClip,
     VIDEO_UNDERSTANDING_API_KEY: "environment-video-key",
     VIDEO_UNDERSTANDING_BASE_URL: `${server.baseUrl}/override`,
     VIDEO_UNDERSTANDING_MODEL: "environment-video-model",
-  })).stdout);
+  }))).stdout).result;
 
   assert.equal(result.status, "ok");
   assert.equal(result.responseModel, "provider-response");
@@ -274,7 +283,7 @@ test("video-understanding forwards the selected named connection's key, address,
   process.stdout.write = () => true;
   try {
     await runSuzuLivesCli({
-      args: ["video-understanding", fixture.videoPath, "--config", fixture.configPath, "--data-root", fixture.dataRoot, "--project-root", fixture.projectRoot],
+      args: ["capability", "video-understanding", "analyze", "--input-json", JSON.stringify({ source: fixture.videoPath, configPath: fixture.configPath }), "--data-root", fixture.dataRoot, "--workspace-root", fixture.projectRoot],
       connectionResolver: async ({ kind }) => kind === "video-understanding" ? { key: "named-video-key", baseUrl: `${server.baseUrl}/named`, model: "named-video-model" } : null,
     });
   } finally {
@@ -294,15 +303,17 @@ test("video-understanding reports the fixed base64 size boundary before any prov
     video: { max_binary_bytes: 8_000_000 },
   });
   await assert.rejects(
-    () => invokeCli([
-      fixture.videoPath,
-      "--config", fixture.configPath,
-      "--data-root", fixture.dataRoot,
-      "--project-root", fixture.projectRoot,
-    ], { SUZU_TEST_VIDEO_PREPARED_CLIP: fixture.preparedClip }),
+    () => invokeCli(capabilityRequest(fixture, {
+      source: fixture.videoPath,
+      configPath: fixture.configPath,
+    }, { SUZU_TEST_VIDEO_PREPARED_CLIP: fixture.preparedClip })),
     (error) => {
-      const result = JSON.parse(error.stderr);
-      return error.code === 4 && result.status === "error" && result.code === "clip_too_large" && /Base64 编码后有 10000000 字节/u.test(result.message);
+      const response = JSON.parse(error.stdout);
+      return error.code === 4
+        && response.status === "error"
+        && response.capabilityId === "video-understanding"
+        && response.error.code === "clip_too_large"
+        && /Base64 编码后有 10000000 字节/u.test(response.error.message);
     },
   );
 });

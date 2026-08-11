@@ -2,7 +2,6 @@ import { createHash, randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 
-import { resolveAgentDataRoot } from "@suzu-lives/agent-registry";
 import { publicCalendarEvents } from "./public-calendar-events.mjs";
 
 const EVENT_TYPES = new Set(["纪念日", "生日", "日程", "其他"]);
@@ -48,7 +47,7 @@ function generatedId(seed = "") {
 }
 
 function fallbackId(event, index) {
-  const source = `${event.date}:${event.name}:${event.type}:${index}`;
+  const source = `${event.contactId}:${event.date}:${event.name}:${event.type}:${index}`;
   return `legacy-${createHash("sha256").update(source).digest("hex").slice(0, 18)}`;
 }
 
@@ -56,10 +55,12 @@ function normalizedStoredEvent(value, index) {
   const source = plainObject(value);
   const date = validDate(source.date);
   const name = clean(source.name).replace(/[\r\n\t]+/gu, " ").slice(0, 80);
-  if (!date || !name) return null;
+  const contactId = clean(source.contactId);
+  const agentId = clean(source.agentId);
+  if (!date || !name || !contactId || !agentId) return null;
   const type = EVENT_TYPES.has(clean(source.type)) ? clean(source.type) : "纪念日";
-  const id = EVENT_ID.test(clean(source.id)) ? clean(source.id) : fallbackId({ date, name, type }, index);
-  return { id, date, name, type, enabled: source.enabled !== false, source: "personal", editable: true };
+  const id = EVENT_ID.test(clean(source.id)) ? clean(source.id) : fallbackId({ contactId, date, name, type }, index);
+  return { id, contactId, agentId, date, name, type, enabled: source.enabled !== false, source: "personal", editable: true };
 }
 
 function publicEvents() {
@@ -72,20 +73,12 @@ function compareEvents(left, right) {
     || left.name.localeCompare(right.name, "zh-CN");
 }
 
-async function ordinaryDirectory(directory) {
-  try {
-    const stat = await fs.lstat(directory);
-    return !stat.isSymbolicLink() && stat.isDirectory();
-  } catch {
-    return false;
-  }
-}
-
-async function calendarFile(context) {
-  if (!context) return "";
-  const agentRoot = path.resolve(context.agentRoot);
-  const target = path.resolve(agentRoot, "time-awareness", "calendar.local.json");
-  return below(agentRoot, target) ? target : "";
+function calendarFile(dataRoot) {
+  const root = clean(dataRoot);
+  if (!root) return "";
+  const resolvedRoot = path.resolve(root);
+  const target = path.resolve(resolvedRoot, "calendar", "calendar.local.json");
+  return below(resolvedRoot, target) ? target : "";
 }
 
 async function readCalendar(filePath) {
@@ -102,10 +95,10 @@ async function readCalendar(filePath) {
   }
 }
 
-async function ensureDirectory(agentRoot) {
-  const root = path.resolve(agentRoot);
+async function ensureDirectory(dataRoot) {
+  const root = path.resolve(dataRoot);
   await fs.mkdir(root, { recursive: true });
-  const parent = path.join(root, "time-awareness");
+  const parent = path.join(root, "calendar");
   try {
     const stat = await fs.lstat(parent);
     if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error("纪念日数据目录不可用，未写入。");
@@ -115,16 +108,15 @@ async function ensureDirectory(agentRoot) {
   }
 }
 
-async function writeCalendar(filePath, events) {
-  const root = path.dirname(path.dirname(filePath));
-  await ensureDirectory(root);
+async function writeCalendar(filePath, dataRoot, events) {
+  await ensureDirectory(dataRoot);
   try {
     const stat = await fs.lstat(filePath);
     if (stat.isSymbolicLink() || !stat.isFile()) throw new Error("纪念日数据文件不可用，未写入。");
   } catch (error) {
     if (error?.code !== "ENOENT") throw error;
   }
-  const value = { events: events.map(({ id, date, name, type, enabled }) => ({ id, date, name, type, enabled })) };
+  const value = { events: events.map(({ id, contactId, agentId, date, name, type, enabled }) => ({ id, contactId, agentId, date, name, type, enabled })) };
   const temporary = `${filePath}.${process.pid}.${Date.now()}.tmp`;
   await fs.writeFile(temporary, `${JSON.stringify(value, null, 2)}\n`, { encoding: "utf8", flag: "wx" });
   try {
@@ -140,14 +132,19 @@ function boolean(value, fallback = true) {
   return value === true || value === "true" || value === "on" || value === 1 || value === "1";
 }
 
-function inputEvent(value, current = null) {
+function inputEvent(value, current = null, contact = null) {
   const source = plainObject(value);
+  const contactId = clean(contact?.id);
+  const agentId = clean(contact?.agentId);
+  if (!contactId || !agentId) throw new Error("所选联系人不存在或不可用。 ");
   const fullDate = validDate(source.date);
   if (!fullDate || !EXACT_DATE.test(fullDate)) throw new Error("请选择一个有效日期。");
   const date = boolean(source.repeat, false) ? fullDate.slice(5) : fullDate;
   const type = EVENT_TYPES.has(clean(source.type)) ? clean(source.type) : "纪念日";
   return {
     id: current?.id || (EVENT_ID.test(clean(source.id)) ? clean(source.id) : generatedId(fullDate)),
+    contactId,
+    agentId,
     date,
     name: normalizedName(source.name),
     type,
@@ -157,56 +154,109 @@ function inputEvent(value, current = null) {
   };
 }
 
-function contextFor(settingsService) {
+function dataRootFor(settingsService) {
   const settings = plainObject(settingsService.load?.());
   const response = plainObject(settingsService.response?.(settings));
-  const dataRoot = clean(response.dataRoot || settings.dataRoot);
-  const agentId = clean(settings.agentId);
-  if (!clean(settings.projectRoot) || !dataRoot || !agentId) return null;
-  return { agentRoot: resolveAgentDataRoot({ dataRoot, agentId }) };
+  return clean(response.dataRoot || settings.dataRoot);
 }
 
-export function createTodayCalendarService({ settingsService } = {}) {
-  if (!settingsService?.load) throw new Error("今天日历需要软件设置服务。");
+function defaultContactId(contactsSnapshot, contacts) {
+  const candidates = [
+    clean(contactsSnapshot?.activeContact?.id),
+    clean(contactsSnapshot?.preferredContact?.id),
+    ...contacts.map((contact) => clean(contact?.id)),
+  ];
+  return candidates.find((id) => contacts.some((contact) => clean(contact?.id) === id)) || "";
+}
+
+async function contactCatalog(contactProjectsService) {
+  const contactsSnapshot = await contactProjectsService.snapshot();
+  const contacts = Array.isArray(contactsSnapshot?.contacts) ? contactsSnapshot.contacts : [];
+  return {
+    contactsSnapshot,
+    contacts,
+    byId: new Map(contacts.map((contact) => [clean(contact?.id), contact]).filter(([id]) => id)),
+  };
+}
+
+function publicContactCalendar(contact) {
+  return {
+    id: clean(contact?.id),
+    name: clean(contact?.name) || "未命名联系人",
+  };
+}
+
+function ownedEvent(catalog, event) {
+  const contact = catalog.byId.get(clean(event.contactId)) || null;
+  const { agentId: _agentId, ...publicEvent } = event;
+  return {
+    ...publicEvent,
+    contactName: clean(contact?.name) || "已移除联系人",
+    editable: Boolean(contact && clean(contact.agentId) === clean(event.agentId)),
+  };
+}
+
+async function calendarContext({ contactProjectsService, settingsService }) {
+  const dataRoot = dataRootFor(settingsService);
+  return {
+    catalog: dataRoot ? await contactCatalog(contactProjectsService) : { contactsSnapshot: null, contacts: [], byId: new Map() },
+    dataRoot,
+    filePath: calendarFile(dataRoot),
+  };
+}
+
+async function writableContext(contactId, dependencies) {
+  const id = clean(contactId);
+  if (!id) throw new Error("请选择要保存日期的联系人。 ");
+  const context = await calendarContext(dependencies);
+  if (!context.dataRoot || !context.filePath) throw new Error("Suzu Lives 数据目录不可用。 ");
+  const contact = context.catalog.byId.get(id) || null;
+  if (!contact) throw new Error("所选联系人不存在或不可用。 ");
+  return { ...context, contact };
+}
+
+export function createTodayCalendarService({ contactProjectsService, settingsService } = {}) {
+  if (!settingsService?.load || !contactProjectsService?.snapshot) {
+    throw new Error("今天日历需要软件设置和联系人项目服务。");
+  }
 
   const snapshot = async () => {
-    const context = contextFor(settingsService);
-    const filePath = await calendarFile(context);
-    const personal = await readCalendar(filePath);
-    const status = personal.status;
+    const context = await calendarContext({ contactProjectsService, settingsService });
+    const stored = await readCalendar(context.filePath);
+    const contacts = context.catalog.contacts.map(publicContactCalendar).filter((contact) => contact.id);
+    const personal = stored.events.map((event) => ownedEvent(context.catalog, event));
+    const hasContacts = clean(context.catalog.contactsSnapshot?.status) === "ready" && contacts.length > 0;
     return {
-      status,
-      events: [...publicEvents(), ...personal.events].sort(compareEvents),
-      canEdit: status === "ready",
+      status: stored.status === "invalid" ? "invalid" : hasContacts ? "ready" : "needs-agent",
+      events: [...publicEvents(), ...personal].sort(compareEvents),
+      contacts,
+      defaultContactId: defaultContactId(context.catalog.contactsSnapshot, context.catalog.contacts),
+      canEdit: stored.status === "ready" && hasContacts,
     };
   };
 
   const saveEvent = async (value) => {
-    const context = contextFor(settingsService);
-    const filePath = await calendarFile(context);
-    if (!filePath) throw new Error("请先选择当前 Agent 的工作目录。");
-    const current = await readCalendar(filePath);
+    const context = await writableContext(value?.contactId, { contactProjectsService, settingsService });
+    const current = await readCalendar(context.filePath);
     if (current.status === "invalid") throw new Error("纪念日数据无法读取，未覆盖原有内容。");
     const requestedId = clean(value?.id);
-    const existing = current.events.find((event) => event.id === requestedId) || null;
-    const next = inputEvent(value, existing);
+    const existing = current.events.find((event) => event.id === requestedId && event.contactId === context.contact.id) || null;
+    const next = inputEvent(value, existing, context.contact);
     const events = existing
-      ? current.events.map((event) => event.id === existing.id ? next : event)
+      ? current.events.map((event) => event.id === existing.id && event.contactId === context.contact.id ? next : event)
       : [...current.events, next];
-    await writeCalendar(filePath, events);
+    await writeCalendar(context.filePath, context.dataRoot, events);
     return snapshot();
   };
 
-  const removeEvent = async (id) => {
-    const context = contextFor(settingsService);
-    const filePath = await calendarFile(context);
-    if (!filePath) throw new Error("请先选择当前 Agent 的工作目录。");
-    const current = await readCalendar(filePath);
+  const removeEvent = async ({ contactId, id } = {}) => {
+    const context = await writableContext(contactId, { contactProjectsService, settingsService });
+    const current = await readCalendar(context.filePath);
     if (current.status === "invalid") throw new Error("纪念日数据无法读取，未覆盖原有内容。");
     const eventId = clean(id);
-    const target = current.events.find((event) => event.id === eventId);
+    const target = current.events.find((event) => event.id === eventId && event.contactId === context.contact.id);
     if (!target) throw new Error("找不到这项纪念日，未修改数据。");
-    await writeCalendar(filePath, current.events.filter((event) => event.id !== eventId));
+    await writeCalendar(context.filePath, context.dataRoot, current.events.filter((event) => event !== target));
     return snapshot();
   };
 

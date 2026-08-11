@@ -90,30 +90,10 @@ function plainObject(value) {
   return value && typeof value === "object" && !Array.isArray(value) && Object.getPrototypeOf(value) === Object.prototype ? value : {};
 }
 
-function inside(root, target) {
-  const relative = path.relative(root, target);
-  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
-}
-
 function boundedText(value, label, maximum = 2000) {
   const result = clean(value);
   if (result.length > maximum) throw new Error(`${label}不能超过 ${maximum} 个字符。`);
   return result;
-}
-
-function stringList(value, label, { maximum = 120, itemMaximum = 500 } = {}) {
-  const source = Array.isArray(value) ? value : String(value ?? "").split(/\r?\n|,/u);
-  const items = [];
-  const seen = new Set();
-  for (const item of source) {
-    const normalized = boundedText(item, label, itemMaximum);
-    if (normalized && !seen.has(normalized)) {
-      seen.add(normalized);
-      items.push(normalized);
-    }
-  }
-  if (items.length > maximum) throw new Error(`${label}不能超过 ${maximum} 项。`);
-  return items;
 }
 
 async function regularDirectory(target, label) {
@@ -133,22 +113,6 @@ async function regularFile(target, label, { required = false } = {}) {
     if (error?.code === "ENOENT" && !required) return false;
     throw error;
   }
-}
-
-async function safeClaudeSettingsPath(projectRoot, { create = false } = {}) {
-  const root = await regularDirectory(projectRoot, "当前工作目录");
-  const claudeRoot = path.join(root, ".claude");
-  try {
-    const stat = await fs.lstat(claudeRoot);
-    if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error(".claude 不是可安全使用的目录。 ");
-  } catch (error) {
-    if (error?.code === "ENOENT" && create) await fs.mkdir(claudeRoot, { recursive: true });
-    else if (error?.code === "ENOENT") return { root, settingsPath: path.join(claudeRoot, "settings.json"), exists: false };
-    else throw error;
-  }
-  const settingsPath = path.join(claudeRoot, "settings.json");
-  const fileExists = await regularFile(settingsPath, "Claude Code 设置文件");
-  return { root, settingsPath, exists: fileExists };
 }
 
 async function safeDeviceClaudeSettingsPath(homeDirectory, { create = false } = {}) {
@@ -295,76 +259,7 @@ function presentClaudeCodeApi({ device = {}, userConfig = {}, settingsExists = f
   };
 }
 
-function presentClaudeConfig(value = {}) {
-  const source = plainObject(value);
-  const permissions = plainObject(source.permissions);
-  const env = plainObject(source.env);
-  return {
-    alwaysThinkingEnabled: source.alwaysThinkingEnabled === true,
-    includeCoAuthoredBy: source.includeCoAuthoredBy === true,
-    skipWebFetchPreflight: source.skipWebFetchPreflight === true,
-    allowedTools: stringList(permissions.allow, "允许工具"),
-    deniedTools: stringList(permissions.deny, "禁止工具"),
-    textService: {
-      baseUrl: clean(env.ANTHROPIC_BASE_URL),
-      hasAuthToken: Boolean(clean(env.ANTHROPIC_AUTH_TOKEN)),
-      sonnet: { model: clean(env.ANTHROPIC_DEFAULT_SONNET_MODEL), name: clean(env.ANTHROPIC_DEFAULT_SONNET_MODEL_NAME) },
-      opus: { model: clean(env.ANTHROPIC_DEFAULT_OPUS_MODEL), name: clean(env.ANTHROPIC_DEFAULT_OPUS_MODEL_NAME) },
-      haiku: { model: clean(env.ANTHROPIC_DEFAULT_HAIKU_MODEL), name: clean(env.ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME) },
-    },
-  };
-}
-
-function mergedClaudeConfig({ device = {}, project = {} } = {}) {
-  const deviceConfig = plainObject(device);
-  const projectConfig = plainObject(project);
-  const deviceEnv = plainObject(deviceConfig.env);
-  const projectEnv = plainObject(projectConfig.env);
-  return {
-    ...deviceConfig,
-    ...projectConfig,
-    // Claude Code 的文本服务以本机设置为底，项目内的显式 env 仍可覆盖它。
-    env: { ...deviceEnv, ...projectEnv },
-    // 协作署名是 Claude Code 的本机偏好；旧项目字段只作为没有本机设置时的兼容回退。
-    includeCoAuthoredBy: Object.hasOwn(deviceConfig, "includeCoAuthoredBy")
-      ? deviceConfig.includeCoAuthoredBy
-      : projectConfig.includeCoAuthoredBy,
-  };
-}
-
-export function createAgentRuntimeConfigService({ settingsService, homeDirectory = os.homedir, fetchImpl = globalThis.fetch } = {}) {
-  if (!settingsService || typeof settingsService.load !== "function") throw new Error("运行设置需要软件设置服务。 ");
-
-  const claudeSnapshot = async (settings) => {
-    const projectRoot = clean(settings?.projectRoot);
-    if (!projectRoot) return { status: "needs-project", path: "", exists: false, settings: presentClaudeConfig() };
-    let projectLocation;
-    let deviceLocation;
-    try {
-      [projectLocation, deviceLocation] = await Promise.all([
-        safeClaudeSettingsPath(projectRoot),
-        safeDeviceClaudeSettingsPath(homeDirectory()),
-      ]);
-    }
-    catch (error) { return { status: "unavailable", path: "", exists: false, message: clean(error?.message), settings: presentClaudeConfig() }; }
-    try {
-      const [project, device] = await Promise.all([
-        projectLocation.exists ? readJsonObject(projectLocation.settingsPath, "项目 Claude Code 设置文件") : {},
-        deviceLocation.exists ? readJsonObject(deviceLocation.settingsPath, "本机 Claude Code 设置文件") : {},
-      ]);
-      const exists = projectLocation.exists || deviceLocation.exists;
-      return {
-        status: exists ? "ready" : "new",
-        path: projectLocation.settingsPath,
-        exists,
-        projectExists: projectLocation.exists,
-        deviceExists: deviceLocation.exists,
-        settings: presentClaudeConfig(mergedClaudeConfig({ device, project })),
-      };
-    } catch (error) {
-      return { status: "invalid", path: projectLocation.settingsPath, exists: true, message: clean(error?.message), settings: presentClaudeConfig() };
-    }
-  };
+export function createAgentRuntimeConfigService({ homeDirectory = os.homedir, fetchImpl = globalThis.fetch } = {}) {
 
   const claudeCodeApiSnapshot = async () => {
     let settingsLocation;
@@ -529,70 +424,11 @@ export function createAgentRuntimeConfigService({ settingsService, homeDirectory
     return { status: "ready", models, message: `已获取 ${models.length} 个模型。` };
   };
 
-  const snapshot = async () => {
-    const claude = await claudeSnapshot(settingsService.load());
-    return { claude };
-  };
-
-  const saveClaude = async (value = {}) => {
-    const settings = settingsService.load();
-    const projectRoot = clean(settings.projectRoot);
-    if (!projectRoot) throw new Error("请先选择当前 Agent 的工作目录。 ");
-    const [projectLocation, deviceLocation] = await Promise.all([
-      safeClaudeSettingsPath(projectRoot, { create: true }),
-      safeDeviceClaudeSettingsPath(homeDirectory(), { create: true }),
-    ]);
-    const [currentProject, currentDevice] = await Promise.all([
-      projectLocation.exists ? readJsonObject(projectLocation.settingsPath, "项目 Claude Code 设置文件") : {},
-      deviceLocation.exists ? readJsonObject(deviceLocation.settingsPath, "本机 Claude Code 设置文件") : {},
-    ]);
-    const nextProject = { ...currentProject };
-    const nextDevice = { ...currentDevice };
-    const permissions = { ...plainObject(currentProject.permissions) };
-    const env = { ...plainObject(currentDevice.env) };
-    const preserveTextService = value.preserveTextService === true;
-    const allowedTools = stringList(value.allowedTools, "允许工具");
-    const deniedTools = stringList(value.deniedTools, "禁止工具");
-    const baseUrl = preserveTextService ? "" : boundedText(value.baseUrl, "文本服务地址", 500);
-    const sonnetModel = preserveTextService ? "" : boundedText(value.sonnetModel, "Sonnet 模型", 200);
-    const sonnetModelName = preserveTextService ? "" : boundedText(value.sonnetModelName, "Sonnet 显示名", 200);
-    const opusModel = preserveTextService ? "" : boundedText(value.opusModel, "Opus 模型", 200);
-    const opusModelName = preserveTextService ? "" : boundedText(value.opusModelName, "Opus 显示名", 200);
-    const haikuModel = preserveTextService ? "" : boundedText(value.haikuModel, "Haiku 模型", 200);
-    const haikuModelName = preserveTextService ? "" : boundedText(value.haikuModelName, "Haiku 显示名", 200);
-    const authToken = preserveTextService ? "" : boundedText(value.authToken, "文本服务密钥", 1000);
-    nextProject.alwaysThinkingEnabled = value.alwaysThinkingEnabled === true;
-    nextDevice.includeCoAuthoredBy = value.includeCoAuthoredBy === true;
-    nextProject.skipWebFetchPreflight = value.skipWebFetchPreflight === true;
-    if (allowedTools.length) permissions.allow = allowedTools; else delete permissions.allow;
-    if (deniedTools.length) permissions.deny = deniedTools; else delete permissions.deny;
-    if (Object.keys(permissions).length) nextProject.permissions = permissions; else delete nextProject.permissions;
-    if (!preserveTextService) {
-      if (baseUrl) env.ANTHROPIC_BASE_URL = baseUrl; else delete env.ANTHROPIC_BASE_URL;
-      if (sonnetModel) env.ANTHROPIC_DEFAULT_SONNET_MODEL = sonnetModel; else delete env.ANTHROPIC_DEFAULT_SONNET_MODEL;
-      if (sonnetModelName) env.ANTHROPIC_DEFAULT_SONNET_MODEL_NAME = sonnetModelName; else delete env.ANTHROPIC_DEFAULT_SONNET_MODEL_NAME;
-      if (opusModel) env.ANTHROPIC_DEFAULT_OPUS_MODEL = opusModel; else delete env.ANTHROPIC_DEFAULT_OPUS_MODEL;
-      if (opusModelName) env.ANTHROPIC_DEFAULT_OPUS_MODEL_NAME = opusModelName; else delete env.ANTHROPIC_DEFAULT_OPUS_MODEL_NAME;
-      if (haikuModel) env.ANTHROPIC_DEFAULT_HAIKU_MODEL = haikuModel; else delete env.ANTHROPIC_DEFAULT_HAIKU_MODEL;
-      if (haikuModelName) env.ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME = haikuModelName; else delete env.ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME;
-      if (authToken) env.ANTHROPIC_AUTH_TOKEN = authToken;
-      else if (value.clearAuthToken === true) delete env.ANTHROPIC_AUTH_TOKEN;
-    }
-    if (Object.keys(env).length) nextDevice.env = env; else delete nextDevice.env;
-    await Promise.all([
-      writeAtomically(projectLocation.settingsPath, `${JSON.stringify(nextProject, null, 2)}\n`),
-      writeAtomically(deviceLocation.settingsPath, `${JSON.stringify(nextDevice, null, 2)}\n`),
-    ]);
-    return snapshot();
-  };
-
-  return { snapshot, claudeCodeApiSnapshot, saveClaude, saveClaudeCodeApi, fetchClaudeCodeModels };
+  return { claudeCodeApiSnapshot, saveClaudeCodeApi, fetchClaudeCodeModels };
 }
 
 export function registerAgentRuntimeConfigIpc({ ipcMain, agentRuntimeConfigService }) {
-  ipcMain.handle("agent-runtime:snapshot", () => agentRuntimeConfigService.snapshot());
   ipcMain.handle("agent-runtime:claude-code-api-snapshot", () => agentRuntimeConfigService.claudeCodeApiSnapshot());
-  ipcMain.handle("agent-runtime:save-claude", (_event, value) => agentRuntimeConfigService.saveClaude(value));
   ipcMain.handle("agent-runtime:save-claude-code-api", (_event, value) => agentRuntimeConfigService.saveClaudeCodeApi(value));
   ipcMain.handle("agent-runtime:fetch-claude-code-models", (_event, value) => agentRuntimeConfigService.fetchClaudeCodeModels(value));
 }

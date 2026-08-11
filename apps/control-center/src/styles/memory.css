@@ -1349,7 +1349,8 @@
   align-items: center;
   justify-content: flex-end;
   gap: 8px;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+  min-width: 0;
 }
 
 .memory-structure-validation {
@@ -1454,6 +1455,13 @@
   color: var(--text);
 }
 
+.memory-recall-toggle.is-active {
+  border-color: rgba(69, 212, 191, .42);
+  background: linear-gradient(135deg, rgba(69, 212, 191, .14), rgba(139, 130, 255, .14));
+  box-shadow: inset 0 1px rgba(255, 255, 255, .06), 0 8px 18px rgba(0, 0, 0, .12);
+  color: var(--text);
+}
+
 .memory-mode-action {
   border-color: rgba(139, 130, 255, .2);
   background: rgba(139, 130, 255, .04);
@@ -1468,8 +1476,492 @@
   }
 }
 
-@media (max-width: 720px) {
-  .memory-page-actions {
-    justify-content: flex-start;
-  }
+.memory-review-card {
+  display: grid;
+  gap: 18px;
+}
+
+.memory-review-filters {
+  display: grid;
+  gap: 9px;
+}
+
+.memory-review-filters > div,
+.memory-review-badges,
+.memory-review-item-footer,
+.memory-review-decision > div,
+.memory-review-batch,
+.memory-review-storage {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.memory-review-filters > div {
+  flex-wrap: wrap;
+}
+
+.memory-review-filters > div > span {
+  width: 66px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.memory-review-filters .memory-mode-action {
+  min-height: 32px;
+  padding: 6px 11px;
+  font-size: 12px;
+}
+
+.memory-review-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(142px, 1fr));
+  gap: 10px;
+  overflow-x: auto;
+  padding-bottom: 2px;
+}
+
+.memory-review-metrics article {
+  display: grid;
+  min-width: 142px;
+  gap: 4px;
+  border: 1px solid var(--line);
+  border-radius: 15px;
+  background: var(--panel-soft);
+  padding: 14px;
+}
+
+.memory-review-metrics span,
+.memory-review-metrics small,
+.memory-review-item-footer,
+.memory-review-section-title > span,
+.memory-review-health summary > span,
+.memory-review-health-item p,
+.memory-review-storage p,
+.memory-review-evidence > div,
+.memory-review-evidence small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.memory-review-metrics strong {
+  font-size: 25px;
+  line-height: 1.1;
+}
+
+.memory-review-list {
+  margin-top: 0;
+}
+
+.memory-review-item {
+  gap: 14px;
+}
+
+.memory-review-badges {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.memory-review-badge,
+.memory-review-type,
+.memory-review-tags span {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--panel);
+  color: var(--muted);
+  padding: 4px 8px;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.memory-review-badge.is-pending {
+  border-color: color-mix(in srgb, var(--accent2) 42%, var(--line));
+  color: color-mix(in srgb, var(--text) 70%, var(--accent2));
+}
+
+.memory-review-badge.is-accepted {
+  border-color: color-mix(in srgb, var(--accent) 42%, var(--line));
+  color: color-mix(in srgb, var(--text) 72%, var(--accent));
+}
+
+.memory-review-badge.is-dismissed,
+.memory-review-badge.is-revoked {
+  opacity: .74;
+}
+
+.memory-review-item-footer {
+  justify-content: space-between;
+  border-top: 1px solid var(--line);
+  padding-top: 12px;
+}
+
+.memory-review-detail-loading,
+.memory-review-detail-error {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--panel);
+  color: var(--muted);
+  padding: 13px;
+  font-size: 12px;
+}
+
+.memory-review-detail-error {
+  color: var(--danger, #e36a70);
+}
+
+.memory-review-detail,
+.memory-review-detail-section,
+.memory-review-member-list,
+.memory-review-evidence-list,
+.memory-review-decision {
+  display: grid;
+  gap: 12px;
+}
+
+.memory-review-detail {
+  border-top: 1px solid var(--line);
+  padding-top: 15px;
+}
+
+.memory-review-section-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.memory-review-section-title h3 {
+  margin: 0;
+  font-size: 14px;
+}
+
+.memory-review-memory-card {
+  display: grid;
+  gap: 7px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--panel);
+  padding: 13px;
+}
+
+.memory-review-memory-card.is-empty,
+.memory-review-empty-inline {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.memory-review-memory-card p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.memory-review-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.memory-review-evidence {
+  display: grid;
+  gap: 7px;
+  border-left: 2px solid var(--accent2);
+  border-radius: 0 12px 12px 0;
+  background: var(--panel);
+  padding: 11px 12px;
+}
+
+.memory-review-evidence > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.memory-review-evidence blockquote {
+  margin: 0;
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.memory-review-evidence details,
+.memory-review-member-list details,
+.memory-review-json {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.memory-review-evidence summary,
+.memory-review-member-list summary,
+.memory-review-json summary,
+.memory-review-health summary {
+  cursor: pointer;
+}
+
+.memory-review-evidence pre,
+.memory-review-json pre {
+  max-height: 280px;
+  overflow: auto;
+  margin: 9px 0 0;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel);
+  color: var(--text);
+  padding: 11px;
+  font: 11px/1.55 ui-monospace, SFMono-Regular, Consolas, monospace;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.memory-review-member-list > article {
+  display: grid;
+  gap: 8px;
+}
+
+.memory-review-endpoints,
+.memory-review-state-change {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+}
+
+.memory-review-endpoints > span,
+.memory-review-state-change > span {
+  color: var(--muted);
+  font-size: 12px;
+  text-align: center;
+}
+
+.memory-review-decision {
+  border-top: 1px solid var(--line);
+  padding-top: 14px;
+}
+
+.memory-review-decision label {
+  display: grid;
+  gap: 7px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.memory-review-decision textarea {
+  resize: vertical;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel);
+  color: var(--text);
+  padding: 10px 11px;
+  font: inherit;
+  line-height: 1.5;
+}
+
+.memory-review-decision > div {
+  justify-content: flex-end;
+}
+
+.memory-review-health {
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--panel-soft);
+  padding: 0 15px;
+}
+
+.memory-review-health summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 50px;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.memory-review-health-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(260px, 1fr));
+  gap: 10px;
+  min-width: 540px;
+  overflow-x: auto;
+  padding: 0 0 15px;
+}
+
+.memory-review-health-item {
+  display: grid;
+  align-content: start;
+  gap: 7px;
+  min-height: 95px;
+  border: 1px solid var(--line);
+  border-radius: 13px;
+  background: var(--panel);
+  padding: 12px;
+}
+
+.memory-review-health-item.is-warning {
+  border-color: color-mix(in srgb, var(--line) 65%, var(--accent2) 35%);
+}
+
+.memory-review-health-item p {
+  margin: 0;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.memory-review-batch {
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.memory-review-batch + .memory-review-batch {
+  margin-top: 8px;
+}
+
+.memory-review-storage {
+  align-items: stretch;
+  padding: 0 0 15px;
+}
+
+.memory-review-storage > div {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 13px;
+  background: var(--panel);
+  padding: 12px;
+}
+
+.memory-review-storage p {
+  margin: 7px 0 0;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.memory-contact-picker-trigger {
+  min-width: 0;
+  max-width: 190px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.memory-contact-picker-trigger.is-active {
+  border-color: color-mix(in srgb, var(--accent2) 54%, var(--line));
+  background: color-mix(in srgb, var(--accent2) 12%, var(--panel));
+  color: var(--text);
+}
+
+.memory-contact-picker-overlay {
+  position: fixed;
+  z-index: 60;
+  inset: 0;
+  display: flex;
+  justify-content: flex-end;
+  background: rgba(4, 6, 11, .42);
+  backdrop-filter: blur(5px);
+}
+
+.memory-contact-picker {
+  display: flex;
+  width: min(360px, calc(100vw - 24px));
+  height: 100%;
+  flex-direction: column;
+  overflow: auto;
+  border-left: 1px solid color-mix(in srgb, var(--accent2) 28%, var(--line));
+  background: var(--panel);
+  box-shadow: -20px 0 48px rgba(0, 0, 0, .26);
+  padding: 22px;
+}
+
+.memory-contact-picker > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--line);
+}
+
+.memory-contact-picker h2 {
+  margin: 0;
+  color: var(--text);
+  font-size: 18px;
+  letter-spacing: -.2px;
+}
+
+.memory-contact-picker__close {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel-soft);
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.memory-contact-picker__list {
+  display: grid;
+  gap: 8px;
+  padding-top: 16px;
+}
+
+.memory-contact-picker__option {
+  width: 100%;
+  min-height: 44px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel-soft);
+  color: var(--text);
+  cursor: pointer;
+  padding: 0 13px;
+  font-weight: 600;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.memory-contact-picker__option.is-selected {
+  border-color: color-mix(in srgb, var(--accent2) 55%, var(--line));
+  background: color-mix(in srgb, var(--accent2) 14%, var(--panel-soft));
+  color: var(--text);
+}
+
+.memory-contact-picker__option:hover:not(:disabled),
+.memory-contact-picker__close:hover {
+  border-color: color-mix(in srgb, var(--accent) 52%, var(--line));
+  color: var(--text);
+}
+
+.memory-contact-picker__option:focus-visible,
+.memory-contact-picker__close:focus-visible {
+  outline: 2px solid var(--accent2);
+  outline-offset: 2px;
+}
+
+.memory-contact-picker__option:disabled {
+  cursor: wait;
+  opacity: .62;
+}
+
+.memory-contact-picker__empty {
+  border: 1px dashed var(--line);
+  border-radius: 12px;
+  color: var(--muted);
+  padding: 14px;
+  text-align: center;
 }

@@ -132,7 +132,7 @@ export function createIphoneFeedbackLinkService({
     const settings = plainObject(settingsProvider());
     const dataRoot = clean(settings.dataRoot);
     const projectRoot = clean(settings.projectRoot);
-    const targets = targetSessions(configuredTargets());
+    const targets = targetSessions(await Promise.resolve(configuredTargets()));
     if (!dataRoot || !projectRoot || !targets.length) return { started: false, reason: "not-configured" };
 
     let paths;
@@ -189,7 +189,7 @@ export function createIphoneFeedbackLinkService({
       if (!event || child !== next || disposed) return;
       void (async () => {
         try {
-          const freshTargets = targetSessions(configuredTargets());
+          const freshTargets = targetSessions(await Promise.resolve(configuredTargets()));
           if (!freshTargets.length) throw new Error("没有已启用的目标会话。 ");
           const media = await feedbackMedia(event.attachments, paths.inboxPath, fsOps);
           const deliveries = await Promise.allSettled(freshTargets.map((target) => chat.sendToSession({

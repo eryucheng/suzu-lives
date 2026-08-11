@@ -2,16 +2,14 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  conversationMessageRows,
   dismissConversationOverlays,
   filterConversationItems,
   parseSuzuConversationCommand,
-  renderConversation,
-  renderConversationMessages,
-  renderRelationshipOverview,
+  conversationReactSnapshot,
   shouldSubmitConversationOnEnter,
-  shouldShowWechatTimeDivider,
+  shouldShowCenteredTimeDivider,
   splitAssistantMessageOnBlankLines,
-  voiceTimeLabel,
 } from "../src/features/conversation/index.mjs";
 
 const messages = [
@@ -21,46 +19,20 @@ const messages = [
   { kind: "attachment", blocks: [{ kind: "text", text: "隐藏 Hook" }] },
 ];
 
-test("relationship overview makes the conversation card the accessible subpage entry", () => {
-  const overview = renderRelationshipOverview();
-  assert.match(overview, /<button type="button" class="relationship-card relationship-card--conversation" data-open-conversation/);
-  assert.match(overview, /aria-label="打开对话：查看并继续当前 Claude 会话"/);
-  assert.equal((overview.match(/data-open-conversation/g) || []).length, 1);
-  assert.match(overview, /<button type="button" class="relationship-card relationship-card--memory" data-open-memory/);
-  assert.equal((overview.match(/data-open-memory/g) || []).length, 1);
-  assert.match(overview, /data-open-relationship-settings/);
-  assert.equal((overview.match(/data-open-relationship-settings/g) || []).length, 1);
-  assert.match(overview, /相处设定/u);
-  assert.doesNotMatch(overview, /共同记忆|>打开对话<|secondary-button/);
-  const connectedOverview = renderRelationshipOverview({
-    state: {
-      memoryStatus: {
-        status: "ready",
-        memories: 12,
-        edges: 7,
-      },
-    },
-  });
-  assert.match(connectedOverview, /12 个节点 · 7 条关联/u);
-  const view = renderConversation({ state: { settings: { conversationPreferences: {} } } });
-  assert.match(view, /conversation-workspace/);
-  assert.match(view, /conversation-roster/);
-  assert.match(view, /data-conversation-new/);
-  assert.doesNotMatch(view, /独立 Claude 项目/u);
-  assert.equal((view.match(/data-conversation-contact=/g) || []).length, 0);
-  assert.doesNotMatch(view, /data-return-relationships/);
-  assert.match(view, /class="conversation-peer">未选择联系人<\/h1>/);
-  assert.match(view, /data-open-conversation-call/);
-  assert.match(view, /开始与此联系人语音通话/);
-  assert.match(view, /data-toggle-conversation-search/);
-  assert.match(view, /data-toggle-conversation-menu/);
-  assert.doesNotMatch(view, /data-toggle-conversation-settings/);
-  assert.match(view, /id="conversationComposer"/);
-  assert.match(view, /data-conversation-composer/);
-  assert.match(view, /conversation-composer__surface/);
-  assert.match(view, /data-toggle-conversation-emoji/);
-  assert.match(view, /conversation-send-button/);
-  assert.doesNotMatch(view, /仅本地只读|RELATIONSHIPS \/ CONVERSATION/u);
+test("conversation React snapshot keeps the current contact model and message rows", () => {
+  const view = conversationReactSnapshot({ state: { settings: { conversationPreferences: {} } } });
+  assert.equal(view.peer, "未选择联系人");
+  assert.equal(view.contacts.length, 0);
+  assert.equal(view.hasContactsRoot, false);
+  assert.equal(view.call.available, false);
+  assert.equal(view.composer.unavailable, true);
+  assert.equal(view.messageRows[0]?.type, "empty");
+  assert.deepEqual(view.permissions, []);
+  assert.equal(view.search, null);
+  assert.equal(view.sessionSettings, null);
+  assert.equal(view.overlays.contactCreate, false);
+  assert.doesNotMatch(view.messageRows[0]?.text || "", /独立 Claude 项目/u);
+  assert.doesNotMatch(view.rosterEmpty, /仅本地只读|RELATIONSHIPS \/ CONVERSATION/u);
 });
 
 test("conversation display preferences filter optional records but keep user text", () => {
@@ -75,7 +47,7 @@ test("conversation display preferences filter optional records but keep user tex
 });
 
 test("agent media remains visible as a chat attachment even when tool details are hidden", () => {
-  const markup = renderConversationMessages([{
+  const rows = conversationMessageRows([{
     kind: "assistant",
     timestamp: "2026-08-04T10:00:00+08:00",
     blocks: [{
@@ -86,14 +58,18 @@ test("agent media remains visible as a chat attachment even when tool details ar
       size: 2048,
     }],
   }], { state: { settings: { conversationPreferences: { tools: false } } } });
-  assert.match(markup, /conversation-media--file/);
-  assert.match(markup, /conversation-message assistant is-media-only/);
-  assert.match(markup, /agent-report\.txt/);
-  assert.match(markup, /2\.0 KB/);
+  const message = rows.find((row) => row.type === "message");
+  const media = message?.blocks[0] || {};
+  assert.equal(message?.mediaOnly, true);
+  assert.equal(message?.kind, "assistant");
+  assert.equal(media.type, "media");
+  assert.equal(media.mediaKind, "file");
+  assert.equal(media.fileName, "agent-report.txt");
+  assert.equal(media.size, "2.0 KB");
 });
 
 test("image attachments render as fixed previews that can be enlarged", () => {
-  const markup = renderConversationMessages([{
+  const rows = conversationMessageRows([{
     id: "assistant-image",
     lineNumber: 42,
     kind: "assistant",
@@ -106,18 +82,20 @@ test("image attachments render as fixed previews that can be enlarged", () => {
       size: 2048,
     }],
   }], { state: { settings: { conversationPreferences: { tools: false } } } });
-  assert.match(markup, /conversation-media__preview/);
-  assert.match(markup, /data-conversation-media-preview=/);
-  assert.match(markup, /data-conversation-media-url="file:\/\/\/C:\/temp\/agent-image\.png"/);
-  assert.match(markup, /data-conversation-media-message-id="assistant-image"/);
-  assert.match(markup, /data-conversation-media-line-number="42"/);
-  assert.match(markup, /data-conversation-message-id="assistant-image"/);
-  assert.match(markup, /data-conversation-line-number="42"/);
-  assert.match(markup, /agent-image\.png/);
+  const message = rows.find((row) => row.type === "message");
+  const media = message?.blocks[0] || {};
+  assert.equal(media.type, "media");
+  assert.equal(media.mediaKind, "image");
+  assert.equal(media.preview?.url, "file:///C:/temp/agent-image.png");
+  assert.equal(media.preview?.messageId, "assistant-image");
+  assert.equal(media.preview?.lineNumber, 42);
+  assert.equal(message?.sourceMessageId, "assistant-image");
+  assert.equal(message?.lineNumber, 42);
+  assert.equal(media.fileName, "agent-image.png");
 });
 
-test("MP3 messages render as a playable voice bar instead of an attachment card", () => {
-  const markup = renderConversationMessages([{
+test("MP3 messages give the React renderer a design-system voice payload", () => {
+  const rows = conversationMessageRows([{
     kind: "assistant",
     timestamp: "2026-08-05T10:00:00+08:00",
     blocks: [{
@@ -128,30 +106,32 @@ test("MP3 messages render as a playable voice bar instead of an attachment card"
       size: 2048,
     }],
   }], { state: { settings: { conversationPreferences: { tools: false } } } });
-  assert.match(markup, /conversation-voice/);
-  assert.match(markup, /data-conversation-voice-toggle/);
-  assert.match(markup, /data-conversation-voice-media/);
-  assert.doesNotMatch(markup, /音频附件/u);
-  assert.doesNotMatch(markup, /<audio[^>]+controls/u);
-});
-
-test("voice bars use a stable short duration label", () => {
-  assert.equal(voiceTimeLabel(0), "0:00");
-  assert.equal(voiceTimeLabel(65.9), "1:05");
+  const message = rows.find((row) => row.type === "message");
+  assert.equal(message?.mediaOnly, true);
+  assert.deepEqual(message?.blocks, [{
+    fileName: "voice.mp3",
+    fileUrl: "file:///C:/temp/voice.mp3",
+    type: "audio",
+  }]);
 });
 
 test("chat bubbles never append delivery or reply-status labels", () => {
-  const markup = renderConversationMessages([
+  const rows = conversationMessageRows([
     { kind: "user", accepted: true, timestamp: "2026-08-05T10:00:00+08:00", blocks: [{ kind: "text", text: "收到" }] },
     { kind: "assistant", streaming: true, timestamp: "2026-08-05T10:00:01+08:00", blocks: [{ kind: "text", text: "好的" }] },
   ], { state: { settings: { conversationPreferences: { timeDisplay: "bubble" } } } });
-  assert.doesNotMatch(markup, /已发送|正在回复|发送中|排队中|引导已送达/u);
+  const renderedText = rows
+    .filter((row) => row.type === "message")
+    .flatMap((row) => row.blocks)
+    .map((block) => block.text || block.detail || "")
+    .join("\n");
+  assert.doesNotMatch(renderedText, /已发送|正在回复|发送中|排队中|引导已送达/u);
 });
 
 test("conversation overlays close together when the user clicks away or presses Escape", () => {
-  const state = { avatarCrop: { source: "data:image/png;base64,avatar" }, contactCreateOpen: true, emojiOpen: true, mediaPreview: { url: "file:///C:/temp/image.png" }, menuOpen: true, searchOpen: false, settingsOpen: true, wechatQrOpen: true };
+  const state = { avatarCrop: { source: "data:image/png;base64,avatar" }, contactCreateOpen: true, contactContextMenu: { contactId: "contact-test" }, emojiOpen: true, mediaPreview: { url: "file:///C:/temp/image.png" }, menuOpen: true, searchOpen: false, sessionNoteOpen: true, settingsOpen: true, wechatQrOpen: true };
   assert.equal(dismissConversationOverlays(state), true);
-  assert.deepEqual(state, { avatarCrop: null, contactCreateOpen: false, emojiOpen: false, mediaPreview: null, menuOpen: false, searchOpen: false, settingsOpen: false, wechatQrOpen: false });
+  assert.deepEqual(state, { avatarCrop: null, contactCreateOpen: false, contactContextMenu: null, emojiOpen: false, mediaPreview: null, menuOpen: false, searchOpen: false, sessionNoteOpen: false, settingsOpen: false, wechatQrOpen: false });
   assert.equal(dismissConversationOverlays(state), false);
 });
 
@@ -196,17 +176,17 @@ test("assistant replies split only on blank lines and keep the live state on the
   assert.deepEqual(splitAssistantMessageOnBlankLines({ kind: "user", blocks: reply.blocks }), [{ kind: "user", blocks: reply.blocks }]);
 });
 
-test("WeChat time mode groups nearby messages and renders a centered divider", () => {
+test("center time mode groups nearby messages and renders a centered divider", () => {
   const first = "2026-08-04T10:00:00+08:00";
-  assert.equal(shouldShowWechatTimeDivider("", first), true);
-  assert.equal(shouldShowWechatTimeDivider(first, "2026-08-04T10:04:59+08:00"), false);
-  assert.equal(shouldShowWechatTimeDivider(first, "2026-08-04T10:05:00+08:00"), true);
+  assert.equal(shouldShowCenteredTimeDivider("", first), true);
+  assert.equal(shouldShowCenteredTimeDivider(first, "2026-08-04T10:04:59+08:00"), false);
+  assert.equal(shouldShowCenteredTimeDivider(first, "2026-08-04T10:05:00+08:00"), true);
 
-  const markup = renderConversationMessages([
+  const rows = conversationMessageRows([
     { kind: "assistant", timestamp: first, blocks: [{ kind: "text", text: "第一段\n\n第二段" }] },
     { kind: "user", timestamp: "2026-08-04T10:04:00+08:00", blocks: [{ kind: "text", text: "收到" }] },
-  ], { state: { settings: { conversationPreferences: { timeDisplay: "wechat" } } } });
-  assert.equal((markup.match(/conversation-message assistant/g) || []).length, 2);
-  assert.equal((markup.match(/conversation-time-divider/g) || []).length, 1);
-  assert.doesNotMatch(markup, /conversation-meta/);
+  ], { state: { settings: { conversationPreferences: { timeDisplay: "center" } } } });
+  assert.equal(rows.filter((row) => row.type === "message" && row.kind === "assistant").length, 2);
+  assert.equal(rows.filter((row) => row.type === "time").length, 1);
+  assert.equal(rows.filter((row) => row.type === "message").every((row) => !row.timestamp), true);
 });

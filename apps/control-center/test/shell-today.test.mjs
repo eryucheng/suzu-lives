@@ -38,34 +38,3 @@ test("today page centers real dates and removes the old placeholder dashboard", 
   assert.match(view, /data-open-admin="usage"/);
   assert.doesNotMatch(view, /和 Suzu 一起，留出真正重要的时间/);
 });
-
-test("plans page shows persisted one-shot and recurring Suzu schedules", () => {
-  const view = renderShellView("plans", {
-    state: {
-      scheduleSnapshot: {
-        tasks: [
-          {
-            id: "schedule-11111111-1111-4111-8111-111111111111",
-            kind: "once",
-            description: "链式主动关心",
-            dueAt: "2026-08-05T10:45:00.000Z",
-            createdAt: "2026-08-05T10:00:00.000Z",
-            target: { type: "conversation", sessionId: "session-a" },
-          },
-          {
-            id: "schedule-22222222-2222-4222-8222-222222222222",
-            kind: "cron",
-            description: "洛克王国远行商人监控",
-            cron: "2 8,12,16,20 * * *",
-            createdAt: "2026-08-05T10:00:00.000Z",
-            target: { type: "operation", name: "traveling-merchant" },
-          },
-        ],
-      },
-    },
-  });
-  assert.match(view, /链式主动关心/u);
-  assert.match(view, /洛克王国远行商人监控/u);
-  assert.match(view, /2 8,12,16,20 \* \* \*/u);
-  assert.match(view, /按能力设置决定会话范围/u);
-});
