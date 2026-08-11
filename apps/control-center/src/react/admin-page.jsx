@@ -1086,18 +1086,24 @@ function UsageEventTable({ events }) {
   );
 }
 
+function ConversationCostList({ conversations }) {
+  return conversations.length ? <div className="admin-conversation-list">{conversations.map((item, index) => <article key={(item.contactId || "contact") + ":" + (item.turnId || item.firstAt || "conversation") + "-" + index}><div><strong>{item.prompt}</strong><p><Status label={item.contactName || "未归属联系人"} tone="muted" /> · {dateTime(item.firstAt)}{item.tools?.length ? " · 工具：" + item.tools.join("、") : ""}</p></div><span>{item.requestCount} 次请求</span><b>{money(item.amountCny)}</b></article>)}</div> : <p className="admin-empty-copy">还没有可以归属到会话轮次的费用。</p>;
+}
+
 function UsageSettings({ actions, data }) {
   const ready = data?.status === "ready";
   const [filter, setFilter] = useState("all");
   const [query, setQuery] = useState("");
   const [sourceScopeOpen, setSourceScopeOpen] = useState(false);
   const [allUsageOpen, setAllUsageOpen] = useState(false);
+  const [allConversationCostsOpen, setAllConversationCostsOpen] = useState(false);
   const summary = usageSummary(data);
   const events = list(data?.events);
   const sources = list(data?.sources);
   const filtered = usageEvents(data, filter, query);
   const recentEvents = filtered.slice(-20).reverse();
   const allFilteredEvents = filtered.slice().reverse();
+  const visibleConversationCosts = summary.conversations.slice(0, 20);
   const sourceNames = [...new Set(events.map((event) => event.source).filter(Boolean))];
   const prices = list(data?.priceCatalog?.models);
 
@@ -1136,6 +1142,15 @@ function UsageSettings({ actions, data }) {
         </div>
       </Dialog>
 
+      <Dialog onClose={() => setAllConversationCostsOpen(false)} open={allConversationCostsOpen} title="全部会话花销">
+        <div className="admin-usage-all-dialog">
+          <p className="admin-dialog-copy">按费用从高到低显示 {summary.conversations.length.toLocaleString("zh-CN")} 个会话轮次。</p>
+          <div className="admin-usage-all-dialog__scroll">
+            <ConversationCostList conversations={summary.conversations} />
+          </div>
+        </div>
+      </Dialog>
+
       <AdminPanel className="admin-usage-ledger">
         <PanelHeading description={"最近扫描于 " + dateTime(data.scannedAt) + "，共 " + events.length.toLocaleString("zh-CN") + " 条已识别记录。"} title="调用流水" />
         <div className="admin-usage-toolbar">
@@ -1153,7 +1168,8 @@ function UsageSettings({ actions, data }) {
 
       <AdminPanel>
         <PanelHeading description="一次用户输入可能触发多次模型请求和工具循环。" title="会话费用" />
-        {summary.conversations.length ? <div className="admin-conversation-list">{summary.conversations.slice(0, 100).map((item, index) => <article key={(item.contactId || "contact") + ":" + (item.turnId || item.firstAt || "conversation") + "-" + index}><div><strong>{item.prompt}</strong><p><Status label={item.contactName || "未归属联系人"} tone="muted" /> · {dateTime(item.firstAt)}{item.tools?.length ? " · 工具：" + item.tools.join("、") : ""}</p></div><span>{item.requestCount} 次请求</span><b>{money(item.amountCny)}</b></article>)}</div> : <p className="admin-empty-copy">还没有可以归属到会话轮次的费用。</p>}
+        <ConversationCostList conversations={visibleConversationCosts} />
+        {summary.conversations.length ? <footer className="admin-usage-ledger__footer"><Button onClick={() => setAllConversationCostsOpen(true)} size="md" type="button" variant="secondary">查看全部会话花销</Button></footer> : null}
       </AdminPanel>
 
       <section className="admin-price-list">

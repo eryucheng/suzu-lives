@@ -796,6 +796,10 @@
   color:var(--text);
 }
 
+.admin-usage-all-dialog .admin-conversation-list {
+  margin-top:0;
+}
+
 .admin-usage-table {
   width:100%;
   min-width:780px;
