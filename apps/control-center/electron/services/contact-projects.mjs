@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 
-import { normalizeAgentId, stableAgentId } from "@suzu-lives/agent-registry";
+import { normalizeAgentId } from "@suzu-lives/agent-registry";
 
 const CONTACT_FILE = "CLAUDE.md";
 const CONTACT_METADATA_DIRECTORY = ".suzu-lives";
@@ -85,12 +85,16 @@ async function contactMetadata(fsOps, projectRoot) {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
   try {
     const createdAt = clean(raw.createdAt);
+    const agentId = normalizeAgentId(raw.agentId);
+    // Storage identity is created together with every contact and is required
+    // when reading it back. Do not recreate a path-derived fallback here.
+    if (!agentId) return null;
     return {
       id: normalizeContactId(raw.id),
       name: normalizeContactName(raw.name),
       createdAt: Number.isFinite(Date.parse(createdAt)) ? createdAt : "",
       sessionId: normalizeSessionId(raw.sessionId),
-      agentId: normalizeAgentId(raw.agentId),
+      agentId,
     };
   } catch {
     return null;
@@ -99,25 +103,6 @@ async function contactMetadata(fsOps, projectRoot) {
 
 function agentIdForContactId(id) {
   return `agent-${normalizeContactId(id).slice("contact-".length)}`;
-}
-
-async function materializeContactStorageIdentity(fsOps, projectRoot, metadata) {
-  if (metadata.agentId) return metadata;
-
-  // Contacts created before storage identity was persisted already own data
-  // under their path-derived ID. Pin that existing ID instead of copying or
-  // moving any per-contact data directory.
-  const agentId = stableAgentId(projectRoot);
-  if (!agentId) throw new ContactProjectsError("无法生成联系人固定存储身份。 ");
-  try {
-    await writeTextAtomic(fsOps, path.join(projectRoot, CONTACT_METADATA_DIRECTORY, CONTACT_METADATA_FILE), contactMetadataText({
-      ...metadata,
-      agentId,
-    }));
-  } catch (error) {
-    throw new ContactProjectsError(`无法固化联系人存储身份：${clean(error?.message) || "未知错误"}`);
-  }
-  return { ...metadata, agentId };
 }
 
 async function contactAt(fsOps, root, value) {
@@ -132,9 +117,8 @@ async function contactAt(fsOps, root, value) {
   const realProjectRoot = await fsOps.realpath(projectRoot);
   if (!samePath(path.dirname(realProjectRoot), root)) return null;
   if (!(await ordinaryFile(fsOps, path.join(realProjectRoot, CONTACT_FILE)))) return null;
-  let metadata = await contactMetadata(fsOps, realProjectRoot);
+  const metadata = await contactMetadata(fsOps, realProjectRoot);
   if (!metadata || metadata.id !== id) return null;
-  metadata = await materializeContactStorageIdentity(fsOps, realProjectRoot, metadata);
   return {
     id,
     name: metadata.name,
@@ -169,14 +153,16 @@ function initialClaudeFile(name) {
   return `# ${name}\n`;
 }
 
-function contactMetadataText({ id, name, createdAt, sessionId = "", agentId = "" } = {}) {
+function contactMetadataText({ id, name, createdAt, sessionId = "", agentId } = {}) {
+  const storageIdentity = normalizeAgentId(agentId);
+  if (!storageIdentity) throw new ContactProjectsError("联系人固定存储身份无效。 ");
   return `${JSON.stringify({
     version: 1,
     id,
     name,
     createdAt,
     ...(normalizeSessionId(sessionId) ? { sessionId: normalizeSessionId(sessionId) } : {}),
-    ...(normalizeAgentId(agentId) ? { agentId: normalizeAgentId(agentId) } : {}),
+    agentId: storageIdentity,
   }, null, 2)}\n`;
 }
 

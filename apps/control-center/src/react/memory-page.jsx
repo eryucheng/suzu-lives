@@ -130,6 +130,10 @@ function visualTierLabel(node) {
   }[node?.visualTier] || memoryKindLabel(node?.kind);
 }
 
+function structureReviewLabel(node) {
+  return node?.structureReviewState === "pending" ? "未审核结构" : "";
+}
+
 function relationLabel(value) {
   return {
     part_of_episode: "属于事件簇",
@@ -243,7 +247,12 @@ function MemoryOverview({ api, contactId, memory, onError, onSuccess }) {
         <div><strong>{numberText(memory?.edges)}</strong><span>关联</span></div>
         <div><strong>{numberText(memory?.embeddings)}</strong><span>向量</span></div>
       </div>
-      <p>{ready ? `当前向量模型：${memory?.embeddingModel || "未配置查询模型"}` : "记忆数据库尚未准备好；聊天和缓存不会写进仓库。"}</p>
+      <p>{ready ? <>
+        当前向量模型：{memory?.embeddingModel || "未配置查询模型"}<br />
+        自动整理模型：{memory?.generationConfigured
+          ? `${memory?.generationModel || "当前 Claude Code 主模型"}（已配置）`
+          : "未配置；新的记忆会保留为待整理"}
+      </> : "记忆数据库尚未准备好；聊天和缓存不会写进仓库。"}</p>
     </article>
     <RecallTest api={api} contactId={contactId} disabled={!ready} onError={onError} onSuccess={onSuccess} />
   </section>;
@@ -469,7 +478,7 @@ function BrainDetail({ detail, graph, loading, onDelete, onEdit, selectedNode })
     <div className="brain-detail-date">{memoryDate(memory)}</div>
     <h2>{memory.title || "未命名记忆"}</h2>
     <p>{memory.content || memory.preview || (loading ? "正在读取记忆详情…" : "没有可展示的记忆正文")}</p>
-    <div className="brain-detail-tags"><span>{visualTierLabel(memory)}</span><span>{memoryKindLabel(memory.kind)}</span><span>{detail ? `${detail.sources?.length || 0} 条原始证据` : `重要度 ${Math.round(Number(memory.importance || 0) * 100)}%`}</span><span>{edges.length} 条记忆关联</span></div>
+    <div className="brain-detail-tags"><span>{visualTierLabel(memory)}</span><span>{memoryKindLabel(memory.kind)}</span>{structureReviewLabel(memory) ? <span>{structureReviewLabel(memory)}</span> : null}<span>{detail ? `${detail.sources?.length || 0} 条原始证据` : `重要度 ${Math.round(Number(memory.importance || 0) * 100)}%`}</span><span>{edges.length} 条记忆关联</span></div>
     {relations.length ? <div className="brain-relation-tags">{relations.map((relation) => <span key={relation}>{relation}</span>)}</div> : null}
     {detail?.memory ? <div className="brain-detail-actions"><Button onClick={() => onEdit(detail)} size="sm" type="button" variant="secondary">修改</Button><Button onClick={() => void onDelete(detail.memory.id)} size="sm" type="button" variant="danger">删除</Button></div> : null}
   </div>;
@@ -695,9 +704,9 @@ function MaintenanceFailure({ failure }) {
   </section>;
 }
 
-function ReviewDetail({ detail, onDecide, pending }) {
+function ReviewDetail({ detail, onDecide, onRetryLongTermExtraction, pending }) {
   const [note, setNote] = useState("");
-  const canDecide = detail.permissions?.canAccept || detail.permissions?.canDismiss || detail.permissions?.canRevoke;
+  const canDecide = detail.permissions?.canAccept || detail.permissions?.canDismiss || detail.permissions?.canRevoke || detail.permissions?.canRetryLongTermExtraction;
   const humanFallback = ["ingestion", "maintenance-failure"].includes(detail.type);
   return <div className="memory-review-detail">
     <section className="memory-review-detail-section">
@@ -714,6 +723,7 @@ function ReviewDetail({ detail, onDecide, pending }) {
       <label>审核备注（可选）<Textarea disabled={pending} onChange={(event) => setNote(event.target.value)} placeholder="记录本次判断理由" rows={2} value={note} /></label>
       <div>
         {detail.permissions?.canDismiss ? <Button disabled={pending} onClick={() => void onDecide("dismiss", note)} type="button" variant="danger">{humanFallback ? "保留基础记忆" : "驳回"}</Button> : null}
+        {detail.permissions?.canRetryLongTermExtraction ? <Button disabled={pending} onClick={() => void onRetryLongTermExtraction(note)} type="button" variant="secondary">{pending ? "正在重新提炼…" : "重新提炼"}</Button> : null}
         {detail.permissions?.canAccept ? <Button disabled={pending} onClick={() => void onDecide("accept", note)} type="button">{pending ? "处理中…" : humanFallback ? "人工通过并写入" : "接受并写入"}</Button> : null}
         {detail.permissions?.canRevoke ? <Button disabled={pending} onClick={() => void onDecide("revoke", note)} type="button" variant="danger">撤销关系</Button> : null}
       </div>
@@ -729,7 +739,7 @@ function ReviewTypeBadge({ value }) {
   return <span className="memory-review-type">{REVIEW_TYPE_LABELS[value] || value || "未知类型"}</span>;
 }
 
-function ReviewItem({ detail, detailError, detailLoading, item, onDecide, onToggle, pending, selected }) {
+function ReviewItem({ detail, detailError, detailLoading, item, onDecide, onRetryLongTermExtraction, onToggle, pending, selected }) {
   const key = reviewKey(item.type, item.id);
   return <article className="memory-attribution-item memory-review-item">
     <div className="memory-attribution-head">
@@ -741,7 +751,7 @@ function ReviewItem({ detail, detailError, detailLoading, item, onDecide, onTogg
     <div className="memory-review-item-footer"><span>{item.batchId ? `批次 ${shortId(item.batchId)}` : "独立候选"}</span><Button onClick={() => void onToggle(item.type, item.id)} type="button" variant="secondary">{selected ? "收起依据" : "查看依据"}</Button></div>
     {selected ? detailLoading ? <div className="memory-review-detail-loading"><span className="brain-loader" />正在读取候选依据…</div>
       : detailError ? <div className="memory-review-detail-error">{detailError}</div>
-        : detail ? <ReviewDetail detail={detail} key={key} onDecide={onDecide} pending={pending} /> : null : null}
+        : detail ? <ReviewDetail detail={detail} key={key} onDecide={onDecide} onRetryLongTermExtraction={onRetryLongTermExtraction} pending={pending} /> : null : null}
   </article>;
 }
 
@@ -766,7 +776,7 @@ function PipelineHealth({ onRecover, overview, recovering }) {
   </details>;
 }
 
-function StorageHealth({ backingUp, onBackup, overview }) {
+function StorageHealth({ backingUp, onBackup, onRestore, overview, restoring }) {
   const storage = overview?.storage || {};
   const active = storage.activeDatabase || {};
   const backups = storage.backups || {};
@@ -776,7 +786,10 @@ function StorageHealth({ backingUp, onBackup, overview }) {
     <div className="memory-review-storage">
       <div><strong>当前记忆数据库</strong><p>状态：{active.status || "unknown"}<br />位置：{active.databasePath || "—"}</p></div>
       <div><strong>数据库备份</strong><p>数量：{numberText(backups.total)}<br />最新：{latest.createdAt || latest.modifiedAt || "—"}</p></div>
-      <Button disabled={backingUp} onClick={() => void onBackup()} type="button" variant="secondary">{backingUp ? "正在创建…" : "创建备份"}</Button>
+      <div className="memory-review-storage-actions">
+        <Button disabled={backingUp || restoring} onClick={() => void onBackup()} type="button" variant="secondary">{backingUp ? "正在创建…" : "创建备份"}</Button>
+        <Button disabled={backingUp || restoring} onClick={() => void onRestore()} type="button" variant="secondary">{restoring ? "正在恢复…" : "恢复备份"}</Button>
+      </div>
     </div>
   </details>;
 }
@@ -794,6 +807,7 @@ function MemoryReview({ actions, api, contactId, onError, onSuccess }) {
   const [resolvingKey, setResolvingKey] = useState("");
   const [recoveringBatch, setRecoveringBatch] = useState("");
   const [backingUp, setBackingUp] = useState(false);
+  const [restoring, setRestoring] = useState(false);
   const overviewRequestRef = useRef(0);
 
   const load = useCallback(async () => {
@@ -895,6 +909,25 @@ function MemoryReview({ actions, api, contactId, onError, onSuccess }) {
     }
   };
 
+  const retryLongTermExtraction = async (detail, note) => {
+    const key = reviewKey(detail.type, detail.id);
+    if (!window.confirm("会从已保留的原文证据重新提炼长期记忆，并保留本次审核记录。确定继续吗？")) return;
+    setResolvingKey(key);
+    onSuccess("正在从原文证据重新提炼长期记忆…");
+    try {
+      const result = await api.memory.retryLongTermExtractionReview(detail.id, note, { contactId });
+      setSelectedKey("");
+      setDetails({});
+      setDetailErrors({});
+      await Promise.all([actions.refreshStatus?.(), load()]);
+      onSuccess(result?.status === "retried" ? "原文已重新提炼，新的候选已进入审核。" : "重新提炼未完成，原文证据与审核项已保留。请查看失败原因。");
+    } catch (retryError) {
+      onError(`重新提炼失败：${retryError?.message || retryError}`);
+    } finally {
+      setResolvingKey("");
+    }
+  };
+
   const recover = async (batchId) => {
     setRecoveringBatch(batchId);
     onSuccess("正在恢复过期输入批次…");
@@ -923,6 +956,26 @@ function MemoryReview({ actions, api, contactId, onError, onSuccess }) {
     }
   };
 
+  const restoreBackup = async () => {
+    setRestoring(true);
+    try {
+      const selected = await api.memory.selectReviewBackup();
+      if (selected?.canceled || !clean(selected?.sourcePath)) return;
+      const inspection = await api.memory.inspectReviewBackup(selected.sourcePath, { contactId });
+      const size = Number(inspection?.bytes || 0);
+      const summary = `${inspection?.createdAt || "未记录创建时间"} · ${size ? `${Math.max(1, Math.round(size / 1024))} KB` : "大小未知"}`;
+      if (!window.confirm(`恢复会覆盖当前联系人的记忆数据库；恢复前会自动创建一份安全备份。\n\n备份：${summary}\n\n确定恢复吗？`)) return;
+      onSuccess("正在恢复并校验记忆备份…");
+      await api.memory.restoreReviewBackup(selected.sourcePath, { contactId });
+      await Promise.all([actions.refreshStatus?.(), load()]);
+      onSuccess("记忆备份已恢复，并已创建恢复前安全备份。");
+    } catch (restoreError) {
+      onError(`恢复备份失败：${restoreError?.message || restoreError}`);
+    } finally {
+      setRestoring(false);
+    }
+  };
+
   const items = Array.isArray(overview?.reviews?.items) ? overview.reviews.items : [];
   return <section className="memory-attribution-card memory-review-card">
     <div className="memory-attribution-intro"><div><span className="eyebrow">MEMORY REVIEW</span><h2>审核中心</h2></div><p>候选不会直接进入正式长期记忆；在这里核对内容、现有状态和直接证据后再决定。</p></div>
@@ -937,10 +990,10 @@ function MemoryReview({ actions, api, contactId, onError, onSuccess }) {
             <div className="memory-review-metrics"><article><span>等待审核</span><strong>{numberText(overview.counts?.reviews)}</strong></article><article><span>阻塞事件</span><strong>{numberText(overview.counts?.blockedEvents)}</strong></article><article><span>运行批次</span><strong>{numberText(overview.counts?.activeBatches)}</strong><small>{numberText(overview.counts?.expiredBatches)} 个租约已过期</small></article><article><span>维护异常</span><strong>{numberText(overview.counts?.failedMaintenance)}</strong><small>{numberText(overview.counts?.pendingMaintenance)} 个等待执行</small></article></div>
             {items.length ? <div className="memory-attribution-list memory-review-list">{items.map((item) => {
               const key = reviewKey(item.type, item.id);
-              return <ReviewItem detail={details[key]} detailError={detailErrors[key]} detailLoading={detailLoadingKey === key} item={item} key={key} onDecide={(action, note) => decide(details[key], action, note)} onToggle={toggleDetail} pending={resolvingKey === key} selected={selectedKey === key} />;
+              return <ReviewItem detail={details[key]} detailError={detailErrors[key]} detailLoading={detailLoadingKey === key} item={item} key={key} onDecide={(action, note) => decide(details[key], action, note)} onRetryLongTermExtraction={(note) => retryLongTermExtraction(details[key], note)} onToggle={toggleDetail} pending={resolvingKey === key} selected={selectedKey === key} />;
             })}</div> : <div className="memory-attribution-empty"><strong>当前筛选条件下没有候选</strong><span>可以切换审核状态查看已经处理的记录。</span></div>}
             <PipelineHealth onRecover={recover} overview={overview} recovering={recoveringBatch} />
-            <StorageHealth backingUp={backingUp} onBackup={backup} overview={overview} />
+            <StorageHealth backingUp={backingUp} onBackup={backup} onRestore={restoreBackup} overview={overview} restoring={restoring} />
           </>}
   </section>;
 }

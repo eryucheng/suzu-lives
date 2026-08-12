@@ -1091,7 +1091,8 @@
 
 .reference-tile-copy strong,
 .reference-tile-copy small,
-.reference-role {
+.reference-role,
+.reference-source {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1102,13 +1103,19 @@
 }
 
 .reference-tile-copy small,
-.reference-role {
+.reference-role,
+.reference-source {
   color: var(--muted2);
   font: 9px Consolas, "Microsoft YaHei UI", monospace;
 }
 
 .reference-role {
   color: var(--accent2);
+  font-family: inherit;
+}
+
+.reference-source {
+  color: var(--muted);
   font-family: inherit;
 }
 
@@ -1328,7 +1335,7 @@
 
 .reference-set-form {
   display: grid;
-  grid-template-columns: minmax(150px, .7fr) minmax(180px, 1fr) auto;
+  grid-template-columns: minmax(130px, .55fr) minmax(150px, .65fr) minmax(180px, 1fr) auto;
   gap: 8px;
 }
 

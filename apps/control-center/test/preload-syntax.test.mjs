@@ -50,6 +50,9 @@ test("Electron preload exposes the memory bridge", async () => {
   assert.equal(typeof bridge?.memory?.revokeReviewRelation, "function");
   assert.equal(typeof bridge?.memory?.recoverReviewInputBatch, "function");
   assert.equal(typeof bridge?.memory?.createReviewBackup, "function");
+  assert.equal(typeof bridge?.memory?.selectReviewBackup, "function");
+  assert.equal(typeof bridge?.memory?.inspectReviewBackup, "function");
+  assert.equal(typeof bridge?.memory?.restoreReviewBackup, "function");
   assert.equal(typeof bridge?.conversation?.stop, "function");
   assert.equal(typeof bridge?.conversation?.steer, "function");
   assert.equal(typeof bridge?.conversation?.call?.start, "function");
@@ -104,21 +107,30 @@ test("Electron preload exposes the memory bridge", async () => {
   await bridge.memory.revokeReviewRelation("review-3", "撤销");
   await bridge.memory.recoverReviewInputBatch("batch-1", true);
   await bridge.memory.createReviewBackup();
-  assert.deepEqual(calls.slice(-6).map((call) => call.channel), [
+  await bridge.memory.selectReviewBackup();
+  await bridge.memory.inspectReviewBackup("C:/tmp/memory-backup.db");
+  await bridge.memory.restoreReviewBackup("C:/tmp/memory-backup.db");
+  assert.deepEqual(calls.slice(-9).map((call) => call.channel), [
     "memory:review-overview",
     "memory:review-proposal",
     "memory:resolve-review",
     "memory:revoke-review-relation",
     "memory:recover-review-input-batch",
     "memory:create-review-backup",
+    "memory:select-review-backup",
+    "memory:inspect-review-backup",
+    "memory:restore-review-backup",
   ]);
-  assert.deepEqual(JSON.parse(JSON.stringify(calls.at(-3).args[0])), {
+  assert.deepEqual(JSON.parse(JSON.stringify(calls.at(-6).args[0])), {
     proposalId: "review-3",
     note: "撤销",
   });
-  assert.deepEqual(JSON.parse(JSON.stringify(calls.at(-2).args[0])), {
+  assert.deepEqual(JSON.parse(JSON.stringify(calls.at(-5).args[0])), {
     batchId: "batch-1",
     force: true,
+  });
+  assert.deepEqual(JSON.parse(JSON.stringify(calls.at(-1).args[0])), {
+    sourcePath: "C:/tmp/memory-backup.db",
   });
   await bridge.conversationCompactor.snapshot({ contactId: "contact-suzu" });
   await bridge.conversationCompactor.save({ contactId: "contact-suzu", prompt: "联系人专属提示词" });

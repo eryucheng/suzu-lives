@@ -23,16 +23,25 @@ test("memory IPC requires the embedded service and forwards React memory actions
     reviewOverview(filters) { calls.push(["overview", filters]); return {}; },
     reviewProposal(payload) { calls.push(["proposal", payload]); return {}; },
     resolveReview(payload) { calls.push(["resolve", payload]); return {}; },
+    retryLongTermExtractionReview(payload) { calls.push(["retry-long-term-extraction", payload]); return {}; },
     revokeReviewRelation(payload) { calls.push(["revoke", payload]); return {}; },
     recoverReviewInputBatch(payload) { calls.push(["recover", payload]); return {}; },
     createReviewBackup(scope) { calls.push(["backup", scope]); return {}; },
+    inspectReviewBackup(payload) { calls.push(["inspect-backup", payload]); return {}; },
+    restoreReviewBackup(payload) { calls.push(["restore-backup", payload]); return {}; },
   };
 
   assert.throws(
     () => registerMemoryIpc({ ipcMain: { handle() {} } }),
     /嵌入式长期记忆服务/u,
   );
-  registerMemoryIpc({ ipcMain, memoryService });
+  registerMemoryIpc({
+    ipcMain,
+    memoryService,
+    dialog: {
+      showOpenDialog: async () => ({ canceled: false, filePaths: ["C:/tmp/memory-backup.db"] }),
+    },
+  });
 
   const contactId = "contact-suzu";
   await handlers.get("memory:status")(null, { contactId });
@@ -46,9 +55,13 @@ test("memory IPC requires the embedded service and forwards React memory actions
   await handlers.get("memory:review-overview")(null, { contactId, reviewStates: ["pending"] });
   await handlers.get("memory:review-proposal")(null, { type: "relation", proposalId: "review-1", contactId });
   await handlers.get("memory:resolve-review")(null, { type: "structure", proposalId: "review-2", action: "accept", note: "确认", contactId });
+  await handlers.get("memory:retry-long-term-extraction-review")(null, { proposalId: "review-2a", note: "重试", contactId });
   await handlers.get("memory:revoke-review-relation")(null, { proposalId: "review-3", note: "撤销", contactId });
   await handlers.get("memory:recover-review-input-batch")(null, { batchId: "batch-1", force: true, contactId });
   await handlers.get("memory:create-review-backup")(null, { contactId });
+  await handlers.get("memory:select-review-backup")(null);
+  await handlers.get("memory:inspect-review-backup")(null, { sourcePath: "C:/tmp/memory-backup.db", contactId });
+  await handlers.get("memory:restore-review-backup")(null, { sourcePath: "C:/tmp/memory-backup.db", contactId });
 
   assert.deepEqual(calls, [
     ["status", { contactId }],
@@ -62,8 +75,11 @@ test("memory IPC requires the embedded service and forwards React memory actions
     ["overview", { contactId, reviewStates: ["pending"] }],
     ["proposal", { type: "relation", proposalId: "review-1", contactId }],
     ["resolve", { type: "structure", proposalId: "review-2", action: "accept", note: "确认", contactId }],
+    ["retry-long-term-extraction", { proposalId: "review-2a", note: "重试", contactId }],
     ["revoke", { proposalId: "review-3", note: "撤销", contactId }],
     ["recover", { batchId: "batch-1", force: true, contactId }],
     ["backup", { contactId }],
+    ["inspect-backup", { sourcePath: "C:/tmp/memory-backup.db", contactId }],
+    ["restore-backup", { sourcePath: "C:/tmp/memory-backup.db", contactId }],
   ]);
 });

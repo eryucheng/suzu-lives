@@ -3,12 +3,20 @@ import test from "node:test";
 
 import { memoryBrainEdgeMode } from "../src/features/memory-brain/brain-view.mjs";
 
-test("memory brain keeps unrelated graph lines hidden and reveals ambient or direct edges", () => {
+test("memory brain keeps ordinary unrelated lines hidden while retaining the structural skeleton", () => {
   const direct = { id: "edge-direct", source: "selected", target: "neighbor" };
+  const structural = {
+    id: "edge-structural",
+    source: "memory-user-age",
+    target: "topology:user",
+    structural: true,
+  };
   const secondHop = { id: "edge-second-hop", source: "neighbor", target: "far-node" };
 
   assert.equal(memoryBrainEdgeMode(direct), "hidden");
+  assert.equal(memoryBrainEdgeMode(structural), "structural");
   assert.equal(memoryBrainEdgeMode(direct, { ambientStrength: 0.7 }), "ambient");
   assert.equal(memoryBrainEdgeMode(direct, { selectedId: "selected", ambientStrength: 0.7 }), "direct");
+  assert.equal(memoryBrainEdgeMode(structural, { selectedId: "selected" }), "hidden");
   assert.equal(memoryBrainEdgeMode(secondHop, { selectedId: "selected", ambientStrength: 0.7 }), "hidden");
 });

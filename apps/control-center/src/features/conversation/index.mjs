@@ -1514,7 +1514,10 @@ export function createConversationReactActions(context) {
       context.render();
     },
     setDraft: (value) => {
-      viewState.draft = String(value ?? "");
+      const next = String(value ?? "");
+      if (viewState.draft === next) return;
+      viewState.draft = next;
+      context.render();
     },
     setListScroll: ({ clientHeight, scrollHeight, scrollTop } = {}) => {
       const top = Number(scrollTop);

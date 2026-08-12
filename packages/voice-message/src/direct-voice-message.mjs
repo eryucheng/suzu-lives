@@ -73,14 +73,14 @@ function agentAudioDirectory(dataRoot, agentId) {
   );
 }
 
-function legacyConfigPath(dataRoot) {
+function sharedConfigPath(dataRoot) {
   return path.join(voiceRoot(dataRoot), "config.json");
 }
 
 function defaultConfigPath(dataRoot, agentId = "") {
   return clean(agentId)
     ? path.join(agentVoiceMessageRoot(dataRoot, agentId), "config.json")
-    : legacyConfigPath(dataRoot);
+    : sharedConfigPath(dataRoot);
 }
 
 export function resolveVoiceMessageConfigPath({ dataRoot, agentId = "", configPath = "" } = {}) {
@@ -174,6 +174,37 @@ function customVoiceSourceAgentIdFromConfig(value) {
   const config = objectValue(value);
   const tts = objectValue(config.tts);
   return sourceAgentId(config.customVoiceSourceAgentId || tts.customVoiceSourceAgentId);
+}
+
+function withoutVoiceSelection(value) {
+  const config = objectValue(value);
+  const tts = objectValue(config.tts);
+  const {
+    voiceId: _voiceId,
+    voice: _voice,
+    customVoiceId: _customVoiceId,
+    sourceAgentId: _sourceAgentId,
+    sourceCandidateId: _sourceCandidateId,
+    customVoiceSource: _customVoiceSource,
+    customVoiceSourceAgentId: _customVoiceSourceAgentId,
+    tts: _tts,
+    ...rest
+  } = config;
+  const {
+    voiceId: _ttsVoiceId,
+    voice_id: _ttsVoiceIdSnakeCase,
+    voice: _ttsVoice,
+    customVoiceId: _ttsCustomVoiceId,
+    sourceAgentId: _ttsSourceAgentId,
+    sourceCandidateId: _ttsSourceCandidateId,
+    customVoiceSource: _ttsCustomVoiceSource,
+    customVoiceSourceAgentId: _ttsCustomVoiceSourceAgentId,
+    ...restTts
+  } = tts;
+  return {
+    ...rest,
+    ...(Object.keys(restTts).length ? { tts: restTts } : {}),
+  };
 }
 
 function customVoicesAt(customVoicesPath) {
@@ -314,9 +345,8 @@ function assertAgentVoiceSelection({ dataRoot, agentId, provider, voiceId, custo
 
 function resolveAgentVoiceConfig({ dataRoot, agentId, requireVoiceSelection }) {
   const contactConfigPath = defaultConfigPath(dataRoot, agentId);
-  const legacyPath = legacyConfigPath(dataRoot);
   const contactConfig = readOptionalVoiceConfig(contactConfigPath) || {};
-  const legacyConfig = readOptionalVoiceConfig(legacyPath) || {};
+  const sharedConfig = withoutVoiceSelection(readOptionalVoiceConfig(sharedConfigPath(dataRoot)) || {});
   const contactVoiceId = voiceIdFromConfig(contactConfig);
   const contactProvider = contactVoiceId ? voiceProviderFromConfig(contactConfig) : "qwen";
   const contactCustomVoiceId = customVoiceIdFromConfig(contactConfig);
@@ -324,8 +354,6 @@ function resolveAgentVoiceConfig({ dataRoot, agentId, requireVoiceSelection }) {
   const contactSourceCandidateId = sourceCandidateIdFromConfig(contactConfig);
   const contactCustomVoiceSource = customVoiceSourceFromConfig(contactConfig);
   const contactCustomVoiceSourceAgentId = customVoiceSourceAgentIdFromConfig(contactConfig);
-  const legacyVoiceId = voiceIdFromConfig(legacyConfig);
-  const legacyProvider = legacyVoiceId ? voiceProviderFromConfig(legacyConfig) : "qwen";
   const selection = contactVoiceId
     ? {
       voiceId: contactVoiceId,
@@ -337,31 +365,20 @@ function resolveAgentVoiceConfig({ dataRoot, agentId, requireVoiceSelection }) {
       customVoiceSourceAgentId: contactCustomVoiceSourceAgentId,
       source: "contact",
     }
-    : legacyVoiceId
-      ? {
-        voiceId: legacyVoiceId,
-        provider: legacyProvider,
-        customVoiceId: customVoiceIdFromConfig(legacyConfig),
-        sourceAgentId: sourceAgentIdFromConfig(legacyConfig),
-        sourceCandidateId: sourceCandidateIdFromConfig(legacyConfig),
-        customVoiceSource: customVoiceSourceFromConfig(legacyConfig),
-        customVoiceSourceAgentId: customVoiceSourceAgentIdFromConfig(legacyConfig),
-        source: "legacy-fallback",
-      }
-      : {
-        voiceId: "",
-        provider: "qwen",
-        customVoiceId: "",
-        sourceAgentId: "",
-        sourceCandidateId: "",
-        customVoiceSource: "",
-        customVoiceSourceAgentId: "",
-        source: "missing",
-      };
+    : {
+      voiceId: "",
+      provider: "qwen",
+      customVoiceId: "",
+      sourceAgentId: "",
+      sourceCandidateId: "",
+      customVoiceSource: "",
+      customVoiceSourceAgentId: "",
+      source: "missing",
+    };
   let customVoice = null;
   if (requireVoiceSelection) {
     if (!selection.voiceId) {
-      throw failure("tts_voice_missing", "当前联系人尚未选择音色；请在 Suzu 的语音设置中选择一个已保存音色。", 10);
+      throw failure("tts_voice_missing", "当前联系人尚未选择音色；请到“能力”中的“语音消息”配置联系人音色后再发送。", 10);
     }
     customVoice = assertAgentVoiceSelection({
       dataRoot,
@@ -379,7 +396,7 @@ function resolveAgentVoiceConfig({ dataRoot, agentId, requireVoiceSelection }) {
     configPath: contactConfigPath,
     localConfig: selection.voiceId
       ? {
-        ...legacyConfig,
+        ...sharedConfig,
         voiceId: selection.voiceId,
         provider: selection.provider,
         customVoiceId: selection.customVoiceId,
@@ -389,9 +406,8 @@ function resolveAgentVoiceConfig({ dataRoot, agentId, requireVoiceSelection }) {
         ...(selection.customVoiceSourceAgentId ? { customVoiceSourceAgentId: selection.customVoiceSourceAgentId } : {}),
         ...(customVoice ? { apiKey: customVoice.apiKey, model: customVoice.model } : {}),
       }
-      : { ...legacyConfig },
+      : { ...sharedConfig },
     selectionSource: selection.source,
-    needsMigration: Boolean(!contactVoiceId && legacyVoiceId),
   };
 }
 
@@ -459,8 +475,7 @@ export function resolveDirectVoiceRuntime({
     resolved = {
       configPath: selectedConfigPath,
       localConfig: readVoiceConfig(selectedConfigPath),
-      selectionSource: requestedConfigPath ? "explicit" : "legacy-global",
-      needsMigration: false,
+      selectionSource: requestedConfigPath ? "explicit" : "shared-config",
     };
   } else {
     resolved = resolveAgentVoiceConfig({ dataRoot: root, agentId: identity, requireVoiceSelection: requireTtsCredentials });
@@ -471,7 +486,6 @@ export function resolveDirectVoiceRuntime({
     agentId: identity,
     configPath: resolved.configPath,
     selectionSource: resolved.selectionSource,
-    needsMigration: resolved.needsMigration,
     timeoutMs: Math.round(positiveNumber(timeoutMs || resolved.localConfig.timeoutMs, 30000)),
     ffmpegPath: clean(resolved.localConfig.ffmpegPath) || "ffmpeg",
     tts: resolveTts(resolved.localConfig, environment, {
@@ -497,37 +511,6 @@ function safeInspection(runtime) {
       apiKeyConfigured: Boolean(runtime.tts.apiKey),
     },
   };
-}
-
-async function persistLegacyVoiceSelection(runtime) {
-  if (!runtime.needsMigration || !runtime.agentId || !runtime.tts.voice) return false;
-  const configPath = resolveVoiceMessageConfigPath({ dataRoot: runtime.dataRoot, agentId: runtime.agentId });
-  const directory = path.dirname(configPath);
-  try {
-    const directoryStat = await fsp.lstat(directory);
-    if (directoryStat.isSymbolicLink() || !directoryStat.isDirectory()) {
-      throw failure("config_invalid", "联系人语音配置目录不安全：" + directory, 10);
-    }
-  } catch (error) {
-    if (error instanceof DirectVoiceMessageError) throw error;
-    if (error?.code !== "ENOENT") throw failure("config_invalid", "无法检查联系人语音配置目录：" + error.message, 10);
-    await fsp.mkdir(directory, { recursive: true });
-  }
-  const existing = readOptionalVoiceConfig(configPath) || {};
-  if (Object.keys(existing).length) return false;
-  const temporary = `${configPath}.${process.pid}.${randomUUID()}.tmp`;
-  const next = { schemaVersion: 2, provider: runtime.tts.provider, voiceId: runtime.tts.voice };
-  try {
-    await fsp.writeFile(temporary, `${JSON.stringify(next, null, 2)}\n`, { encoding: "utf8", flag: "wx" });
-    await fsp.link(temporary, configPath);
-    await fsp.unlink(temporary);
-  } catch (error) {
-    await fsp.unlink(temporary).catch(() => undefined);
-    if (error?.code === "EEXIST") return false;
-    if (error instanceof DirectVoiceMessageError) throw error;
-    throw failure("config_write_failed", "无法保存当前联系人的音色选择：" + (clean(error?.message) || "未知错误"), 10);
-  }
-  return true;
 }
 
 function withTimeout(timeoutMs, abortSignal = null) {
@@ -860,7 +843,6 @@ export async function synthesizeDirectVoiceAudio({
   const message = clean(text);
   if (!message) throw failure("voice_text_missing", "语音文本不能为空。");
   if (!runtime?.tts?.provider) throw failure("tts_runtime_missing", "缺少联系人语音运行配置。", 10);
-  await persistLegacyVoiceSelection(runtime);
   const synthesized = runtime.tts.provider === "minimax"
     ? await synthesizeMiniMax({ text: message, runtime, fetchImpl, ledgerPath, agentId, feature, abortSignal })
     : runtime.tts.provider === "cosyvoice"

@@ -112,10 +112,10 @@ function ConversationComposer({ actions, composer, focusRequest = 0 }) {
     <form className="conversation-composer" onSubmit={(event) => { event.preventDefault(); actions.submitMessage(); }}>
       <div className="conversation-composer__surface">
         <textarea
-          defaultValue={composer.draft}
+          value={composer.draft || ""}
           disabled={unavailable}
           maxLength={20000}
-          onInput={(event) => {
+          onChange={(event) => {
             actions.setDraft(event.currentTarget.value);
             resize(event.currentTarget);
           }}

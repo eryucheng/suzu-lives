@@ -121,9 +121,9 @@ contextBridge.exposeInMainWorld("suzuConsole", {
     add: (value) => ipcRenderer.invoke("visual-references:add", value),
     update: (value) => ipcRenderer.invoke("visual-references:update", value),
     upsertSet: (value) => ipcRenderer.invoke("visual-references:upsert-set", value),
-    removeSet: (id) => ipcRenderer.invoke("visual-references:remove-set", id),
+    removeSet: (value) => ipcRenderer.invoke("visual-references:remove-set", value),
     remove: (value) => ipcRenderer.invoke("visual-references:remove", value),
-    thumbnail: (id) => ipcRenderer.invoke("visual-references:thumbnail", id),
+    thumbnail: (reference) => ipcRenderer.invoke("visual-references:thumbnail", reference),
   },
   voiceDesign: {
     snapshot: () => ipcRenderer.invoke("voice-design:snapshot"),
@@ -166,6 +166,10 @@ contextBridge.exposeInMainWorld("suzuConsole", {
       "memory:resolve-review",
       { type, proposalId, action, note, ...scope },
     ),
+    retryLongTermExtractionReview: (proposalId, note = "", scope = {}) => ipcRenderer.invoke(
+      "memory:retry-long-term-extraction-review",
+      { proposalId, note, ...scope },
+    ),
     revokeReviewRelation: (proposalId, note = "", scope = {}) => ipcRenderer.invoke(
       "memory:revoke-review-relation",
       { proposalId, note, ...scope },
@@ -175,5 +179,14 @@ contextBridge.exposeInMainWorld("suzuConsole", {
       { batchId, force, ...scope },
     ),
     createReviewBackup: (scope = {}) => ipcRenderer.invoke("memory:create-review-backup", scope),
+    selectReviewBackup: () => ipcRenderer.invoke("memory:select-review-backup"),
+    inspectReviewBackup: (sourcePath, scope = {}) => ipcRenderer.invoke(
+      "memory:inspect-review-backup",
+      { sourcePath, ...scope },
+    ),
+    restoreReviewBackup: (sourcePath, scope = {}) => ipcRenderer.invoke(
+      "memory:restore-review-backup",
+      { sourcePath, ...scope },
+    ),
   },
 });

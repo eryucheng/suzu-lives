@@ -207,6 +207,7 @@ export function registerIpcHandlers({ app, dataStorageService, getMainWindow, se
     }),
   });
   memoryService.setConversationReader(conversation.reader);
+  void memoryService.resumeExistingMaintenance().catch(() => undefined);
   const conversationCompactorService = createConversationCompactorService({
     reader: conversation.reader,
     settingsService,
@@ -423,7 +424,7 @@ export function registerIpcHandlers({ app, dataStorageService, getMainWindow, se
   void wechatService.start().catch(() => undefined);
   registerConnectionsIpc({ ipcMain, connectionsService });
   registerImageWorkbenchIpc({ connectionsService, ipcMain, nativeImage, settingsService });
-  registerVisualReferencesIpc({ dialog, getMainWindow, ipcMain, nativeImage, settingsService });
+  registerVisualReferencesIpc({ contactProjectsService, dialog, getMainWindow, ipcMain, nativeImage, settingsService });
   registerVoiceDesignIpc({ connectionsService, contactProjectsService, ipcMain, settingsService });
-  registerMemoryIpc({ ipcMain, memoryService });
+  registerMemoryIpc({ dialog, getMainWindow, ipcMain, memoryService });
 }

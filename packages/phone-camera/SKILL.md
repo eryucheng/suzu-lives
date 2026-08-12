@@ -11,6 +11,6 @@ description: 让 Agent 通过 Suzu Lives 的图像引擎生成真实手机随手
 
 `suzu-lives phone-camera --shot rear --scene "画面中实际可见的场景" --dry-run`
 
-需要视觉参考时使用重复的 `--ref <asset-or-set-id>`；只选择当前画面必要的资料。`--backend comfyui --workflow <id>` 只在明确指定本地工作流时使用；失败不会切回 API。成功 JSON 的 `status: "ok"` 才代表生成成功。
+需要视觉参考时使用重复的 `--ref shared:<asset-or-set-id>` 或 `--ref contact:<asset-or-set-id>`；只选择当前画面必要的资料。`shared` 是用户共享资料，`contact` 只指当前联系人，不能读取其他联系人的专属资料。`--backend comfyui --workflow <id>` 只在明确指定本地工作流时使用；失败不会切回 API。成功 JSON 的 `status: "ok"` 才代表生成成功。
 
 生成后的 JSON 会给出本地图片路径。若用户要求交付，使用当前 Suzu 会话系统提示中提供的附件交付命令；它会显示在本会话中，并在该会话已绑定微信时自动发送。不要使用 `--send`。

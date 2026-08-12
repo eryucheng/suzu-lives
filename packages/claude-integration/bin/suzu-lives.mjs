@@ -54,7 +54,7 @@ function help() {
   return {
     status: "help",
     commands: [
-      "suzu-lives visual-reference-manager init|list|show|validate|apply [--data-root <software-data-root>]",
+      "suzu-lives visual-reference-manager init|list|show|validate|apply --scope shared|contact [--data-root <software-data-root>]",
       "suzu-lives capability image-vision analyze --input-json '<JSON>' [--data-root <software-data-root>] [--workspace-root <workspace>]",
       "suzu-lives capability video-understanding analyze --input-json '<JSON>' [--data-root <software-data-root>] [--workspace-root <workspace>]",
       "suzu-lives capability image-generation generate --input-json '<JSON>' [--data-root <software-data-root>] [--workspace-root <workspace>]",

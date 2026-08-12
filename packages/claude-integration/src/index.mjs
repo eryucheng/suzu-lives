@@ -549,7 +549,7 @@ export function renderClaudeManagedBlock({ abilityIds, command = "suzu-lives" } 
     if (id === "image-vision") return `- <!-- suzu-lives:ability:${id} --> \`${id}\`：使用 \`${internalCapabilityCliUsage({ launcher, capabilityId: id })}\` 调用软件拥有的标准能力执行器。`;
     if (id === "video-understanding") return `- <!-- suzu-lives:ability:${id} --> \`${id}\`：使用 \`${internalCapabilityCliUsage({ launcher, capabilityId: id })}\` 调用软件拥有的标准能力执行器。`;
     if (id === TIME_AWARENESS_ID) return `- <!-- suzu-lives:ability:${id} --> \`${id}\`：由 Suzu 在每次用户消息进入时检查本机日期、星期和当前时间；按软件中设定的会话间隔注入。`;
-    if (id === "visual-reference-manager") return `- <!-- suzu-lives:ability:${id} --> \`${id}\`：使用 \`${launcher} visual-reference-manager init|list|show|validate|apply\` 维护软件资料库。`;
+    if (id === "visual-reference-manager") return `- <!-- suzu-lives:ability:${id} --> \`${id}\`：使用 \`${launcher} visual-reference-manager init|list|show|validate|apply --scope shared|contact\` 维护共享或当前联系人的视觉资料库。`;
     if (id === "site-automation") return `- <!-- suzu-lives:ability:${id} --> \`${id}\`：使用 \`${launcher} site browser start|check\` 管理专用浏览器，再用 \`${launcher} site <site> <action>\` 调用已接入网站适配器。`;
     if (id === "iphone-bridge") return `- <!-- suzu-lives:ability:${id} --> \`${id}\`：使用 \`${launcher} iphone-bridge send ...\` 向 iPhone 发出请求；反馈监听由正在运行的 Suzu 直接处理。`;
     if (id === PROACTIVE_CONTACT_ID) return `- <!-- suzu-lives:ability:${id} --> \`${id}\`：使用已注册的轻量 Skill 按 Suzu \`schedule\` 语义管理链式关心和一次性回访。`;
@@ -562,8 +562,8 @@ export function renderClaudeManagedBlock({ abilityIds, command = "suzu-lives" } 
   if (ids.includes(TIME_AWARENESS_ID)) notices.push(`\`time-awareness\` 通过 Suzu 受管的 \`UserPromptSubmit\` Hook 检查本轮当前本地时间；同一 Claude 会话仅按软件中设定的间隔写入新的时间提醒。它不读取消息正文、不联网、不替代其他同事件 Hook。`);
   if (ids.includes("voice-message")) notices.push("`voice-message` 使用 Suzu 的标准 `capability <id> <action> --input-json` 协议；它只在软件数据目录中生成 MP3，再由当前 Suzu 会话的附件交付命令显示和投递。");
   if (ids.includes("image-generation")) notices.push("`image-generation` 使用 Suzu 的标准 `capability <id> <action> --input-json` 协议；默认后端与 ComfyUI 配置位于统一软件数据目录，运行记录和候选图片仍属于当前 Agent 的数据目录。");
-  if (ids.includes("phone-camera")) notices.push("`phone-camera` 使用 Suzu 的标准 `capability <id> <action> --input-json` 协议；它只生成用户说明的手机拍照式画面，失败不会静默切换后端。");
-  if (ids.includes("visual-reference-manager")) notices.push(`\`visual-reference-manager\` 使用独立的软件拥有命令；资料和 manifest 均在当前 Agent 的软件数据目录，写入前仍需先 dry-run 和用户确认。`);
+  if (ids.includes("phone-camera")) notices.push("`phone-camera` 使用 Suzu 的标准 `capability <id> <action> --input-json` 协议；它可明确读取共享或当前联系人的视觉资料，但不能读取其他联系人的专属资料，失败不会静默切换后端。");
+  if (ids.includes("visual-reference-manager")) notices.push(`\`visual-reference-manager\` 使用独立的软件拥有命令；共享资料与当前联系人专属资料物理隔离，写入前仍需先 dry-run 和用户确认。`);
   if (ids.includes("site-automation")) notices.push(`\`site-automation\` 使用独立的软件拥有命令；它负责专用 Chrome、profile 与诊断，并保留已登记评论、点赞、私信/群回复、分享和群隐私同意的适配器幂等与隐私保护。`);
   if (ids.includes("iphone-bridge")) notices.push(`\`iphone-bridge\` 使用独立的软件拥有命令；只保留既有 iPhone 邮件快捷指令的发送与反馈监听语义。`);
   if (ids.includes(PROACTIVE_CONTACT_ID)) notices.push(`\`proactive-contact\` 使用 Suzu 自有的 \`schedule\` 自动任务；仅在软件运行期间执行，关闭期间不补跑。`);
@@ -605,9 +605,9 @@ function renderStandardVoiceMessageSkill(launcher) {
     "",
     markdownCode(command),
     "",
-    "其中 JSON 例如 " + markdownCode('{"text":"<要说的话>"}') + "。也可使用 " + markdownCode('{"audioPath":"<用户明确给出的本地音频路径>"}') + " 转换已有音频；text 与 audioPath 必须且只能提供一个。可选字段只有 configPath 和 timeoutMs。",
+    "其中 JSON 例如 " + markdownCode('{"text":"<要说的话>"}') + "。也可使用 " + markdownCode('{"audioPath":"<用户明确给出的本地音频路径>"}') + " 转换已有音频；text 与 audioPath 必须且只能提供一个。可选字段只有 timeoutMs。音色始终使用当前联系人的已保存选择；未配置时，向用户说明需要到“能力 → 语音消息”配置联系人音色，不要自行指定或猜测音色。",
     "",
-    "成功 JSON 的 result.savedPath 是生成的 MP3。必须紧接着使用当前 Suzu 会话系统提示中提供的附件交付命令，以 --audio 交付这个路径。只检查当前联系人语音配置时，使用 " + markdownCode(inspect) + "，输入 JSON 只接受 configPath 与 timeoutMs。",
+    "成功 JSON 的 result.savedPath 是生成的 MP3。必须紧接着使用当前 Suzu 会话系统提示中提供的附件交付命令，以 --audio 交付这个路径。只检查当前联系人语音配置时，使用 " + markdownCode(inspect) + "；无需指定配置路径。",
     "",
     "不要绕过软件入口，也不要把配置、密钥或音频复制进 Claude 项目。",
     "",
@@ -655,7 +655,7 @@ function renderStandardPhoneCameraSkill(launcher) {
     "",
     markdownCode(command),
     "",
-    "输入 JSON 例如 " + markdownCode('{"shot":"rear","scene":"画面中实际可见的场景","dryRun":true}') + "。可选字段为 referenceIds、manifestPath、backend、workflow、size、seed、outputDirectory、configPath、dryRun。referenceIds 只放当前画面需要的视觉资料 asset 或 set ID。",
+    "输入 JSON 例如 " + markdownCode('{"shot":"rear","scene":"画面中实际可见的场景","dryRun":true}') + "。可选字段为 referenceIds、backend、workflow、size、seed、outputDirectory、configPath、dryRun。referenceIds 是至多 16 项的 { scope, id }，scope 只能是 shared 或 contact；只放当前画面真正需要的资料或分组。contact 只会读取当前联系人专属资料，不能访问其他联系人。",
     "",
     "成功 JSON 的 result.path 才代表图片已保存；失败不会静默切换后端。若用户要求交付图片，先生成，再用当前会话提供的附件交付命令。",
     "",
@@ -675,7 +675,7 @@ function renderPhoneCameraSkill(launcher) {
 }
 
 function renderVisualReferenceManagerSkill(launcher) {
-  return `---\nname: suzu-lives-visual-reference-manager\ndescription: 通过 Suzu Lives 维护用户明确要求保存、登记、查看、更新、删除或校验的视觉参考资料库。\n---\n\n<!-- suzu-lives:ability:visual-reference-manager -->\n# Visual Reference Manager\n\n这是 Suzu Lives 生成的直连注册文件；请只使用下方稳定入口。\n\n只在用户明确要求维护参考资料库时使用；不要把普通聊天附件自动永久保存。资料副本和清单都由 Suzu Lives 写入当前 Agent 的软件数据目录。\n\n角色只能是 \`identity\`、\`location\`、\`object\`、\`style\`，ID 使用稳定的小写英文层级。使用稳定入口：\n\n\`${launcher} visual-reference-manager init\`\n\n\`${launcher} visual-reference-manager list --query "卧室" --limit 10\`\n\n\`${launcher} visual-reference-manager show home.bedroom.door-view\`\n\n\`${launcher} visual-reference-manager validate\`\n\n新增、更新、换角色或删除时，先准备版本为 1 的维护计划 JSON，再执行：\n\n\`${launcher} visual-reference-manager apply --plan '<计划文件>' --dry-run\`\n\n只有 dry-run 成功、没有冲突且用户已确认后，才执行同一计划的 \`${launcher} visual-reference-manager apply --plan '<计划文件>'\`。\`remove\` 必须明确 \`delete_file: true|false\`；不要手工编辑 manifest。\n`;
+  return `---\nname: suzu-lives-visual-reference-manager\ndescription: 通过 Suzu Lives 维护用户明确要求保存、登记、查看、更新、删除或校验的视觉参考资料库。\n---\n\n<!-- suzu-lives:ability:visual-reference-manager -->\n# Visual Reference Manager\n\n这是 Suzu Lives 生成的直连注册文件；请只使用下方稳定入口。\n\n只在用户明确要求维护参考资料库时使用；不要把普通聊天附件自动永久保存。资料分为两种物理隔离的归属：\n\n- \`shared\`：用户的共享资料，例如家、常用物品、公共风格，以及用户明确指定可共享的本人资料。\n- \`contact\`：当前联系人的专属资料；这是默认值，人物脸、服装和私人物品只能写在这里，不能访问其他联系人的资料。\n\n角色只能是 \`identity\`、\`location\`、\`object\`、\`style\`，ID 使用稳定的小写英文层级。每次命令都明确写 \`--scope shared\` 或 \`--scope contact\`：\n\n\`${launcher} visual-reference-manager init --scope contact\`\n\n\`${launcher} visual-reference-manager list --scope shared --query "卧室" --limit 10\`\n\n\`${launcher} visual-reference-manager show home.bedroom.door-view --scope shared\`\n\n\`${launcher} visual-reference-manager validate --scope contact\`\n\n新增、更新、换角色或删除时，先准备版本为 1 的维护计划 JSON，再执行：\n\n\`${launcher} visual-reference-manager apply --scope contact --plan '<计划文件>' --dry-run\`\n\n只有 dry-run 成功、没有冲突且用户已确认后，才执行同一计划的 \`${launcher} visual-reference-manager apply --scope contact --plan '<计划文件>'\`。\`remove\` 必须明确 \`delete_file: true|false\`；不要手工编辑 manifest，也不要把当前联系人的人物资料改写到 \`shared\`。\n`;
 }
 
 function renderSiteAutomationSkill(launcher) {
