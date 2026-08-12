@@ -32,19 +32,3 @@ npm run dist
 ```
 
 `npm run dist` 生成 Windows ZIP 发布包，输出位于 `apps/control-center/dist/`。解压 ZIP 后运行其中的 `Suzu Lives Console.exe`；目标电脑不需要另装 Node.js 或 Electron。
-
-## 一键打包
-
-更新代码后，可直接双击仓库根目录的 `一键打包.cmd`。它会同步依赖、运行全部测试、生成 Windows ZIP，并自动在资源管理器中选中最新产物。
-
-也可以在终端运行：
-
-```powershell
-npm run package
-```
-
-仅在已确认测试通过、需要更快构建时使用：
-
-```powershell
-npm run package:fast
-```

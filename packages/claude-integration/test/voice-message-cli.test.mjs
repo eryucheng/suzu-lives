@@ -1,12 +1,8 @@
 import assert from "node:assert/strict";
-import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import process from "node:process";
 import test from "node:test";
-import { fileURLToPath } from "node:url";
-import { promisify } from "node:util";
 
 import { resolveAgentDataRoot, stableAgentId } from "@suzu-lives/agent-registry";
 import {
@@ -16,20 +12,8 @@ import {
   runDirectVoiceMessage,
 } from "@suzu-lives/voice-message/direct-voice-message";
 
-const execFileAsync = promisify(execFile);
-const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const CLI = path.join(PACKAGE_ROOT, "bin", "suzu-lives.mjs");
-
 async function temporaryDirectory(prefix) {
   return fs.mkdtemp(path.join(os.tmpdir(), prefix));
-}
-
-function isolatedEnvironment(extra = {}) {
-  const env = {};
-  for (const key of ["PATH", "Path", "PATHEXT", "SYSTEMROOT", "SystemRoot", "WINDIR", "COMSPEC", "TEMP", "TMP", "LOCALAPPDATA", "APPDATA", "USERPROFILE"]) {
-    if (process.env[key]) env[key] = process.env[key];
-  }
-  return { ...env, ...extra };
 }
 
 async function createFixture({ local = {} } = {}) {
@@ -62,35 +46,6 @@ function bytesResponse(value, { status = 200 } = {}) {
     arrayBuffer: async () => body,
   };
 }
-
-async function invokeCli(args, environment = {}) {
-  return execFileAsync(process.execPath, [CLI, "voice-message", ...args], {
-    cwd: PACKAGE_ROOT,
-    env: isolatedEnvironment(environment),
-  });
-}
-
-test("voice-message --inspect checks only Suzu voice settings and never prints the key", async () => {
-  const fixture = await createFixture();
-  const result = await invokeCli([
-    "--inspect",
-    "--config", fixture.configPath,
-    "--data-root", fixture.dataRoot,
-    "--project-root", fixture.projectRoot,
-  ], { VOICE_FIXTURE_KEY: "environment-fixture-key" });
-  const inspection = JSON.parse(result.stdout);
-
-  assert.equal(inspection.status, "ready");
-  assert.equal(inspection.delivery, "conversation-attachment");
-  assert.equal(inspection.outputFormat, "mp3");
-  assert.equal(inspection.tts.model, "fixture-qwen-tts");
-  assert.equal(inspection.tts.voiceConfigured, true);
-  assert.equal(inspection.tts.apiKeyConfigured, true);
-  assert.doesNotMatch(result.stdout, /environment-fixture-key|ilink/u);
-  const agentId = stableAgentId(fixture.projectRoot);
-  const ledgerPath = path.join(resolveAgentDataRoot({ dataRoot: fixture.dataRoot, agentId }), "cost-ledger", "events.jsonl");
-  await assert.rejects(() => fs.stat(ledgerPath), /ENOENT/u);
-});
 
 test("saved Suzu voice and selected API connection override local defaults without bridge configuration", async () => {
   const fixture = await createFixture({ local: { voiceId: "saved-voice", model: "saved-model" } });
@@ -321,14 +276,6 @@ test("local audio is converted to MP3 without TTS credentials or external delive
   assert.ok(result.savedPath.startsWith(path.join(resolveAgentDataRoot({ dataRoot: fixture.dataRoot, agentId }), "voice-message", "audio")));
   assert.equal(await fs.readFile(result.savedPath, "utf8"), "converted-mp3");
   assert.equal(fetched, false);
-});
-
-test("voice-message rejects direct-delivery options", async () => {
-  const fixture = await createFixture();
-  await assert.rejects(
-    () => invokeCli(["测试", "--mode", "native", "--config", fixture.configPath, "--data-root", fixture.dataRoot, "--project-root", fixture.projectRoot], { VOICE_FIXTURE_KEY: "key" }),
-    (error) => /--mode/u.test(String(error.message || error.stdout || error.stderr || "")),
-  );
 });
 
 test("voice-message confines its software configuration file to the data root", async () => {

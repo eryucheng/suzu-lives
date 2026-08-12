@@ -80,11 +80,7 @@ test("merchant fixture parsing prepares a Suzu-owned delivery result and state",
   assert.equal(notificationResult.deliveryReady, true);
 });
 
-test("merchant Skill uses stable Suzu Lives schedule forms without private paths", () => {
+test("merchant Skill excludes private paths", () => {
   const skill = renderTravelingMerchantSkill();
-  assert.match(skill, /suzu-lives traveling-merchant/u);
-  assert.match(skill, /suzu-lives schedule add --cron "2 8,12,16,20 \* \* \*" --exec traveling-merchant --desc "洛克王国远行商人监控"/u);
-  assert.match(skill, /suzu-lives schedule list/u);
-  assert.match(skill, /suzu-lives schedule remove <旧任务ID>/u);
   assert.doesNotMatch(skill, /D:\\Apps|config\.local|registry\.local|(?:^|[\\/])ling(?:[\\/]|$)/iu);
 });

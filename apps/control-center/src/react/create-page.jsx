@@ -1,4 +1,3 @@
-import { createRoot } from "react-dom/client";
 import { PageHeader, Status } from "suzu-design-system";
 
 import { CREATE_SPACES } from "../features/create/overview.mjs";
@@ -34,23 +33,4 @@ export function CreatePage({ actions = {} }) {
       </section>
     </>
   );
-}
-
-let pageElement = null;
-let pageRoot = null;
-
-export function renderCreatePage(element, props) {
-  if (!element) return;
-  if (pageElement !== element) {
-    pageRoot?.unmount();
-    pageElement = element;
-    pageRoot = createRoot(element);
-  }
-  pageRoot.render(<CreatePage {...props} />);
-}
-
-export function unmountCreatePage() {
-  pageRoot?.unmount();
-  pageRoot = null;
-  pageElement = null;
 }

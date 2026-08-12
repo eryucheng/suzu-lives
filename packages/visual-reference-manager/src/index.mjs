@@ -177,7 +177,7 @@ export async function runVisualReferenceManager({ agentRoot, args } = {}) {
 
 export async function runVisualReferenceManagerCli(values, { environment = process.env } = {}) {
   const args = parseVisualReferenceManagerArgs(values);
-  const dataRoot = resolveSuzuLivesDataRoot({ configuredRoot: args.dataRoot || environment.SUZU_LIVES_DATA_ROOT, localAppData: environment.LOCALAPPDATA, fallbackBase: "" });
+  const dataRoot = resolveSuzuLivesDataRoot({ configuredRoot: args.dataRoot || environment.SUZU_LIVES_DATA_ROOT, localAppData: environment.LOCALAPPDATA, appData: environment.APPDATA, fallbackBase: "", fallbackToLocatorWhenMissing: true });
   const agentRoot = resolveAgentDataRoot({ dataRoot, agentId: args.agentId || environment.SUZU_LIVES_AGENT_ID, projectRoot: args.projectRoot || environment.SUZU_LIVES_PROJECT_ROOT });
   return runVisualReferenceManager({ agentRoot, args });
 }

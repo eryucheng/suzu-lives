@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
-import { createRoot } from "react-dom/client";
 import { Banner, Button, Calendar, Dialog, GlassPanel, Input, PageHeader, Select, Status, Switch } from "suzu-design-system";
 
 import { dateTime, money } from "../core/formatters.mjs";
@@ -8,15 +7,6 @@ import "./today-page.css";
 
 const EVENT_TYPES = ["纪念日", "生日", "日程", "其他"];
 const WEEKDAYS = ["一", "二", "三", "四", "五", "六", "日"];
-
-let pageRoot = null;
-let pageElement = null;
-
-function emit(name, detail = {}) {
-  window.setTimeout(() => {
-    window.dispatchEvent(new CustomEvent(name, { detail }));
-  }, 0);
-}
 
 function two(value) {
   return String(value).padStart(2, "0");
@@ -123,7 +113,7 @@ function editorSeed(editor, selectedDate, defaultContactId = "") {
   };
 }
 
-function TodayEventEditor({ editor, selectedDate, canEdit, contacts = [], defaultContactId = "" }) {
+function TodayEventEditor({ actions = {}, editor, selectedDate, canEdit, contacts = [], defaultContactId = "" }) {
   const event = editor?.event || null;
   const key = `${event?.contactId || defaultContactId}:${event?.id || "new"}:${selectedDate}`;
   const [draft, setDraft] = useState(() => editorSeed(editor, selectedDate, defaultContactId));
@@ -133,13 +123,13 @@ function TodayEventEditor({ editor, selectedDate, canEdit, contacts = [], defaul
 
   const save = (formEvent) => {
     formEvent.preventDefault();
-    emit("suzu-today:save-event", draft);
+    void actions.saveEvent?.(draft);
   };
   const footer = (
     <div className="today-editor-actions">
-      {event?.id ? <Button variant="danger" size="sm" onClick={() => emit("suzu-today:remove-event", { contactId: event.contactId, id: event.id, name: event.name })}>删除</Button> : <span />}
+      {event?.id ? <Button variant="danger" size="sm" onClick={() => void actions.removeEvent?.({ contactId: event.contactId, id: event.id, name: event.name })}>删除</Button> : <span />}
       <div>
-        <Button variant="secondary" size="sm" onClick={() => emit("suzu-today:close-editor")}>取消</Button>
+        <Button variant="secondary" size="sm" onClick={() => actions.closeEditor?.()}>取消</Button>
         <Button variant="primary" size="sm" form="today-event-form" type="submit" disabled={!canEdit || !draft.contactId || !draft.name.trim() || !draft.date}>保存</Button>
       </div>
     </div>
@@ -148,7 +138,7 @@ function TodayEventEditor({ editor, selectedDate, canEdit, contacts = [], defaul
   const dialog = (
     <Dialog
       open
-      onClose={() => emit("suzu-today:close-editor")}
+      onClose={() => actions.closeEditor?.()}
       title={event ? "编辑日期" : "添加日期"}
       footer={footer}
     >
@@ -207,7 +197,7 @@ function TodayEventEditor({ editor, selectedDate, canEdit, contacts = [], defaul
   return typeof document === "undefined" ? dialog : createPortal(dialog, document.body);
 }
 
-function TodayEvents({ events, canEdit }) {
+function TodayEvents({ actions = {}, events, canEdit }) {
   if (!events.length) {
     return <div className="today-event-empty">这一天还没有要记住的事。</div>;
   }
@@ -224,7 +214,7 @@ function TodayEvents({ events, canEdit }) {
             </div>
           </div>
           {event.editable
-            ? <Button variant="ghost" size="sm" disabled={!canEdit} onClick={() => emit("suzu-today:edit-event", { contactId: event.contactId, id: event.id })}>修改</Button>
+            ? <Button variant="ghost" size="sm" disabled={!canEdit} onClick={() => actions.editEvent?.({ contactId: event.contactId, id: event.id })}>修改</Button>
             : <Status label="节日" tone="info" />}
         </article>
       ))}
@@ -232,7 +222,7 @@ function TodayEvents({ events, canEdit }) {
   );
 }
 
-export function TodayPage({ snapshot = {} }) {
+export function TodayPage({ actions = {}, snapshot = {} }) {
   const now = new Date();
   const today = dateKey(now);
   const selectedDate = validDateKey(snapshot.selectedDate) || today;
@@ -262,10 +252,10 @@ export function TodayPage({ snapshot = {} }) {
             events={calendarMarks}
             layout="fill"
             month={month.getMonth()}
-            onGoToday={() => emit("suzu-today:go-today")}
-            onNextMonth={() => emit("suzu-today:set-month", { month: shiftMonth(month, 1) })}
-            onPrevMonth={() => emit("suzu-today:set-month", { month: shiftMonth(month, -1) })}
-            onSelect={(date) => emit("suzu-today:select-date", { date })}
+            onGoToday={() => actions.goToday?.()}
+            onNextMonth={() => actions.setMonth?.(shiftMonth(month, 1))}
+            onPrevMonth={() => actions.setMonth?.(shiftMonth(month, -1))}
+            onSelect={(date) => actions.selectDate?.(date)}
             selected={selectedDate}
             year={month.getFullYear()}
           />
@@ -282,7 +272,7 @@ export function TodayPage({ snapshot = {} }) {
                 <h2>{dateLabel(selectedDate)}</h2>
               </div>
               <div className="today-day-panel__actions">
-                <Button size="sm" variant="secondary" disabled={!canEdit} onClick={() => emit("suzu-today:open-editor")}>添加日期</Button>
+                <Button size="sm" variant="secondary" disabled={!canEdit} onClick={() => actions.openEditor?.()}>添加日期</Button>
                 <Status label={`${selectedEvents.length} 项`} tone={selectedEvents.length ? "info" : "muted"} />
               </div>
             </header>
@@ -293,7 +283,7 @@ export function TodayPage({ snapshot = {} }) {
               {snapshot.calendar?.status === "invalid" ? (
                 <Banner tone="danger">纪念日数据暂时无法读取。为避免覆盖原有内容，编辑已暂停。</Banner>
               ) : null}
-              <TodayEvents canEdit={canEdit} events={selectedEvents} />
+              <TodayEvents actions={actions} canEdit={canEdit} events={selectedEvents} />
             </div>
           </GlassPanel>
           <GlassPanel as="section" className="today-conversation-panel" intensity="soft">
@@ -301,7 +291,7 @@ export function TodayPage({ snapshot = {} }) {
               type="button"
               className="today-conversation-panel__action"
               aria-label="打开对话"
-              onClick={() => emit("suzu-today:open-conversation")}
+              onClick={() => actions.openConversation?.()}
             >
               <span className="today-conversation-panel__copy">
                 <span className="today-section-kicker">CONVERSATION</span>
@@ -319,7 +309,7 @@ export function TodayPage({ snapshot = {} }) {
             type="button"
             className="today-cost-card__action"
             aria-label="查看今日用量"
-            onClick={() => emit("suzu-today:open-usage")}
+            onClick={() => actions.openUsage?.()}
           >
             <div className="today-insight-head">
               <span className="today-section-kicker">USAGE</span>
@@ -338,7 +328,7 @@ export function TodayPage({ snapshot = {} }) {
               <span className="today-section-kicker">RECENT</span>
               <h2>最近活动</h2>
             </div>
-            <button className="today-text-action" type="button" onClick={() => emit("suzu-today:open-usage")}>全部记录</button>
+            <button className="today-text-action" type="button" onClick={() => actions.openUsage?.()}>全部记录</button>
           </div>
           {recentEvents.length ? (
             <div className="today-activity-list">
@@ -358,23 +348,7 @@ export function TodayPage({ snapshot = {} }) {
         </GlassPanel>
       </section>
 
-      <TodayEventEditor canEdit={canEdit} contacts={contacts} defaultContactId={defaultContactId} editor={snapshot.editor} selectedDate={selectedDate} />
+      <TodayEventEditor actions={actions} canEdit={canEdit} contacts={contacts} defaultContactId={defaultContactId} editor={snapshot.editor} selectedDate={selectedDate} />
     </div>
   );
-}
-
-export function renderTodayPage(element, props) {
-  if (!element) return;
-  if (pageElement !== element) {
-    pageRoot?.unmount();
-    pageElement = element;
-    pageRoot = createRoot(element);
-  }
-  pageRoot.render(<TodayPage {...props} />);
-}
-
-export function unmountTodayPage() {
-  pageRoot?.unmount();
-  pageRoot = null;
-  pageElement = null;
 }

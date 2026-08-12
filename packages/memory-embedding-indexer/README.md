@@ -10,15 +10,3 @@
 每个节点使用确定性的标题、正文、主体、状态与时间字段生成索引文本，并保存其 SHA-256。再次运行时只调用新增节点或正文发生变化的节点；人工编辑记忆后，核心层也会主动删除该节点的旧向量。
 
 当前 OpenAI 兼容 provider 支持一次提交最多 10 条文本。写入以单批事务完成；单批失败不会删除已有向量，报告会保留失败节点 ID。配置费用流水路径后，每次真实 API 调用都会追加 `memory-index-embedding` 用量事件。
-
-CLI 示例：
-
-```powershell
-node .\packages\memory-embedding-indexer\src\cli.mjs `
-  --database="D:\path\memory.db" `
-  --agent="agent-id" `
-  --config="D:\path\embedding-config.json" `
-  --ledger="D:\path\usage-events.jsonl"
-```
-
-`--dry-run` 只报告计划，不调用 API。`--memory-id=<id>` 可重复传入，用于小范围验证；`--rebuild` 强制重新生成所选节点。

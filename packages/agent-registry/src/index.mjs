@@ -1,7 +1,5 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
-import fsp from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 
 function clean(value) {
@@ -12,6 +10,10 @@ const DATA_ROOT_FOLDER_NAME = "Suzu Lives";
 const DATA_ROOT_LOCATOR_DIRECTORY = "suzu-lives-console";
 const DATA_ROOT_LOCATOR_FILE_NAME = "data-root.json";
 const DATA_ROOT_REDIRECT_FILE_NAME = ".suzu-lives-data-location.json";
+const CONTACT_METADATA_DIRECTORY = ".suzu-lives";
+const CONTACT_METADATA_FILE = "contact.json";
+const CONTACT_ID_PATTERN = /^contact-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/iu;
+const AGENT_ID_PATTERN = /^agent-[a-z0-9][a-z0-9_-]{0,121}$/iu;
 
 function absolutePath(value) {
   const candidate = clean(value);
@@ -48,9 +50,37 @@ export function normalizeProjectRoot(projectRoot) {
   return value ? path.resolve(value) : "";
 }
 
+export function normalizeAgentId(value) {
+  const agentId = clean(value).toLowerCase();
+  return AGENT_ID_PATTERN.test(agentId) ? agentId : "";
+}
+
+function storedContactAgentId(projectRoot) {
+  const root = normalizeProjectRoot(projectRoot);
+  if (!root) return "";
+  const directory = path.join(root, CONTACT_METADATA_DIRECTORY);
+  const metadataPath = path.join(directory, CONTACT_METADATA_FILE);
+  try {
+    const directoryStat = fs.lstatSync(directory);
+    const metadataStat = fs.lstatSync(metadataPath);
+    if (directoryStat.isSymbolicLink() || !directoryStat.isDirectory()
+      || metadataStat.isSymbolicLink() || !metadataStat.isFile()) return "";
+    const metadata = readJson(metadataPath, null);
+    if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return "";
+    if (!CONTACT_ID_PATTERN.test(clean(metadata.id).toLowerCase())) return "";
+    return normalizeAgentId(metadata.agentId);
+  } catch {
+    return "";
+  }
+}
+
 export function stableAgentId(projectRoot) {
   const root = normalizeProjectRoot(projectRoot);
   if (!root) return "";
+  // A Suzu-managed contact carries its identity with the project so its
+  // per-contact data does not change when the project directory is moved.
+  const persisted = storedContactAgentId(root);
+  if (persisted) return persisted;
   return `agent-${createHash("sha256").update(root.toLowerCase()).digest("hex").slice(0, 16)}`;
 }
 
@@ -167,9 +197,19 @@ export function resolveSuzuLivesDataRoot({
   fallbackBase = "",
   appData = process.env.APPDATA,
   locatorPath = "",
+  fallbackToLocatorWhenMissing = false,
 } = {}) {
   const configured = clean(configuredRoot);
-  if (configured) return followDataRootRedirect(path.resolve(configured));
+  if (configured) {
+    const requested = path.resolve(configured);
+    const resolved = followDataRootRedirect(requested);
+    // Installed Hooks and bundled CLIs can retain a data-root argument from
+    // before a migration. Once that old copy is removed, use the software's
+    // current locator instead of recreating a new directory at the stale path.
+    if (resolved !== requested || !fallbackToLocatorWhenMissing || isDirectory(requested)) return resolved;
+    const located = readSuzuLivesDataRootLocator({ appData, fallbackBase, locatorPath }).dataRoot;
+    return located ? followDataRootRedirect(located) : resolved;
+  }
 
   const located = readSuzuLivesDataRootLocator({ appData, fallbackBase, locatorPath }).dataRoot;
   if (located) return followDataRootRedirect(located);
@@ -211,42 +251,4 @@ export function resolveAgentConversationDataRoot({
 export function encodeClaudeProjectDirectory(projectRoot) {
   const root = normalizeProjectRoot(projectRoot);
   return root ? root.replace(/[^a-zA-Z0-9]/gu, "-") : "";
-}
-
-async function newestJsonl(directory) {
-  if (!isDirectory(directory)) return "";
-
-  const candidates = [];
-  for (const name of await fsp.readdir(directory)) {
-    if (!name.toLowerCase().endsWith(".jsonl") || name.startsWith("agent-")) continue;
-    const filePath = path.join(directory, name);
-    try {
-      const stat = await fsp.stat(filePath);
-      if (stat.isFile()) candidates.push({ filePath, modified: stat.mtimeMs, size: stat.size });
-    } catch {
-      // A session may disappear while Claude Code rotates or replaces it.
-    }
-  }
-
-  candidates.sort((left, right) => right.modified - left.modified || right.size - left.size);
-  return candidates[0]?.filePath || "";
-}
-
-export async function resolveTranscriptPath(
-  projectRoot,
-  { homeDirectory = os.homedir() } = {},
-) {
-  const root = normalizeProjectRoot(projectRoot);
-  if (!root) return { path: "", source: "missing" };
-
-  const encoded = encodeClaudeProjectDirectory(root);
-  const detected = await newestJsonl(path.join(
-    path.resolve(homeDirectory),
-    ".claude",
-    "projects",
-    encoded,
-  ));
-  if (detected) return { path: detected, source: "auto" };
-
-  return { path: "", source: "missing" };
 }

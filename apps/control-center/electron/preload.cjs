@@ -25,8 +25,6 @@ contextBridge.exposeInMainWorld("suzuConsole", {
     companionTargets: () => ipcRenderer.invoke("capabilities:companion-targets"),
     register: (id) => ipcRenderer.invoke("capabilities:register", id),
     setActive: (id, enabled) => ipcRenderer.invoke("capabilities:set-active", { id, enabled }),
-    enable: (id) => ipcRenderer.invoke("capabilities:enable", id),
-    initializeDefaults: () => ipcRenderer.invoke("capabilities:initialize-defaults"),
     saveSettings: (id, value) => ipcRenderer.invoke("capabilities:save-settings", { id, value }),
     openTravelingMerchantPage: () => ipcRenderer.invoke("capabilities:open-traveling-merchant-page"),
   },

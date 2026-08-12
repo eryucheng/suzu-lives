@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { createRoot } from "react-dom/client";
 import { PageHeader, Select, Status } from "suzu-design-system";
 
 import { CreateStudioDialog } from "./create-studio-dialog.jsx";
@@ -364,7 +363,7 @@ export function CreateAudioPage({ actions = {}, api }) {
       </CreateStudioDialog>
 
       <CreateStudioDialog ariaLabel="配置联系人音色" onClose={() => setDialog({ type: "" })} open={dialog.type === "contacts" || dialog.type === "contact-choice"}>
-        {dialog.type === "contacts" ? <><DialogHeader onClose={() => setDialog({ type: "" })} title="配置联系人音色">联系人</DialogHeader><div className="voice-settings-copy"><p>选择一位联系人，再为他或她设置保存过的音色。每个人的设置互不影响。</p></div>{contacts.length ? <div className="voice-contact-list">{contacts.map((item) => <article className="voice-contact-row" key={item.id}><div><strong>{item.name}</strong><small>{voiceChoiceLabel(item, choices)}</small></div><button className="secondary-button" onClick={() => setDialog({ type: "contact-choice", contactId: item.id })} type="button">配置音色</button></article>)}</div> : <div className="voice-history-empty voice-contact-empty">还没有联系人。请先在“关系”中创建联系人。</div>}<div className="voice-form-actions voice-contact-dialog-actions"><button className="secondary-button" onClick={() => setDialog({ type: "" })} type="button">关闭</button></div></> : contact ? <><DialogHeader onClose={() => setDialog({ type: "" })} title={`为“${contact.name}”配置音色`}>联系人</DialogHeader><div className="voice-settings-copy"><p>这里列出已保留的百炼音色，以及本机音色库中的 MiniMax 和阿里百炼复刻音色；保存后只影响“{contact.name}”。</p></div>{choices.length ? <form className="voice-form voice-contact-config-form" onSubmit={saveContactVoice}><div className="voice-contact-choice-list">{choices.map((item) => { const selected = item.id ? contact.provider === item.provider && item.id === contact.customVoiceId && item.voiceId === contact.voiceId : contact.provider === item.provider && item.voiceId === contact.voiceId; return <label className="voice-contact-choice" key={item.key}><input defaultChecked={selected} name="voiceSelection" required type="radio" value={item.key} /><span><strong>{item.name}</strong><small>{selected ? `${contact.name}正在使用` : item.kindLabel}</small></span></label>; })}</div><div className="voice-form-actions"><button className="secondary-button" onClick={() => setDialog({ type: "contacts" })} type="button">返回联系人列表</button><button className="primary-button" disabled={Boolean(assigningVoiceId)}>{assigningVoiceId ? "正在保存…" : "使用这个音色"}</button></div></form> : <><div className="voice-history-empty voice-contact-empty">先保留一个候选音色，或点音色设置里的“自定义音频”添加 MiniMax 或阿里百炼复刻声音。</div><div className="voice-form-actions voice-contact-dialog-actions"><button className="secondary-button" onClick={() => setDialog({ type: "contacts" })} type="button">返回联系人列表</button></div></>}</> : null}
+        {dialog.type === "contacts" ? <><DialogHeader onClose={() => setDialog({ type: "" })} title="配置联系人音色">联系人</DialogHeader><div className="voice-settings-copy"><p>选择一位联系人，再为他或她设置保存过的音色。每个人的设置互不影响。</p></div>{contacts.length ? <div className="voice-contact-list">{contacts.map((item) => <article className="voice-contact-row" key={item.id}><div><strong>{item.name}</strong><small>{voiceChoiceLabel(item, choices)}</small></div><button className="secondary-button" onClick={() => setDialog({ type: "contact-choice", contactId: item.id })} type="button">配置音色</button></article>)}</div> : <div className="voice-history-empty voice-contact-empty">还没有联系人。请先在“关系”中创建联系人。</div>}<div className="voice-form-actions voice-contact-dialog-actions"><button className="secondary-button" onClick={() => setDialog({ type: "" })} type="button">关闭</button></div></> : contact ? <><DialogHeader onClose={() => setDialog({ type: "" })} title={`为“${contact.name}”配置音色`}>联系人</DialogHeader><div className="voice-settings-copy"><p>{`这里列出已保留的百炼音色，以及本机音色库中的 MiniMax 和阿里百炼复刻音色；保存后只影响“${contact.name}”。`}</p></div>{choices.length ? <form className="voice-form voice-contact-config-form" onSubmit={saveContactVoice}><div className="voice-contact-choice-list">{choices.map((item) => { const selected = item.id ? contact.provider === item.provider && item.id === contact.customVoiceId && item.voiceId === contact.voiceId : contact.provider === item.provider && item.voiceId === contact.voiceId; return <label className="voice-contact-choice" key={item.key}><input defaultChecked={selected} name="voiceSelection" required type="radio" value={item.key} /><span><strong>{item.name}</strong><small>{selected ? `${contact.name}正在使用` : item.kindLabel}</small></span></label>; })}</div><div className="voice-form-actions"><button className="secondary-button" onClick={() => setDialog({ type: "contacts" })} type="button">返回联系人列表</button><button className="primary-button" disabled={Boolean(assigningVoiceId)}>{assigningVoiceId ? "正在保存…" : "使用这个音色"}</button></div></form> : <><div className="voice-history-empty voice-contact-empty">先保留一个候选音色，或点音色设置里的“自定义音频”添加 MiniMax 或阿里百炼复刻声音。</div><div className="voice-form-actions voice-contact-dialog-actions"><button className="secondary-button" onClick={() => setDialog({ type: "contacts" })} type="button">返回联系人列表</button></div></>}</> : null}
       </CreateStudioDialog>
 
       <CreateStudioDialog ariaLabel="自定义音频" onClose={() => { if (!savingCustomAudio) setDialog({ type: "settings" }); }} open={dialog.type === "custom"}>
@@ -374,23 +373,4 @@ export function CreateAudioPage({ actions = {}, api }) {
       </CreateStudioDialog>
     </>
   );
-}
-
-let pageElement = null;
-let pageRoot = null;
-
-export function renderCreateAudioPage(element, props) {
-  if (!element) return;
-  if (pageElement !== element) {
-    pageRoot?.unmount();
-    pageElement = element;
-    pageRoot = createRoot(element);
-  }
-  pageRoot.render(<CreateAudioPage {...props} />);
-}
-
-export function unmountCreateAudioPage() {
-  pageRoot?.unmount();
-  pageRoot = null;
-  pageElement = null;
 }

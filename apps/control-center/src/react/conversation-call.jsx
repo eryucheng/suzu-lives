@@ -18,6 +18,11 @@ import {
 } from "./conversation-call-utils.mjs";
 
 const ConversationCallContext = createContext(null);
+const VOICE_ENERGY_THRESHOLD = 0.025;
+const VOICE_CAPTURE_WARMUP_SECONDS = 0.6;
+// ScriptProcessor emits roughly one frame every 40–45 ms on desktop.  Nine
+// quiet frames therefore make a short pause the end of the current sentence.
+const VOICE_SILENCE_FRAME_COUNT = 9;
 
 const EMPTY_CALL_CONTROL = Object.freeze({
   active: false,
@@ -33,6 +38,7 @@ function createAudioState(token) {
   if (!AudioContextConstructor) throw new Error("当前运行环境不支持实时音频。 ");
   return {
     audioContext: new AudioContextConstructor({ latencyHint: "interactive" }),
+    captureReadyAt: 0,
     commitPending: false,
     currentSource: null,
     epoch: 0,
@@ -41,11 +47,10 @@ function createAudioState(token) {
     nextIndex: 0,
     pending: new Map(),
     processor: null,
+    sendingUtterance: false,
     silentGain: null,
     silenceFrames: 0,
     source: null,
-    speaking: false,
-    speechFrames: 0,
     skipped: new Set(),
     stream: null,
     token,
@@ -245,27 +250,28 @@ export function ConversationCallProvider({ active = false, api = null, snapshot 
     }
   }, [isCurrentCall, patchCall]);
 
-  const updateVoiceActivity = useCallback((token, input) => {
+  const updateVoiceActivity = useCallback((token, energy) => {
     const current = callRef.current;
     const audio = audioRef.current;
-    if (!current || !audio || current.token !== token || audio.token !== token) return;
-    if (inputEnergy(input) >= 0.012) {
-      audio.speechFrames += 1;
+    if (!current || !audio || current.token !== token || audio.token !== token) return "";
+    if (energy >= VOICE_ENERGY_THRESHOLD) {
       audio.silenceFrames = 0;
-      if (!audio.speaking && audio.speechFrames >= 2) {
-        audio.speaking = true;
+      if (!audio.sendingUtterance) {
+        audio.sendingUtterance = true;
         audio.hasSpoken = true;
         void interruptFromSpeech(token);
+        return "started";
       }
-      return;
+      return "active";
     }
+    if (!audio.sendingUtterance) return "";
     audio.silenceFrames += 1;
-    if (audio.speaking && audio.silenceFrames >= 9) {
-      audio.speaking = false;
-      audio.speechFrames = 0;
-      void commitUtterance(token);
+    if (audio.silenceFrames >= VOICE_SILENCE_FRAME_COUNT) {
+      audio.sendingUtterance = false;
+      return "ended";
     }
-  }, [commitUtterance, interruptFromSpeech]);
+    return "";
+  }, [interruptFromSpeech]);
 
   const startMicrophone = useCallback(async (token, callId) => {
     if (!navigator.mediaDevices?.getUserMedia) throw new Error("当前环境无法读取麦克风。 ");
@@ -284,6 +290,9 @@ export function ConversationCallProvider({ active = false, api = null, snapshot 
       return;
     }
     audio.stream = stream;
+    // Windows' capture pipeline can emit a short gain-control transient right
+    // after a stream opens.  Do not treat that startup pulse as a sentence.
+    audio.captureReadyAt = audio.audioContext.currentTime + VOICE_CAPTURE_WARMUP_SECONDS;
     audio.source = audio.audioContext.createMediaStreamSource(stream);
     // 2,048 frames keeps capture chunks around 40–45 ms on the usual desktop
     // sample rates, short enough for a conversational turn without flooding IPC.
@@ -296,14 +305,22 @@ export function ConversationCallProvider({ active = false, api = null, snapshot 
     audio.processor.onaudioprocess = (event) => {
       const activeCall = callRef.current;
       if (!activeCall || activeCall.token !== token || activeCall.id !== callId || audioRef.current !== audio) return;
+      if (audio.audioContext.currentTime < audio.captureReadyAt) return;
       const input = event.inputBuffer.getChannelData(0);
-      updateVoiceActivity(token, input);
-      const pcm = downsamplePcm16(input, audio.audioContext.sampleRate, 16000);
-      if (!pcm.length) return;
-      const payload = pcm.buffer.slice(pcm.byteOffset, pcm.byteOffset + pcm.byteLength);
-      apiRef.current?.conversation?.call?.audio?.({ callId, audio: payload });
+      const energy = inputEnergy(input);
+      const voiceTransition = updateVoiceActivity(token, energy);
+      if (energy >= VOICE_ENERGY_THRESHOLD) {
+        const pcm = downsamplePcm16(input, audio.audioContext.sampleRate, 16000);
+        if (pcm.length) {
+          const payload = pcm.buffer.slice(pcm.byteOffset, pcm.byteOffset + pcm.byteLength);
+          apiRef.current?.conversation?.call?.audio?.({ callId, audio: payload });
+        }
+      }
+      if (voiceTransition === "ended") {
+        void commitUtterance(token);
+      }
     };
-  }, [updateVoiceActivity]);
+  }, [commitUtterance, updateVoiceActivity]);
 
   const end = useCallback(async () => {
     const current = callRef.current;

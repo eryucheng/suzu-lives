@@ -8,17 +8,20 @@ export function registerLedgerIpc({ ipcMain, settingsService, contactProjectsSer
   ipcMain.handle("ledger:scan", async () => {
     const settings = settingsService.load();
     const snapshot = await contactProjectsService.snapshot();
-    const contactScopes = (Array.isArray(snapshot?.contacts) ? snapshot.contacts : []).map((contact) => ({
-      contactId: clean(contact?.id),
-      contactName: clean(contact?.name),
-      projectRoot: clean(contact?.projectRoot),
-      sessionId: clean(contact?.sessionId),
-      usageLedgerPath: settingsService.usageLedgerPath({
+    const contactScopes = (Array.isArray(snapshot?.contacts) ? snapshot.contacts : []).map((contact) => {
+      const usageLedgerPath = settingsService.usageLedgerPath({
         ...settings,
         agentId: clean(contact?.agentId),
         projectRoot: clean(contact?.projectRoot),
-      }),
-    }));
+      });
+      return {
+        contactId: clean(contact?.id),
+        contactName: clean(contact?.name),
+        projectRoot: clean(contact?.projectRoot),
+        sessionId: clean(contact?.sessionId),
+        usageLedgerPath,
+      };
+    });
     return scanCostLedger(settings, { contactScopes });
   });
 }

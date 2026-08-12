@@ -19,4 +19,4 @@ description: 通过用户已配置并测试的 iPhone 邮件快捷指令发送�
 
 `suzu-lives iphone-bridge receive --preview '<主题>' '<内容>'`
 
-软件代码、配置、反馈状态和附件目录都在 Suzu Lives 当前 Agent 数据根；运行时不会使用远程转发，也不会把私密内容展示到界面。
+软件代码、配置、反馈状态和附件目录都在 Suzu Lives 统一软件数据根；运行时不会使用远程转发，也不会把私密内容展示到界面。

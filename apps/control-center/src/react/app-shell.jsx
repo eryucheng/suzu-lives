@@ -74,7 +74,6 @@ function GlobalNotice({ message = "" }) {
 }
 
 export function AppShell() {
-  const [activeView, setActiveView] = useState("today");
   const [workspace, setWorkspace] = useState(() => latestWorkspace);
   const [notice, setNotice] = useState(() => latestNotice);
 
@@ -87,19 +86,8 @@ export function AppShell() {
     };
   }, []);
 
-  useLayoutEffect(() => {
-    const onViewChange = (event) => {
-      const view = String(event.detail?.view || "");
-      if ([...PRIMARY_NAVIGATION, ...UTILITY_NAVIGATION].some((item) => item.view === view)) setActiveView(view);
-    };
-    window.addEventListener("suzu-shell:view-change", onViewChange);
-    return () => window.removeEventListener("suzu-shell:view-change", onViewChange);
-  }, []);
-
-  const navigate = (view) => {
-    setActiveView(view);
-    window.dispatchEvent(new CustomEvent("suzu-shell:navigate", { detail: { view } }));
-  };
+  const activeView = String(workspace?.activeView || "today");
+  const navigate = (view) => workspace?.actions?.navigate?.(view);
   const conversationProps = workspace?.route?.kind === "conversation" ? workspace.route.props : null;
 
   return (

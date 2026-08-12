@@ -86,9 +86,9 @@ function writeAcknowledgement(child, uid, accepted, message = "") {
 }
 
 /**
- * Owns the iPhone IMAP receiver while Suzu is running. The Python process only
- * emits local JSON events; this service selects every configured conversation
- * and uses the normal per-session chat queue for delivery.
+ * Owns the shared iPhone IMAP receiver while Suzu is running. The Python
+ * process only emits local JSON events; this service selects every configured
+ * conversation and uses the normal per-session chat queue for delivery.
  */
 export function createIphoneFeedbackLinkService({
   chat,
@@ -131,13 +131,12 @@ export function createIphoneFeedbackLinkService({
     if (disposed) return { started: false, reason: "disposed" };
     const settings = plainObject(settingsProvider());
     const dataRoot = clean(settings.dataRoot);
-    const projectRoot = clean(settings.projectRoot);
     const targets = targetSessions(await Promise.resolve(configuredTargets()));
-    if (!dataRoot || !projectRoot || !targets.length) return { started: false, reason: "not-configured" };
+    if (!dataRoot || !targets.length) return { started: false, reason: "not-configured" };
 
     let paths;
     try {
-      paths = resolveIphoneBridgePaths({ projectRoot, dataRoot });
+      paths = resolveIphoneBridgePaths({ dataRoot });
       const config = await fsOps.lstat(paths.configPath);
       if (config.isSymbolicLink() || !config.isFile()) throw new Error("iPhone 软件配置不是安全的普通文件。 ");
     } catch (error) {
@@ -157,7 +156,7 @@ export function createIphoneFeedbackLinkService({
         "--watch",
         "--event-stream",
       ], {
-        cwd: paths.projectRoot,
+        cwd: paths.runtimeRoot,
         env: { ...process.env, SUZU_LIVES_IPHONE_INBOX_DIR: paths.inboxPath },
         stdio: ["pipe", "pipe", "pipe"],
         windowsHide: true,

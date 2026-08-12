@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 
-import { stableAgentId } from "@suzu-lives/agent-registry";
+import { normalizeAgentId, stableAgentId } from "@suzu-lives/agent-registry";
 
 const CONTACT_FILE = "CLAUDE.md";
 const CONTACT_METADATA_DIRECTORY = ".suzu-lives";
@@ -90,10 +90,34 @@ async function contactMetadata(fsOps, projectRoot) {
       name: normalizeContactName(raw.name),
       createdAt: Number.isFinite(Date.parse(createdAt)) ? createdAt : "",
       sessionId: normalizeSessionId(raw.sessionId),
+      agentId: normalizeAgentId(raw.agentId),
     };
   } catch {
     return null;
   }
+}
+
+function agentIdForContactId(id) {
+  return `agent-${normalizeContactId(id).slice("contact-".length)}`;
+}
+
+async function materializeContactStorageIdentity(fsOps, projectRoot, metadata) {
+  if (metadata.agentId) return metadata;
+
+  // Contacts created before storage identity was persisted already own data
+  // under their path-derived ID. Pin that existing ID instead of copying or
+  // moving any per-contact data directory.
+  const agentId = stableAgentId(projectRoot);
+  if (!agentId) throw new ContactProjectsError("无法生成联系人固定存储身份。 ");
+  try {
+    await writeTextAtomic(fsOps, path.join(projectRoot, CONTACT_METADATA_DIRECTORY, CONTACT_METADATA_FILE), contactMetadataText({
+      ...metadata,
+      agentId,
+    }));
+  } catch (error) {
+    throw new ContactProjectsError(`无法固化联系人存储身份：${clean(error?.message) || "未知错误"}`);
+  }
+  return { ...metadata, agentId };
 }
 
 async function contactAt(fsOps, root, value) {
@@ -108,12 +132,13 @@ async function contactAt(fsOps, root, value) {
   const realProjectRoot = await fsOps.realpath(projectRoot);
   if (!samePath(path.dirname(realProjectRoot), root)) return null;
   if (!(await ordinaryFile(fsOps, path.join(realProjectRoot, CONTACT_FILE)))) return null;
-  const metadata = await contactMetadata(fsOps, realProjectRoot);
+  let metadata = await contactMetadata(fsOps, realProjectRoot);
   if (!metadata || metadata.id !== id) return null;
+  metadata = await materializeContactStorageIdentity(fsOps, realProjectRoot, metadata);
   return {
     id,
     name: metadata.name,
-    agentId: stableAgentId(realProjectRoot),
+    agentId: metadata.agentId,
     projectRoot: realProjectRoot,
     createdAt: metadata.createdAt,
     sessionId: metadata.sessionId,
@@ -144,13 +169,14 @@ function initialClaudeFile(name) {
   return `# ${name}\n`;
 }
 
-function contactMetadataText({ id, name, createdAt, sessionId = "" } = {}) {
+function contactMetadataText({ id, name, createdAt, sessionId = "", agentId = "" } = {}) {
   return `${JSON.stringify({
     version: 1,
     id,
     name,
     createdAt,
     ...(normalizeSessionId(sessionId) ? { sessionId: normalizeSessionId(sessionId) } : {}),
+    ...(normalizeAgentId(agentId) ? { agentId: normalizeAgentId(agentId) } : {}),
   }, null, 2)}\n`;
 }
 
@@ -298,6 +324,7 @@ export function createContactProjectsService({
         name: normalizedName,
         createdAt: new Date().toISOString(),
         sessionId,
+        agentId: agentIdForContactId(id),
       }));
     } catch (error) {
       throw new ContactProjectsError(`无法保存联系人备注：${clean(error?.message) || "未知错误"}`);
@@ -309,7 +336,10 @@ export function createContactProjectsService({
       preferredContactId: clean(settings.preferredContactId) || id,
       projectRoot,
     });
-    return snapshot();
+    return {
+      ...(await snapshot()),
+      createdContact: { id, projectRoot },
+    };
   };
 
   return { create, select, selectRoot, setPreferred, snapshot, syncClaudeProjectSettings };

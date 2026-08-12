@@ -1,5 +1,4 @@
 import { useState } from "react";
-import { createRoot } from "react-dom/client";
 import { Button, GlassPanel, PageHeader, Status, Tabs } from "suzu-design-system";
 
 import "./settings-page.css";
@@ -179,23 +178,4 @@ export function SettingsPage({ actions = {}, snapshot = {} }) {
       </section>
     </div>
   );
-}
-
-let pageElement = null;
-let pageRoot = null;
-
-export function renderSettingsPage(element, props) {
-  if (!element) return;
-  if (pageElement !== element) {
-    pageRoot?.unmount();
-    pageElement = element;
-    pageRoot = createRoot(element);
-  }
-  pageRoot.render(<SettingsPage {...props} />);
-}
-
-export function unmountSettingsPage() {
-  pageRoot?.unmount();
-  pageRoot = null;
-  pageElement = null;
 }

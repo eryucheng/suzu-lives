@@ -1,5 +1,4 @@
 import { useEffect, useState } from "react";
-import { createRoot } from "react-dom/client";
 import { Avatar, Banner, Button, Dialog, Empty, GlassPanel, Input, PageHeader, Roster, Tabs, Textarea } from "suzu-design-system";
 
 import { getIdentity } from "../core/identity.mjs";
@@ -233,23 +232,4 @@ export function RelationshipSettingsPage({ actions = {}, snapshot = {} }) {
       )}
     </div>
   );
-}
-
-let pageElement = null;
-let pageRoot = null;
-
-export function renderRelationshipSettingsPage(element, props) {
-  if (!element) return;
-  if (pageElement !== element) {
-    pageRoot?.unmount();
-    pageElement = element;
-    pageRoot = createRoot(element);
-  }
-  pageRoot.render(<RelationshipSettingsPage {...props} />);
-}
-
-export function unmountRelationshipSettingsPage() {
-  pageRoot?.unmount();
-  pageRoot = null;
-  pageElement = null;
 }

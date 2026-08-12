@@ -1,12 +1,8 @@
-# Capability registry
+# Internal capability CLI
 
-This package is the software-owned capability catalog. It exposes stable IDs, migration state, dependency types, configuration requirements, true enablement state, and Claude-registration eligibility.
+This package owns the host-neutral command contract for Suzu-owned, Agent-callable capabilities. It does not maintain a second generic registry, enablement store, or invocation path: desktop capability settings and Claude registrations are managed by the control center.
 
-It does not infer a configured external service from a package being present. It stores only per-ability-whitelisted non-secret configuration in the software data root, requires a deliberate enable action, and rejects `invoke` before dispatch when enablement or configuration is missing. Actual invocation consumes a short-lived, single-use software-signed credential bound to the ability, action, and scope; the stable CLI cannot issue one. Package executors perform their own concrete dependency and private authorization-context checks; `plan` is a separate, explicitly non-executing mode.
-
-## Internal capability CLI
-
-The `./internal-cli` export is the host-neutral contract for Suzu-owned, Agent-callable capabilities. Its canonical shell form is:
+The `./internal-cli` export provides the canonical shell form:
 
 ```text
 suzu-lives capability <capability-id> <action> --input-json '<JSON>'

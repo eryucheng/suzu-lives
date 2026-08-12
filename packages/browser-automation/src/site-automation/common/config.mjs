@@ -2,11 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import {
-  resolveAgentDataRoot,
-  resolveSuzuLivesDataRoot,
-  stableAgentId,
-} from "@suzu-lives/agent-registry";
+import { resolveSuzuLivesDataRoot } from "@suzu-lives/agent-registry";
 
 export const MODULE_ROOT = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -16,6 +12,32 @@ export const REGISTRY_PATH = path.join(MODULE_ROOT, "registry.json");
 
 function clean(value) {
   return String(value ?? "").trim();
+}
+
+/**
+ * Python cannot read Electron's virtual app.asar paths. Keep the launcher
+ * resolution here so the regular site flow and the explicit browser command
+ * always select the same real file.
+ */
+export function resolveBrowserStarterPath({
+  resourcesPath = process.resourcesPath,
+  existsSync = fs.existsSync,
+} = {}) {
+  const resourcesRoot = clean(resourcesPath);
+  const unpackedPath = resourcesRoot
+    ? path.join(
+      resourcesRoot,
+      "app.asar.unpacked",
+      "node_modules",
+      "@suzu-lives",
+      "browser-automation",
+      "src",
+      "web-browser",
+      "start_browser.py",
+    )
+    : "";
+  if (unpackedPath && existsSync(unpackedPath)) return unpackedPath;
+  return path.resolve(MODULE_ROOT, "..", "web-browser", "start_browser.py");
 }
 
 function plainObject(value) {
@@ -42,24 +64,19 @@ function readOptionalJson(filePath) {
   }
 }
 
-function softwareRuntime({ dataRoot = "", projectRoot = "", agentId = "" } = {}) {
+function softwareRuntime({ dataRoot = "", projectRoot = "" } = {}) {
   const resolvedDataRoot = resolveSuzuLivesDataRoot({
     configuredRoot: clean(dataRoot) || process.env.SUZU_LIVES_DATA_ROOT || "",
     localAppData: process.env.LOCALAPPDATA || "",
+    appData: process.env.APPDATA || "",
     fallbackBase: "",
+    fallbackToLocatorWhenMissing: true,
   });
-  const resolvedAgentId = clean(agentId) || process.env.SUZU_LIVES_AGENT_ID || stableAgentId(projectRoot);
-  if (!resolvedAgentId) {
-    throw new Error("site-automation 需要当前 Agent 身份；请传入 --project-root 或 --agent-id。");
-  }
-  const agentRoot = resolveAgentDataRoot({ dataRoot: resolvedDataRoot, agentId: resolvedAgentId });
   return {
     dataRoot: resolvedDataRoot,
-    agentId: resolvedAgentId,
     projectRoot: clean(projectRoot),
-    agentRoot,
-    runtimeRoot: path.join(agentRoot, "site-automation"),
-    browserRuntimeRoot: path.join(agentRoot, "web-browser"),
+    runtimeRoot: path.join(resolvedDataRoot, "capabilities", "site-automation"),
+    browserRuntimeRoot: path.join(resolvedDataRoot, "capabilities", "web-browser"),
   };
 }
 
@@ -78,17 +95,17 @@ export function resolveModulePath(value) {
 }
 
 /**
- * Configuration and all mutable runtime files live below the current Agent's
+ * Configuration and all mutable runtime files live in the software-owned
  * Suzu Lives data root. We never read configuration or runtime from a Claude
- * project directory.
+ * project directory or an individual contact's data directory.
  */
 export function loadConfig(context = {}) {
   const runtime = softwareRuntime(context);
   const defaultConfigPath = path.join(runtime.runtimeRoot, "config.json");
   const requestedConfig = clean(context.configPath || process.env.SUZU_LIVES_SITE_AUTOMATION_CONFIG || defaultConfigPath);
-  const sourcePath = path.resolve(requestedConfig);
+  const sourcePath = path.resolve(runtime.runtimeRoot, requestedConfig);
   if (!inside(runtime.runtimeRoot, sourcePath)) {
-    throw new Error("site-automation 配置必须位于当前 Agent 的软件数据目录内。");
+    throw new Error("site-automation 配置必须位于 Suzu Lives 软件数据目录内。");
   }
   const raw = readOptionalJson(sourcePath);
   const media = raw?.douyin?.media && typeof raw.douyin.media === "object" ? raw.douyin.media : {};
@@ -102,7 +119,6 @@ export function loadConfig(context = {}) {
     ...raw,
     sourcePath,
     dataRoot: runtime.dataRoot,
-    agentId: runtime.agentId,
     projectRoot: runtime.projectRoot,
     runtimeRoot: runtime.runtimeRoot,
     browserRuntimeRoot: runtime.browserRuntimeRoot,
@@ -111,7 +127,7 @@ export function loadConfig(context = {}) {
     navigationTimeoutMs: Number(raw.navigationTimeoutMs || 25000),
     autoStartBrowser: raw.autoStartBrowser !== false,
     pythonCommand: String(raw.pythonCommand || process.env.SUZU_LIVES_PYTHON || "python"),
-    browserStartScript: path.join(MODULE_ROOT, "web-browser", "start_browser.py"),
+    browserStartScript: resolveBrowserStarterPath(),
     diagnosticsDirectory: resolveRuntimePath(raw.diagnosticsDirectory, path.join(runtime.runtimeRoot, "diagnostics")),
     actionLogPath: resolveRuntimePath(raw.actionLogPath, path.join(runtime.runtimeRoot, "action-log.jsonl")),
     suzuLivesCommand: String(raw.suzuLivesCommand || process.env.SUZU_LIVES_COMMAND || "suzu-lives"),

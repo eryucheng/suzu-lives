@@ -1,6 +1,4 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { flushSync } from "react-dom";
-import { createRoot } from "react-dom/client";
 import { ChatVoice } from "suzu-design-system";
 
 import { shouldSubmitConversationOnEnter } from "../features/conversation/index.mjs";
@@ -607,23 +605,4 @@ export function ConversationPage({ actions, snapshot = {} }) {
       <ConversationOverlays actions={actions} overlays={snapshot.overlays} />
     </section>
   );
-}
-
-let pageElement = null;
-let pageRoot = null;
-
-export function renderConversationPage(element, props) {
-  if (!element) return;
-  if (pageElement !== element) {
-    pageRoot?.unmount();
-    pageElement = element;
-    pageRoot = createRoot(element);
-  }
-  flushSync(() => pageRoot.render(<ConversationPage {...props} />));
-}
-
-export function unmountConversationPage() {
-  pageRoot?.unmount();
-  pageRoot = null;
-  pageElement = null;
 }

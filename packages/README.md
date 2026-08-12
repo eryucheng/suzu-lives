@@ -8,7 +8,7 @@
 
 当前能力迁移的基础模块：
 
-- `capability-registry`：软件拥有的能力清单、依赖与真实状态判定；
+- `capability-registry`：Agent 可调用能力的中立 `capability` CLI 输入/输出合约；
 - `claude-integration`：经用户明确操作后生成轻量 Claude 注册文件和稳定 CLI 合约；
 - `capability-runtime`：所有执行器共用的“已启用 + 已配置 + 依赖可用”调用门禁；
 - `media-understanding`：图像与视频理解的受控模型/FFmpeg 执行器；
@@ -18,4 +18,4 @@
 - `proactive-contact`：由 Suzu 调度器创建一次性任务、在指定会话中主动联系的软件拥有 Skill。
 - `traveling-merchant`：由 Suzu 调度器按计划抓取网页、保存状态并投递到指定会话的软件拥有执行器。
 
-这些模块不会自行触发模型、设备、浏览器或站点。只有稳定入口的 `ability invoke` 通过门禁，并消费软件控制面签发的短时、单次、能力/动作/作用域绑定凭证后，才会调用配置后的软件执行器；CLI 不能自行签发凭证。当前缺少安全凭据来源或已验证 bridge 协议的能力会保持不可启用；测试始终使用临时目录与 fake adapter。
+这些模块不会自行触发模型、设备、浏览器或站点。每项能力只通过当前软件拥有的稳定入口执行：Agent 可调用的媒体能力使用 `suzu-lives capability …`，浏览器、iPhone 和自动化能力使用各自的专用命令；桌面端统一管理配置、联系人范围和实际可用状态。

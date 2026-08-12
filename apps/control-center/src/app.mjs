@@ -1,5 +1,5 @@
 import { state } from "./core/state.mjs";
-import { CLAUDE_CODE_API_PROVIDERS, loadClaudeCodeApi, loadApiServices, loadCapabilities } from "./features/agent/index.mjs";
+import { CLAUDE_CODE_API_PROVIDERS, loadClaudeCodeApi, loadApiServices, loadCapabilities } from "./features/agent/runtime.mjs";
 import { resolveOnboardingStep, shouldShowOnboarding } from "./features/onboarding/index.mjs";
 import { conversationReactSnapshot, createConversationReactActions, startConversationPolling, stopConversationPolling } from "./features/conversation/index.mjs";
 import { loadRelationshipFiles, selectRelationshipContact } from "./features/relationship-settings/index.mjs";
@@ -179,10 +179,6 @@ function setCapabilityPage(page, category = "", abilityId = "") {
 
 function setSettingsTab(tab) {
   state.settingsTab = ["general", "data"].includes(tab) ? tab : "general";
-}
-
-function updateShell() {
-  window.dispatchEvent(new CustomEvent("suzu-shell:view-change", { detail: { view: state.view } }));
 }
 
 function openOnboarding() {
@@ -510,13 +506,20 @@ async function saveCapabilitySettings(abilityId, value) {
     if (response?.ok) {
       state.capabilitySnapshot = response.value;
       setNotice(`${CAPABILITY_SETTINGS_LABELS[abilityId] || "能力设置"}已保存。`);
+      render();
+      return { ok: true, value: response.value };
     } else {
-      setNotice(response?.error?.message || "无法保存能力设置。");
+      const error = response?.error || { message: "无法保存能力设置。" };
+      setNotice(error.message || "无法保存能力设置。");
+      render();
+      return { ok: false, error };
     }
   } catch (error) {
-    setNotice(error?.message || "无法保存能力设置。");
+    const result = { code: "", message: error?.message || "无法保存能力设置。" };
+    setNotice(result.message);
+    render();
+    return { ok: false, error: result };
   }
-  render();
 }
 
 async function setCapabilityContactEnabled(abilityId, contactId, contactEnabled) {
@@ -661,6 +664,89 @@ async function refreshTodayCalendar() {
   if (state.view === "today") render();
 }
 
+function setTodayMonth(value) {
+  const month = String(value || "");
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/u.test(month)) return;
+  state.todayMonth = month;
+  render();
+}
+
+function selectTodayDate(value) {
+  const date = String(value || "");
+  if (!/^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/u.test(date)) return;
+  const check = new Date(`${date}T12:00:00`);
+  if (Number.isNaN(check.getTime()) || check.toISOString().slice(0, 10) !== date) return;
+  state.todaySelectedDate = date;
+  state.todayMonth = date.slice(0, 7);
+  render();
+}
+
+function goToToday() {
+  const today = new Date();
+  state.todaySelectedDate = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+  state.todayMonth = state.todaySelectedDate.slice(0, 7);
+  render();
+}
+
+function openTodayEventEditor() {
+  if (state.todayCalendar?.canEdit !== true) return;
+  state.todayEventEditor = { event: null };
+  render();
+}
+
+function editTodayEvent({ id = "", contactId = "" } = {}) {
+  const eventId = String(id || "");
+  const ownerId = String(contactId || "");
+  const event = (state.todayCalendar?.events || []).find((candidate) => (
+    candidate.id === eventId && candidate.contactId === ownerId && candidate.editable
+  ));
+  if (!event) return;
+  state.todayEventEditor = { event };
+  render();
+}
+
+function closeTodayEventEditor() {
+  if (!state.todayEventEditor) return;
+  state.todayEventEditor = null;
+  render();
+}
+
+async function saveTodayEvent(value) {
+  try {
+    state.todayCalendar = await api.todayCalendar.saveEvent(value || {});
+    state.todayEventEditor = null;
+    setNotice("纪念日已保存。");
+    render();
+  } catch (error) {
+    setNotice(error?.message || String(error));
+  }
+}
+
+async function removeTodayEvent({ id = "", contactId = "", name = "这项纪念日" } = {}) {
+  const eventId = String(id || "");
+  const ownerId = String(contactId || "");
+  const eventName = String(name || "这项纪念日");
+  if (!eventId || !ownerId || !window.confirm(`删除“${eventName}”？`)) return;
+  try {
+    state.todayCalendar = await api.todayCalendar.removeEvent({ contactId: ownerId, id: eventId });
+    state.todayEventEditor = null;
+    setNotice("纪念日已删除。");
+    render();
+  } catch (error) {
+    setNotice(error?.message || String(error));
+  }
+}
+
+function openTodayConversation() {
+  setView("relationships");
+  setRelationshipPage("conversation");
+}
+
+function openTodayUsage() {
+  setAdminTab("usage");
+  setView("admin");
+}
+
 async function loadSchedules() {
   try {
     state.scheduleSnapshot = await api.schedule.snapshot();
@@ -782,6 +868,7 @@ function contentClassName() {
     state.view === "admin" ? "content--admin" : "",
     state.view === "relationships" && state.relationshipPage === "settings" ? "content--relationship-settings" : "",
     state.view === "relationships" && state.relationshipPage === "compactor" ? "content--conversation-compactor" : "",
+    state.view === "relationships" && state.relationshipPage === "memory" ? "content--memory" : "",
   ].filter(Boolean).join(" ");
 }
 
@@ -790,6 +877,18 @@ function routeForCurrentView() {
     return {
       kind: "today",
       props: {
+        actions: {
+          closeEditor: closeTodayEventEditor,
+          editEvent: editTodayEvent,
+          goToday: goToToday,
+          openConversation: openTodayConversation,
+          openEditor: openTodayEventEditor,
+          openUsage: openTodayUsage,
+          removeEvent: removeTodayEvent,
+          saveEvent: saveTodayEvent,
+          selectDate: selectTodayDate,
+          setMonth: setTodayMonth,
+        },
         snapshot: {
           calendar: state.todayCalendar,
           data: state.data,
@@ -845,7 +944,6 @@ function routeForCurrentView() {
           openSite: openCapabilitySite,
           openTravelingMerchantPage,
           openVisual: () => openCapabilityCreatePage("visual"),
-          openAudio: () => openCapabilityCreatePage("audio"),
           openApiServices: openCapabilityApiServices,
           returnToCategory: (category) => setCapabilityPage("category", category),
           returnToOverview: () => setCapabilityPage("overview"),
@@ -853,6 +951,7 @@ function routeForCurrentView() {
           setCapabilityActive,
           saveSettings: saveCapabilitySettings,
           setContactEnabled: setCapabilityContactEnabled,
+          voiceDesign: api.voiceDesign,
           saveWechatSettings,
           setSiteEnabled: (siteId, siteEnabled) => saveSiteAutomationControl(
             { siteId, siteEnabled },
@@ -1037,6 +1136,8 @@ function routeForCurrentView() {
 
 function buildWorkspace() {
   return {
+    actions: { navigate: setView },
+    activeView: state.view,
     contentClassName: contentClassName(),
     notice: currentGlobalNotice(),
     onboarding: onboardingWorkspace(),
@@ -1045,7 +1146,6 @@ function buildWorkspace() {
 }
 
 function render() {
-  updateShell();
   const workspace = buildWorkspace();
   renderAppWorkspace(workspace);
 }
@@ -1083,82 +1183,4 @@ async function refreshData() {
   }
 }
 
-function bindStaticShellEvents() {
-  window.addEventListener("suzu-shell:navigate", (event) => setView(event.detail?.view));
-  window.addEventListener("suzu-today:set-month", (event) => {
-    const month = String(event.detail?.month || "");
-    if (!/^\d{4}-(0[1-9]|1[0-2])$/u.test(month)) return;
-    state.todayMonth = month;
-    render();
-  });
-  window.addEventListener("suzu-today:select-date", (event) => {
-    const date = String(event.detail?.date || "");
-    if (!/^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/u.test(date)) return;
-    const check = new Date(`${date}T12:00:00`);
-    if (Number.isNaN(check.getTime()) || check.toISOString().slice(0, 10) !== date) return;
-    state.todaySelectedDate = date;
-    state.todayMonth = date.slice(0, 7);
-    render();
-  });
-  window.addEventListener("suzu-today:go-today", () => {
-    const today = new Date();
-    state.todaySelectedDate = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
-    state.todayMonth = state.todaySelectedDate.slice(0, 7);
-    render();
-  });
-  window.addEventListener("suzu-today:open-editor", () => {
-    if (state.todayCalendar?.canEdit !== true) return;
-    state.todayEventEditor = { event: null };
-    render();
-  });
-  window.addEventListener("suzu-today:edit-event", (event) => {
-    const id = String(event.detail?.id || "");
-    const contactId = String(event.detail?.contactId || "");
-    const item = (state.todayCalendar?.events || []).find((candidate) => (
-      candidate.id === id && candidate.contactId === contactId && candidate.editable
-    ));
-    if (!item) return;
-    state.todayEventEditor = { event: item };
-    render();
-  });
-  window.addEventListener("suzu-today:close-editor", () => {
-    if (!state.todayEventEditor) return;
-    state.todayEventEditor = null;
-    render();
-  });
-  window.addEventListener("suzu-today:save-event", async (event) => {
-    try {
-      state.todayCalendar = await api.todayCalendar.saveEvent(event.detail || {});
-      state.todayEventEditor = null;
-      setNotice("纪念日已保存。");
-      render();
-    } catch (error) {
-      setNotice(error?.message || String(error));
-    }
-  });
-  window.addEventListener("suzu-today:remove-event", async (event) => {
-    const id = String(event.detail?.id || "");
-    const contactId = String(event.detail?.contactId || "");
-    const name = String(event.detail?.name || "这项纪念日");
-    if (!id || !contactId || !window.confirm(`删除“${name}”？`)) return;
-    try {
-      state.todayCalendar = await api.todayCalendar.removeEvent({ contactId, id });
-      state.todayEventEditor = null;
-      setNotice("纪念日已删除。");
-      render();
-    } catch (error) {
-      setNotice(error?.message || String(error));
-    }
-  });
-  window.addEventListener("suzu-today:open-conversation", () => {
-    setView("relationships");
-    setRelationshipPage("conversation");
-  });
-  window.addEventListener("suzu-today:open-usage", () => {
-    setAdminTab("usage");
-    setView("admin");
-  });
-}
-
-bindStaticShellEvents();
 refreshData();

@@ -1,5 +1,4 @@
 import { useEffect, useState } from "react";
-import { createRoot } from "react-dom/client";
 import { Button, Dialog, Empty, GlassPanel, Input, PageHeader, Select, Status, Switch, Textarea } from "suzu-design-system";
 
 import { dateTime } from "../core/formatters.mjs";
@@ -285,7 +284,7 @@ function DeletePlanDialog({ actions, onClose, task }) {
       title="删除计划？"
     >
       <div className="plans-delete-dialog">
-        <p>“{scheduleTask(task).description}”会被永久删除，之后需要重新设置。</p>
+        <p>{`“${scheduleTask(task).description}”会被永久删除，之后需要重新设置。`}</p>
         {error ? <p className="plans-editor-error" role="alert">{error}</p> : null}
       </div>
     </Dialog>
@@ -353,23 +352,4 @@ export function PlansPage({ actions = {}, snapshot = null }) {
       {removingTask ? <DeletePlanDialog actions={pageActions} onClose={() => setRemovingTask(null)} task={removingTask} /> : null}
     </div>
   );
-}
-
-let pageElement = null;
-let pageRoot = null;
-
-export function renderPlansPage(element, props) {
-  if (!element) return;
-  if (pageElement !== element) {
-    pageRoot?.unmount();
-    pageElement = element;
-    pageRoot = createRoot(element);
-  }
-  pageRoot.render(<PlansPage {...props} />);
-}
-
-export function unmountPlansPage() {
-  pageRoot?.unmount();
-  pageRoot = null;
-  pageElement = null;
 }

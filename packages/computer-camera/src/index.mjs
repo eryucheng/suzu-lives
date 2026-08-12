@@ -121,6 +121,6 @@ export async function launchComputerCamera({
 
 export async function runComputerCameraCli(values, { environment = process.env, launch = launchComputerCamera } = {}) {
   const options = parseComputerCameraArgs(values);
-  const dataRoot = resolveSuzuLivesDataRoot({ configuredRoot: options.dataRoot || environment.SUZU_LIVES_DATA_ROOT, localAppData: environment.LOCALAPPDATA, fallbackBase: "" });
+  const dataRoot = resolveSuzuLivesDataRoot({ configuredRoot: options.dataRoot || environment.SUZU_LIVES_DATA_ROOT, localAppData: environment.LOCALAPPDATA, appData: environment.APPDATA, fallbackBase: "", fallbackToLocatorWhenMissing: true });
   return launch({ dataRoot, cameraIndex: options.cameraIndex, activeSeconds: options.activeSeconds, warmupSeconds: options.warmupSeconds, pythonCommand: environment.SUZU_LIVES_PYTHON || environment.PYTHON || "python" });
 }

@@ -447,6 +447,24 @@
   padding-top:16px;
 }
 
+.iphone-bridge-config-dialog {
+  width:min(760px, calc(100vw - 32px));
+}
+
+.iphone-bridge-config-form {
+  display:grid;
+  gap:18px;
+  padding:18px;
+}
+
+.iphone-bridge-config-form__actions {
+  display:flex;
+  justify-content:flex-end;
+  gap:10px;
+  border-top:1px solid color-mix(in srgb,var(--border) 84%,transparent);
+  padding-top:16px;
+}
+
 .capability-api-binding-react {
   display:flex;
   min-height:76px;

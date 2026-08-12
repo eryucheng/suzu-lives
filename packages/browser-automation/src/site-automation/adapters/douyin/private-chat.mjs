@@ -244,7 +244,7 @@ function requireOwnerSettings(config) {
   if (!settings.enabled) {
     throw new SiteAutomationError(
       "OWNER_CHAT_DISABLED",
-      "Douyin owner chat is disabled in the current Agent's Suzu Lives configuration.",
+      "Douyin owner chat is disabled in Suzu Lives' shared configuration.",
     );
   }
   if (!settings.displayName) {

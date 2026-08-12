@@ -163,6 +163,7 @@ export async function locateClaudeProjectDirectory({
 
 export function createConversationReader({
   contactProjectsService = null,
+  onContactCreated = null,
   settingsService,
   fsOps = fs,
   homeDirectory = os.homedir(),
@@ -414,7 +415,12 @@ export function createConversationReader({
 
   const createContact = async ({ name } = {}) => {
     if (!contactProjectsService?.create) throw new ConversationReaderError("当前版本未接入联系人项目服务。 ");
-    await contactProjectsService.create({ name });
+    const created = await contactProjectsService.create({ name });
+    if (typeof onContactCreated === "function" && created?.createdContact) {
+      // A contact remains usable even when an optional default Skill cannot be
+      // written (for example, a user-owned conflicting Skill already exists).
+      await Promise.resolve(onContactCreated(created.createdContact)).catch(() => undefined);
+    }
     return snapshot();
   };
 

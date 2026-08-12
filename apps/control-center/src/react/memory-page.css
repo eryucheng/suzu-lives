@@ -2,6 +2,10 @@
   min-width: 920px;
 }
 
+#content.content--memory {
+  scrollbar-gutter: stable;
+}
+
 .memory-react-page {
   display: grid;
   min-width: 920px;
@@ -49,6 +53,29 @@
 
 .memory-page-empty {
   min-height: 260px;
+}
+
+.memory-react-page .memory-page-actions {
+  gap: var(--space-sm);
+}
+
+.memory-recall-control {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-sm);
+  height: 36px;
+  box-sizing: border-box;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--panel) 70%, transparent);
+  color: var(--text);
+  font-size: var(--font-size-xs);
+  white-space: nowrap;
+}
+
+.memory-view-tabs {
+  flex: 0 0 auto;
 }
 
 .memory-editor-form {

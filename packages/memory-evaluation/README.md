@@ -57,19 +57,15 @@
 
 完整分析没有合格结论时，请求可以以“无提案”完成；有结论时只生成独立的 `pending reported` 提案。任一专职调用失败会返回 `retryable-failure` 并保留请求为 `pending`，固定目标或证据边界损坏才会进入 `blocked`。原始 `utterance` 的 `evidenceMode` 不会被改写；只有本次请求明确列出的观察在审查快照中获得临时声明通道资格。执行器不扫描请求之外的对话、不处理行为推断、不自动接受提案，也不会直接新增正式 `memory_nodes`。
 
-旧数据库中没有完整结构目标的四类请求继续保持 `pending`，不会被批处理额度吞掉。所有 `inferred` 请求也保持待处理。
+没有完整结构目标的四类请求继续保持 `pending`，不会被批处理额度吞掉。所有 `inferred` 请求也保持待处理。
 
 `processPendingStateAnalysisRequests` 是调用方显式触发的有界单 Worker 批处理。调用方必须提供 `maxRequests`；处理顺序稳定，一条可重试失败不会阻断后续请求，未支持家族不会被领取。它不是后台调度器，也没有多进程领取租约；在实现原子抢占前，不应由多个 Worker 并发调用。
-
-稳定命令 `suzu-lives memory-analyze --agent <agent-id> --max-requests <1-500>` 会读取该 Agent 的 `memory.db`，有界顺序处理待分析请求。它统一复用该 Agent 当前 Claude CLI，因此实际文字模型与日常 Agent 保持一致；不同状态家族仍使用各自的专职提示词和独立调用。模型环境与凭证不进入数据库、命令参数或调用审计正文；每次真实模型调用仍写统一用量流水。
 
 ### 最终回复中的记忆采用判定
 
 `UserPromptSubmit` 只记录本轮向 Agent 暴露了哪些长期记忆。主 Agent 正常结束后，非阻塞 `Stop` Hook 把同一运行会话中尚未绑定的最新召回轨迹与最终可见回复固化为 `pending` 使用判定请求；Hook 本身不调用模型、不修改回复，也不会把“注入过”直接当成“采用过”。用户中断导致没有正常 Stop 时不会伪造判定；下一次用户输入会替换当前会话指针，避免把旧轨迹绑定到错误回复。
 
 `processRetrievalUsageRequest` 让独立模型只依据最终可见回复，对原轨迹中每条已选记忆返回 `used`、`not_used` 或 `uncertain`。代码要求所有原节点恰好出现一次，拒绝缺项、越界节点、跨 Agent 节点和变化后的回复正文。只有 `used` 会追加一条 `used` 反馈；`not_used` 不代表记忆无关，`uncertain` 不产生反馈，正确性、帮助性、错误与纠正仍不能由这条链推断。
-
-稳定命令 `suzu-lives memory-usage-analyze --agent <agent-id> --max-requests <1-500>` 显式、有界、顺序处理这类待判定请求。它与 `memory-analyze` 一样复用当前 Agent 的 Claude CLI 与费用流水，但队列、专职提示词和数量上限彼此独立；命令不会创建后台调度器，输出摘要也不会打印回复正文或记忆内容。单条模型失败会保留为可重试请求，并继续处理本批次后续请求。
 
 `reviewPreferenceCanonicalState` 负责固定主体与 `canonicalKey` 下的完整证据影子复核。它不静默截断观察；已有当前状态时，还会核对该状态所有 `supported_by/challenged_by` 证据记忆是否已经出现在当前证据账本。旧状态缺少证据边或账本覆盖不完整时直接停止，避免只看到后来反证就错误降级。
 
@@ -263,18 +259,6 @@ const result = runPlasticityShadow({
 `proposeReportedStateFromReview` 把家族专用审查器的 `ready` 结果转换为统一 `pending` 提案。它只处理 `reported` 表达层，要求审查器明确返回 `automaticStateWriteAllowed: false`，并保存审查版本、输入哈希、规范化状态草稿、旧状态 ID、选中证据及全部考虑过的证据观察。跨家族、跨主体、跨 `canonicalKey`、跨表达层、证据越界和旧状态漂移都会拒绝；`skipped` 与 `review_required` 不会入队。
 
 桥接只写审计队列，不写 `memory_nodes`。完全相同的审查输入在不同调度批次重放仍复用同一提案；批次编号只记录首次生成来源，不参与提案身份。入队时由 `memory-core` 固化选中正文和证据指纹，审核后证据变化会要求重建提案。正式状态只有调用方随后显式执行人工接受才会变化；不存在自动接受。人工驳回只改变提案审核状态。偏好与行为倾向的 `add_scoped_exception` 在接受时由 `memory-core` 从家族专用结构化范围生成独立范围槽，保留宽泛根状态并建立显式范围关系；桥接层和模型都不能自行指定范围键。
-
-## 离线运行
-
-```powershell
-node .\packages\memory-evaluation\src\cli.mjs `
-  --database "D:\path\to\memory.db" `
-  --agent "agent-id" `
-  --cases ".\runtime\memory-evaluation\agent-id\cases.json" `
-  --output ".\runtime\memory-evaluation\agent-id\baseline.json"
-```
-
-该命令默认不调用Embedding API，只测当前文本检索、时间定位和图链路，因此不会意外产生外部费用。需要复现线上混合召回时，通过JavaScript API给 `createCurrentRetrieverExecutor` 传入现有 `embeddingProvider`；后续由控制中心统一接入，不在案例文件里保存API配置。
 
 ## JavaScript API
 

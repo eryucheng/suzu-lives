@@ -20,7 +20,7 @@ from typing import Any
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-DEFAULT_CONFIG_PATH = SCRIPT_DIR / "feedback_config.json"
+DEFAULT_CONFIG_PATH = SCRIPT_DIR / "config.json"
 DEFAULT_STATE_PATH = SCRIPT_DIR / "feedback_state.json"
 DEFAULT_INBOX_PATH = Path(
     os.environ.get("SUZU_LIVES_IPHONE_INBOX_DIR", "").strip()
@@ -108,7 +108,7 @@ def get_mail_password(mail_config: dict[str, Any]) -> str:
         env_value = os.environ.get(env_name, "").strip()
         if env_value:
             return env_value
-    raise RuntimeError("请在 feedback_config.json 的 mail.password 中填写邮箱客户端授权码")
+    raise RuntimeError("请在 iPhone 配置的 mail.password 中填写邮箱客户端授权码")
 
 
 def imap_quote(value: Any) -> str:

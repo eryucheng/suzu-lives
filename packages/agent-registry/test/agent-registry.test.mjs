@@ -5,11 +5,9 @@ import path from "node:path";
 import test from "node:test";
 
 import {
-  encodeClaudeProjectDirectory,
   resolveAgentDataRoot,
   resolveAgentConversationDataRoot,
   resolveSuzuLivesDataRoot,
-  resolveTranscriptPath,
   stableAgentId,
 } from "../src/index.mjs";
 
@@ -45,33 +43,4 @@ test("builds software and Agent data roots without depending on Electron", () =>
     path.join(dataRoot, "agents", stableAgentId(projectRoot), "conversations", "session-1"),
   );
   assert.throws(() => resolveAgentConversationDataRoot({ dataRoot, projectRoot, sessionId: "../outside" }), /sessionId/u);
-});
-
-test("selects the newest Claude project transcript as the final fallback", async () => {
-  const homeDirectory = temporaryDirectory("suzu-home-");
-  const projectRoot = temporaryDirectory("suzu-auto-transcript-");
-  const sessions = path.join(
-    homeDirectory,
-    ".claude",
-    "projects",
-    encodeClaudeProjectDirectory(projectRoot),
-  );
-  fs.mkdirSync(sessions, { recursive: true });
-  const older = path.join(sessions, "older.jsonl");
-  const newer = path.join(sessions, "newer.jsonl");
-  fs.writeFileSync(older, "{}\n", "utf8");
-  fs.writeFileSync(newer, "{}\n{}\n", "utf8");
-  const now = Date.now() / 1000;
-  fs.utimesSync(older, now - 30, now - 30);
-  fs.utimesSync(newer, now, now);
-
-  const result = await resolveTranscriptPath(projectRoot, { homeDirectory });
-  assert.deepEqual(result, { path: newer, source: "auto" });
-});
-
-test("returns a missing result instead of inventing a transcript path", async () => {
-  const root = temporaryDirectory("suzu-missing-transcript-");
-  const homeDirectory = temporaryDirectory("suzu-missing-home-");
-  const result = await resolveTranscriptPath(root, { homeDirectory });
-  assert.deepEqual(result, { path: "", source: "missing" });
 });
