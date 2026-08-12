@@ -133,14 +133,15 @@ export function registerIpcHandlers({ app, dataStorageService, getMainWindow, se
   void initialClaudeSettingsSync.catch(() => undefined);
   const connectionsService = createConnectionsService({ safeStorage, settingsService });
   const externalCapabilitiesService = createExternalCapabilitiesIpcService({ settingsService });
+  const agentRuntimeConfigService = createAgentRuntimeConfigService();
   const memoryService = createLongTermMemoryService({
     connectionsService,
     contactProjectsService,
     settingsService,
+    textModelConnectionResolver: () => agentRuntimeConfigService.resolveClaudeCodeGenerationConnection(),
   });
   const todayCalendarService = createTodayCalendarService({ contactProjectsService, settingsService });
   const relationshipFilesService = createRelationshipFilesService({ settingsService });
-  const agentRuntimeConfigService = createAgentRuntimeConfigService();
   const projectHooksService = createProjectHooksService({
     settingsService,
     executablePath: app.getPath("exe"),
@@ -196,11 +197,14 @@ export function registerIpcHandlers({ app, dataStorageService, getMainWindow, se
     shell,
     wechatAttachmentCli,
     claudeWorkspaceDirectories,
+    initializeContactCapabilities: (contact) => capabilitiesService.initializeDefaultContactCapabilities(contact),
     proactiveContactSettings: () => capabilitiesService.proactiveContactSettings(),
     isProactiveContactEnabled: ({ contactId }) => capabilitiesService.isCompanionContactEnabled({
       abilityId: "proactive-contact", contactId,
     }),
-    hasTravelingMerchantRecipients: () => capabilitiesService.enabledCompanionContactIds("traveling-merchant").length > 0,
+    isTravelingMerchantEnabled: ({ contactId }) => capabilitiesService.isCompanionContactEnabled({
+      abilityId: "traveling-merchant", contactId,
+    }),
   });
   memoryService.setConversationReader(conversation.reader);
   const conversationCompactorService = createConversationCompactorService({

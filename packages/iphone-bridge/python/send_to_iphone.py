@@ -55,7 +55,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="通过已配置的 iPhone 邮件自动化发送请求")
     parser.add_argument("subject")
     parser.add_argument("content")
-    parser.add_argument("--config", type=Path, required=True, help="当前 Agent 既有 iPhone 固定配置")
+    parser.add_argument("--config", type=Path, required=True, help="Suzu Lives 统一 iPhone 配置")
     args = parser.parse_args()
     config = load_json(args.config.expanduser().resolve())
     host, port, sender, recipient, secret = outbound_settings(config)

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Banner, Button, Dialog, Empty, GlassPanel, Input, PageHeader, Status, Textarea } from "suzu-design-system";
+import { Banner, Button, Dialog, Empty, GlassPanel, Input, PageHeader, Status, Switch, Tabs, Textarea } from "suzu-design-system";
 
 import { createMemoryBrainView } from "../features/memory-brain/brain-view.mjs";
 
@@ -19,6 +19,12 @@ const REVIEW_STATES = Object.freeze([
   ["accepted", "已接受"],
   ["dismissed", "已驳回"],
   ["revoked", "已撤销"],
+]);
+
+const MEMORY_VIEW_TABS = Object.freeze([
+  { label: "记忆大脑", value: "brain" },
+  { label: "列表管理", value: "library" },
+  { label: "审核中心", value: "review" },
 ]);
 
 const REVIEW_TYPE_LABELS = Object.freeze(Object.fromEntries(REVIEW_TYPES.filter(([value]) => value !== "all")));
@@ -109,10 +115,14 @@ function memoryKindLabel(value) {
     derived_hypothesis: "推导认识",
     reflection: "反思",
     topic_or_episode: "旧版主题节点",
+    actor_entity: "人物主体",
+    relationship_context: "关系容器",
   }[value] || clean(value) || "记忆";
 }
 
 function visualTierLabel(node) {
+  if (node?.graphNodeType === "actor") return "人物根节点";
+  if (node?.graphNodeType === "relationship") return "关系根节点";
   return {
     major: "大神经元",
     state: "人物状态",
@@ -139,6 +149,9 @@ function relationLabel(value) {
     established_from: "由此形成",
     completes: "完成",
     cancels: "取消",
+    about_subject: "关于该主体",
+    belongs_to_relationship: "归入关系",
+    member_of_relationship: "关系成员",
   }[value] || clean(value);
 }
 
@@ -324,7 +337,7 @@ function MemoryEditorDialog({ api, contactId, detail, onClose, onError, onSaved,
   </Dialog>;
 }
 
-function MemoryLibrary({ api, contactId, editingEnabled, onDelete, onEdit, onError, onRestore, onSuccess, refreshToken }) {
+function MemoryLibrary({ api, contactId, onDelete, onEdit, onError, onRestore, onSuccess, refreshToken }) {
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState("active");
   const [library, setLibrary] = useState(null);
@@ -420,12 +433,12 @@ function MemoryLibrary({ api, contactId, editingEnabled, onDelete, onEdit, onErr
               return <article className={`memory-library-item${deleted ? " is-deleted" : ""}`} key={memory.id}>
                 <div className="memory-library-item-head">
                   <div><strong>{memory.title || "未命名记忆"}</strong><span>{memoryStatusLabel(memory.status)} · {memoryKindLabel(memory.kind)}{date ? ` · ${date}` : ""}</span></div>
-                  {editingEnabled ? <div className="memory-library-actions">
+                  <div className="memory-library-actions">
                     <Button disabled={pending} onClick={() => void loadDetail(memory.id)} size="sm" type="button" variant="secondary">修改</Button>
                     {deleted
                       ? <Button disabled={pending} onClick={() => void restore(memory.id)} size="sm" type="button" variant="secondary">恢复</Button>
                       : <Button disabled={pending} onClick={() => void remove(memory.id)} size="sm" type="button" variant="danger">删除</Button>}
-                  </div> : null}
+                  </div>
                 </div>
                 <p>{memory.content}</p>
               </article>;
@@ -442,6 +455,15 @@ function BrainDetail({ detail, graph, loading, onDelete, onEdit, selectedNode })
   }
   const edges = (graph?.edges || []).filter((edge) => edge.source === memory.id || edge.target === memory.id);
   const relations = [...new Set(edges.map((edge) => relationLabel(edge.relation)).filter(Boolean))];
+  if (memory.graphNodeType) {
+    return <div className="brain-detail-content">
+      <span className="eyebrow">SELECTED CONTEXT</span>
+      <h2>{memory.title || "记忆上下文"}</h2>
+      <p>{memory.preview || "这是一组结构化记忆的共同上下文。"}</p>
+      <div className="brain-detail-tags"><span>{visualTierLabel(memory)}</span><span>{memoryKindLabel(memory.kind)}</span><span>{edges.length} 条图谱关联</span></div>
+      {relations.length ? <div className="brain-relation-tags">{relations.map((relation) => <span key={relation}>{relation}</span>)}</div> : null}
+    </div>;
+  }
   return <div className="brain-detail-content">
     <span className="eyebrow">SELECTED MEMORY</span>
     <div className="brain-detail-date">{memoryDate(memory)}</div>
@@ -512,8 +534,12 @@ function MemoryBrain({ api, available = true, contactId, onDelete, onEdit, onErr
         if (!id) return;
         setSelectedNode(node);
         setDetail(null);
-        setDetailLoading(true);
         const request = ++detailRequestRef.current;
+        if (node.graphNodeType) {
+          setDetailLoading(false);
+          return;
+        }
+        setDetailLoading(true);
         void api.memory.detail(id, { contactId }).then((next) => {
           if (!active || request !== detailRequestRef.current || viewer.selectedId() !== id) return;
           setDetail(next);
@@ -588,7 +614,7 @@ function MemoryBrain({ api, available = true, contactId, onDelete, onEdit, onErr
       {loading ? <div className="memory-brain-loading"><span className="brain-loader" /><strong>正在组织记忆空间…</strong></div> : null}
       {!loading && graph && !nodeCount ? <div className="memory-brain-loading"><strong>还没有结构化记忆</strong><span>原始对话不会直接堆进大脑视图。</span></div> : null}
       {selectedNode ? <aside aria-live="polite" className="memory-brain-detail"><BrainDetail detail={detail} graph={graph} loading={detailLoading} onDelete={remove} onEdit={onEdit} selectedNode={selectedNode} /></aside> : null}
-      <div className="memory-brain-hint"><span className="brain-legend-major">主题 / 事件簇</span><span className="brain-legend-state">人物状态</span><span className="brain-legend-minor">具体记忆</span><span>拖动浏览 · 滚轮缩放 · 双击回到全景</span></div>
+      <div className="memory-brain-hint"><span className="brain-legend-major">主题 / 事件簇 / 人物关系</span><span className="brain-legend-state">人物状态</span><span className="brain-legend-minor">具体记忆</span><span>拖动浏览 · 滚轮缩放 · 双击回到全景</span></div>
     </div>
   </section>;
 }
@@ -926,7 +952,6 @@ export function MemoryPage({ actions = {}, api, loading = false, snapshot = {} }
   const ready = memory.status === "ready";
   const selectedContact = memory.selectedContact || contacts.find((contact) => clean(contact?.id) === contactId) || null;
   const [view, setView] = useState("brain");
-  const [editingEnabled, setEditingEnabled] = useState(false);
   const [contactPickerOpen, setContactPickerOpen] = useState(false);
   const [contactPending, setContactPending] = useState(false);
   const [editing, setEditing] = useState(null);
@@ -970,12 +995,11 @@ export function MemoryPage({ actions = {}, api, loading = false, snapshot = {} }
     }
   };
 
-  const setRecallEnabled = async () => {
+  const setRecallEnabled = async (nextEnabled) => {
     if (loading) return;
-    const enabled = snapshot.settings?.memoryRecallEnabled !== false;
     setPageError("");
     try {
-      await actions.setRecallEnabled?.(!enabled);
+      await actions.setRecallEnabled?.(Boolean(nextEnabled));
     } catch (error) {
       reportError(`无法更新记忆召回开关：${error?.message || error}`);
     }
@@ -1026,13 +1050,14 @@ export function MemoryPage({ actions = {}, api, loading = false, snapshot = {} }
 
   const visibleView = ["brain", "library", "review"].includes(view) ? view : "brain";
   const recallEnabled = snapshot.settings?.memoryRecallEnabled !== false;
+  const selectView = (nextView) => {
+    if (loading || (!ready && nextView !== "brain")) return;
+    setView(nextView);
+  };
   const headerActions = <div className="memory-page-actions">
     <Button aria-expanded={contactPickerOpen} aria-haspopup="dialog" className={`memory-contact-picker-trigger${contactPickerOpen ? " is-active" : ""}`} disabled={!contacts.length || loading || contactPending} onClick={() => setContactPickerOpen((current) => !current)} type="button" variant="secondary">联系人：{contactName(selectedContact)}</Button>
-    <Button aria-pressed={recallEnabled} className={`memory-recall-toggle${recallEnabled ? " is-active" : ""}`} disabled={loading} onClick={() => void setRecallEnabled()} type="button" variant="secondary">记忆召回：{recallEnabled ? "开启" : "关闭"}</Button>
-    <Button aria-pressed={editingEnabled} className={`memory-edit-toggle${editingEnabled ? " is-active" : ""}`} disabled={!ready || loading} onClick={() => setEditingEnabled((current) => !current)} type="button" variant="secondary">{editingEnabled ? "完成编辑" : "编辑记忆"}</Button>
-    <Button aria-pressed={visibleView === "brain"} className={`memory-mode-action${visibleView === "brain" ? " is-active" : ""}`} disabled={loading} onClick={() => setView("brain")} type="button" variant="secondary">记忆大脑</Button>
-    <Button aria-pressed={visibleView === "library"} className={`memory-mode-action${visibleView === "library" ? " is-active" : ""}`} disabled={!ready || loading} onClick={() => setView("library")} type="button" variant="secondary">列表管理</Button>
-    <Button aria-pressed={visibleView === "review"} className={`memory-mode-action${visibleView === "review" ? " is-active" : ""}`} disabled={!ready || loading} onClick={() => setView("review")} type="button" variant="secondary">审核中心</Button>
+    <div className="memory-recall-control"><span id="memoryRecallLabel">记忆召回</span><Switch aria-labelledby="memoryRecallLabel" checked={recallEnabled} disabled={loading} onChange={(event) => void setRecallEnabled(event.target.checked)} /></div>
+    <Tabs active={visibleView} className="memory-view-tabs" items={MEMORY_VIEW_TABS} onChange={selectView} size="sm" />
     <Button onClick={actions.returnToOverview} type="button" variant="secondary">返回关系</Button>
   </div>;
 
@@ -1053,7 +1078,7 @@ export function MemoryPage({ actions = {}, api, loading = false, snapshot = {} }
         : visibleView === "review" ? <MemoryReview actions={{ refreshStatus }} api={api} contactId={contactId} onError={reportError} onSuccess={reportSuccess} />
           : <>
             <MemoryOverview api={api} contactId={contactId} memory={memory} onError={reportError} onSuccess={reportSuccess} />
-            <MemoryLibrary api={api} contactId={contactId} editingEnabled={editingEnabled} onDelete={deleteMemory} onEdit={openEdit} onError={reportError} onRestore={restoreMemory} onSuccess={reportSuccess} refreshToken={libraryRefreshToken} />
+            <MemoryLibrary api={api} contactId={contactId} onDelete={deleteMemory} onEdit={openEdit} onError={reportError} onRestore={restoreMemory} onSuccess={reportSuccess} refreshToken={libraryRefreshToken} />
           </>}
     <MemoryEditorDialog api={api} contactId={contactId} detail={editing} onClose={() => setEditing(null)} onError={reportError} onSaved={finishEdit} onSuccess={reportSuccess} />
   </div>;

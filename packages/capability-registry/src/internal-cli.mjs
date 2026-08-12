@@ -1,5 +1,10 @@
+import { resolveAgentDataRoot } from "@suzu-lives/agent-registry";
+import { AgentImageGenerationError, listComfyWorkflows, runAgentImageGeneration, validateComfyWorkflows } from "@suzu-lives/agent-image-generation";
+import { ImageWorkbenchError } from "@suzu-lives/image-workbench";
 import { DirectImageVisionError, runDirectImageVision } from "@suzu-lives/media-understanding/direct-image-vision";
 import { DirectVideoUnderstandingError, runDirectVideoUnderstanding } from "@suzu-lives/media-understanding/direct-video-understanding";
+import { loadPhoneCameraComfyConnection, loadPhoneConfig, PhoneCameraError, takePhonePhoto } from "@suzu-lives/phone-camera";
+import { DirectVoiceMessageError, runDirectVoiceMessage } from "@suzu-lives/voice-message/direct-voice-message";
 
 /**
  * The stable, Agent-host-neutral contract for Suzu-owned capability commands.
@@ -46,6 +51,22 @@ function optionalBoolean(value, label) {
   return value;
 }
 
+function optionalSafeInteger(value, label, { minimum = 0, maximum = Number.MAX_SAFE_INTEGER } = {}) {
+  if (value === undefined) return null;
+  if (!Number.isSafeInteger(value) || value < minimum || value > maximum) {
+    throw new InternalCapabilityCliError(label + " 必须是 " + minimum + " 到 " + maximum + " 之间的整数。");
+  }
+  return value;
+}
+
+function optionalChoice(value, label, choices) {
+  const selected = optionalText(value, label);
+  if (selected && !choices.includes(selected)) {
+    throw new InternalCapabilityCliError(label + " 必须是 " + choices.join("、") + " 之一。");
+  }
+  return selected;
+}
+
 function assertKnownKeys(value, allowed, label) {
   if (!plainObject(value)) throw new InternalCapabilityCliError(`${label} 必须是 JSON 对象。`);
   const unknown = Object.keys(value).find((key) => !allowed.includes(key));
@@ -88,9 +109,94 @@ function normalizeVideoUnderstandingAnalyzeInput(value) {
   });
 }
 
+function normalizeImageGenerationReferences(value) {
+  if (value === undefined) return Object.freeze([]);
+  if (!Array.isArray(value) || value.length > 16) {
+    throw new InternalCapabilityCliError("input.references 必须是至多 16 项的数组。");
+  }
+  return Object.freeze(value.map((entry, index) => {
+    const label = "input.references[" + index + "]";
+    const source = assertKnownKeys(entry, ["path", "role"], label);
+    const role = optionalChoice(source.role, label + ".role", ["identity", "location", "object", "style"]) || "object";
+    return Object.freeze({
+      path: requiredText(source.path, label + ".path"),
+      role,
+    });
+  }));
+}
+
+function normalizeImageGenerationGenerateInput(value) {
+  const source = assertKnownKeys(value, ["prompt", "backend", "workflow", "size", "seed", "references", "outputDirectory", "configPath"], "image-generation 输入");
+  return Object.freeze({
+    prompt: requiredText(source.prompt, "input.prompt"),
+    backend: optionalChoice(source.backend, "input.backend", ["api", "comfyui"]),
+    workflow: optionalText(source.workflow, "input.workflow"),
+    size: optionalText(source.size, "input.size"),
+    seed: optionalSafeInteger(source.seed, "input.seed"),
+    references: normalizeImageGenerationReferences(source.references),
+    outputDirectory: optionalText(source.outputDirectory, "input.outputDirectory"),
+    configPath: optionalText(source.configPath, "input.configPath"),
+  });
+}
+
+function normalizeImageGenerationWorkflowInput(value) {
+  const source = assertKnownKeys(value, ["configPath"], "image-generation 输入");
+  return Object.freeze({ configPath: optionalText(source.configPath, "input.configPath") });
+}
+
+function normalizeReferenceIds(value) {
+  if (value === undefined) return Object.freeze([]);
+  if (!Array.isArray(value) || value.length > 16) {
+    throw new InternalCapabilityCliError("input.referenceIds 必须是至多 16 项的数组。");
+  }
+  return Object.freeze(value.map((item, index) => requiredText(item, "input.referenceIds[" + index + "]")));
+}
+
+function normalizePhoneCameraGenerateInput(value) {
+  const source = assertKnownKeys(value, ["shot", "scene", "referenceIds", "manifestPath", "backend", "workflow", "size", "seed", "outputDirectory", "configPath", "dryRun"], "phone-camera 输入");
+  return Object.freeze({
+    shot: optionalChoice(requiredText(source.shot, "input.shot"), "input.shot", ["rear", "selfie", "mirror"]),
+    scene: requiredText(source.scene, "input.scene"),
+    referenceIds: normalizeReferenceIds(source.referenceIds),
+    manifestPath: optionalText(source.manifestPath, "input.manifestPath"),
+    backend: optionalChoice(source.backend, "input.backend", ["api", "comfyui"]),
+    workflow: optionalText(source.workflow, "input.workflow"),
+    size: optionalText(source.size, "input.size"),
+    seed: optionalSafeInteger(source.seed, "input.seed"),
+    outputDirectory: optionalText(source.outputDirectory, "input.outputDirectory"),
+    configPath: optionalText(source.configPath, "input.configPath"),
+    dryRun: optionalBoolean(source.dryRun, "input.dryRun"),
+  });
+}
+
+function normalizeVoiceMessageInput(value, { inspect = false } = {}) {
+  const source = assertKnownKeys(value, inspect ? ["configPath", "timeoutMs"] : ["text", "audioPath", "configPath", "timeoutMs"], "voice-message 输入");
+  const text = inspect ? "" : optionalText(source.text, "input.text");
+  const audioPath = inspect ? "" : optionalText(source.audioPath, "input.audioPath");
+  if (!inspect && (Boolean(text) === Boolean(audioPath))) {
+    throw new InternalCapabilityCliError("input.text 与 input.audioPath 必须且只能提供一个。");
+  }
+  return Object.freeze({
+    text,
+    audioPath,
+    configPath: optionalText(source.configPath, "input.configPath"),
+    timeoutMs: optionalSafeInteger(source.timeoutMs, "input.timeoutMs", { minimum: 1, maximum: 600000 }),
+  });
+}
+
 const CAPABILITY_ACTIONS = Object.freeze({
   "image-vision": Object.freeze({ analyze: normalizeImageVisionAnalyzeInput }),
   "video-understanding": Object.freeze({ analyze: normalizeVideoUnderstandingAnalyzeInput }),
+  "image-generation": Object.freeze({
+    generate: normalizeImageGenerationGenerateInput,
+    "list-workflows": normalizeImageGenerationWorkflowInput,
+    "validate-workflows": normalizeImageGenerationWorkflowInput,
+  }),
+  "phone-camera": Object.freeze({ generate: normalizePhoneCameraGenerateInput }),
+  "voice-message": Object.freeze({
+    generate: (value) => normalizeVoiceMessageInput(value),
+    inspect: (value) => normalizeVoiceMessageInput(value, { inspect: true }),
+  }),
 });
 
 function definitionFor(capabilityId, action) {
@@ -168,10 +274,27 @@ function requiredRuntimeText(value, label) {
 
 function normalizedConnection(value) {
   if (!plainObject(value)) return {};
+  const apiKey = optionalText(value.apiKey ?? value.key, "connection.apiKey");
   return {
-    key: optionalText(value.key, "connection.key"),
+    apiKey,
+    key: apiKey,
     baseUrl: optionalText(value.baseUrl, "connection.baseUrl"),
     model: optionalText(value.model, "connection.model"),
+    type: optionalText(value.type, "connection.type"),
+    provider: optionalText(value.provider, "connection.provider"),
+    timeoutMs: optionalSafeInteger(value.timeoutMs, "connection.timeoutMs", { minimum: 1, maximum: 600000 }),
+  };
+}
+
+function imageConnection(connection) {
+  return {
+    apiKey: connection.apiKey || connection.key,
+    key: connection.apiKey || connection.key,
+    baseUrl: connection.baseUrl,
+    model: connection.model,
+    type: connection.type,
+    provider: connection.provider,
+    ...(connection.timeoutMs ? { timeoutMs: connection.timeoutMs } : {}),
   };
 }
 
@@ -229,6 +352,80 @@ export async function executeInternalCapability({ request, runtime } = {}) {
     });
   }
 
+  if (request.capabilityId === "image-generation") {
+    const agentRoot = resolveAgentDataRoot({ dataRoot, agentId });
+    if (request.action === "list-workflows") {
+      return listComfyWorkflows({ dataRoot, configPath: request.input.configPath });
+    }
+    if (request.action === "validate-workflows") {
+      return validateComfyWorkflows({ dataRoot, configPath: request.input.configPath });
+    }
+    if (request.action === "generate") {
+      return runAgentImageGeneration({
+        agentRoot,
+        agentId,
+        dataRoot,
+        environment,
+        connectionResolver: async () => imageConnection(connection),
+        options: {
+          prompt: request.input.prompt,
+          backend: request.input.backend,
+          workflow: request.input.workflow,
+          size: request.input.size,
+          seed: request.input.seed,
+          refs: request.input.references.map((reference) => reference.role + "=" + reference.path),
+          out: request.input.outputDirectory,
+          config: request.input.configPath,
+        },
+      });
+    }
+  }
+
+  if (request.capabilityId === "phone-camera" && request.action === "generate") {
+    const agentRoot = resolveAgentDataRoot({ dataRoot, agentId });
+    const phone = await loadPhoneConfig({ dataRoot, configPath: request.input.configPath });
+    const backend = request.input.backend || phone.config.defaultBackend;
+    const comfyui = backend === "comfyui"
+      ? await loadPhoneCameraComfyConnection(dataRoot)
+      : { registry: { version: 1, workflows: {} } };
+    return takePhonePhoto({
+      agentRoot,
+      dataRoot,
+      connection: backend === "comfyui" ? comfyui : imageConnection(connection),
+      registry: comfyui.registry,
+      options: {
+        shot: request.input.shot,
+        scene: request.input.scene,
+        refs: request.input.referenceIds,
+        manifest: request.input.manifestPath,
+        backend: request.input.backend,
+        workflow: request.input.workflow,
+        size: request.input.size,
+        seed: request.input.seed,
+        out: request.input.outputDirectory,
+        config: request.input.configPath,
+        dryRun: request.input.dryRun,
+      },
+    });
+  }
+
+  if (request.capabilityId === "voice-message") {
+    return runDirectVoiceMessage({
+      dataRoot,
+      ledgerPath,
+      agentId,
+      text: request.input.text,
+      audioFile: request.input.audioPath,
+      configPath: request.input.configPath,
+      timeoutMs: request.input.timeoutMs ?? undefined,
+      inspect: request.action === "inspect",
+      apiKeyOverride: connection.apiKey || connection.key,
+      baseUrlOverride: connection.baseUrl,
+      modelOverride: connection.model,
+      environment,
+    });
+  }
+
   throw new InternalCapabilityCliError(`未找到内部能力 ${request.capabilityId}。`, { code: "capability_not_found" });
 }
 
@@ -274,6 +471,27 @@ export function internalCapabilityErrorDetails(error) {
             : "image_vision_error",
       message,
       exitCode: error.exitCode || 4,
+    };
+  }
+  if (error instanceof DirectVoiceMessageError) {
+    return {
+      code: clean(error.code) || "voice_message_error",
+      message: cleanCapabilityErrorMessage(error.message),
+      exitCode: error.exitCode || 4,
+    };
+  }
+  if (error instanceof AgentImageGenerationError || error instanceof ImageWorkbenchError) {
+    return {
+      code: "image_generation_error",
+      message: cleanCapabilityErrorMessage(error.message),
+      exitCode: 4,
+    };
+  }
+  if (error instanceof PhoneCameraError) {
+    return {
+      code: "phone_camera_error",
+      message: cleanCapabilityErrorMessage(error.message),
+      exitCode: 4,
     };
   }
   return {

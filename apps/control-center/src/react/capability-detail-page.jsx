@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Button, Empty, GlassPanel, PageHeader, Select, Status, Switch } from "suzu-design-system";
 
-import { API_BINDINGS } from "../features/agent/index.mjs";
+import { API_BINDINGS } from "../features/agent/runtime.mjs";
 import {
   CAPABILITY_CATEGORIES,
   capabilityCategory,
@@ -16,7 +16,7 @@ const EXTERNAL_TYPE_LABELS = Object.freeze({
   mcp: "MCP",
   skill: "Skill",
 });
-const CONTACT_SCOPED_CAPABILITY_IDS = new Set(["time-awareness", "image-vision", "video-understanding"]);
+const CONTACT_SCOPED_CAPABILITY_IDS = new Set(["time-awareness", "image-vision", "video-understanding", "image-generation", "phone-camera", "voice-message", "site-automation", "iphone-bridge", "proactive-contact", "traveling-merchant"]);
 
 function savedSettings(capability) {
   return capability?.savedSettings && typeof capability.savedSettings === "object"
@@ -203,6 +203,102 @@ function ContactDeliverySettings({ actions, capability, description, contactsSna
   );
 }
 
+function voiceChoiceLabel(contact, choices) {
+  if (!contact?.voiceId) return "尚未配置";
+  const choice = choices.find((item) => (
+    item.provider === contact.provider
+    && item.voiceId === contact.voiceId
+    && (!item.id || item.id === contact.customVoiceId)
+  ));
+  return choice?.name || (contact.provider === "minimax" ? "MiniMax 自定义音频" : contact.provider === "cosyvoice" ? "阿里百炼 CosyVoice 复刻音色" : "已保存的百炼音色");
+}
+
+function SettingsDialogHeader({ children, onClose, title }) {
+  return <header className="create-settings-dialog__header"><div><span className="reference-kicker">{children}</span><h2>{title}</h2></div><button aria-label={`关闭${title}`} className="create-settings-close suzu-close-button" onClick={onClose} type="button"><span aria-hidden="true">×</span></button></header>;
+}
+
+function VoiceContactConfigDialog({ onClose, open, voiceDesign }) {
+  const [snapshot, setSnapshot] = useState(null);
+  const [selectedContactId, setSelectedContactId] = useState("");
+  const [feedback, setFeedback] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (!open) {
+      setSelectedContactId("");
+      setFeedback("");
+      return undefined;
+    }
+    if (typeof voiceDesign?.snapshot !== "function") {
+      setSnapshot(null);
+      setFeedback("当前无法读取联系人音色。");
+      return undefined;
+    }
+    let cancelled = false;
+    setLoading(true);
+    setFeedback("");
+    void (async () => {
+      try {
+        const next = await voiceDesign.snapshot();
+        if (!cancelled) setSnapshot(next || null);
+      } catch (error) {
+        if (!cancelled) setFeedback(error?.message || "读取联系人音色失败。");
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [open, voiceDesign]);
+
+  const contacts = Array.isArray(snapshot?.contacts) ? snapshot.contacts : [];
+  const choices = Array.isArray(snapshot?.assignableVoices) ? snapshot.assignableVoices : [];
+  const contact = contacts.find((item) => item.id === selectedContactId) || null;
+  const close = () => { if (!saving) onClose?.(); };
+  const save = async (event) => {
+    event.preventDefault();
+    if (!contact || saving || typeof voiceDesign?.saveContactVoice !== "function") return;
+    const key = new FormData(event.currentTarget).get("voiceSelection");
+    const choice = choices.find((item) => item.key === key);
+    if (!choice?.voiceId || !choice.provider) return;
+    setSaving(true);
+    setFeedback(`正在为“${contact.name}”保存音色…`);
+    try {
+      const next = await voiceDesign.saveContactVoice({
+        contactId: contact.id,
+        customVoiceId: choice.id || "",
+        provider: choice.provider,
+        sourceCandidateId: choice.sourceCandidateId || "",
+        sourceContactId: choice.sourceContactId || "",
+        voiceId: choice.voiceId,
+      });
+      if (next?.status) setSnapshot(next);
+      onClose?.();
+    } catch (error) {
+      setFeedback(error?.message || "配置联系人音色失败，请稍后重试。");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <CreateStudioDialog ariaLabel="配置联系人音色" onClose={close} open={open}>
+      {!selectedContactId ? <>
+        <SettingsDialogHeader onClose={close} title="配置联系人音色">联系人</SettingsDialogHeader>
+        <div className="voice-settings-copy"><p>选择一位联系人，再为他或她设置保存过的音色。每个人的设置互不影响。</p></div>
+        {feedback ? <div className="voice-settings-copy"><p>{feedback}</p></div> : null}
+        {loading ? <div className="voice-history-empty voice-contact-empty">正在读取可用音色…</div> : contacts.length ? <div className="voice-contact-list">{contacts.map((item) => <article className="voice-contact-row" key={item.id}><div><strong>{item.name}</strong><small>{voiceChoiceLabel(item, choices)}</small></div><button className="secondary-button" onClick={() => setSelectedContactId(item.id)} type="button">配置音色</button></article>)}</div> : <div className="voice-history-empty voice-contact-empty">还没有联系人。请先在“关系”中创建联系人。</div>}
+        <div className="voice-form-actions voice-contact-dialog-actions"><button className="secondary-button" onClick={close} type="button">关闭</button></div>
+      </> : contact ? <>
+        <SettingsDialogHeader onClose={close} title={`为“${contact.name}”配置音色`}>联系人</SettingsDialogHeader>
+        <div className="voice-settings-copy"><p>{`这里列出已保留的百炼音色，以及本机音色库中的 MiniMax 和阿里百炼复刻音色；保存后只影响“${contact.name}”。`}</p></div>
+        {feedback ? <div className="voice-settings-copy"><p>{feedback}</p></div> : null}
+        {choices.length ? <form className="voice-form voice-contact-config-form" onSubmit={save}><div className="voice-contact-choice-list">{choices.map((item) => { const selected = item.id ? contact.provider === item.provider && item.id === contact.customVoiceId && item.voiceId === contact.voiceId : contact.provider === item.provider && item.voiceId === contact.voiceId; return <label className="voice-contact-choice" key={item.key}><input defaultChecked={selected} name="voiceSelection" required type="radio" value={item.key} /><span><strong>{item.name}</strong><small>{selected ? `${contact.name}正在使用` : item.kindLabel}</small></span></label>; })}</div><div className="voice-form-actions"><button className="secondary-button" disabled={saving} onClick={() => setSelectedContactId("")} type="button">返回联系人列表</button><button className="primary-button" disabled={saving}>{saving ? "正在保存…" : "使用这个音色"}</button></div></form> : <><div className="voice-history-empty voice-contact-empty">先在创作 → 音色设计中保留一个候选音色，或添加 MiniMax、阿里百炼复刻声音。</div><div className="voice-form-actions voice-contact-dialog-actions"><button className="secondary-button" onClick={() => setSelectedContactId("")} type="button">返回联系人列表</button></div></>}
+      </> : null}
+    </CreateStudioDialog>
+  );
+}
+
 function CapabilityHeaderToggle({ actions, capability }) {
   const enabled = capability.enabled === true;
   const disabled = capability.canToggle !== true;
@@ -266,10 +362,11 @@ export function CapabilityCategoryPage({ actions = {}, capabilitySnapshot, categ
   );
 }
 
-function ImageGenerationSettings({ actions, apiServices, capability }) {
+function ImageGenerationSettings({ actions, apiServices, capability, contactsSnapshot }) {
   const settings = savedSettings(capability);
   const comfy = settings.comfyui || {};
   return (
+    <>
     <CapabilitySettingsForm abilityId="image-generation" actions={actions}>
       <SettingSurface description="云端 API 适合日常使用；本机绘画只在你本机运行 ComfyUI 时启用。" eyebrow="图片生成" title="出图方式">
         <FormGrid>
@@ -286,15 +383,18 @@ function ImageGenerationSettings({ actions, apiServices, capability }) {
         </FormGrid>
       </SettingSurface>
     </CapabilitySettingsForm>
+      <ContactDeliverySettings actions={actions} capability={capability} contactsSnapshot={contactsSnapshot} description="打开后，只向该联系人的 Claude 项目登记图像生成 Skill。关闭不会删除全局出图设置或已有图片。" emptyDescription="先创建联系人，再选择允许哪些联系人使用图像生成。" />
+    </>
   );
 }
 
-function PhoneCameraSettings({ actions, apiServices, capability }) {
+function PhoneCameraSettings({ actions, apiServices, capability, contactsSnapshot }) {
   const settings = savedSettings(capability);
   const sizes = settings.sizeByShot || {};
   const references = settings.references || {};
   const prompt = settings.prompt || {};
   return (
+    <>
     <CapabilitySettingsForm abilityId="phone-camera" actions={actions}>
       <SettingSurface description="这些偏好会附在已有拍摄规则上，不会替换后置、自拍或镜前的基础画面逻辑。" eyebrow="手机拍照式图片" title="画面偏好">
         <FormGrid>
@@ -309,25 +409,24 @@ function PhoneCameraSettings({ actions, apiServices, capability }) {
         </FormGrid>
       </SettingSurface>
     </CapabilitySettingsForm>
+      <ContactDeliverySettings actions={actions} capability={capability} contactsSnapshot={contactsSnapshot} description="打开后，只向该联系人的 Claude 项目登记手机拍照式生图 Skill。关闭不会删除全局画面偏好或已有图片。" emptyDescription="先创建联系人，再选择允许哪些联系人使用手机拍照式生图。" />
+    </>
   );
 }
 
-function VisualReferenceSettings({ actions }) {
+function VoiceMessageSettings({ actions, apiServices, capability, contactsSnapshot }) {
+  const [voiceDialogOpen, setVoiceDialogOpen] = useState(false);
   return (
-    <SettingSurface description="把参考图、描述和分类放在视觉工作台中；图片生成会直接使用这里的资料。" eyebrow="视觉资料" title="在视觉工作台整理参考">
-      <div className="capability-inline-action-react"><p>视觉资料在视觉工作台中统一整理，进入后即可增添、筛选与编辑。</p><Button onClick={actions.openVisual} type="button" variant="secondary">打开视觉工作台</Button></div>
-    </SettingSurface>
-  );
-}
-
-function VoiceMessageSettings({ actions, apiServices }) {
-  return (
-    <SettingSurface description="API 用于文字转语音；每位联系人的音色只在音色设计中单独配置。" eyebrow="声音" title="发送语音">
+    <>
+    <SettingSurface description="API 用于文字转语音；每位联系人的音色和允许范围都单独保存。" eyebrow="声音" title="发送语音">
         <FormGrid>
           <ApiBinding actions={actions} apiServices={apiServices} bindingId="sound" />
         </FormGrid>
-        <div className="capability-inline-action-react"><div><strong>为联系人配置音色</strong><p>在音色设计中选择联系人，再为他或她单独指定声音。</p></div><Button onClick={actions.openAudio} type="button" variant="secondary">配置联系人音色</Button></div>
+        <div className="capability-inline-action-react"><div><strong>为联系人配置音色</strong><p>直接在这里选择联系人和已保存的声音。</p></div><Button onClick={() => setVoiceDialogOpen(true)} type="button" variant="secondary">配置联系人音色</Button></div>
     </SettingSurface>
+      <ContactDeliverySettings actions={actions} capability={capability} contactsSnapshot={contactsSnapshot} description="打开后，只向该联系人的 Claude 项目登记发送语音 Skill。关闭不会删除该联系人的音色设置。" emptyDescription="先创建联系人，再选择允许哪些联系人使用语音消息。" />
+      <VoiceContactConfigDialog onClose={() => setVoiceDialogOpen(false)} open={voiceDialogOpen} voiceDesign={actions.voiceDesign} />
+    </>
   );
 }
 
@@ -408,20 +507,20 @@ function TimeAwarenessSettings({ actions, capability, contactsSnapshot }) {
   );
 }
 
-function SiteAutomationOverview({ actions, capability }) {
+function SiteAutomationOverview({ actions, capability, contactsSnapshot }) {
   const settings = savedSettings(capability);
   const sites = Array.isArray(settings.sites) ? settings.sites : [];
   const configuration = settings.configuration || {};
   return (
     <>
-      <SettingSurface description="每个网站单独管理。新增网站后会自动出现在这里，不需要再造一套能力页面。" eyebrow="网页自动化" title="已接入的网站">
+      <SettingSurface description="每个网站单独管理，所有联系人共用这套设置。新增网站后会自动出现在这里，不需要再造一套能力页面。" eyebrow="网页自动化" title="已接入的网站">
         {sites.length ? <div className="capability-site-grid">{sites.map((site) => {
           const enabledActions = (site.actions || []).filter((action) => action.enabled !== false).length;
           return <button className="capability-site-card" key={site.id} onClick={() => actions.openSite?.(site.id)} type="button"><Status label={site.enabled !== false ? "已启用" : "已关闭"} tone={site.enabled !== false ? "success" : "muted"} /><strong>{site.name}</strong><span>{enabledActions + " / " + (site.actions || []).length + " 个动作可用"}</span></button>;
         })}</div> : <Empty className="capability-inline-empty" description="接入新的站点适配器后，它会出现在这里。" title="还没有接入网站" />}
       </SettingSurface>
       <CapabilitySettingsForm abilityId="site-automation" actions={actions}>
-        <SettingSurface description="各网站共用 Suzu Lives 的专用浏览器；登录状态不会显示在这里。" eyebrow="网页自动化" title="浏览器连接">
+        <SettingSurface description="网页浏览和各网站动作共用 Suzu Lives 的专用浏览器；登录状态不会显示在这里。" eyebrow="网页自动化" title="浏览器与连接">
           <FormGrid>
             <FormField className="capability-form-field--wide" label="浏览器连接地址"><input defaultValue={configuration.cdpUrl || "http://127.0.0.1:9222"} maxLength="500" name="cdpUrl" /></FormField>
             <FormField label="页面操作等待（毫秒）"><input defaultValue={configuration.timeoutMs ?? 10000} max="120000" min="1000" name="timeoutMs" type="number" /></FormField>
@@ -431,6 +530,7 @@ function SiteAutomationOverview({ actions, capability }) {
           </FormGrid>
         </SettingSurface>
       </CapabilitySettingsForm>
+      <ContactDeliverySettings actions={actions} capability={capability} contactsSnapshot={contactsSnapshot} description="打开后，才向这位联系人的 Claude 项目登记网页自动化 Skill。关闭后，该联系人不能再使用专用浏览器或已接入的网站动作；浏览器登录状态和网站动作设置会保留。" emptyDescription="先创建联系人，再选择允许哪些联系人使用网页自动化。" />
     </>
   );
 }
@@ -521,21 +621,66 @@ function TravelingMerchantSettings({ actions, capability, contactsSnapshot }) {
   );
 }
 
-function IphoneBridgeSettings({ actions, capability, contactsSnapshot }) {
-  const settings = savedSettings(capability);
-  const status = settings.saved
-    ? "邮件连接已配置。本地接收器会在软件运行时直接把反馈投递到下方勾选的联系人。"
-    : "请先在能力页完成 iPhone 邮件连接设置，然后再选择接收联系人。";
+function IphoneBridgeConfigDialog({ actions, capability, onClose, open }) {
+  const [saving, setSaving] = useState(false);
+  const [feedback, setFeedback] = useState("");
+  const configuration = savedSettings(capability).configuration || {};
+  const allowedSenders = Array.isArray(configuration.allowedSenders) ? configuration.allowedSenders.join("\n") : "";
+  const close = () => { if (!saving) onClose?.(); };
+  const save = async (event) => {
+    event.preventDefault();
+    if (saving || typeof actions.saveSettings !== "function") return;
+    setSaving(true);
+    setFeedback("");
+    try {
+      const result = await actions.saveSettings("iphone-bridge", formValue(event.currentTarget));
+      if (result?.ok) onClose?.();
+      else setFeedback(result?.error?.message || "邮件连接没有保存，请检查填写内容。 ");
+    } catch (error) {
+      setFeedback(error?.message || "邮件连接没有保存，请稍后重试。 ");
+    } finally {
+      setSaving(false);
+    }
+  };
   return (
-    <>
-      <SettingSurface description={status} eyebrow="iPhone 反馈" title="本地直接接收" />
-      <ContactDeliverySettings actions={actions} capability={capability} description="可以同时勾选多个联系人；一封手机反馈会分别排进每位联系人的对话。这里只决定接收范围。" contactsSnapshot={contactsSnapshot} />
-    </>
+    <CreateStudioDialog ariaLabel="配置 iPhone 邮件连接" className="iphone-bridge-config-dialog" onClose={close} open={open}>
+      <SettingsDialogHeader onClose={close} title="配置 iPhone 邮件连接">iPhone 互通</SettingsDialogHeader>
+      <div className="voice-settings-copy"><p>填写已在 iPhone 快捷指令中使用的收发邮箱。授权码不写进页面或配置快照：请先把它放到操作系统环境变量，再在这里填写变量名。</p></div>
+      {feedback ? <div className="voice-settings-copy"><p>{feedback}</p></div> : null}
+      <form className="iphone-bridge-config-form" onSubmit={save}>
+        <div className="capability-form-grid-react">
+          <FormField label="SMTP 服务器"><input defaultValue={configuration.smtpHost || "smtp.163.com"} maxLength="320" name="smtpHost" required /></FormField>
+          <FormField label="SMTP 端口"><input defaultValue={configuration.smtpPort ?? 465} max="65535" min="1" name="smtpPort" required type="number" /></FormField>
+          <FormField label="发件邮箱"><input defaultValue={configuration.sender || ""} maxLength="320" name="sender" required type="email" /></FormField>
+          <FormField label="iPhone 快捷指令邮箱"><input defaultValue={configuration.recipient || ""} maxLength="320" name="recipient" required type="email" /></FormField>
+          <FormField label="IMAP 服务器"><input defaultValue={configuration.imapHost || "imap.163.com"} maxLength="320" name="imapHost" required /></FormField>
+          <FormField label="IMAP 端口"><input defaultValue={configuration.imapPort ?? 993} max="65535" min="1" name="imapPort" required type="number" /></FormField>
+          <FormField label="反馈邮箱账号"><input defaultValue={configuration.username || ""} maxLength="320" name="username" required type="email" /></FormField>
+          <FormField label="收件箱"><input defaultValue={configuration.mailbox || "INBOX"} maxLength="160" name="mailbox" required /></FormField>
+          <FormField className="capability-form-field--wide" hint="每行一个地址；只有这些地址发来的反馈会交给 Agent。" label="允许的反馈发件人"><textarea defaultValue={allowedSenders} maxLength="9600" name="allowedSenders" required /></FormField>
+          <FormField className="capability-form-field--wide" hint="例如 SUZU_IPHONE_MAIL_PASSWORD。实际授权码只由本机进程从这个环境变量读取。" label="邮箱授权码环境变量"><input defaultValue={configuration.passwordEnv || "SUZU_IPHONE_MAIL_PASSWORD"} maxLength="128" name="passwordEnv" required /></FormField>
+          <FormField label="反馈邮件主题"><input defaultValue={configuration.feedbackSubject || "查岗"} maxLength="200" name="feedbackSubject" required /></FormField>
+          <FormField className="capability-form-field--wide" hint="可用变量：{{content}}、{{subject}}、{{from}}、{{receivedAt}}、{{attachments}}。" label="交给 Agent 的反馈提示词"><textarea defaultValue={configuration.feedbackPrompt || "这是来自 iPhone 的反馈（{{subject}}，来自 {{from}}，{{receivedAt}}）：\n{{content}}\n{{attachments}}"} maxLength="12000" name="feedbackPrompt" required /></FormField>
+        </div>
+        <footer className="iphone-bridge-config-form__actions"><Button disabled={saving} onClick={close} type="button" variant="secondary">取消</Button><Button disabled={saving} type="submit">{saving ? "正在保存…" : "保存邮件连接"}</Button></footer>
+      </form>
+    </CreateStudioDialog>
   );
 }
 
-function WebBrowserSettings() {
-  return <SettingSurface description="这项能力会使用专用浏览器资料。首次登录后，Agent 才能在已授权的网站里继续操作。" eyebrow="专用浏览器" title="在独立浏览器中完成登录" />;
+function IphoneBridgeSettings({ actions, capability, contactsSnapshot }) {
+  const [configOpen, setConfigOpen] = useState(false);
+  const settings = savedSettings(capability);
+  const status = settings.saved
+    ? "全局邮件连接参数已保存。软件运行时会读取授权码环境变量，并把反馈直接投递到下方勾选的联系人。"
+    : "先配置全局邮件连接，再选择要接收 iPhone 反馈的联系人。";
+  return (
+    <>
+      <SettingSurface action={<Button onClick={() => setConfigOpen(true)} type="button" variant="secondary">配置邮件连接</Button>} description={status} eyebrow="iPhone 反馈" title="本地直接接收" />
+      <ContactDeliverySettings actions={actions} capability={capability} description="可以同时勾选多个联系人；打开后会向该联系人的 Claude 项目登记 iPhone Skill，一封手机反馈也会分别排进所有已勾选联系人的对话。" contactsSnapshot={contactsSnapshot} />
+      <IphoneBridgeConfigDialog actions={actions} capability={capability} onClose={() => setConfigOpen(false)} open={configOpen} />
+    </>
+  );
 }
 
 function WechatSettings({ actions, wechatSnapshot }) {
@@ -564,17 +709,15 @@ function GenericCapabilitySettings() {
 
 function CapabilitySettings({ actions, apiServices, capability, contactsSnapshot, siteId, wechatSnapshot }) {
   if (capability.id === "wechat-connection") return <WechatSettings actions={actions} wechatSnapshot={wechatSnapshot} />;
-  if (capability.id === "image-generation") return <ImageGenerationSettings actions={actions} apiServices={apiServices} capability={capability} />;
-  if (capability.id === "phone-camera") return <PhoneCameraSettings actions={actions} apiServices={apiServices} capability={capability} />;
-  if (capability.id === "visual-reference-manager") return <VisualReferenceSettings actions={actions} />;
-  if (capability.id === "voice-message") return <VoiceMessageSettings actions={actions} apiServices={apiServices} capability={capability} />;
+  if (capability.id === "image-generation") return <ImageGenerationSettings actions={actions} apiServices={apiServices} capability={capability} contactsSnapshot={contactsSnapshot} />;
+  if (capability.id === "phone-camera") return <PhoneCameraSettings actions={actions} apiServices={apiServices} capability={capability} contactsSnapshot={contactsSnapshot} />;
+  if (capability.id === "voice-message") return <VoiceMessageSettings actions={actions} apiServices={apiServices} capability={capability} contactsSnapshot={contactsSnapshot} />;
   if (capability.id === "time-awareness") return <TimeAwarenessSettings actions={actions} capability={capability} contactsSnapshot={contactsSnapshot} />;
   if (capability.id === "image-vision") return <ImageVisionSettings actions={actions} apiServices={apiServices} capability={capability} contactsSnapshot={contactsSnapshot} />;
   if (capability.id === "video-understanding") return <VideoUnderstandingSettings actions={actions} apiServices={apiServices} capability={capability} contactsSnapshot={contactsSnapshot} />;
-  if (capability.id === "web-browser") return <WebBrowserSettings />;
   if (capability.id === "site-automation") {
     const site = capabilitySites(capability).find((item) => item.id === siteId);
-    return site ? <SiteAutomationSiteSettings actions={actions} site={site} /> : <SiteAutomationOverview actions={actions} capability={capability} />;
+    return site ? <SiteAutomationSiteSettings actions={actions} site={site} /> : <SiteAutomationOverview actions={actions} capability={capability} contactsSnapshot={contactsSnapshot} />;
   }
   if (capability.id === "iphone-bridge") return <IphoneBridgeSettings actions={actions} capability={capability} contactsSnapshot={contactsSnapshot} />;
   if (capability.id === "proactive-contact") return <ProactiveContactSettings actions={actions} capability={capability} contactsSnapshot={contactsSnapshot} />;
@@ -685,7 +828,7 @@ export function ExternalCapabilitiesPage({ actions = {}, externalSnapshot }) {
       {capabilities.length ? <section className="external-capability-list">{capabilities.map((capability) => <ExternalCapabilityCard actions={actions} capability={capability} key={capability.id} onRemove={setRemoving} />)}</section> : <GlassPanel as="section" className="capability-empty-panel" intensity="soft"><Empty description="选择本地 suzu-capability.json 后，这里会显示静态诊断和所选项目中的登记状态。" title="还没有外部能力" /></GlassPanel>}
       <CreateStudioDialog ariaLabel="移除外部能力" className="capability-remove-dialog" onClose={() => setRemoving(null)} open={Boolean(removing)}>
         <header><div><span>EXTERNAL CAPABILITY</span><h2>移除外部能力？</h2></div><button aria-label="关闭" className="suzu-close-button" onClick={() => setRemoving(null)} type="button">×</button></header>
-        <p>“{removing?.name || "这项外部能力"}”会先尝试清理所有由 Suzu Lives 登记的项目条目；任何冲突、项目缺失或手动修改都会中止并保留文件。</p>
+        <p>{`“${removing?.name || "这项外部能力"}”会先尝试清理所有由 Suzu Lives 登记的项目条目；任何冲突、项目缺失或手动修改都会中止并保留文件。`}</p>
         <footer><Button disabled={removingPending} onClick={() => setRemoving(null)} type="button" variant="secondary">取消</Button><Button disabled={removingPending} onClick={remove} type="button" variant="danger">{removingPending ? "正在移除…" : "移除能力"}</Button></footer>
       </CreateStudioDialog>
     </div>

@@ -3,7 +3,6 @@ import fsSync from "node:fs";
 import path from "node:path";
 import { createHash } from "node:crypto";
 
-import { CAPABILITY_DEFINITIONS, getCapabilityDefinition } from "@suzu-lives/capability-registry";
 import { internalCapabilityCliUsage } from "@suzu-lives/capability-registry/internal-cli";
 import { PROACTIVE_CONTACT_ID, PROACTIVE_CONTACT_NAME, renderProactiveContactSkill } from "@suzu-lives/proactive-contact";
 import { renderTravelingMerchantSkill, travelingMerchantDefaultConfig, TRAVELING_MERCHANT_ID, TRAVELING_MERCHANT_NAME } from "@suzu-lives/traveling-merchant";
@@ -37,23 +36,23 @@ const SELECTABLE_CLAUDE_TOOL_PERMISSIONS = Object.freeze([
 const AGENT_ABILITY_CATALOG = Object.freeze([
   { id: "image-generation", name: "图像生成", description: "生成、编辑图片，并可结合视觉参考。", category: "create", setting: { route: "api", label: "设置图片" } },
   { id: "phone-camera", name: "手机拍照式图像", description: "生成具有手机拍摄感的图片。", category: "create", setting: { route: "api", label: "设置图片" } },
-  { id: "visual-reference-manager", name: "视觉参考库", description: "整理、检索并应用视觉参考。", category: "create", setting: { route: "visual", label: "打开视觉工作台" } },
   { id: TIME_AWARENESS_ID, name: "时间感知", description: "按会话以设定的间隔感知本机日期、星期与当前时间。", category: "perceive" },
   { id: "image-vision", name: "图像理解", description: "理解一张明确提供的本地图片。", category: "perceive", setting: { route: "api", label: "设置图像理解" } },
   { id: "video-understanding", name: "视频理解", description: "理解一段明确提供的视频。", category: "perceive", setting: { route: "api", label: "设置视频理解" } },
   { id: "voice-message", name: "语音消息", description: "将文字或已有音频通过既有通道发送。", category: "create", setting: { route: "audio", label: "打开音色设计" } },
-  { id: "web-browser", name: "网页浏览", description: "使用软件拥有的浏览器处理已登录网页。", category: "act" },
-  { id: "site-automation", name: "网页自动化", description: "为每个已接入的网站单独管理可用动作。", category: "act" },
+  { id: "site-automation", name: "网页自动化", description: "使用专用浏览器浏览已登录网页，并执行已接入网站动作。", category: "act" },
   { id: "iphone-bridge", name: "iPhone 互通", description: "调用 Suzu Lives 中配置的 iPhone 快捷指令。", category: "act" },
   { id: "proactive-contact", name: "主动关心", description: "在 Suzu 运行期间用自动任务安排主动联系。", category: "companion" },
   { id: "traveling-merchant", name: "旅行商人", description: "运行已有的旅行商人监控与通知流程。", category: "companion" },
 ]);
-const DIRECT_COMPATIBILITY_ABILITIES = new Map([
+const CLAUDE_REGISTERABLE_ABILITIES = new Map([
   ["image-generation", { id: "image-generation", name: "图像生成", renderSkill: renderImageGenerationSkill }],
   ["phone-camera", { id: "phone-camera", name: "手机拍照式生图", renderSkill: renderPhoneCameraSkill }],
+  ["image-vision", { id: "image-vision", name: "图像理解", renderSkill: renderImageVisionSkill }],
+  ["video-understanding", { id: "video-understanding", name: "视频理解", renderSkill: renderVideoUnderstandingSkill }],
+  ["voice-message", { id: "voice-message", name: "语音消息", renderSkill: renderVoiceMessageSkill }],
   ["visual-reference-manager", { id: "visual-reference-manager", name: "视觉参考资料库", renderSkill: renderVisualReferenceManagerSkill }],
   [TIME_AWARENESS_ID, { id: TIME_AWARENESS_ID, name: "时间感知", renderSkill: renderTimeAwarenessSkill }],
-  ["web-browser", { id: "web-browser", name: "网页浏览", renderSkill: renderWebBrowserSkill }],
   ["site-automation", { id: "site-automation", name: "网页自动化", renderSkill: renderSiteAutomationSkill }],
   ["iphone-bridge", { id: "iphone-bridge", name: "iPhone Bridge", renderSkill: renderIphoneBridgeSkill }],
   [PROACTIVE_CONTACT_ID, { id: PROACTIVE_CONTACT_ID, name: PROACTIVE_CONTACT_NAME, renderSkill: renderProactiveContactSkill }],
@@ -80,19 +79,16 @@ function assertLauncher(launcher = {}) {
   return command;
 }
 
-function directCompatibilityAbility(abilityId) {
-  return DIRECT_COMPATIBILITY_ABILITIES.get(clean(abilityId).toLowerCase()) || null;
+function registerableClaudeAbility(abilityId) {
+  return CLAUDE_REGISTERABLE_ABILITIES.get(clean(abilityId).toLowerCase()) || null;
 }
 
 function knownRegistrationAbility(abilityId) {
-  return Boolean(directCompatibilityAbility(abilityId) || getCapabilityDefinition(abilityId));
+  return Boolean(registerableClaudeAbility(abilityId));
 }
 
 export function claudeRegistrationAbilityIds() {
-  return [...new Set([
-    ...DIRECT_COMPATIBILITY_ABILITIES.keys(),
-    ...CAPABILITY_DEFINITIONS.filter((item) => item.claudeRegistration && item.executorAttached && item.migration !== "deferred").map((item) => item.id),
-  ])].sort();
+  return [...CLAUDE_REGISTERABLE_ABILITIES.keys()].sort();
 }
 
 export function claudeAgentAbilityCatalog() {
@@ -127,14 +123,9 @@ export function inspectClaudeRegistration({ projectRoot, abilityId } = {}) {
 }
 
 function assertRegisterableAbility(abilityId) {
-  const direct = directCompatibilityAbility(abilityId);
+  const direct = registerableClaudeAbility(abilityId);
   if (direct) return direct;
-  const capability = getCapabilityDefinition(abilityId);
-  if (!capability) throw new ClaudeIntegrationError("未找到该 Suzu Lives 能力。");
-  if (!capability.claudeRegistration || capability.migration === "deferred" || capability.executorAttached !== true) {
-    throw new ClaudeIntegrationError("该能力尚未接入可注册的软件执行器。");
-  }
-  return capability;
+  throw new ClaudeIntegrationError("这项能力没有当前可用的 Suzu Lives 注册入口。");
 }
 
 function inside(root, target) {
@@ -542,41 +533,41 @@ function registeredIds(existing) {
   return ids;
 }
 
+function standardCapabilityBullet(id, command) {
+  return "- <!-- suzu-lives:ability:" + id + " --> `" + id + "`：使用 `" + command + "` 调用软件拥有的标准能力执行器。";
+}
+
 export function renderClaudeManagedBlock({ abilityIds, command = "suzu-lives" } = {}) {
   const launcher = safeCommand(command);
   const ids = [...new Set((abilityIds || []).map((value) => clean(value).toLowerCase()))]
     .filter((id) => knownRegistrationAbility(id))
     .sort();
-  const directAbilityIds = new Set(["image-vision", "video-understanding", TIME_AWARENESS_ID, "voice-message", "image-generation", "phone-camera", "visual-reference-manager", "web-browser", "site-automation", "iphone-bridge", PROACTIVE_CONTACT_ID, TRAVELING_MERCHANT_ID]);
   const bullets = ids.map((id) => {
+    if (id === "voice-message") return standardCapabilityBullet(id, internalCapabilityCliUsage({ launcher, capabilityId: id, action: "generate" }));
+    if (id === "image-generation") return standardCapabilityBullet(id, internalCapabilityCliUsage({ launcher, capabilityId: id, action: "generate" }));
+    if (id === "phone-camera") return standardCapabilityBullet(id, internalCapabilityCliUsage({ launcher, capabilityId: id, action: "generate" }));
     if (id === "image-vision") return `- <!-- suzu-lives:ability:${id} --> \`${id}\`：使用 \`${internalCapabilityCliUsage({ launcher, capabilityId: id })}\` 调用软件拥有的标准能力执行器。`;
     if (id === "video-understanding") return `- <!-- suzu-lives:ability:${id} --> \`${id}\`：使用 \`${internalCapabilityCliUsage({ launcher, capabilityId: id })}\` 调用软件拥有的标准能力执行器。`;
     if (id === TIME_AWARENESS_ID) return `- <!-- suzu-lives:ability:${id} --> \`${id}\`：由 Suzu 在每次用户消息进入时检查本机日期、星期和当前时间；按软件中设定的会话间隔注入。`;
-    if (id === "voice-message") return `- <!-- suzu-lives:ability:${id} --> \`${id}\`：使用 \`${launcher} voice-message <text>\` 调用软件拥有的兼容执行器。`;
-    if (id === "image-generation") return `- <!-- suzu-lives:ability:${id} --> \`${id}\`：使用 \`${launcher} image-generation --prompt <visible-scene>\` 调用软件拥有的图像引擎。`;
-    if (id === "phone-camera") return `- <!-- suzu-lives:ability:${id} --> \`${id}\`：使用 \`${launcher} phone-camera --shot <rear|selfie|mirror> --scene <visible-scene>\` 生成手机拍照式图片。`;
     if (id === "visual-reference-manager") return `- <!-- suzu-lives:ability:${id} --> \`${id}\`：使用 \`${launcher} visual-reference-manager init|list|show|validate|apply\` 维护软件资料库。`;
-    if (id === "web-browser") return `- <!-- suzu-lives:ability:${id} --> \`${id}\`：使用 \`${launcher} web-browser\` 启动或检查软件拥有的专用 Chrome。`;
-    if (id === "site-automation") return `- <!-- suzu-lives:ability:${id} --> \`${id}\`：使用 \`${launcher} site <site> <action>\` 调用软件拥有的已接入网站适配器。`;
+    if (id === "site-automation") return `- <!-- suzu-lives:ability:${id} --> \`${id}\`：使用 \`${launcher} site browser start|check\` 管理专用浏览器，再用 \`${launcher} site <site> <action>\` 调用已接入网站适配器。`;
     if (id === "iphone-bridge") return `- <!-- suzu-lives:ability:${id} --> \`${id}\`：使用 \`${launcher} iphone-bridge send ...\` 向 iPhone 发出请求；反馈监听由正在运行的 Suzu 直接处理。`;
     if (id === PROACTIVE_CONTACT_ID) return `- <!-- suzu-lives:ability:${id} --> \`${id}\`：使用已注册的轻量 Skill 按 Suzu \`schedule\` 语义管理链式关心和一次性回访。`;
     if (id === TRAVELING_MERCHANT_ID) return `- <!-- suzu-lives:ability:${id} --> \`${id}\`：使用 \`${launcher} traveling-merchant\` 调用软件拥有的监控执行器。`;
-    return `- <!-- suzu-lives:ability:${id} --> \`${id}\`：使用 \`${launcher} ability status --id ${id}\` 先确认软件状态。`;
+    return "";
   }).join("\n");
   const notices = [];
-  if (ids.includes("image-vision")) notices.push(`\`image-vision\` 使用 Suzu 的标准 \`capability <id> <action> --input-json\` 协议，不通过旧 \`ability plan\` 或 \`ability invoke\`；它仍只读取明确给出的本地图片和软件数据目录中的配置。`);
-  if (ids.includes("video-understanding")) notices.push(`\`video-understanding\` 使用 Suzu 的标准 \`capability <id> <action> --input-json\` 协议，不通过旧 \`ability plan\` 或 \`ability invoke\`；它只处理明确给出的本地视频或 http(s) URL，并把临时片段、缓存、保留片段和配置限制在软件数据目录。`);
+  if (ids.includes("image-vision")) notices.push(`\`image-vision\` 使用 Suzu 的标准 \`capability <id> <action> --input-json\` 协议；它仍只读取明确给出的本地图片和软件数据目录中的配置。`);
+  if (ids.includes("video-understanding")) notices.push(`\`video-understanding\` 使用 Suzu 的标准 \`capability <id> <action> --input-json\` 协议；它只处理明确给出的本地视频或 http(s) URL，并把临时片段、缓存、保留片段和配置限制在软件数据目录。`);
   if (ids.includes(TIME_AWARENESS_ID)) notices.push(`\`time-awareness\` 通过 Suzu 受管的 \`UserPromptSubmit\` Hook 检查本轮当前本地时间；同一 Claude 会话仅按软件中设定的间隔写入新的时间提醒。它不读取消息正文、不联网、不替代其他同事件 Hook。`);
-  if (ids.includes("voice-message")) notices.push(`\`voice-message\` 使用独立的软件拥有命令，不通过 \`ability plan\` 或 \`ability invoke\`；它只在软件数据目录中生成 MP3，再由当前 Suzu 会话的附件交付命令显示和投递。`);
-  if (ids.includes("image-generation")) notices.push(`\`image-generation\` 使用独立的软件拥有命令，不通过 \`ability plan\` 或 \`ability invoke\`；默认后端、运行记录、候选图片与连接配置仍只位于当前 Agent 的软件数据目录。`);
-  if (ids.includes("phone-camera")) notices.push(`\`phone-camera\` 使用独立的软件拥有命令，不通过 \`ability plan\` 或 \`ability invoke\`；它只生成用户说明的手机拍照式画面，失败不会静默切换后端。`);
-  if (ids.includes("visual-reference-manager")) notices.push(`\`visual-reference-manager\` 使用独立的软件拥有命令，不通过 \`ability plan\` 或 \`ability invoke\`；资料和 manifest 均在当前 Agent 的软件数据目录，写入前仍需先 dry-run 和用户确认。`);
-  if (ids.includes("web-browser")) notices.push(`\`web-browser\` 使用独立的软件拥有命令，不通过 \`ability plan\` 或 \`ability invoke\`；专用 Chrome、profile 与诊断仍只位于当前 Agent 的软件数据目录。`);
-  if (ids.includes("site-automation")) notices.push(`\`site-automation\` 使用独立的软件拥有的站点适配器，不通过 \`ability plan\` 或 \`ability invoke\`；已登记的评论、点赞、私信/群回复、分享和群隐私同意均保留适配器自己的幂等与隐私保护。`);
-  if (ids.includes("iphone-bridge")) notices.push(`\`iphone-bridge\` 使用独立的软件拥有命令，不通过 \`ability plan\` 或 \`ability invoke\`；只保留既有 iPhone 邮件快捷指令的发送与反馈监听语义。`);
+  if (ids.includes("voice-message")) notices.push("`voice-message` 使用 Suzu 的标准 `capability <id> <action> --input-json` 协议；它只在软件数据目录中生成 MP3，再由当前 Suzu 会话的附件交付命令显示和投递。");
+  if (ids.includes("image-generation")) notices.push("`image-generation` 使用 Suzu 的标准 `capability <id> <action> --input-json` 协议；默认后端与 ComfyUI 配置位于统一软件数据目录，运行记录和候选图片仍属于当前 Agent 的数据目录。");
+  if (ids.includes("phone-camera")) notices.push("`phone-camera` 使用 Suzu 的标准 `capability <id> <action> --input-json` 协议；它只生成用户说明的手机拍照式画面，失败不会静默切换后端。");
+  if (ids.includes("visual-reference-manager")) notices.push(`\`visual-reference-manager\` 使用独立的软件拥有命令；资料和 manifest 均在当前 Agent 的软件数据目录，写入前仍需先 dry-run 和用户确认。`);
+  if (ids.includes("site-automation")) notices.push(`\`site-automation\` 使用独立的软件拥有命令；它负责专用 Chrome、profile 与诊断，并保留已登记评论、点赞、私信/群回复、分享和群隐私同意的适配器幂等与隐私保护。`);
+  if (ids.includes("iphone-bridge")) notices.push(`\`iphone-bridge\` 使用独立的软件拥有命令；只保留既有 iPhone 邮件快捷指令的发送与反馈监听语义。`);
   if (ids.includes(PROACTIVE_CONTACT_ID)) notices.push(`\`proactive-contact\` 使用 Suzu 自有的 \`schedule\` 自动任务；仅在软件运行期间执行，关闭期间不补跑。`);
   if (ids.includes(TRAVELING_MERCHANT_ID)) notices.push(`\`traveling-merchant\` 使用独立的软件拥有命令；其运行状态位于软件数据目录，Cron 由 Suzu \`schedule\` 执行，现有通知发送链路保持不变。`);
-  if (ids.some((id) => !directAbilityIds.has(id))) notices.push(`其他能力可先使用显式 \`${launcher} ability plan\` 查看无副作用计划。实际 \`ability invoke\` 还必须带有软件控制面签发的短时、单次、能力/动作/作用域绑定授权凭证；CLI 不会自行签发，也不会把未配置能力降级为计划。`);
   return `${CLAUDE_START}\n## Suzu Lives 能力注册\n\n这些是由 Suzu Lives 管理的轻量入口。功能源码、设置、缓存和凭据不在此项目中；请只使用下方登记的入口。\n\n${bullets}\n\n${notices.join("\n\n")}\n${CLAUDE_END}`;
 }
 
@@ -594,43 +585,112 @@ function renderVideoUnderstandingSkill(launcher) {
   return `---\nname: suzu-lives-video-understanding\ndescription: 通过 Suzu Lives 的标准能力 CLI 理解一段明确给出的本地视频或 http(s) 视频。\n---\n\n<!-- suzu-lives:ability:video-understanding -->\n# 视频理解\n\n这是 Suzu Lives 生成的轻量注册文件，不包含功能源码、安装路径、配置、缓存或凭据。\n\n仅在需要理解用户明确提供的视频内容时调用：\n\n\`${command}\`\n\n其中 \`<JSON>\` 例如 \`{"source":"<本地视频路径或 http(s) URL>","question":"<具体问题>"}\`。输入只接受 \`source\`、\`question\`、\`cacheKey\`、\`configPath\`、\`noCache\`、\`keepClip\`、\`dryRun\`。软件会检查 FFmpeg/FFprobe，准备受大小限制的 MP4 片段；\`dryRun: true\` 只准备和校验视频，不请求模型。\`configPath\` 必须位于软件数据目录内。成功和失败都会在 stdout 返回统一 JSON：\`schemaVersion\`、\`status\`、\`capabilityId\`、\`action\` 与 \`result\` 或 \`error\`。\n\n不要绕过软件入口，也不要把配置、密钥、缓存或视频复制进 Claude 项目；若返回 \`clip_too_large\`、\`dependency_missing\`、\`api_error\` 或其他稳定错误码，如实说明视频、工具或软件配置问题，不要补写未看到或未听到的内容。\n`;
 }
 
+function markdownCode(value) {
+  return "`" + value + "`";
+}
+
+function renderStandardVoiceMessageSkill(launcher) {
+  const command = internalCapabilityCliUsage({ launcher, capabilityId: "voice-message", action: "generate" });
+  const inspect = internalCapabilityCliUsage({ launcher, capabilityId: "voice-message", action: "inspect" });
+  return [
+    "---",
+    "name: suzu-lives-voice-message",
+    "description: 通过 Suzu Lives 的标准能力 CLI 生成一条明确要求的 MP3 语音，并交付到当前会话。",
+    "---",
+    "",
+    "<!-- suzu-lives:ability:voice-message -->",
+    "# 发送语音",
+    "",
+    "只在用户明确要求语音回复、或一段很短的话用声音显著更自然时调用。",
+    "",
+    markdownCode(command),
+    "",
+    "其中 JSON 例如 " + markdownCode('{"text":"<要说的话>"}') + "。也可使用 " + markdownCode('{"audioPath":"<用户明确给出的本地音频路径>"}') + " 转换已有音频；text 与 audioPath 必须且只能提供一个。可选字段只有 configPath 和 timeoutMs。",
+    "",
+    "成功 JSON 的 result.savedPath 是生成的 MP3。必须紧接着使用当前 Suzu 会话系统提示中提供的附件交付命令，以 --audio 交付这个路径。只检查当前联系人语音配置时，使用 " + markdownCode(inspect) + "，输入 JSON 只接受 configPath 与 timeoutMs。",
+    "",
+    "不要绕过软件入口，也不要把配置、密钥或音频复制进 Claude 项目。",
+    "",
+  ].join("\n");
+}
+
+function renderStandardImageGenerationSkill(launcher) {
+  const command = internalCapabilityCliUsage({ launcher, capabilityId: "image-generation", action: "generate" });
+  const list = internalCapabilityCliUsage({ launcher, capabilityId: "image-generation", action: "list-workflows" });
+  const validate = internalCapabilityCliUsage({ launcher, capabilityId: "image-generation", action: "validate-workflows" });
+  return [
+    "---",
+    "name: suzu-lives-image-generation",
+    "description: 通过 Suzu Lives 的标准能力 CLI 生成普通图片或明确指定的 ComfyUI 工作流图片。",
+    "---",
+    "",
+    "<!-- suzu-lives:ability:image-generation -->",
+    "# Image Generation",
+    "",
+    "普通生成图片和明确指定的本地 ComfyUI 工作流使用：",
+    "",
+    markdownCode(command),
+    "",
+    "输入 JSON 例如 " + markdownCode('{"prompt":"画面中实际需要生成的内容"}') + "。可选字段：backend（api 或 comfyui）、workflow、size、seed、references、outputDirectory、configPath。references 是至多 16 项的数组，每项为 { role, path }，role 只能是 identity、location、object 或 style。",
+    "",
+    "列出或校验统一的 ComfyUI 工作流时，分别使用 " + markdownCode(list) + " 与 " + markdownCode(validate) + "，输入 JSON 只接受可选的 configPath。API 或 ComfyUI 出错时不能切换到另一后端。",
+    "",
+    "成功 JSON 的 result.path 才代表图片已保存。若用户要求交付，先生成，再使用当前会话提供的附件交付命令；不要自动导入视觉参考库或调用 image-vision。",
+    "",
+  ].join("\n");
+}
+
+function renderStandardPhoneCameraSkill(launcher) {
+  const command = internalCapabilityCliUsage({ launcher, capabilityId: "phone-camera", action: "generate" });
+  return [
+    "---",
+    "name: suzu-lives-phone-camera",
+    "description: 让 Agent 通过 Suzu Lives 的标准能力 CLI 生成真实手机随手拍、自拍或镜面自拍。",
+    "---",
+    "",
+    "<!-- suzu-lives:ability:phone-camera -->",
+    "# Phone Camera",
+    "",
+    "食物、房间、街景和眼前所见用 rear；正面自拍用 selfie；穿搭或全身镜前照用 mirror。只把画面中真正可见的事实放进 scene。",
+    "",
+    markdownCode(command),
+    "",
+    "输入 JSON 例如 " + markdownCode('{"shot":"rear","scene":"画面中实际可见的场景","dryRun":true}') + "。可选字段为 referenceIds、manifestPath、backend、workflow、size、seed、outputDirectory、configPath、dryRun。referenceIds 只放当前画面需要的视觉资料 asset 或 set ID。",
+    "",
+    "成功 JSON 的 result.path 才代表图片已保存；失败不会静默切换后端。若用户要求交付图片，先生成，再用当前会话提供的附件交付命令。",
+    "",
+  ].join("\n");
+}
+
 function renderVoiceMessageSkill(launcher) {
-  return `---\nname: suzu-lives-voice-message\ndescription: 通过 Suzu Lives 生成一条明确要求的 MP3 语音，并交付到当前会话。\n---\n\n<!-- suzu-lives:ability:voice-message -->\n# 发送语音\n\n这是 Suzu Lives 生成的轻量注册文件，不包含功能源码、安装路径、配置、缓存或凭据。\n\n只在用户明确要求语音回复、或一段很短的话用声音显著更自然时调用。先生成 MP3：\n\n\`${launcher} voice-message '<要说的话>'\`\n\n也可把用户明确给出的本地音频转换成 MP3：\n\n\`${launcher} voice-message --audio-file '<本地音频路径>'\`\n\n成功 JSON 中的 \`savedPath\` 是生成的 MP3。必须紧接着使用当前 Suzu 会话系统提示中提供的附件交付命令，以 \`--audio "<savedPath>"\` 交付它：这样 Suzu 会显示可播放音频，已绑定微信的当前会话会把同一文件作为 MP3 文件投递。不要改用旧脚本、原生语音气泡或任何直接外部通道。\n\n可用 \`--inspect\` 仅检查软件数据目录中的语音配置和声音连接，不调用 TTS 或交付。不要把配置、密钥或音频复制进 Claude 项目。\n`;
+  return renderStandardVoiceMessageSkill(launcher);
 }
 
 function renderImageGenerationSkill(launcher) {
-  return `---\nname: suzu-lives-image-generation\ndescription: 通过 Suzu Lives 的图像引擎生成普通图片或明确指定的 ComfyUI 工作流图片。\n---\n\n<!-- suzu-lives:ability:image-generation -->\n# Image Generation\n\n这是 Suzu Lives 生成的直连注册文件；不要通过 \`ability plan\` 或 \`ability invoke\` 调用此能力。\n\n普通生成图片和明确指定的本地 ComfyUI 工作流使用此能力：\n\n\`${launcher} image-generation --prompt "画面中实际需要生成的内容"\`\n\n可选 \`--backend api|comfyui\`、\`--workflow <id>\`、\`--size WIDTHxHEIGHT\`、\`--seed <整数>\`，以及重复的 \`--ref [identity|location|object|style=]PATH\`。默认后端来自当前 Agent 的软件配置；API 或 ComfyUI 出错时不能切换到另一后端。\`--list-workflows\` 与 \`--validate-workflows\` 只检查软件数据目录中的 ComfyUI registry，不会连接 ComfyUI。\n\n\`--out\` 与 \`--config\` 必须位于当前 Agent 的 Suzu Lives 数据目录。API 连接来自软件管理的连接或 \`IMAGE_API_KEY\` / \`IMAGE_BASE_URL\` / \`IMAGE_MODEL\` 环境覆盖。成功 JSON 的 \`status: "ok"\` 才代表图片已保存。\n\n若用户要求交付图片，先生成，再使用当前 Suzu 会话系统提示中给出的附件交付命令；它会显示在本会话中，并在该会话已绑定微信时自动发送。不要使用旧的直接发送参数，也不要自动导入视觉参考库或调用 image-vision。\n`;
+  return renderStandardImageGenerationSkill(launcher);
 }
 
 function renderPhoneCameraSkill(launcher) {
-  return `---\nname: suzu-lives-phone-camera\ndescription: 让 Agent 通过 Suzu Lives 的图像引擎生成真实手机随手拍、自拍或镜面自拍。\n---\n\n<!-- suzu-lives:ability:phone-camera -->\n# Phone Camera\n\n这是 Suzu Lives 生成的直连注册文件；不要通过 \`ability plan\` 或 \`ability invoke\` 调用此能力。\n\n食物、房间、街景和眼前所见用 \`rear\`；正面自拍用 \`selfie\`；穿搭或全身镜前照用 \`mirror\`。只把画面中真正可见的事实放进 \`--scene\`。\n\n\`${launcher} phone-camera --shot rear --scene "画面中实际可见的场景" --dry-run\`\n\n需要视觉参考时使用重复的 \`--ref <asset-or-set-id>\`；只选择当前画面必要的资料。\`--backend comfyui --workflow <id>\` 只在明确指定本地工作流时使用；失败不会切回 API。成功 JSON 的 \`status: "ok"\` 才代表生成成功。\n\n若用户要求交付图片，先生成，再使用当前 Suzu 会话系统提示中给出的附件交付命令；它会显示在本会话中，并在该会话已绑定微信时自动发送。不要使用旧的直接发送参数。\n`;
+  return renderStandardPhoneCameraSkill(launcher);
 }
 
 function renderVisualReferenceManagerSkill(launcher) {
-  return `---\nname: suzu-lives-visual-reference-manager\ndescription: 通过 Suzu Lives 维护用户明确要求保存、登记、查看、更新、删除或校验的视觉参考资料库。\n---\n\n<!-- suzu-lives:ability:visual-reference-manager -->\n# Visual Reference Manager\n\n这是 Suzu Lives 生成的直连注册文件；不要通过 \`ability plan\` 或 \`ability invoke\` 调用此能力。\n\n只在用户明确要求维护参考资料库时使用；不要把普通聊天附件自动永久保存。资料副本和清单都由 Suzu Lives 写入当前 Agent 的软件数据目录。\n\n角色只能是 \`identity\`、\`location\`、\`object\`、\`style\`，ID 使用稳定的小写英文层级。使用稳定入口：\n\n\`${launcher} visual-reference-manager init\`\n\n\`${launcher} visual-reference-manager list --query "卧室" --limit 10\`\n\n\`${launcher} visual-reference-manager show home.bedroom.door-view\`\n\n\`${launcher} visual-reference-manager validate\`\n\n新增、更新、换角色或删除时，先准备版本为 1 的维护计划 JSON，再执行：\n\n\`${launcher} visual-reference-manager apply --plan '<计划文件>' --dry-run\`\n\n只有 dry-run 成功、没有冲突且用户已确认后，才执行同一计划的 \`${launcher} visual-reference-manager apply --plan '<计划文件>'\`。\`remove\` 必须明确 \`delete_file: true|false\`；不要手工编辑 manifest。\n`;
-}
-
-function renderWebBrowserSkill(launcher) {
-  return `---\nname: suzu-lives-web-browser\ndescription: 通过 Suzu Lives 的专用 Chrome 与已接入网站适配器执行网页浏览、互动和会话动作。\n---\n\n<!-- suzu-lives:ability:web-browser -->\n# Web Browser 与 Web Automation\n\n这是 Suzu Lives 生成的直连注册文件；不要通过 \`ability plan\` 或 \`ability invoke\` 调用此能力。\n\n使用软件拥有的专用 Chrome；登录状态只保存在当前 Agent 的 Suzu Lives 数据目录。启动或检查浏览器：\n\n\`${launcher} web-browser\`\n\n\`${launcher} web-browser --check\`\n\n连接本机 CDP 时沿用原命令：\n\n\`playwright-cli attach --cdp=http://127.0.0.1:9222\`\n\n完成后使用 \`playwright-cli detach\`。需要结束一次抖音浏览时，调用 \`${launcher} site douyin close\`；不要直接关闭专用 Chrome。\n\n查询已接入的网站和动作：\n\n\`${launcher} site list\`\n\n\`${launcher} site describe <site>\`\n\n\`${launcher} site <site> <action> [--text <value>] [--state on|off]\`\n\n每个网站的动作由软件拥有的适配器执行；网页自动化中关闭的网站或动作会被适配器直接拒绝。\n\n软件配置仅从当前 Agent 的 Suzu Lives 数据目录读取：\`agents/<agentId>/site-automation/config.json\`。不要读取项目目录中的 \`config.local.json\`、\`runtime/\`、源码或浏览器 profile。\n`;
+  return `---\nname: suzu-lives-visual-reference-manager\ndescription: 通过 Suzu Lives 维护用户明确要求保存、登记、查看、更新、删除或校验的视觉参考资料库。\n---\n\n<!-- suzu-lives:ability:visual-reference-manager -->\n# Visual Reference Manager\n\n这是 Suzu Lives 生成的直连注册文件；请只使用下方稳定入口。\n\n只在用户明确要求维护参考资料库时使用；不要把普通聊天附件自动永久保存。资料副本和清单都由 Suzu Lives 写入当前 Agent 的软件数据目录。\n\n角色只能是 \`identity\`、\`location\`、\`object\`、\`style\`，ID 使用稳定的小写英文层级。使用稳定入口：\n\n\`${launcher} visual-reference-manager init\`\n\n\`${launcher} visual-reference-manager list --query "卧室" --limit 10\`\n\n\`${launcher} visual-reference-manager show home.bedroom.door-view\`\n\n\`${launcher} visual-reference-manager validate\`\n\n新增、更新、换角色或删除时，先准备版本为 1 的维护计划 JSON，再执行：\n\n\`${launcher} visual-reference-manager apply --plan '<计划文件>' --dry-run\`\n\n只有 dry-run 成功、没有冲突且用户已确认后，才执行同一计划的 \`${launcher} visual-reference-manager apply --plan '<计划文件>'\`。\`remove\` 必须明确 \`delete_file: true|false\`；不要手工编辑 manifest。\n`;
 }
 
 function renderSiteAutomationSkill(launcher) {
-  return `---\nname: suzu-lives-site-automation\ndescription: 通过 Suzu Lives 的已接入网站适配器执行网页浏览、互动和会话动作。\n---\n\n<!-- suzu-lives:ability:site-automation -->\n# Web Automation\n\n这是 Suzu Lives 生成的直连注册文件；不要通过 \`ability plan\` 或 \`ability invoke\` 调用此能力。\n\n先使用软件拥有的专用 Chrome：\n\n\`${launcher} web-browser\`\n\n\`${launcher} web-browser --check\`\n\n需要连接 CDP 时沿用原命令：\n\n\`playwright-cli attach --cdp=http://127.0.0.1:9222\`\n\n完成后使用 \`playwright-cli detach\`。需要结束一次抖音浏览时，调用 \`${launcher} site douyin close\`；不要直接关闭专用 Chrome。\n\n先查询已接入的网站和它们允许的动作：\n\n\`${launcher} site list\`\n\n\`${launcher} site describe <site>\`\n\n\`${launcher} site <site> <action> [--text <value>] [--state on|off]\`\n\n每个网站的动作都由软件拥有的适配器执行。不要绕过适配器：它负责该站点原有的登录检查、幂等、私信/群聊范围、显式隐私同意和 dry-run 保护；若用户在网页自动化设置中关闭了网站或动作，适配器会直接拒绝调用。\n\n软件配置仅从当前 Agent 的 Suzu Lives 数据目录读取：\`agents/<agentId>/site-automation/config.json\`。不要读取项目目录中的 \`config.local.json\`、\`runtime/\`、源码或浏览器 profile。\n`;
+  return `---\nname: suzu-lives-site-automation\ndescription: 通过 Suzu Lives 的专用 Chrome 与已接入网站适配器执行网页浏览、互动和会话动作。\n---\n\n<!-- suzu-lives:ability:site-automation -->\n# 网页自动化\n\n这是 Suzu Lives 生成的直连注册文件；请只使用下方稳定入口。\n\n网站浏览和自动化共用软件拥有的专用 Chrome；登录状态保存在 Suzu Lives 统一的软件数据目录。启动或检查浏览器：\n\n\`${launcher} site browser start\`\n\n\`${launcher} site browser check\`\n\n需要连接 CDP 时沿用原命令：\n\n\`playwright-cli attach --cdp=http://127.0.0.1:9222\`\n\n完成后使用 \`playwright-cli detach\`。需要结束一次抖音浏览时，调用 \`${launcher} site douyin close\`；不要直接关闭专用 Chrome。\n\n先查询已接入的网站和它们允许的动作：\n\n\`${launcher} site list\`\n\n\`${launcher} site describe <site>\`\n\n\`${launcher} site <site> <action> [--text <value>] [--state on|off]\`\n\n每个网站的动作都由软件拥有的适配器执行。不要绕过适配器：它负责该站点原有的登录检查、幂等、私信/群聊范围、显式隐私同意和 dry-run 保护；若用户在网页自动化设置中关闭了网站或动作，适配器会直接拒绝调用。\n\n软件配置仅从统一软件数据目录读取：\`capabilities/site-automation/config.json\`。不要读取项目目录、联系人目录中的 \`config.local.json\`、\`runtime/\`、源码或浏览器 profile。\n`;
 }
 
 function renderIphoneBridgeSkill(launcher) {
-  return `---\nname: suzu-lives-iphone-bridge\ndescription: 通过 Suzu Lives 中配置的 iPhone 邮件快捷指令发送请求。\n---\n\n<!-- suzu-lives:ability:iphone-bridge -->\n# iPhone Bridge\n\n这是 Suzu Lives 生成的直连注册文件。软件代码、配置、反馈状态和附件都在当前 Agent 的 Suzu Lives 数据根。\n\n向 iPhone 发出请求时使用：\n\n\`${launcher} iphone-bridge send '闹钟' '08:30 起床'\`\n\n手机反馈由正在运行的 Suzu 本地接收器直接投递到能力设置中勾选的一个或多个会话。不要手动管理反馈接收器，也不要使用其他转发路径。\n\n若返回未配置，请先在 Suzu Lives 中完成 iPhone 设置；不要复制、打印或手工修改敏感配置。\n`;
+  return `---\nname: suzu-lives-iphone-bridge\ndescription: 通过 Suzu Lives 中配置的 iPhone 邮件快捷指令发送请求。\n---\n\n<!-- suzu-lives:ability:iphone-bridge -->\n# iPhone Bridge\n\n这是 Suzu Lives 生成的直连注册文件。软件代码、配置、反馈状态和附件都在统一的 Suzu Lives 软件数据根。\n\n向 iPhone 发出请求时使用：\n\n\`${launcher} iphone-bridge send '闹钟' '08:30 起床'\`\n\n手机反馈由正在运行的 Suzu 本地接收器直接投递到能力设置中勾选的一个或多个会话。不要手动管理反馈接收器，也不要使用其他转发路径。\n\n若返回未配置，请先在 Suzu Lives 中完成 iPhone 设置；不要复制、打印或手工修改敏感配置。\n`;
 }
 
 export function renderCapabilitySkill({ abilityId, command = "suzu-lives" } = {}) {
   const launcher = safeCommand(command);
-  const direct = directCompatibilityAbility(abilityId);
+  const direct = registerableClaudeAbility(abilityId);
   if (direct) return direct.renderSkill(launcher);
-  const capability = assertRegisterableAbility(abilityId);
-  if (capability.id === "image-vision") return renderImageVisionSkill(launcher);
-  if (capability.id === "video-understanding") return renderVideoUnderstandingSkill(launcher);
-  if (capability.id === "voice-message") return renderVoiceMessageSkill(launcher);
-  return `---\nname: suzu-lives-${capability.id}\ndescription: 通过 Suzu Lives 的稳定入口查询、计划或请求 ${capability.name}。\n---\n\n<!-- suzu-lives:ability:${capability.id} -->\n# ${capability.name}\n\n这是 Suzu Lives 生成的轻量注册文件，不包含功能源码、安装路径、配置、缓存或凭据。\n\n先执行：\n\n\`${launcher} ability status --id ${capability.id}\`\n\n如需无副作用检查，显式执行：\n\n\`${launcher} ability plan --id ${capability.id} --request-json '<JSON>'\`\n\n只有状态明确允许，并且软件控制面已在用户明确确认后签发本次短时、单次授权凭证时，才通过软件入口提交实际请求：\n\n\`${launcher} ability invoke --id ${capability.id} --request-json '<JSON>' --authorization-credential '<软件签发凭证>'\`\n\nCLI 不能签发凭证，且当前管理页面尚未接入凭证发放操作；不要猜测、伪造或重放凭证。若状态显示未配置、未启用、依赖不可用或待授权，不要绕过软件入口；说明所需的 Suzu Lives 配置即可。\n`;
+  throw new ClaudeIntegrationError("这项能力没有当前可用的 Suzu Lives 注册入口。");
 }
 
 export function mergeClaudeManagedBlock(existing, block) {

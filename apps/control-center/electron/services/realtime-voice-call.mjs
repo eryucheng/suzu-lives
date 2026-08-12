@@ -8,6 +8,8 @@ import { resolveDirectVoiceRuntime, synthesizeDirectVoiceAudio } from "@suzu-liv
 const DEFAULT_ASR_MODEL = "qwen3-asr-flash-realtime";
 const MAX_AUDIO_CHUNK_BYTES = 48 * 1024;
 const MAX_TRANSCRIPT_LENGTH = 4_000;
+const ASR_INPUT_ENERGY_THRESHOLD = 0.025;
+const MAX_QUEUED_AUDIO_BYTES = 256 * 1024;
 const CONNECT_TIMEOUT_MS = 15_000;
 const DEFAULT_RECONNECT_DELAYS_MS = Object.freeze([500, 1_200, 2_500]);
 
@@ -31,6 +33,18 @@ function audioBuffer(value) {
   if (value instanceof ArrayBuffer) return Buffer.from(value);
   if (ArrayBuffer.isView(value)) return Buffer.from(value.buffer, value.byteOffset, value.byteLength);
   return Buffer.alloc(0);
+}
+
+function pcmEnergy(value) {
+  const pcm = Buffer.isBuffer(value) ? value : audioBuffer(value);
+  if (!pcm.length || pcm.length % 2 !== 0) return 0;
+  let total = 0;
+  const sampleCount = pcm.length / 2;
+  for (let offset = 0; offset < pcm.length; offset += 2) {
+    const sample = pcm.readInt16LE(offset) / 32_768;
+    total += sample * sample;
+  }
+  return Math.sqrt(total / sampleCount);
 }
 
 function audioMime(format) {
@@ -298,8 +312,7 @@ export function createRealtimeVoiceCallService({
     }
   };
 
-  const recordAsrUsage = async (call, message, transcript) => {
-    const utterance = call.asrUtterances.shift();
+  const recordAsrUsage = async (call, message, transcript, utterance) => {
     if (!utterance?.audioBytes) return;
     await appendLedger(call.ledgerPath, {
       agentId: call.agentId,
@@ -325,17 +338,24 @@ export function createRealtimeVoiceCallService({
     try { message = JSON.parse(String(raw)); } catch { return; }
     const type = clean(message?.type);
     if (type === "input_audio_buffer.speech_started") {
+      if (!call.hasBufferedAudio) return;
       void interruptResponse(call, { announce: true });
       return;
     }
     if (["conversation.item.input_audio_transcription.text", "conversation.item.input_audio_transcription.delta"].includes(type)) {
+      // A transcript only belongs in the conversation after this process has
+      // explicitly committed a locally gated utterance.  Ignore anything the
+      // provider may emit while merely opening a realtime session.
+      if (!call.asrUtterances.length) return;
       const text = bounded(clean(`${message.text || message.delta || ""}${message.stash || ""}` || message.transcript), MAX_TRANSCRIPT_LENGTH);
       if (text) emitCall(call, "call-transcript", { text, final: false });
       return;
     }
     if (type === "conversation.item.input_audio_transcription.completed") {
+      const utterance = call.asrUtterances.shift();
+      if (!utterance) return;
       const text = bounded(clean(message.transcript || message.text), MAX_TRANSCRIPT_LENGTH);
-      void recordAsrUsage(call, message, text).catch((error) => {
+      void recordAsrUsage(call, message, text, utterance).catch((error) => {
         if (callIsActive(call)) emitCall(call, "call-error", { message: `无法记录语音识别用量：${ttsErrorMessage(error)}` });
       });
       if (text) void sendTranscript(call, text);
@@ -347,7 +367,8 @@ export function createRealtimeVoiceCallService({
       return;
     }
     if (type === "conversation.item.input_audio_transcription.failed") {
-      call.asrUtterances.shift();
+      const utterance = call.asrUtterances.shift();
+      if (!utterance) return;
       const detail = clean(message.error?.message || message.error?.code || message.message);
       emitCall(call, "call-error", { message: `语音识别失败：${detail || "未知错误"}` });
       return;
@@ -359,6 +380,9 @@ export function createRealtimeVoiceCallService({
 
   const scheduleAsrReconnect = (call, reason = "") => {
     if (!callIsActive(call) || call.closing || !call.started || call.reconnectTimer) return;
+    // With no locally accepted audio there is nothing to recover.  Leave ASR
+    // closed until a later above-threshold frame starts the next utterance.
+    if (!call.hasBufferedAudio && !call.asrQueuedAudio.length) return;
     const attempt = Number(call.reconnectAttempts) || 0;
     if (attempt >= reconnectDelays.length) {
       emitCall(call, "call-error", { message: `语音识别连接已断开${reason ? `：${reason}` : ""}。请挂断后重新拨打。` });
@@ -372,12 +396,12 @@ export function createRealtimeVoiceCallService({
     call.reconnectTimer = setTimeout(async () => {
       call.reconnectTimer = null;
       if (!callIsActive(call) || call.closing) return;
-      try {
-        await connectAsr(call);
+      const recovered = await ensureAsrReady(call);
+      if (recovered) {
         call.reconnectAttempts = 0;
-      } catch (error) {
-        scheduleAsrReconnect(call, ttsErrorMessage(error));
+        return;
       }
+      scheduleAsrReconnect(call, reason || "无法重新建立连接");
     }, delay);
   };
 
@@ -408,7 +432,7 @@ export function createRealtimeVoiceCallService({
       finish(reject, new RealtimeVoiceCallError("语音识别连接超时。"));
     }, CONNECT_TIMEOUT_MS);
     socket.on("open", () => {
-      if (!callIsActive(call)) {
+      if (!callIsActive(call) || call.closing) {
         try { socket.close?.(); } catch { /* A hung-up call has no socket. */ }
         return;
       }
@@ -416,7 +440,6 @@ export function createRealtimeVoiceCallService({
         // The renderer already has a lightweight speech/silence detector.  Let
         // it commit each utterance explicitly: a noisy microphone can otherwise
         // keep server VAD open forever and never produce a final transcript.
-        call.hasBufferedAudio = false;
         socket.send(JSON.stringify({
           event_id: `session-${randomUUID()}`,
           type: "session.update",
@@ -437,6 +460,7 @@ export function createRealtimeVoiceCallService({
     });
     socket.on("message", (value) => handleAsrMessage(call, value));
     socket.on("error", (error) => {
+      call.asrReady = false;
       if (!settled) {
         finish(reject, new RealtimeVoiceCallError(`语音识别连接失败：${ttsErrorMessage(error)}`));
         return;
@@ -444,6 +468,8 @@ export function createRealtimeVoiceCallService({
       if (callIsActive(call) && call.started) scheduleAsrReconnect(call, ttsErrorMessage(error));
     });
     socket.on("close", (code, reason) => {
+      call.asrReady = false;
+      if (call.socket === socket) call.socket = null;
       if (!settled) {
         finish(reject, new RealtimeVoiceCallError(`语音识别连接已关闭（${code || "未知"}）：${clean(reason) || "未建立通话"}`));
         return;
@@ -451,6 +477,47 @@ export function createRealtimeVoiceCallService({
       if (callIsActive(call) && !call.closing && call.started) scheduleAsrReconnect(call, `连接关闭（${code || "未知"}）`);
     });
   });
+
+  const flushQueuedAudio = (call) => {
+    if (!callIsActive(call) || call.closing) return false;
+    if (!call.asrReady || !call.asrQueuedAudio.length) return true;
+    if (call.socket?.readyState !== WebSocket.OPEN) return false;
+    try {
+      while (call.asrQueuedAudio.length) {
+        const pcm = call.asrQueuedAudio[0];
+        call.socket.send(JSON.stringify({
+          event_id: `audio-${randomUUID()}`,
+          type: "input_audio_buffer.append",
+          audio: pcm.toString("base64"),
+        }));
+        call.asrQueuedAudio.shift();
+        call.asrQueuedAudioBytes = Math.max(0, call.asrQueuedAudioBytes - pcm.length);
+      }
+      return true;
+    } catch (error) {
+      call.asrReady = false;
+      emitCall(call, "call-error", { message: `无法发送麦克风音频：${ttsErrorMessage(error)}` });
+      return false;
+    }
+  };
+
+  const ensureAsrReady = (call) => {
+    if (!callIsActive(call) || call.closing) return Promise.resolve(false);
+    if (call.asrReady && call.socket?.readyState === WebSocket.OPEN) return Promise.resolve(flushQueuedAudio(call));
+    call.asrReady = false;
+    if (call.asrConnecting) return call.asrConnecting;
+    const connecting = connectAsr(call)
+      .then(() => flushQueuedAudio(call))
+      .catch((error) => {
+        if (callIsActive(call)) emitCall(call, "call-error", { message: `无法连接语音识别服务：${ttsErrorMessage(error)}` });
+        return false;
+      })
+      .finally(() => {
+        if (call.asrConnecting === connecting) call.asrConnecting = null;
+      });
+    call.asrConnecting = connecting;
+    return connecting;
+  };
 
   const start = async ({ senderId = "" } = {}) => {
     if (disposed) throw new RealtimeVoiceCallError("实时通话服务已经停止。 ");
@@ -483,19 +550,23 @@ export function createRealtimeVoiceCallService({
     if (!asrApiKey) {
       throw new RealtimeVoiceCallError("语音通话需要阿里百炼 API Key 才能实时识别你说的话；请在 管理 → API 中配置阿里百炼。 ");
     }
+    const callId = `call-${randomUUID()}`;
     const call = {
       agentId,
       asrApiKey,
+      asrConnecting: null,
       asrModel: DEFAULT_ASR_MODEL,
       asrReady: false,
       asrPendingAudioBytes: 0,
+      asrQueuedAudio: [],
+      asrQueuedAudioBytes: 0,
       asrUtterances: [],
       asrUrl: realtimeAsrWebSocketUrl(dashScope?.baseUrl),
       closed: false,
       closing: false,
       generation: 0,
       hasBufferedAudio: false,
-      id: `call-${randomUUID()}`,
+      id: callId,
       ledgerPath,
       nextAudioIndex: 0,
       ownerSenderId: clean(senderId),
@@ -514,20 +585,12 @@ export function createRealtimeVoiceCallService({
       voiceRuntime,
     };
     activeCall = call;
-    try {
-      await connectAsr(call);
-      call.started = true;
-      return {
-        callId: call.id,
-        contactName: clean(contact.name) || "联系人",
-        provider: call.voiceRuntime.tts.provider,
-      };
-    } catch (error) {
-      call.closed = true;
-      if (activeCall === call) activeCall = null;
-      try { call.socket?.close?.(); } catch { /* Connection setup already failed. */ }
-      throw error;
-    }
+    call.started = true;
+    return {
+      callId: call.id,
+      contactName: clean(contact.name) || "联系人",
+      provider: call.voiceRuntime.tts.provider,
+    };
   };
 
   const pushAudio = ({ callId, senderId = "", audio } = {}) => {
@@ -535,30 +598,38 @@ export function createRealtimeVoiceCallService({
     if (!callIsActive(call) || clean(callId) !== call.id) return { accepted: false, reason: "inactive" };
     if (call.ownerSenderId && clean(senderId) && call.ownerSenderId !== clean(senderId)) return { accepted: false, reason: "owner" };
     const pcm = audioBuffer(audio);
-    if (!call.asrReady || !pcm.length || pcm.length > MAX_AUDIO_CHUNK_BYTES || pcm.length % 2 !== 0) {
+    if (!pcm.length || pcm.length > MAX_AUDIO_CHUNK_BYTES || pcm.length % 2 !== 0) {
       return { accepted: false, reason: "audio" };
     }
-    if (call.socket?.readyState !== WebSocket.OPEN) return { accepted: false, reason: "socket" };
-    try {
-      call.socket.send(JSON.stringify({
-        event_id: `audio-${randomUUID()}`,
-        type: "input_audio_buffer.append",
-        audio: pcm.toString("base64"),
-      }));
-      call.asrPendingAudioBytes += pcm.length;
-      call.hasBufferedAudio = true;
-      return { accepted: true };
-    } catch (error) {
-      emitCall(call, "call-error", { message: `无法发送麦克风音频：${ttsErrorMessage(error)}` });
-      return { accepted: false, reason: "send" };
+    const energy = pcmEnergy(pcm);
+    if (energy < ASR_INPUT_ENERGY_THRESHOLD) return { accepted: false, reason: "quiet" };
+    if (call.asrQueuedAudioBytes + pcm.length > MAX_QUEUED_AUDIO_BYTES) {
+      emitCall(call, "call-error", { message: "说话音频积压过多，请停顿后再试。" });
+      return { accepted: false, reason: "queue" };
     }
+    // This queue contains only frames that passed the RMS threshold.  It lets
+    // the first voiced frame create the websocket without ever opening ASR for
+    // a silent call.
+    call.asrQueuedAudio.push(pcm);
+    call.asrQueuedAudioBytes += pcm.length;
+    call.asrPendingAudioBytes += pcm.length;
+    call.hasBufferedAudio = true;
+    if (call.asrReady) {
+      if (!flushQueuedAudio(call)) scheduleAsrReconnect(call, "无法发送麦克风音频");
+    } else {
+      void ensureAsrReady(call);
+    }
+    return { accepted: true };
   };
 
-  const commitAudio = ({ callId, senderId = "" } = {}) => {
+  const commitAudio = async ({ callId, senderId = "" } = {}) => {
     const call = activeCall;
     if (!callIsActive(call) || clean(callId) !== call.id) return { accepted: false, committed: false, reason: "inactive" };
     if (call.ownerSenderId && clean(senderId) && call.ownerSenderId !== clean(senderId)) return { accepted: false, committed: false, reason: "owner" };
-    if (!call.asrReady || !call.hasBufferedAudio) return { accepted: false, committed: false, reason: "audio" };
+    if (!call.hasBufferedAudio) return { accepted: false, committed: false, reason: "audio" };
+    const ready = await ensureAsrReady(call);
+    if (!ready || !callIsActive(call) || call.closing) return { accepted: false, committed: false, reason: "socket" };
+    if (call.asrQueuedAudio.length) return { accepted: false, committed: false, reason: "audio" };
     if (call.socket?.readyState !== WebSocket.OPEN) return { accepted: false, committed: false, reason: "socket" };
     try {
       call.socket.send(JSON.stringify({
@@ -592,7 +663,10 @@ export function createRealtimeVoiceCallService({
     if (call.ownerSenderId && clean(senderId) && call.ownerSenderId !== clean(senderId)) return { accepted: false, stopped: false };
     call.closing = true;
     call.asrPendingAudioBytes = 0;
+    call.asrQueuedAudio.length = 0;
+    call.asrQueuedAudioBytes = 0;
     call.asrUtterances.length = 0;
+    call.hasBufferedAudio = false;
     if (call.reconnectTimer) clearTimeout(call.reconnectTimer);
     call.reconnectTimer = null;
     const requestIds = [...call.requestIds];
@@ -614,7 +688,10 @@ export function createRealtimeVoiceCallService({
     if (call) {
       call.closing = true;
       call.asrPendingAudioBytes = 0;
+      call.asrQueuedAudio.length = 0;
+      call.asrQueuedAudioBytes = 0;
       call.asrUtterances.length = 0;
+      call.hasBufferedAudio = false;
       if (call.reconnectTimer) clearTimeout(call.reconnectTimer);
       call.reconnectTimer = null;
       clearReplyAudio(call);

@@ -1,4 +1,3 @@
-import { createRoot } from "react-dom/client";
 import { Empty, GlassPanel, PageHeader, Status } from "suzu-design-system";
 
 import { capabilityCategory, capabilityOverview, createWechatConnectionCapability } from "../features/capabilities/overview.mjs";
@@ -83,7 +82,7 @@ function CapabilitiesOverview({ actions, overview, snapshot }) {
 
   return (
     <div className="capabilities-react-page">
-      <PageHeader eyebrow="CAPABILITIES" subtitle="整理创作、感知、行动与陪伴。" title="能力" />
+      <PageHeader eyebrow="CAPABILITIES" subtitle="整理感知、陪伴、行动与创作。" title="能力" />
 
       <section aria-label="能力方向" className="capabilities-overview-grid">
         {overview.categories.map((category) => (
@@ -105,7 +104,7 @@ export function CapabilitiesPage({ actions = {}, snapshot = {} }) {
   if (!capabilitySnapshot) {
     return (
       <div className="capabilities-react-page">
-        <PageHeader eyebrow="CAPABILITIES" subtitle="整理创作、感知、行动与陪伴。" title="能力" />
+        <PageHeader eyebrow="CAPABILITIES" subtitle="整理感知、陪伴、行动与创作。" title="能力" />
         <Empty className="capabilities-empty" description="正在读取可用能力与已保存设置。" title="正在读取能力" />
       </div>
     );
@@ -144,23 +143,4 @@ export function CapabilitiesPage({ actions = {}, snapshot = {} }) {
     );
   }
   return <CapabilitiesOverview actions={actions} overview={overview} snapshot={snapshot} />;
-}
-
-let pageElement = null;
-let pageRoot = null;
-
-export function renderCapabilitiesPage(element, props) {
-  if (!element) return;
-  if (pageElement !== element) {
-    pageRoot?.unmount();
-    pageElement = element;
-    pageRoot = createRoot(element);
-  }
-  pageRoot.render(<CapabilitiesPage {...props} />);
-}
-
-export function unmountCapabilitiesPage() {
-  pageRoot?.unmount();
-  pageRoot = null;
-  pageElement = null;
 }

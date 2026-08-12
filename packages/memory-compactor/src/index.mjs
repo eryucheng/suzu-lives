@@ -41,11 +41,6 @@ export {
 } from "./utterance-evidence.mjs";
 
 export {
-  memoryCompactorUsage,
-  runMemoryCompactorCli,
-} from "./cli.mjs";
-
-export {
   DEFAULT_COMPACTION_RULES,
   appendCompactRecords,
   buildCompactRecords,

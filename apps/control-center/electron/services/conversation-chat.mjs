@@ -392,7 +392,7 @@ export function scheduleSystemPrompt(commands) {
     sections.push(`### 主动关心\n\n当前会话已在“主动关心”能力中启用。一次性任务会自动绑定当前 Claude 会话和项目：\n\n${conversationAdd} --delay 45m --prompt "到时间后要处理的完整任务内容" --desc "简短说明"\n\n链式主动关心触发时使用这段提示词：\n\n${chainPrompt}\n\n临时回访使用这段提示词：\n\n${followUpPrompt}`);
   }
   if (operationAdd) {
-    sections.push(`### 远行商人\n\n至少有一个会话已在“远行商人”能力中启用。循环任务由 Suzu 抓取一次网页，并把命中结果分别投递到那些已启用会话：\n\n${operationAdd} --cron "2 8,12,16,20 * * *" --exec traveling-merchant --desc "洛克王国远行商人监控"`);
+    sections.push(`### 远行商人\n\n当前会话已在“远行商人”能力中启用。循环任务由 Suzu 抓取一次网页，并把命中结果投递到已开启这项能力的会话：\n\n${operationAdd} --cron "2 8,12,16,20 * * *" --exec traveling-merchant --desc "洛克王国远行商人监控"`);
   }
   if (list && remove) {
     sections.push(`### 查看与删除\n\n${list}\n${remove}`);

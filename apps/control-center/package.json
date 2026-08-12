@@ -24,7 +24,6 @@
   "dependencies": {
     "@suzu-lives/agent-registry": "0.1.0",
     "@suzu-lives/browser-automation": "0.1.0",
-    "@suzu-lives/capability-registry": "0.1.0",
     "@suzu-lives/claude-integration": "0.1.0",
     "@suzu-lives/conversation-reader": "0.1.0",
     "@suzu-lives/cost-ledger": "0.1.0",
@@ -66,6 +65,7 @@
     "files": [
       "assets/**/*",
       "electron/**/*",
+      "renderer/**/*",
       "shared/**/*",
       "src/**/*",
       "package.json"

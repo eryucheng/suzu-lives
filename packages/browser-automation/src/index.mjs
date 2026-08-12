@@ -209,7 +209,7 @@ export function resolveDedicatedBrowserRuntime({ dataRoot, debugPort = 9222 } = 
   const root = path.join(requiredDataRoot(dataRoot), "capabilities", "web-browser");
   const port = positivePort(debugPort);
   return {
-    abilityId: "web-browser",
+    abilityId: "site-automation",
     runtimeDataRoot: root,
     profileDirectory: path.join(root, "chrome-profile"),
     diagnosticsDirectory: path.join(root, "diagnostics"),
@@ -248,7 +248,7 @@ export function planSiteAutomation({ dataRoot, siteId, action, options = {} } = 
 }
 
 /** Start only a dedicated profile and prove its 127.0.0.1 CDP endpoint is ready. */
-export async function executeWebBrowser({
+export async function executeSiteAutomationBrowser({
   dataRoot,
   gate,
   configuration = {},
@@ -260,13 +260,13 @@ export async function executeWebBrowser({
   waitImpl,
   now = () => new Date(),
 } = {}) {
-  assertInvocationGate({ abilityId: "web-browser", gate, dependencies: {} });
-  assertVerifiedCapabilityAuthorization({ authorization, abilityId: "web-browser", action: "start-browser", scope: invocation?.scope });
+  assertInvocationGate({ abilityId: "site-automation", gate, dependencies: {} });
+  assertVerifiedCapabilityAuthorization({ authorization, abilityId: "site-automation", action: "start-browser", scope: invocation?.scope });
   const configuredExecutable = clean(configuration.executablePath);
   const executablePath = configuredExecutable ? path.resolve(configuredExecutable) : "";
   const debugPort = positivePort(configuration.debugPort);
   assertInvocationGate({
-    abilityId: "web-browser",
+    abilityId: "site-automation",
     gate,
     dependencies: { "专用 Chrome 可执行文件": Boolean(executablePath && fs.existsSync(executablePath)), "浏览器启动器": typeof browserLauncher === "function", "本机 CDP 探针": typeof cdpProbe === "function" },
   });
@@ -275,7 +275,7 @@ export async function executeWebBrowser({
   if (prior.status === "ready" && prior.cdpEndpoint === runtime.cdpEndpoint && Number(prior.debugPort) === runtime.debugPort) {
     const existing = await cdpProbe({ cdpEndpoint: runtime.cdpEndpoint, debugPort: runtime.debugPort });
     if (existing?.ready === true) {
-      return { abilityId: "web-browser", status: "ready", alreadyRunning: true, profileDirectory: runtime.profileDirectory, cdpEndpoint: runtime.cdpEndpoint, statePath: runtime.statePath, manualLoginRequired: true, browser: existing.browser };
+      return { abilityId: "site-automation", status: "ready", alreadyRunning: true, profileDirectory: runtime.profileDirectory, cdpEndpoint: runtime.cdpEndpoint, statePath: runtime.statePath, manualLoginRequired: true, browser: existing.browser };
     }
   }
   await fsp.mkdir(runtime.profileDirectory, { recursive: true });
@@ -295,7 +295,7 @@ export async function executeWebBrowser({
     const cdp = await waitForControlledCdp({ cdpEndpoint: runtime.cdpEndpoint, debugPort: runtime.debugPort, cdpProbe, startupTimeoutMs, waitImpl });
     const readyAt = now().toISOString();
     await writeJsonAtomic(runtime.statePath, { status: "ready", startedAt: now().toISOString(), readyAt, debugPort: runtime.debugPort, cdpEndpoint: runtime.cdpEndpoint, profileDirectory: runtime.profileDirectory, pid: Number(launched?.pid) || 0, browser: cdp.browser });
-    return { abilityId: "web-browser", status: "ready", profileDirectory: runtime.profileDirectory, cdpEndpoint: runtime.cdpEndpoint, statePath: runtime.statePath, manualLoginRequired: true, process: launched && typeof launched === "object" ? { pid: Number(launched.pid) || 0 } : undefined, browser: cdp.browser };
+    return { abilityId: "site-automation", status: "ready", profileDirectory: runtime.profileDirectory, cdpEndpoint: runtime.cdpEndpoint, statePath: runtime.statePath, manualLoginRequired: true, process: launched && typeof launched === "object" ? { pid: Number(launched.pid) || 0 } : undefined, browser: cdp.browser };
   } catch (error) {
     await stopManagedProcess(launched);
     await writeJsonAtomic(runtime.statePath, { status: "failed", failedAt: now().toISOString(), debugPort: runtime.debugPort, cdpEndpoint: runtime.cdpEndpoint, profileDirectory: runtime.profileDirectory, error: clean(error?.message).slice(0, 500) || "browser startup failed" });

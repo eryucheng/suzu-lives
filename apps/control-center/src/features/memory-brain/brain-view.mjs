@@ -162,6 +162,9 @@ function relationColor(edge, alpha) {
     same_thread: "temporal",
     followed_by: "temporal",
     shares_entity: "entity",
+    about_subject: "actor",
+    belongs_to_relationship: "relationship",
+    member_of_relationship: "relationship",
   }[edge?.relation] || "associative");
   const color = {
     structural: "166, 144, 255",
@@ -170,6 +173,8 @@ function relationColor(edge, alpha) {
     causal: "255, 125, 137",
     temporal: "103, 229, 205",
     entity: "105, 218, 242",
+    actor: "105, 218, 242",
+    relationship: "255, 165, 208",
     associative: "151, 142, 255",
   }[family] || "151, 142, 255";
   return `rgba(${color}, ${alpha})`;
@@ -177,7 +182,14 @@ function relationColor(edge, alpha) {
 
 function nodePalette(node) {
   if (node.visualTier === "major") {
-    return node.visualFamily === "episode" ? "87, 239, 210" : "177, 151, 255";
+    return ({
+      episode: "87, 239, 210",
+      topic: "177, 151, 255",
+      user: "105, 218, 242",
+      agent: "177, 151, 255",
+      relationship: "255, 142, 180",
+      entity: "151, 207, 255",
+    }[node.visualFamily] || "177, 151, 255");
   }
   if (node.visualTier === "state") {
     return ({

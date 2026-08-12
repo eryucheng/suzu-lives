@@ -4,8 +4,6 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { stableAgentId } from "@suzu-lives/agent-registry";
-
 import {
   SESSION_COMPACTION_SCHEMA,
   chooseCompactionPlan,
@@ -13,7 +11,6 @@ import {
   parseJsonlText,
   parseSessionCompaction,
   reconstructLogicalContext,
-  runMemoryCompactorCli,
   runCompaction,
 } from "../src/index.mjs";
 
@@ -263,46 +260,4 @@ test("keeps compactor reports separate when two Claude sessions use the same Age
   assert.equal(firstReport.sessionId, "session-first");
   assert.equal(secondReport.sessionId, "session-second");
   assert.equal(fs.existsSync(path.join(softwareDataDirectory, "agents", "agent-test", "memory", "compactor", "work", "last-run.json")), false);
-});
-
-test("stable CLI uses only the conversation generator and never resolves an embedding provider", async () => {
-  const root = temporaryDirectory("suzu-conversation-compactor-cli-");
-  const projectRoot = path.join(root, "project");
-  const transcriptPath = path.join(root, "current.jsonl");
-  const dataRoot = path.join(root, "software-data");
-  fs.mkdirSync(projectRoot, { recursive: true });
-  writeTranscript(transcriptPath);
-  const agentId = stableAgentId(projectRoot);
-  let generatorCalls = 0;
-  let output = "";
-
-  const result = await runMemoryCompactorCli({
-    args: [
-      "--project-root", projectRoot,
-      "--transcript", transcriptPath,
-      "--data-root", dataRoot,
-      "--now", "2026-07-30T02:00:00.000Z",
-    ],
-    stdout: { write(chunk) { output += chunk; } },
-    agentGeneratorFactory: () => async (request) => {
-      generatorCalls += 1;
-      assert.equal(request.schemaName, "conversation-compaction-v1");
-      return {
-        output: { summary: "继续讨论此前的科技馆话题。" },
-        usage: {},
-        model: "current-agent-model",
-        requestId: "processing-request",
-        durationMs: 1,
-        metadata: { provider: "test" },
-      };
-    },
-  });
-
-  assert.equal(result.status, "written");
-  assert.equal(generatorCalls, 1);
-  assert.equal(JSON.parse(output).transcriptSource, "explicit");
-  assert.equal(
-    fs.existsSync(path.join(dataRoot, "agents", agentId, "memory", "memory.db")),
-    false,
-  );
 });

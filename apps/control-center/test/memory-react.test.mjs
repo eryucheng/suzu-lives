@@ -25,6 +25,7 @@ test("memory route is owned by a React page and scopes every action to a contact
   assert.doesNotMatch(router, /LegacyMarkup/u);
 
   assert.match(app, /kind: "memory"/u);
+  assert.match(app, /state\.view === "relationships" && state\.relationshipPage === "memory" \? "content--memory"/u);
   assert.match(app, /selectContact: loadMemoryScope/u);
   assert.match(app, /refreshStatus: refreshMemoryScope/u);
   assert.doesNotMatch(app, /bindMemoryEvents/u);
@@ -42,13 +43,19 @@ test("memory route is owned by a React page and scopes every action to a contact
   assert.match(page, /setView\("brain"\);/u);
   assert.match(page, /const visibleView = \["brain", "library", "review"\]\.includes\(view\) \? view : "brain";/u);
   assert.match(page, /<MemoryBrain api=\{api\} available=\{ready\}/u);
-  assert.match(page, /记忆大脑<\/Button>\n    <Button[\s\S]*列表管理<\/Button>\n    <Button[\s\S]*审核中心<\/Button>/u);
-  assert.match(page, /visibleView === "library"[\s\S]*disabled=\{!ready \|\| loading\}[\s\S]*列表管理/u);
+  assert.match(page, /Switch, Tabs/u);
+  assert.match(page, /<Switch[^>]*checked=\{recallEnabled\}/u);
+  assert.match(page, /<Tabs active=\{visibleView\}[^>]*items=\{MEMORY_VIEW_TABS\}[^>]*onChange=\{selectView\}/u);
+  assert.match(page, /\{ label: "记忆大脑", value: "brain" \}/u);
+  assert.match(page, /if \(loading \|\| \(!ready && nextView !== "brain"\)\) return;/u);
+  assert.match(page, /<div className="memory-library-actions">[\s\S]*修改[\s\S]*删除/u);
+  assert.doesNotMatch(page, /editingEnabled|编辑记忆|完成编辑/u);
   assert.doesNotMatch(page, /\{ready \? <>/u);
   assert.doesNotMatch(page, /dangerouslySetInnerHTML/u);
   assert.doesNotMatch(page, /memory\.sessions/u);
 
-  assert.ok(page.indexOf("memory-contact-picker-trigger") < page.indexOf("memory-recall-toggle"));
+  assert.ok(page.indexOf("memory-contact-picker-trigger") < page.indexOf("memory-recall-control"));
   assert.match(css, /#memoryReactRoot[\s\S]*min-width:\s*920px/u);
+  assert.match(css, /#content\.content--memory[\s\S]*scrollbar-gutter:\s*stable/u);
   assert.doesNotMatch(css, /@media/u);
 });

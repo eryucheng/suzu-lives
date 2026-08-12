@@ -81,7 +81,9 @@ function resolveDataRoot({ requestedRoot, environment }) {
     return resolveSuzuLivesDataRoot({
       configuredRoot: clean(requestedRoot) || clean(environment?.SUZU_LIVES_DATA_ROOT),
       localAppData: clean(environment?.LOCALAPPDATA),
+      appData: clean(environment?.APPDATA),
       fallbackBase: "",
+      fallbackToLocatorWhenMissing: true,
     });
   } catch (error) {
     throw new TravelingMerchantError(clean(error?.message) || "无法定位 Suzu Lives 软件数据目录。");

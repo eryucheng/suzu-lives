@@ -1,7 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
 
-import { resolveAgentConversationDataRoot, stableAgentId } from "@suzu-lives/agent-registry";
+import {
+  resolveAgentConversationDataRoot,
+  resolveSuzuLivesDataRoot,
+  stableAgentId,
+} from "@suzu-lives/agent-registry";
 
 const WEEKDAYS = ["星期日", "星期一", "星期二", "星期三", "星期四", "星期五", "星期六"];
 const PUBLIC_DATES = new Map([["01-01", "元旦"], ["05-01", "劳动节"], ["10-01", "国庆节"]]);
@@ -123,9 +127,16 @@ export async function runProjectHook({ args = [], input = "", now = new Date() }
   try { command = parsedArguments(args); } catch { return {}; }
   if (command.role !== "time-awareness") return {};
   const root = clean(command.options["project-root"]);
-  const softwareDataRoot = clean(command.options["data-root"]);
-  if (!root || !softwareDataRoot) return {};
+  const configuredDataRoot = clean(command.options["data-root"]);
+  if (!root || !configuredDataRoot) return {};
   try {
+    const softwareDataRoot = resolveSuzuLivesDataRoot({
+      configuredRoot: configuredDataRoot,
+      localAppData: process.env.LOCALAPPDATA || "",
+      appData: process.env.APPDATA || "",
+      fallbackBase: "",
+      fallbackToLocatorWhenMissing: true,
+    });
     const current = now instanceof Date ? new Date(now.getTime()) : new Date(now);
     if (!Number.isFinite(current.getTime())) return {};
     const agentId = stableAgentId(root);

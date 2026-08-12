@@ -1,11 +1,7 @@
-import fs from "node:fs/promises";
-import path from "node:path";
-
 import { resolveAgentDataRoot, resolveSuzuLivesDataRoot } from "@suzu-lives/agent-registry";
-import { validateComfyRegistry } from "@suzu-lives/image-workbench";
 import { asDashScopeImageConnection, createDashScopeConnectionService } from "@suzu-lives/service-connections";
 
-import { loadPhoneConfig, PhoneCameraError, takePhonePhoto } from "./index.mjs";
+import { loadPhoneCameraComfyConnection, loadPhoneConfig, PhoneCameraError, takePhonePhoto } from "./index.mjs";
 
 function clean(value) { return String(value ?? "").trim(); }
 function nextValue(values, index, flag) { const value = values[index + 1]; if (!value || value.startsWith("--")) throw new PhoneCameraError(`${flag} 缺少值。`); return value; }
@@ -17,15 +13,9 @@ export function parsePhoneCameraArgs(values = []) {
   if (!clean(result.shot) || !clean(result.scene)) throw new PhoneCameraError("--shot 与 --scene 均为必填。 "); return result;
 }
 
-async function comfyConnection(dataRoot) {
-  const filePath = path.join(dataRoot, "connections", "comfyui.json"); let value = {};
-  try { value = JSON.parse(await fs.readFile(filePath, "utf8")); } catch {}
-  return { baseUrl: clean(value.baseUrl) || "http://127.0.0.1:8188", timeoutMs: Number(value.timeoutMs) || 600000, pollIntervalMs: Number(value.pollIntervalMs) || 1000, registry: validateComfyRegistry(value.registry || { version: 1, workflows: {} }) };
-}
-
 export async function runPhoneCameraCli(values, { environment = process.env, fetchImpl = fetch, connectionResolver } = {}) {
-  const options = parsePhoneCameraArgs(values); const dataRoot = resolveSuzuLivesDataRoot({ configuredRoot: options.dataRoot || environment.SUZU_LIVES_DATA_ROOT, localAppData: environment.LOCALAPPDATA, fallbackBase: "" }); const agentRoot = resolveAgentDataRoot({ dataRoot, agentId: options.agentId || environment.SUZU_LIVES_AGENT_ID, projectRoot: options.projectRoot || environment.SUZU_LIVES_PROJECT_ROOT });
-  const phone = await loadPhoneConfig(agentRoot, options.config); const backend = options.backend || phone.config.defaultBackend;
-  const service = createDashScopeConnectionService({ dataRoot, safeStorage: { isEncryptionAvailable: () => false }, environment }); const connection = connectionResolver ? await connectionResolver({ kind: "phone-camera", dataRoot, agentRoot, options }) : asDashScopeImageConnection(await service.resolve()); const comfyui = await comfyConnection(dataRoot);
-  return takePhonePhoto({ agentRoot, connection: backend === "comfyui" ? comfyui : connection, registry: comfyui.registry, fetchImpl, options });
+  const options = parsePhoneCameraArgs(values); const dataRoot = resolveSuzuLivesDataRoot({ configuredRoot: options.dataRoot || environment.SUZU_LIVES_DATA_ROOT, localAppData: environment.LOCALAPPDATA, appData: environment.APPDATA, fallbackBase: "", fallbackToLocatorWhenMissing: true }); const agentRoot = resolveAgentDataRoot({ dataRoot, agentId: options.agentId || environment.SUZU_LIVES_AGENT_ID, projectRoot: options.projectRoot || environment.SUZU_LIVES_PROJECT_ROOT });
+  const phone = await loadPhoneConfig({ dataRoot, configPath: options.config }); const backend = options.backend || phone.config.defaultBackend;
+  const service = createDashScopeConnectionService({ dataRoot, safeStorage: { isEncryptionAvailable: () => false }, environment }); const connection = connectionResolver ? await connectionResolver({ kind: "phone-camera", dataRoot, agentRoot, options }) : asDashScopeImageConnection(await service.resolve()); const comfyui = await loadPhoneCameraComfyConnection(dataRoot);
+  return takePhonePhoto({ agentRoot, dataRoot, connection: backend === "comfyui" ? comfyui : connection, registry: comfyui.registry, fetchImpl, options });
 }

@@ -246,11 +246,6 @@ export {
 } from "./state-analysis-request-service.mjs";
 
 export {
-  memoryStateAnalysisUsage,
-  runMemoryStateAnalysisCli,
-} from "./state-analysis-cli.mjs";
-
-export {
   buildRetrievalUsageInput,
   parseRetrievalUsageGeneration,
   RETRIEVAL_USAGE_PROMPT_VERSION,
@@ -263,8 +258,3 @@ export {
   processRetrievalUsageRequest,
   RETRIEVAL_USAGE_PROCESSOR_VERSION,
 } from "./retrieval-usage-service.mjs";
-
-export {
-  memoryRetrievalUsageAnalysisUsage,
-  runMemoryRetrievalUsageAnalysisCli,
-} from "./retrieval-usage-cli.mjs";

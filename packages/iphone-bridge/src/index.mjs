@@ -4,11 +4,7 @@ import fsSync from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import {
-  resolveAgentDataRoot,
-  resolveSuzuLivesDataRoot,
-  stableAgentId,
-} from "@suzu-lives/agent-registry";
+import { resolveSuzuLivesDataRoot } from "@suzu-lives/agent-registry";
 
 const PACKAGE_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 
@@ -115,20 +111,19 @@ function parseArgs(values) {
 }
 
 export function resolveIphoneBridgePaths({ projectRoot, dataRoot } = {}) {
-  const root = path.resolve(clean(projectRoot));
-  if (!clean(projectRoot)) throw new Error("iphone-bridge 需要当前 Agent 项目目录。 ");
+  const root = clean(projectRoot) ? path.resolve(clean(projectRoot)) : "";
   const softwareDataRoot = resolveSuzuLivesDataRoot({
     configuredRoot: clean(dataRoot) || process.env.SUZU_LIVES_DATA_ROOT || "",
     localAppData: process.env.LOCALAPPDATA || "",
+    appData: process.env.APPDATA || "",
     fallbackBase: "",
+    fallbackToLocatorWhenMissing: true,
   });
-  const agentId = stableAgentId(root);
-  const runtimeRoot = path.join(resolveAgentDataRoot({ dataRoot: softwareDataRoot, agentId }), "iphone-bridge");
+  const runtimeRoot = path.join(softwareDataRoot, "automation", "iphone-bridge");
   return {
     projectRoot: root,
-    agentId,
     runtimeRoot,
-    configPath: path.join(runtimeRoot, "feedback_config.json"),
+    configPath: path.join(runtimeRoot, "config.json"),
     statePath: path.join(runtimeRoot, "feedback_state.json"),
     inboxPath: path.join(runtimeRoot, "inbox"),
     sendScriptPath: path.join(PACKAGE_ROOT, "python", "send_to_iphone.py"),

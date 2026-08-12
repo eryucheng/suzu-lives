@@ -259,6 +259,27 @@ function presentClaudeCodeApi({ device = {}, userConfig = {}, settingsExists = f
   };
 }
 
+function claudeCodeGenerationConnectionFromEnv(value) {
+  const env = plainObject(value);
+  const baseUrl = clean(env.ANTHROPIC_BASE_URL);
+  const provider = claudeCodeApiProvider(inferClaudeCodeApiProvider(baseUrl));
+  const authEnvKey = provider?.authEnvKey
+    || (clean(env.ANTHROPIC_API_KEY) ? "ANTHROPIC_API_KEY" : "ANTHROPIC_AUTH_TOKEN");
+  const apiKey = clean(env[authEnvKey]);
+  const model = clean(env.ANTHROPIC_MODEL);
+  if (!baseUrl || !apiKey || !model) return null;
+  return {
+    type: "anthropic-compatible",
+    baseUrl,
+    apiKey,
+    model,
+    provider: provider?.label || "Claude Code 自定义服务",
+    // 内置服务都遵循 Anthropic SDK 的 x-api-key 约定；自定义服务继续
+    // 沿用用户在 Claude Code 中选择的凭据方式。
+    authMode: provider ? "api-key" : (authEnvKey === "ANTHROPIC_API_KEY" ? "api-key" : "auth-token"),
+  };
+}
+
 export function createAgentRuntimeConfigService({ homeDirectory = os.homedir, fetchImpl = globalThis.fetch } = {}) {
 
   const claudeCodeApiSnapshot = async () => {
@@ -424,7 +445,19 @@ export function createAgentRuntimeConfigService({ homeDirectory = os.homedir, fe
     return { status: "ready", models, message: `已获取 ${models.length} 个模型。` };
   };
 
-  return { claudeCodeApiSnapshot, saveClaudeCodeApi, fetchClaudeCodeModels };
+  const resolveClaudeCodeGenerationConnection = async () => {
+    const settingsLocation = await safeDeviceClaudeSettingsPath(homeDirectory());
+    if (!settingsLocation.exists) return null;
+    const device = await readJsonObject(settingsLocation.settingsPath, "本机 Claude Code 设置文件");
+    return claudeCodeGenerationConnectionFromEnv(plainObject(device).env);
+  };
+
+  return {
+    claudeCodeApiSnapshot,
+    saveClaudeCodeApi,
+    fetchClaudeCodeModels,
+    resolveClaudeCodeGenerationConnection,
+  };
 }
 
 export function registerAgentRuntimeConfigIpc({ ipcMain, agentRuntimeConfigService }) {

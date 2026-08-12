@@ -1,4 +1,3 @@
-import { createRoot } from "react-dom/client";
 import { GlassPanel, PageHeader, Status } from "suzu-design-system";
 
 import "./relationships-page.css";
@@ -83,23 +82,4 @@ export function RelationshipsPage({ actions = {}, snapshot = {} }) {
       </section>
     </div>
   );
-}
-
-let pageElement = null;
-let pageRoot = null;
-
-export function renderRelationshipsPage(element, props) {
-  if (!element) return;
-  if (pageElement !== element) {
-    pageRoot?.unmount();
-    pageElement = element;
-    pageRoot = createRoot(element);
-  }
-  pageRoot.render(<RelationshipsPage {...props} />);
-}
-
-export function unmountRelationshipsPage() {
-  pageRoot?.unmount();
-  pageRoot = null;
-  pageElement = null;
 }

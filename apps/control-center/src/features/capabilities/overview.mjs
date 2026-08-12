@@ -1,8 +1,8 @@
 export const CAPABILITY_CATEGORIES = Object.freeze([
-  Object.freeze({ id: "create", label: "创作", detail: "图片、声音与视觉资料" }),
   Object.freeze({ id: "perceive", label: "感知", detail: "图片、视频与时间" }),
-  Object.freeze({ id: "act", label: "行动", detail: "现实中的工具与联系" }),
   Object.freeze({ id: "companion", label: "陪伴", detail: "日常互动与游戏" }),
+  Object.freeze({ id: "act", label: "行动", detail: "现实中的工具与联系" }),
+  Object.freeze({ id: "create", label: "创作", detail: "图片、声音与视觉资料" }),
 ]);
 
 export const WECHAT_DELIVERY_OPTIONS = Object.freeze([

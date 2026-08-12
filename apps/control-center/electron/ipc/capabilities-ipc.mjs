@@ -3,7 +3,6 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 
-import { issueCapabilityInvocationAuthorization, setCapabilityEnabled } from "@suzu-lives/capability-registry";
 import { listSiteAutomationSites } from "@suzu-lives/browser-automation";
 import { claudeAgentAbilityCatalog, inspectClaudeRegistration, removeClaudeRegistration, travelingMerchantDefaultConfig, writeClaudeRegistration } from "@suzu-lives/claude-integration";
 import { resolveAgentDataRoot } from "@suzu-lives/agent-registry";
@@ -12,15 +11,31 @@ const COMPANION_CONTACT_ID = /^contact-[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
 const MAX_COMPANION_CONTACTS = 160;
 const TIME_AWARENESS_ID = "time-awareness";
 const TIME_AWARENESS_CONFIG_PATH = ["capabilities", TIME_AWARENESS_ID, "config.json"];
-const CONTACT_SCOPED_AGENT_CAPABILITY_IDS = new Set(["image-vision", "video-understanding"]);
+const CONTACT_SCOPED_AGENT_CAPABILITY_IDS = new Set(["image-generation", "phone-camera", "voice-message", "image-vision", "video-understanding", "site-automation", "iphone-bridge"]);
+const CONTACT_SCOPED_AUTOMATION_CAPABILITY_IDS = new Set(["proactive-contact", "traveling-merchant"]);
+const DEFAULT_CONTACT_SCOPED_AGENT_CAPABILITY_IDS = new Set(["image-vision", "video-understanding"]);
 const DEFAULT_TIME_AWARENESS_INTERVAL_MINUTES = 10;
 const MIN_TIME_AWARENESS_INTERVAL_MINUTES = 1;
 const MAX_TIME_AWARENESS_INTERVAL_MINUTES = 24 * 60;
+const DEFAULT_IPHONE_BRIDGE_SMTP_HOST = "smtp.163.com";
+const DEFAULT_IPHONE_BRIDGE_IMAP_HOST = "imap.163.com";
+const DEFAULT_IPHONE_BRIDGE_PASSWORD_ENV = "SUZU_IPHONE_MAIL_PASSWORD";
+const DEFAULT_IPHONE_BRIDGE_FEEDBACK_SUBJECT = "查岗";
+const DEFAULT_IPHONE_BRIDGE_FEEDBACK_PROMPT = "这是来自 iPhone 的反馈（{{subject}}，来自 {{from}}，{{receivedAt}}）：\n{{content}}\n{{attachments}}";
+const HIDDEN_CONTACT_DEFAULT_ABILITY_IDS = Object.freeze(["visual-reference-manager"]);
+const MANAGED_REGISTRATION_VERSION = 5;
 const DEFAULT_PROACTIVE_CHAIN_PROMPT = "根据时间和前面聊的内容判断要不要主动联系对方，要发就正常发，不发就沉默，然后记得要设置下一次自动任务";
 const DEFAULT_PROACTIVE_FOLLOW_UP_PROMPT = "临时回访：用户在 TIME 提到 EVENT。先检查当前会话里是否已经有结果；已经有结果就只输出 NO_REPLY；还没有结果就自然地关心或询问。不要提及自动任务、回访任务或系统机制。这是一次性回访，不要设置下一次自动任务。";
 
 function clean(value) {
   return String(value ?? "").trim();
+}
+
+function managedClaudeRegistrationAbilityIds() {
+  return [...new Set([
+    ...claudeAgentAbilityCatalog().map((capability) => capability.id),
+    ...HIDDEN_CONTACT_DEFAULT_ABILITY_IDS,
+  ])].filter((abilityId) => !isContactScopedAutomationCapability(abilityId));
 }
 
 function plainObject(value) {
@@ -30,13 +45,6 @@ function plainObject(value) {
 function absoluteProjectRoot(value) {
   const source = clean(value);
   return source && path.isAbsolute(source) ? path.resolve(source) : "";
-}
-
-function sameProjectRoot(left, right) {
-  const a = absoluteProjectRoot(left);
-  const b = absoluteProjectRoot(right);
-  if (!a || !b) return false;
-  return process.platform === "win32" ? a.toLowerCase() === b.toLowerCase() : a === b;
 }
 
 function normalizedCompanionContactIds(value) {
@@ -94,6 +102,51 @@ function timeAwarenessSettings(value) {
   };
 }
 
+function iphoneBridgeSettings(value) {
+  const source = plainObject(value);
+  const mail = plainObject(source.mail);
+  const outbound = plainObject(source.outbound);
+  const allowedSenders = Array.isArray(mail.allowedSenders)
+    ? mail.allowedSenders.map((item) => publicText(item, 320)).filter(Boolean).slice(0, 30)
+    : [];
+  const routes = Array.isArray(source.routes) ? source.routes.map((item) => plainObject(item)) : [];
+  const route = routes.find((item) => item.enabled !== false && clean(item.subject) && clean(item.promptTemplate)) || {};
+  const credentialConfigured = Boolean(
+    clean(mail.password)
+    || clean(mail.passwordEnv)
+    || clean(outbound.password)
+    || clean(outbound.passwordEnv),
+  );
+  const saved = Boolean(
+    clean(mail.imapHost)
+    && clean(mail.username)
+    && allowedSenders.length
+    && credentialConfigured
+    && clean(outbound.sender || mail.username)
+    && clean(outbound.recipient)
+    && clean(route.subject)
+    && clean(route.promptTemplate),
+  );
+  return {
+    saved,
+    configuration: {
+      smtpHost: publicText(outbound.smtpHost || mail.smtpHost || DEFAULT_IPHONE_BRIDGE_SMTP_HOST, 320),
+      smtpPort: numberOrFallback(outbound.smtpPort ?? mail.smtpPort, { minimum: 1, maximum: 65535, fallback: 465, integer: true }),
+      sender: publicText(outbound.sender || mail.username, 320),
+      recipient: publicText(outbound.recipient, 320),
+      imapHost: publicText(mail.imapHost || DEFAULT_IPHONE_BRIDGE_IMAP_HOST, 320),
+      imapPort: numberOrFallback(mail.imapPort, { minimum: 1, maximum: 65535, fallback: 993, integer: true }),
+      username: publicText(mail.username, 320),
+      mailbox: publicText(mail.mailbox || "INBOX", 160),
+      allowedSenders,
+      passwordEnv: publicText(outbound.passwordEnv || mail.passwordEnv, 128),
+      credentialConfigured,
+      feedbackSubject: publicText(route.subject || DEFAULT_IPHONE_BRIDGE_FEEDBACK_SUBJECT, 200),
+      feedbackPrompt: publicText(route.promptTemplate || DEFAULT_IPHONE_BRIDGE_FEEDBACK_PROMPT, 12000),
+    },
+  };
+}
+
 function contactScopedAgentCapabilitySettings(value) {
   const source = plainObject(value);
   return {
@@ -106,8 +159,18 @@ function isContactScopedAgentCapability(abilityId) {
   return CONTACT_SCOPED_AGENT_CAPABILITY_IDS.has(clean(abilityId));
 }
 
+function isContactScopedAutomationCapability(abilityId) {
+  return CONTACT_SCOPED_AUTOMATION_CAPABILITY_IDS.has(clean(abilityId));
+}
+
+function isContactScopedCapability(abilityId) {
+  const id = clean(abilityId);
+  return id === TIME_AWARENESS_ID || isContactScopedAgentCapability(id) || isContactScopedAutomationCapability(id);
+}
+
 function contactScopedCapabilityConfigPath(abilityId) {
   const id = clean(abilityId);
+  if (id === "iphone-bridge") return ["automation", "iphone-bridge", "config.json"];
   return isContactScopedAgentCapability(id) ? ["capabilities", id, "config.json"] : null;
 }
 
@@ -164,6 +227,20 @@ function publicJson(dataRoot, segments) {
 function boundedText(value, label, maximum = 12000) {
   const result = String(value ?? "").trim();
   if (result.length > maximum) throw new Error(`${label}不能超过 ${maximum} 个字符。`);
+  return result;
+}
+
+function requiredText(value, label, maximum = 12000) {
+  const result = boundedText(value, label, maximum);
+  if (!result) throw new Error(`${label}不能为空。`);
+  return result;
+}
+
+function environmentVariableName(value) {
+  const result = requiredText(value, "邮箱授权码环境变量", 128);
+  if (!/^[A-Za-z_][A-Za-z0-9_]{0,127}$/u.test(result)) {
+    throw new Error("邮箱授权码环境变量只能使用字母、数字和下划线，且不能以数字开头。 ");
+  }
   return result;
 }
 
@@ -317,6 +394,7 @@ function configuredCustomVoiceId(value) {
 
 function voiceMessageSettings({ dataRoot, agentRoot, voiceDesign, candidates, customVoices }) {
   const shared = publicJson(dataRoot, ["capabilities", "voice-message", "config.json"]);
+  const scope = contactScopedAgentCapabilitySettings(shared);
   const contact = agentRoot ? publicJson(agentRoot, ["voice-message", "config.json"]) : {};
   const contactVoiceId = configuredVoiceId(contact);
   const contactProvider = configuredVoiceProvider(contact);
@@ -370,6 +448,7 @@ function voiceMessageSettings({ dataRoot, agentRoot, voiceDesign, candidates, cu
     timeoutMs: numberOrFallback(shared.timeoutMs, { minimum: 1000, maximum: 600000, fallback: 30000, integer: true }),
     candidates,
     customVoices,
+    enabledContactIds: scope.enabledContactIds,
     selectionSource,
     voiceDiagnostic: diagnostic,
     canSelectVoice: Boolean(agentRoot) && (candidates.length > 0 || customVoices.length > 0),
@@ -425,20 +504,20 @@ function savedCapabilitySettings(settings, dataRoot) {
   const video = plainObject(videoUnderstanding.video);
   const imageVisionScope = contactScopedAgentCapabilitySettings(imageVision);
   const videoUnderstandingScope = contactScopedAgentCapabilitySettings(videoUnderstanding);
-  const agentId = clean(settings?.agentId);
-  const agentRoot = agentId && clean(dataRoot) ? resolveAgentDataRoot({ dataRoot, agentId }) : "";
-  const imageGeneration = agentRoot ? publicJson(agentRoot, ["image-generation", "config.json"]) : {};
+  const imageGeneration = publicJson(dataRoot, ["capabilities", "image-generation", "config.json"]);
+  const imageGenerationScope = contactScopedAgentCapabilitySettings(imageGeneration);
   const imageComfyui = plainObject(imageGeneration.comfyui);
-  const visualReferences = agentRoot ? publicJson(agentRoot, ["visual-references", "manifest.json"]) : {};
-  const voiceDesign = agentRoot ? publicJson(agentRoot, ["voice-design", "config.json"]) : {};
   const voiceAgentRoot = currentVoiceAgentRoot(settings, dataRoot);
-  const iphoneBridge = agentRoot ? publicJson(agentRoot, ["iphone-bridge", "feedback_config.json"]) : {};
-  const iphoneFeedback = publicJson(dataRoot, ["automation", "iphone-bridge", "config.json"]);
-  const phoneCamera = agentRoot ? publicJson(agentRoot, ["phone-camera", "config.json"]) : {};
+  const voiceDesign = voiceAgentRoot ? publicJson(voiceAgentRoot, ["voice-design", "config.json"]) : {};
+  const iphoneBridge = publicJson(dataRoot, ["automation", "iphone-bridge", "config.json"]);
+  const iphoneBridgeState = iphoneBridgeSettings(iphoneBridge);
+  const phoneCamera = publicJson(dataRoot, ["capabilities", "phone-camera", "config.json"]);
+  const phoneCameraScope = contactScopedAgentCapabilitySettings(phoneCamera);
   const phoneSizes = plainObject(phoneCamera.size_by_shot);
   const phoneReferences = plainObject(phoneCamera.references);
-  const siteAutomation = agentRoot ? publicJson(agentRoot, ["site-automation", "config.json"]) : {};
-  const browserRuntime = agentRoot ? publicJson(agentRoot, ["web-browser", "runtime.json"]) : {};
+  const siteAutomation = publicJson(dataRoot, ["capabilities", "site-automation", "config.json"]);
+  const siteAutomationScope = contactScopedAgentCapabilitySettings(siteAutomation);
+  const browserRuntime = publicJson(dataRoot, ["capabilities", "web-browser", "runtime.json"]);
   const proactiveContact = publicJson(dataRoot, ["automation", "proactive-contact", "config.json"]);
   const merchant = publicJson(dataRoot, ["automation", "traveling-merchant", "config.json"]);
   const phonePrompt = plainObject(phoneCamera.prompt);
@@ -447,7 +526,8 @@ function savedCapabilitySettings(settings, dataRoot) {
   const voiceMessage = voiceMessageSettings({ dataRoot, agentRoot: voiceAgentRoot, voiceDesign, candidates, customVoices });
   return {
     "image-generation": {
-      saved: Object.keys(imageGeneration).length > 0,
+      saved: Object.keys(imageGeneration).length > 0 || imageGenerationScope.knownContactIds.length > 0,
+      enabledContactIds: imageGenerationScope.enabledContactIds,
       defaultBackend: choiceOrFallback(imageGeneration.default_backend ?? imageGeneration.defaultBackend, ["api", "comfyui"], "api"),
       comfyui: {
         baseUrl: clean(imageComfyui.base_url ?? imageComfyui.baseUrl) || "http://127.0.0.1:8188",
@@ -456,7 +536,6 @@ function savedCapabilitySettings(settings, dataRoot) {
         defaultWorkflow: clean(imageComfyui.default_workflow ?? imageComfyui.defaultWorkflow),
       },
     },
-    "visual-reference-manager": { saved: Object.keys(visualReferences).length > 0 },
     "image-vision": {
       saved: Boolean(clean(visionProvider.base_url) || clean(visionProvider.model) || imageVisionScope.knownContactIds.length),
       provider: { baseUrl: clean(visionProvider.base_url), model: clean(visionProvider.model) },
@@ -491,11 +570,12 @@ function savedCapabilitySettings(settings, dataRoot) {
       ...voiceMessage,
     },
     "iphone-bridge": {
-      saved: Object.keys(iphoneBridge).length > 0,
-      enabledContactIds: companionContactIds(iphoneFeedback),
+      ...iphoneBridgeState,
+      enabledContactIds: companionContactIds(iphoneBridge),
     },
     "phone-camera": {
-      saved: Object.keys(phoneCamera).length > 0,
+      saved: Object.keys(phoneCamera).length > 0 || phoneCameraScope.knownContactIds.length > 0,
+      enabledContactIds: phoneCameraScope.enabledContactIds,
       defaultBackend: choiceOrFallback(phoneCamera.default_backend, ["api", "comfyui"], "api"),
       sizeByShot: {
         rear: sizeOrFallback(phoneSizes.rear, "1536x1024"),
@@ -505,11 +585,12 @@ function savedCapabilitySettings(settings, dataRoot) {
       references: { maxImages: numberOrFallback(phoneReferences.max_images, { minimum: 1, maximum: 16, fallback: 8, integer: true }) },
       prompt: { prefix: clean(phonePrompt.prefix), suffix: clean(phonePrompt.suffix) },
     },
-    "web-browser": { saved: Object.keys(browserRuntime).length > 0, runtime: { status: clean(browserRuntime.status), browser: clean(browserRuntime.browser) } },
     "proactive-contact": proactiveContactSettings(proactiveContact),
     "site-automation": {
-      saved: Object.keys(siteAutomation).length > 0,
+      saved: Object.keys(siteAutomation).length > 0 || Object.keys(browserRuntime).length > 0 || siteAutomationScope.knownContactIds.length > 0,
+      enabledContactIds: siteAutomationScope.enabledContactIds,
       sites: siteAutomationSettings(siteAutomation),
+      browser: { status: clean(browserRuntime.status), browser: clean(browserRuntime.browser) },
       configuration: {
         cdpUrl: clean(siteAutomation.cdpUrl) || "http://127.0.0.1:9222",
         timeoutMs: numberOrFallback(siteAutomation.timeoutMs, { minimum: 1000, maximum: 120000, fallback: 10000, integer: true }),
@@ -655,18 +736,17 @@ export function createCapabilitiesService({
     }
     return { id: contactId, projectRoot };
   };
-  const contactProjectForProject = async (projectRoot) => {
-    const target = absoluteProjectRoot(projectRoot);
-    if (!target || !contactProjectsService?.snapshot) return null;
+  const allContactProjects = async () => {
+    if (!contactProjectsService?.snapshot) return [];
     try {
       const catalog = await contactProjectsService.snapshot();
-      const contact = (Array.isArray(catalog?.contacts) ? catalog.contacts : []).find((item) => (
-        COMPANION_CONTACT_ID.test(clean(item?.id)) && sameProjectRoot(item?.projectRoot, target)
-      ));
-      if (!contact) return null;
-      return { id: clean(contact.id), projectRoot: target };
+      return (Array.isArray(catalog?.contacts) ? catalog.contacts : []).flatMap((contact) => {
+        const id = clean(contact?.id);
+        const projectRoot = absoluteProjectRoot(contact?.projectRoot);
+        return COMPANION_CONTACT_ID.test(id) && projectRoot ? [{ id, projectRoot }] : [];
+      });
     } catch {
-      return null;
+      return [];
     }
   };
   const writeTimeAwarenessSettings = async ({ dataRoot, existing, intervalMinutes, enabledContactIds } = {}) => {
@@ -726,20 +806,9 @@ export function createCapabilitiesService({
     return resolved.flatMap((item) => item.status === "fulfilled" && item.value ? [item.value] : []);
   };
   const getProactiveContactSettings = () => proactiveContactSettings(companionConfig("proactive-contact"));
-  const setProactiveAutoMaintain = async (enabled) => {
-    const settings = settingsService.load();
-    const dataRoot = capabilityDataRoot(settings);
-    if (!dataRoot) throw new Error("无法定位 Suzu Lives 软件数据目录。 ");
-    const existing = publicJson(dataRoot, ["automation", "proactive-contact", "config.json"]);
-    const current = proactiveContactSettings(existing);
-    await writeProactiveContactSettings(dataRoot, existing, {
-      ...current,
-      autoMaintain: enabled,
-    });
-  };
   const enabledIphoneBridgeSessions = async () => {
     const settings = settingsService.load();
-    if (!inspectClaudeRegistration({ projectRoot: clean(settings?.projectRoot), abilityId: "iphone-bridge" }).registered) return [];
+    if (!iphoneBridgeSettings(companionConfig("iphone-bridge", settings)).saved) return [];
     return enabledCompanionSessions("iphone-bridge");
   };
   const notifyIphoneFeedbackChange = () => {
@@ -764,27 +833,35 @@ export function createCapabilitiesService({
       projectRoot,
       launcher,
       capabilities: claudeAgentAbilityCatalog().map((capability) => {
-        const current = inspectClaudeRegistration({ projectRoot, abilityId: capability.id });
-        const added = current.registered === true;
+        const contactScoped = isContactScopedCapability(capability.id);
+        const enabledContactIds = Array.isArray(savedSettings[capability.id]?.enabledContactIds)
+          ? savedSettings[capability.id].enabledContactIds
+          : [];
+        const current = contactScoped ? null : inspectClaudeRegistration({ projectRoot, abilityId: capability.id });
+        const added = contactScoped ? enabledContactIds.length > 0 : current?.registered === true;
         return {
           ...capability,
           added,
           enabled: added,
-          canToggle: Boolean(projectRoot) && launcher.available === true,
-          toggleReason: !projectRoot
-            ? "先在“当前 Agent”中选择工作目录。"
-            : !launcher.available
-              ? "当前软件还没有准备好切换这项能力。"
-              : "",
-          savedSettings: savedSettings[capability.id] || { saved: false },
-          canAdd: !added && Boolean(projectRoot) && launcher.available === true,
-          addReason: added
-            ? "已加入当前 Agent。"
+          canToggle: !contactScoped && Boolean(projectRoot) && launcher.available === true,
+          toggleReason: contactScoped
+            ? "请在详情中选择允许使用这项能力的联系人。"
             : !projectRoot
               ? "先在“当前 Agent”中选择工作目录。"
               : !launcher.available
-                ? "当前软件还未准备好添加能力。"
-                : "可以添加到当前 Agent。",
+                ? "当前软件还没有准备好切换这项能力。"
+                : "",
+          savedSettings: savedSettings[capability.id] || { saved: false },
+          canAdd: !contactScoped && !added && Boolean(projectRoot) && launcher.available === true,
+          addReason: added
+            ? contactScoped ? "已为至少一位联系人启用。" : "已加入当前 Agent。"
+            : contactScoped
+              ? "请在详情中选择联系人。"
+              : !projectRoot
+                ? "先在“当前 Agent”中选择工作目录。"
+                : !launcher.available
+                  ? "当前软件还未准备好添加能力。"
+                  : "可以添加到当前 Agent。",
         };
       }),
     };
@@ -830,19 +907,6 @@ export function createCapabilitiesService({
       throw error;
     }
   };
-  const recordTimeAwarenessContactEnabled = async ({ projectRoot, enabled } = {}) => {
-    const contact = await contactProjectForProject(projectRoot);
-    if (!contact) return;
-    const settings = settingsService.load();
-    const dataRoot = capabilityDataRoot(settings);
-    if (!dataRoot) return;
-    const existing = publicJson(dataRoot, TIME_AWARENESS_CONFIG_PATH);
-    await writeTimeAwarenessSettings({
-      dataRoot,
-      existing,
-      enabledContactIds: withCompanionContact(existing, contact.id, enabled === true),
-    });
-  };
   const setContactScopedAgentCapabilityEnabled = async ({ abilityId, contact, enabled } = {}) => {
     const capabilityId = clean(abilityId);
     const configPath = contactScopedCapabilityConfigPath(capabilityId);
@@ -870,165 +934,117 @@ export function createCapabilitiesService({
       enabledContactIds: withCompanionContact(existing, contactId, enabled === true),
       knownContactIds: trackCompanionContact(contactScopedAgentCapabilitySettings(existing).knownContactIds, contactId),
     });
+    if (capabilityId === "iphone-bridge") notifyIphoneFeedbackChange();
     return { result, snapshot: snapshot() };
   };
   const registerAbility = async (abilityId) => {
     const settings = settingsService.load();
     const capabilityId = clean(abilityId);
-    if (capabilityId === TIME_AWARENESS_ID) {
-      const registration = await installTimeAwarenessForProject(settings?.projectRoot);
-      await recordTimeAwarenessContactEnabled({ projectRoot: settings?.projectRoot, enabled: true }).catch(() => undefined);
-      return { registration, snapshot: snapshot() };
-    }
-    if (isContactScopedAgentCapability(capabilityId)) {
-      const contact = await contactProjectForProject(settings?.projectRoot);
-      if (contact) {
-        const enabled = await setContactScopedAgentCapabilityEnabled({ abilityId: capabilityId, contact, enabled: true });
-        return { registration: enabled.result, snapshot: enabled.snapshot };
-      }
+    if (isContactScopedCapability(capabilityId)) {
+      throw new Error("请在能力详情中选择要启用的联系人。 ");
     }
     const registration = await writeClaudeRegistration({
       projectRoot: clean(settings?.projectRoot), abilityId: capabilityId, launcher: stableLauncher(), toolPermissions: settings?.claudeToolPermissions,
     });
-    if (capabilityId === "iphone-bridge") notifyIphoneFeedbackChange();
     return { registration, snapshot: snapshot() };
   };
-  const capabilityAgentRoot = (settings) => {
-    const dataRoot = capabilityDataRoot(settings);
-    const agentId = clean(settings?.agentId);
-    return dataRoot && agentId ? resolveAgentDataRoot({ dataRoot, agentId }) : "";
-  };
-  const initializeContactScopedAgentCapabilityDefaults = async () => {
-    if (!contactProjectsService?.snapshot) return { handled: false, errors: [] };
-    let catalog;
-    try {
-      catalog = await contactProjectsService.snapshot();
-    } catch {
-      return { handled: false, errors: [] };
-    }
-    const contacts = (Array.isArray(catalog?.contacts) ? catalog.contacts : []).flatMap((contact) => {
-      const id = clean(contact?.id);
-      const projectRoot = absoluteProjectRoot(contact?.projectRoot);
-      return COMPANION_CONTACT_ID.test(id) && projectRoot ? [{ id, projectRoot }] : [];
-    });
+  const initializeDefaultContactCapabilities = async (contact) => {
+    const contactId = clean(contact?.id);
+    const projectRoot = absoluteProjectRoot(contact?.projectRoot);
     const settings = settingsService.load();
     const dataRoot = capabilityDataRoot(settings);
-    if (!dataRoot) return { handled: false, errors: [] };
     const launcher = stableLauncher();
+    if (!COMPANION_CONTACT_ID.test(contactId) || !projectRoot || !dataRoot || launcher.available !== true) {
+      return { initialized: false, errors: [] };
+    }
     const errors = [];
-    for (const abilityId of CONTACT_SCOPED_AGENT_CAPABILITY_IDS) {
+    for (const abilityId of DEFAULT_CONTACT_SCOPED_AGENT_CAPABILITY_IDS) {
       const configPath = contactScopedCapabilityConfigPath(abilityId);
       const existing = publicJson(dataRoot, configPath);
       const current = contactScopedAgentCapabilitySettings(existing);
-      let enabledContactIds = current.enabledContactIds;
-      let knownContactIds = current.knownContactIds;
-      let changed = false;
-      for (const contact of contacts) {
-        if (knownContactIds.includes(contact.id)) continue;
-        try {
-          await writeClaudeRegistration({
-            projectRoot: contact.projectRoot,
-            abilityId,
-            launcher,
-            toolPermissions: settings?.claudeToolPermissions,
-          });
-          enabledContactIds = withCompanionContact({ enabledContactIds }, contact.id, true);
-          knownContactIds = trackCompanionContact(knownContactIds, contact.id);
-          changed = true;
-        } catch (error) {
-          errors.push({ id: abilityId, contactId: contact.id, code: clean(error?.code), message: clean(error?.message) || "无法默认开启。" });
-        }
-      }
-      if (changed) {
+      if (current.knownContactIds.includes(contactId)) continue;
+      try {
+        await writeClaudeRegistration({
+          projectRoot,
+          abilityId,
+          launcher,
+          toolPermissions: settings?.claudeToolPermissions,
+        });
         await writeContactScopedAgentCapabilitySettings({
           abilityId,
           dataRoot,
           existing,
-          enabledContactIds,
-          knownContactIds,
+          enabledContactIds: withCompanionContact(existing, contactId, true),
+          knownContactIds: trackCompanionContact(current.knownContactIds, contactId),
         });
+      } catch (error) {
+        errors.push({ id: abilityId, contactId, code: clean(error?.code), message: clean(error?.message) || "无法默认开启。" });
       }
     }
-    return { handled: true, errors };
+    for (const abilityId of HIDDEN_CONTACT_DEFAULT_ABILITY_IDS) {
+      if (inspectClaudeRegistration({ projectRoot, abilityId }).registered === true) continue;
+      try {
+        await writeClaudeRegistration({
+          projectRoot,
+          abilityId,
+          launcher,
+          toolPermissions: settings?.claudeToolPermissions,
+        });
+      } catch (error) {
+        errors.push({ id: abilityId, contactId, code: clean(error?.code), message: clean(error?.message) || "无法完成默认登记。" });
+      }
+    }
+    return { initialized: true, errors };
   };
-  const defaultsMarker = (settings) => {
-    const root = capabilityAgentRoot(settings);
-    return root ? publicJson(root, ["capabilities", "defaults-v1.json"]) : {};
+  const managedRegistrationsMarker = (settings) => {
+    const dataRoot = capabilityDataRoot(settings);
+    return dataRoot ? publicJson(dataRoot, ["capabilities", "managed-registrations-v1.json"]) : {};
   };
   const registrationRefreshRequired = (marker, launcher) => (
-    marker.registrationVersion !== 3 || clean(marker.launcherCommand) !== launcher.command
+    marker.registrationVersion !== MANAGED_REGISTRATION_VERSION || clean(marker.launcherCommand) !== launcher.command
   );
   const refreshManagedRegistrations = async () => {
     const settings = settingsService.load();
+    const dataRoot = capabilityDataRoot(settings);
     const launcher = stableLauncher();
-    const projectRoot = clean(settings?.projectRoot);
-    const agentRoot = capabilityAgentRoot(settings);
-    if (!projectRoot || !agentRoot || launcher.available !== true) {
+    if (!dataRoot || launcher.available !== true) {
       return { refreshed: false, errors: [], snapshot: snapshot() };
     }
-    const marker = defaultsMarker(settings);
+    const marker = managedRegistrationsMarker(settings);
     if (!registrationRefreshRequired(marker, launcher)) {
       return { refreshed: false, errors: [], snapshot: snapshot() };
     }
     const errors = [];
-    for (const capability of claudeAgentAbilityCatalog()) {
-      // This Skill does not contain a launcher, and refreshing it would also
-      // reinstall its Hook. The project settings sync already updates its CLI
-      // permission when needed.
-      if (capability.id === "time-awareness") continue;
-      if (inspectClaudeRegistration({ projectRoot, abilityId: capability.id }).registered !== true) continue;
-      try { await registerAbility(capability.id); }
-      catch (error) { errors.push({ id: capability.id, code: clean(error?.code), message: clean(error?.message) || "无法更新受管注册。" }); }
+    const contacts = await allContactProjects();
+    for (const contact of contacts) {
+      for (const capabilityId of managedClaudeRegistrationAbilityIds()) {
+        // This Skill does not contain a launcher, and refreshing it would also
+        // reinstall its Hook. The project settings sync already updates its CLI
+        // permission when needed.
+        if (capabilityId === TIME_AWARENESS_ID) continue;
+        if (inspectClaudeRegistration({ projectRoot: contact.projectRoot, abilityId: capabilityId }).registered !== true) continue;
+        try {
+          await writeClaudeRegistration({
+            projectRoot: contact.projectRoot,
+            abilityId: capabilityId,
+            launcher,
+            toolPermissions: settings?.claudeToolPermissions,
+          });
+        } catch (error) {
+          errors.push({ id: capabilityId, contactId: contact.id, code: clean(error?.code), message: clean(error?.message) || "无法更新受管注册。" });
+        }
+      }
     }
     if (!errors.length) {
-      await writeJsonBelow(agentRoot, ["capabilities", "defaults-v1.json"], {
+      await writeJsonBelow(dataRoot, ["capabilities", "managed-registrations-v1.json"], {
         ...marker,
-        version: Math.max(Number(marker.version) || 0, 2),
-        registrationVersion: 3,
+        version: 1,
+        registrationVersion: MANAGED_REGISTRATION_VERSION,
         launcherCommand: launcher.command,
         registrationsRefreshedAt: new Date().toISOString(),
       });
     }
     return { refreshed: true, errors, snapshot: snapshot() };
-  };
-  const initializeDefaults = async () => {
-    const settings = settingsService.load();
-    const launcher = stableLauncher();
-    const projectRoot = clean(settings?.projectRoot);
-    const agentRoot = capabilityAgentRoot(settings);
-    if (!projectRoot || !agentRoot || launcher.available !== true) return { initialized: false, errors: [], snapshot: snapshot() };
-    const marker = defaultsMarker(settings);
-    const contactScopedDefaults = await initializeContactScopedAgentCapabilityDefaults();
-    if (marker.initialized === true) {
-      const refreshed = await refreshManagedRegistrations();
-      return { initialized: false, errors: [...contactScopedDefaults.errors, ...refreshed.errors], snapshot: refreshed.snapshot };
-    }
-    const errors = [];
-    for (const capability of claudeAgentAbilityCatalog()) {
-      if (capability.id === TIME_AWARENESS_ID) continue;
-      if (contactScopedDefaults.handled && isContactScopedAgentCapability(capability.id)) continue;
-      const registered = inspectClaudeRegistration({ projectRoot, abilityId: capability.id }).registered === true;
-      if (registered) {
-        if (capability.id !== "time-awareness" && registrationRefreshRequired(marker, launcher)) {
-          try { await registerAbility(capability.id); }
-          catch (error) { errors.push({ id: capability.id, code: clean(error?.code), message: clean(error?.message) || "无法更新受管注册。" }); }
-        }
-        continue;
-      }
-      try { await registerAbility(capability.id); }
-      catch (error) { errors.push({ id: capability.id, code: clean(error?.code), message: clean(error?.message) || "无法默认开启。" }); }
-    }
-    // 用户已有的同名 Skill 不会被覆盖；只在其他可恢复错误存在时重试初始化。
-    const retryNeeded = errors.some((error) => error.code !== "skill-conflict");
-    await writeJsonBelow(agentRoot, ["capabilities", "defaults-v1.json"], {
-      version: 2,
-      initialized: !retryNeeded,
-      initializedAt: new Date().toISOString(),
-      registrationVersion: errors.length ? 0 : 3,
-      launcherCommand: errors.length ? "" : launcher.command,
-      unresolved: errors.map(({ id, code }) => ({ id, code })),
-    });
-    return { initialized: true, errors: [...contactScopedDefaults.errors, ...errors], snapshot: snapshot() };
   };
   const saveSettings = async ({ id, value } = {}) => {
     const capabilityId = clean(id);
@@ -1067,7 +1083,15 @@ export function createCapabilitiesService({
     }
     if (isContactScopedAgentCapability(capabilityId) && (Object.hasOwn(input, "contactId") || Object.hasOwn(input, "contactEnabled"))) {
       if (!Object.hasOwn(input, "contactEnabled")) throw new Error("联系人开关状态无效。 ");
-      const name = capabilityId === "image-vision" ? "图像理解" : "视频理解";
+      const name = ({
+        "image-generation": "图像生成",
+        "phone-camera": "手机拍照式生图",
+        "voice-message": "语音消息",
+        "image-vision": "图像理解",
+        "video-understanding": "视频理解",
+        "site-automation": "网页自动化",
+        "iphone-bridge": "iPhone 互通",
+      })[capabilityId] || "联系人能力";
       const contact = await contactProjectForInput(input, name);
       const result = await setContactScopedAgentCapabilityEnabled({
         abilityId: capabilityId,
@@ -1077,11 +1101,9 @@ export function createCapabilitiesService({
       return result.snapshot;
     }
     if (capabilityId === "image-generation") {
-      const agentRoot = capabilityAgentRoot(settings);
-      if (!agentRoot) throw new Error("请先选择当前 Agent 的工作目录。 ");
-      const existing = publicJson(agentRoot, ["image-generation", "config.json"]);
+      const existing = publicJson(dataRoot, ["capabilities", "image-generation", "config.json"]);
       const comfyui = plainObject(existing.comfyui);
-      await writeJsonBelow(agentRoot, ["image-generation", "config.json"], {
+      await writeJsonBelow(dataRoot, ["capabilities", "image-generation", "config.json"], {
         ...existing,
         default_backend: oneOf(input.defaultBackend, ["api", "comfyui"], "api", "图片生成方式"),
         comfyui: {
@@ -1095,13 +1117,11 @@ export function createCapabilitiesService({
       return snapshot();
     }
     if (capabilityId === "phone-camera") {
-      const agentRoot = capabilityAgentRoot(settings);
-      if (!agentRoot) throw new Error("请先选择当前 Agent 的工作目录。 ");
-      const existing = publicJson(agentRoot, ["phone-camera", "config.json"]);
+      const existing = publicJson(dataRoot, ["capabilities", "phone-camera", "config.json"]);
       const prompt = plainObject(existing.prompt);
       const sizes = plainObject(existing.size_by_shot);
       const references = plainObject(existing.references);
-      await writeJsonBelow(agentRoot, ["phone-camera", "config.json"], {
+      await writeJsonBelow(dataRoot, ["capabilities", "phone-camera", "config.json"], {
         ...existing,
         default_backend: oneOf(input.defaultBackend, ["api", "comfyui"], "api", "自拍图片生成方式"),
         size_by_shot: {
@@ -1217,23 +1237,50 @@ export function createCapabilitiesService({
       return snapshot();
     }
     if (capabilityId === "iphone-bridge") {
-      if (!Object.hasOwn(input, "contactId") && !Object.hasOwn(input, "contactEnabled")) {
-        throw new Error("iPhone 互通目前只需要设置投递联系人。 ");
-      }
-      if (!Object.hasOwn(input, "contactEnabled")) throw new Error("联系人开关状态无效。 ");
-      const contactId = await companionContactForInput(input);
-      const existing = companionConfig("iphone-bridge", settings);
+      const existing = publicJson(dataRoot, ["automation", "iphone-bridge", "config.json"]);
+      const existingMail = plainObject(existing.mail);
+      const existingOutbound = plainObject(existing.outbound);
+      const { password: _mailPassword, ...mailWithoutPassword } = existingMail;
+      const { password: _outboundPassword, ...outboundWithoutPassword } = existingOutbound;
+      const passwordEnv = environmentVariableName(input.passwordEnv || existingOutbound.passwordEnv || existingMail.passwordEnv || DEFAULT_IPHONE_BRIDGE_PASSWORD_ENV);
+      const feedbackSubject = requiredText(input.feedbackSubject, "反馈邮件主题", 200);
+      const feedbackPrompt = requiredText(input.feedbackPrompt, "反馈提示词", 12000);
+      const allowedSenders = normalizedLines(input.allowedSenders, "允许的反馈发件人", { maximum: 30, itemMaximum: 320 });
+      if (!allowedSenders.length) throw new Error("至少填写一个允许的反馈发件人。 ");
+      const existingRoutes = Array.isArray(existing.routes) ? existing.routes.map((item) => plainObject(item)) : [];
+      const currentRoute = existingRoutes.find((route) => clean(route.subject) === feedbackSubject) || {};
+      const otherRoutes = existingRoutes.filter((route) => clean(route.subject) !== feedbackSubject);
       await writeJsonBelow(dataRoot, ["automation", "iphone-bridge", "config.json"], {
         ...existing,
-        enabledContactIds: withCompanionContact(existing, contactId, boundedBoolean(input.contactEnabled, false)),
+        mail: {
+          ...mailWithoutPassword,
+          imapHost: requiredText(input.imapHost || existingMail.imapHost || DEFAULT_IPHONE_BRIDGE_IMAP_HOST, "IMAP 服务器", 320),
+          imapPort: boundedNumber(input.imapPort, "IMAP 端口", { minimum: 1, maximum: 65535, fallback: 993, integer: true }),
+          username: requiredText(input.username || existingMail.username, "反馈邮箱账号", 320),
+          mailbox: requiredText(input.mailbox || existingMail.mailbox || "INBOX", "收件箱", 160),
+          allowedSenders,
+          passwordEnv,
+        },
+        outbound: {
+          ...outboundWithoutPassword,
+          smtpHost: requiredText(input.smtpHost || existingOutbound.smtpHost || existingMail.smtpHost || DEFAULT_IPHONE_BRIDGE_SMTP_HOST, "SMTP 服务器", 320),
+          smtpPort: boundedNumber(input.smtpPort, "SMTP 端口", { minimum: 1, maximum: 65535, fallback: 465, integer: true }),
+          sender: requiredText(input.sender || existingOutbound.sender || existingMail.username, "发件邮箱", 320),
+          recipient: requiredText(input.recipient || existingOutbound.recipient, "iPhone 快捷指令邮箱", 320),
+          passwordEnv,
+        },
+        routes: [...otherRoutes, {
+          ...currentRoute,
+          enabled: true,
+          subject: feedbackSubject,
+          promptTemplate: feedbackPrompt,
+        }],
       });
       notifyIphoneFeedbackChange();
       return snapshot();
     }
     if (capabilityId === "site-automation") {
-      const agentRoot = capabilityAgentRoot(settings);
-      if (!agentRoot) throw new Error("请先选择当前 Agent 的工作目录。 ");
-      const existing = publicJson(agentRoot, ["site-automation", "config.json"]);
+      const existing = publicJson(dataRoot, ["capabilities", "site-automation", "config.json"]);
       const requestedSiteId = clean(input.siteId).toLowerCase();
       if (requestedSiteId) {
         const site = siteAutomationCatalog().find((item) => item.id === requestedSiteId);
@@ -1262,13 +1309,13 @@ export function createCapabilitiesService({
             },
           };
         }
-        await writeJsonBelow(agentRoot, ["site-automation", "config.json"], {
+        await writeJsonBelow(dataRoot, ["capabilities", "site-automation", "config.json"], {
           ...existing,
           sites: { ...sites, [site.id]: nextSite },
         });
         return snapshot();
       }
-      await writeJsonBelow(agentRoot, ["site-automation", "config.json"], {
+      await writeJsonBelow(dataRoot, ["capabilities", "site-automation", "config.json"], {
         ...existing,
         cdpUrl: httpUrl(input.cdpUrl, "浏览器连接地址", clean(existing.cdpUrl) || "http://127.0.0.1:9222"),
         timeoutMs: boundedNumber(input.timeoutMs, "页面操作等待时间", { minimum: 1000, maximum: 120000, fallback: 10000, integer: true }),
@@ -1352,7 +1399,7 @@ export function createCapabilitiesService({
   return {
     snapshot,
     companionTargets,
-    initializeDefaults,
+    initializeDefaultContactCapabilities,
     refreshManagedRegistrations,
     saveSettings,
     proactiveContactSettings: getProactiveContactSettings,
@@ -1367,48 +1414,14 @@ export function createCapabilitiesService({
       const capabilityId = clean(id);
       if (enabled) {
         const result = await registerAbility(capabilityId);
-        if (capabilityId === "proactive-contact") {
-          await setProactiveAutoMaintain(true);
-          requestProactiveContactMaintenance();
-        }
         return { ...result, enabled: true, snapshot: snapshot() };
       }
+      if (isContactScopedCapability(capabilityId)) {
+        throw new Error("请在能力详情中选择要关闭的联系人。 ");
+      }
       const settings = settingsService.load();
-      if (capabilityId === TIME_AWARENESS_ID) {
-        const removed = await uninstallTimeAwarenessForProject(settings?.projectRoot);
-        await recordTimeAwarenessContactEnabled({ projectRoot: settings?.projectRoot, enabled: false }).catch(() => undefined);
-        return { removed, enabled: false, snapshot: snapshot() };
-      }
-      if (isContactScopedAgentCapability(capabilityId)) {
-        const contact = await contactProjectForProject(settings?.projectRoot);
-        if (contact) {
-          const disabled = await setContactScopedAgentCapabilityEnabled({ abilityId: capabilityId, contact, enabled: false });
-          return { removed: disabled.result, enabled: false, snapshot: disabled.snapshot };
-        }
-      }
       const removed = await removeClaudeRegistration({ projectRoot: clean(settings?.projectRoot), abilityId: capabilityId });
-      if (capabilityId === "proactive-contact") await setProactiveAutoMaintain(false);
-      if (capabilityId === "iphone-bridge") notifyIphoneFeedbackChange();
       return { removed, enabled: false, snapshot: snapshot() };
-    },
-    enable: (abilityId) => {
-      const settings = settingsService.load();
-      const dataRoot = capabilityDataRoot(settings);
-      if (!dataRoot) throw new Error("无法定位 Suzu Lives 软件数据目录，因此没有启用能力。");
-      setCapabilityEnabled({ id: abilityId, dataRoot, enabled: true });
-      return snapshot();
-    },
-    issueAuthorization: (value = {}) => {
-      if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("能力授权请求必须是对象。 ");
-      const settings = settingsService.load();
-      const dataRoot = capabilityDataRoot(settings);
-      if (!dataRoot) throw new Error("无法定位 Suzu Lives 软件数据目录，因此不会签发能力授权。 ");
-      return issueCapabilityInvocationAuthorization({
-        id: value.id,
-        request: value.request,
-        dataRoot,
-        ttlMs: value.ttlMs,
-      });
     },
   };
 }
@@ -1416,14 +1429,9 @@ export function createCapabilitiesService({
 export function registerCapabilitiesIpc({ ipcMain, capabilitiesService }) {
   ipcMain.handle("capabilities:snapshot", () => capabilitiesService.snapshot());
   ipcMain.handle("capabilities:companion-targets", () => capabilitiesService.companionTargets());
-  ipcMain.handle("capabilities:initialize-defaults", () => capabilityIpcResult(() => capabilitiesService.initializeDefaults()));
   ipcMain.handle("capabilities:save-settings", (_event, value) => capabilityIpcResult(() => capabilitiesService.saveSettings(value)));
   ipcMain.handle("capabilities:open-traveling-merchant-page", () => capabilityIpcResult(() => capabilitiesService.openTravelingMerchantPage()));
   // Electron 只会向渲染层返回 IPC handler 的消息，因此同时返回稳定错误码。
   ipcMain.handle("capabilities:register", (_event, abilityId) => capabilityIpcResult(() => capabilitiesService.register(abilityId)));
   ipcMain.handle("capabilities:set-active", (_event, value) => capabilityIpcResult(() => capabilitiesService.setActive(value)));
-  ipcMain.handle("capabilities:enable", (_event, abilityId) => capabilitiesService.enable(abilityId));
-  // No renderer/preload method exposes this yet. A future management UI must
-  // call this only after recording an explicit user confirmation.
-  ipcMain.handle("capabilities:issue-authorization", (_event, value) => capabilitiesService.issueAuthorization(value));
 }

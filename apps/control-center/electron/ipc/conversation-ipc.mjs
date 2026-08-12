@@ -37,11 +37,12 @@ export function registerConversationIpc({
   shell,
   wechatAttachmentCli = "",
   claudeWorkspaceDirectories = [],
+  initializeContactCapabilities = null,
   proactiveContactSettings = () => ({}),
   isProactiveContactEnabled = () => false,
-  hasTravelingMerchantRecipients = () => false,
+  isTravelingMerchantEnabled = () => false,
 }) {
-  const reader = createConversationReader({ contactProjectsService, settingsService });
+  const reader = createConversationReader({ contactProjectsService, onContactCreated: initializeContactCapabilities, settingsService });
   const sessionSettings = createConversationSessionSettingsService({
     dataRoot: settingsService.response(settingsService.load()).dataRoot,
     reader,
@@ -66,7 +67,7 @@ export function registerConversationIpc({
     const contactId = await reader.contactIdForSession({ sessionId, projectRoot });
     const contactArgument = quotedArgument(contactId);
     const proactiveEnabled = await Promise.resolve(isProactiveContactEnabled({ contactId })) === true;
-    const merchantEnabled = hasTravelingMerchantRecipients() === true;
+    const merchantEnabled = await Promise.resolve(isTravelingMerchantEnabled({ contactId })) === true;
     return {
       conversationAdd: proactiveEnabled && contactArgument
         ? `${invocation} schedule add --data-root ${rootArgument} --contact-id ${contactArgument}`

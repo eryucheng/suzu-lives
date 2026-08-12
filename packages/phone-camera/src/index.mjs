@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
-import { createCandidates } from "@suzu-lives/image-workbench";
+import { createCandidates, validateComfyRegistry } from "@suzu-lives/image-workbench";
 import { createVisualReferenceLibrary, VisualReferenceError } from "@suzu-lives/visual-reference-library";
 
 import profiles from "../profiles.json" with { type: "json" };
@@ -14,6 +14,8 @@ function clean(value) { return String(value ?? "").trim(); }
 function object(value) { return value && typeof value === "object" && !Array.isArray(value) ? value : {}; }
 function inside(root, target) { const relative = path.relative(root, target); return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative)); }
 function rooted(root, value, label) { const base = path.resolve(root); const raw = clean(value); const target = path.resolve(base, raw || "."); if (!inside(base, target)) throw new PhoneCameraError(label + "必须位于当前 Agent 的 Suzu Lives 数据目录。 "); return target; }
+function capabilityConfigRoot(dataRoot) { const root = clean(dataRoot); if (!root) throw new PhoneCameraError("缺少 Suzu Lives 软件数据目录。 "); return path.join(path.resolve(root), "capabilities", "phone-camera"); }
+function phoneConfigPath({ dataRoot, configPath = "" } = {}) { const root = capabilityConfigRoot(dataRoot); const target = configPath ? path.resolve(root, configPath) : path.join(root, "config.json"); if (!inside(root, target)) throw new PhoneCameraError("--config 必须位于 Suzu Lives 软件手机拍照配置目录。 "); return target; }
 function list(value) { return Array.isArray(value) ? value : []; }
 
 export function normalizePhoneConfig(value = {}) {
@@ -23,10 +25,24 @@ export function normalizePhoneConfig(value = {}) {
   return { sizeByShot: { rear: clean(sizes.rear) || clean(profiles.shots.rear.default_size), selfie: clean(sizes.selfie) || clean(profiles.shots.selfie.default_size), mirror: clean(sizes.mirror) || clean(profiles.shots.mirror.default_size) }, references: { manifest: clean(references.manifest) || "visual-references/manifest.json", maxImages }, output: { directory: clean(output.directory) || "phone-camera" }, prompt: { prefix: clean(prompt.prefix), suffix: clean(prompt.suffix) }, defaultBackend: clean(source.default_backend) || "api" };
 }
 
-export async function loadPhoneConfig(agentRoot, configPath = "") {
-  const root = path.resolve(agentRoot); const target = configPath ? rooted(root, configPath, "--config") : path.join(root, "phone-camera", "config.json");
+export async function loadPhoneConfig({ dataRoot, configPath = "" } = {}) {
+  const target = phoneConfigPath({ dataRoot, configPath });
   try { return { config: normalizePhoneConfig(JSON.parse(await fs.readFile(target, "utf8"))), path: target, source: "saved" }; }
   catch (error) { if (error?.code === "ENOENT") return { config: normalizePhoneConfig(), path: target, source: "default" }; if (error instanceof SyntaxError) throw new PhoneCameraError("--config 必须是 JSON 对象。 "); throw error; }
+}
+
+export async function loadPhoneCameraComfyConnection(dataRoot) {
+  const root = clean(dataRoot);
+  if (!root) throw new PhoneCameraError("缺少 Suzu Lives 软件数据目录。 ");
+  const filePath = path.join(path.resolve(root), "connections", "comfyui.json");
+  let value = {};
+  try { value = JSON.parse(await fs.readFile(filePath, "utf8")); } catch {}
+  return {
+    baseUrl: clean(value.baseUrl) || "http://127.0.0.1:8188",
+    timeoutMs: Number(value.timeoutMs) || 600000,
+    pollIntervalMs: Number(value.pollIntervalMs) || 1000,
+    registry: validateComfyRegistry(value.registry || { version: 1, workflows: {} }),
+  };
 }
 
 function referencePrompt(references) {
@@ -54,9 +70,9 @@ export async function expandReferences({ agentRoot, manifest = "", requested = [
   catch (error) { if (error instanceof VisualReferenceError) throw new PhoneCameraError(error.message); throw error; }
 }
 
-export async function takePhonePhoto({ agentRoot, connection, registry, fetchImpl, options = {} } = {}) {
+export async function takePhonePhoto({ agentRoot, dataRoot, connection, registry, fetchImpl, options = {} } = {}) {
   const root = path.resolve(clean(agentRoot)); if (!clean(agentRoot)) throw new PhoneCameraError("缺少当前 Agent 数据目录。 ");
-  const { config, path: phoneConfigPath, source: configSource } = await loadPhoneConfig(root, options.config);
+  const { config, path: phoneConfigPath, source: configSource } = await loadPhoneConfig({ dataRoot, configPath: options.config });
   const shot = clean(options.shot); const scene = clean(options.scene); const backend = clean(options.backend) || config.defaultBackend; if (!SHOTS.has(shot)) throw new PhoneCameraError("--shot 必须是 rear、selfie 或 mirror。 "); if (!['api', 'comfyui'].includes(backend)) throw new PhoneCameraError("--backend 必须是 api 或 comfyui。 ");
   const manifest = clean(options.manifest) || config.references.manifest; const references = await expandReferences({ agentRoot: root, manifest, requested: list(options.refs), maxImages: config.references.maxImages }); const prompt = buildPhonePrompt({ scene, shot, config, references }); const size = clean(options.size) || config.sizeByShot[shot];
   if (options.dryRun) return { status: "dry-run", backend, workflow: clean(options.workflow) || null, shot, size, references: references.map(({ index, id, role, path: referencePath }) => ({ index, id, role, path: referencePath })), prompt, configSource };

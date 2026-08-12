@@ -1,5 +1,4 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { createRoot } from "react-dom/client";
 import { Avatar, Banner, Button, Dialog, Empty, GlassPanel, Input, PageHeader, Select, Status, Switch, Tabs, Textarea } from "suzu-design-system";
 
 import {
@@ -16,7 +15,7 @@ import {
 } from "../core/avatar-file.mjs";
 import { compactNumber, dateTime, localDateTimeInput, money, startOfTodayInput } from "../core/formatters.mjs";
 import { getIdentity, profileInitial } from "../core/identity.mjs";
-import { API_BINDINGS, CLAUDE_CODE_API_PROVIDERS } from "../features/agent/index.mjs";
+import { API_BINDINGS, CLAUDE_CODE_API_PROVIDERS } from "../features/agent/runtime.mjs";
 
 import "./admin-page.css";
 
@@ -544,7 +543,7 @@ function ClaudeCodeApiSettings({ actions, config, initialModels = [], initialNot
   return (
     <AdminPanel className="admin-claude-api-panel">
       <PanelHeading
-        description="配置本机 Claude Code 的文字模型服务。"
+        description="配置本机 Claude Code 的文字模型服务；长期记忆自动入库和整理会复用这里当前的主模型。"
         eyebrow="CLAUDE CODE"
         status={status}
         title="Claude Code API"
@@ -961,7 +960,7 @@ function ApiDeleteDialog({ connection, onClose, onConfirm }) {
     }
   };
   const footer = <div className="admin-dialog-actions"><Button disabled={pending} onClick={onClose} type="button" variant="secondary">取消</Button><Button disabled={pending} onClick={remove} type="button" variant="danger">{pending ? "正在移除…" : "移除"}</Button></div>;
-  return <Dialog footer={footer} onClose={pending ? () => {} : onClose} open title="移除 API"><div className="admin-delete-dialog"><p>移除“{connection.name || "这个 API"}”？已选用它的功能会改为未选择。</p><InlineError>{error}</InlineError></div></Dialog>;
+  return <Dialog footer={footer} onClose={pending ? () => {} : onClose} open title="移除 API"><div className="admin-delete-dialog"><p>{`移除“${connection.name || "这个 API"}”？已选用它的功能会改为未选择。`}</p><InlineError>{error}</InlineError></div></Dialog>;
 }
 
 function ApiServices({ actions, services }) {
@@ -1196,23 +1195,4 @@ export function AdminPage({ actions = {}, snapshot = {} }) {
       </section>
     </div>
   );
-}
-
-let pageElement = null;
-let pageRoot = null;
-
-export function renderAdminPage(element, props) {
-  if (!element) return;
-  if (pageElement !== element) {
-    pageRoot?.unmount();
-    pageElement = element;
-    pageRoot = createRoot(element);
-  }
-  pageRoot.render(<AdminPage {...props} />);
-}
-
-export function unmountAdminPage() {
-  pageRoot?.unmount();
-  pageRoot = null;
-  pageElement = null;
 }

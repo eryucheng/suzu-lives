@@ -45,8 +45,8 @@ function startBrowser(config) {
 }
 
 /**
- * End only the Chrome process that was started for the current Agent's
- * software-owned profile.  The Python launcher verifies both the debugging
+ * End only the Chrome process that was started for Suzu Lives' shared
+ * software-owned profile. The Python launcher verifies both the debugging
  * port and profile path before calling taskkill, so this cannot target a
  * normal user Chrome window.
  */

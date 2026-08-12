@@ -69,14 +69,34 @@ function providerConnection(value, { fallbackModel = "" } = {}) {
   const apiKey = clean(source.apiKey || source.key);
   const baseUrl = clean(source.baseUrl);
   const model = clean(source.model) || clean(fallbackModel);
-  if (!apiKey || !baseUrl || !model || !["dashscope", "openai-compatible"].includes(type)) return null;
+  if (!apiKey || !baseUrl || !model || !["dashscope", "openai-compatible", "anthropic-compatible"].includes(type)) return null;
   const configuredTimeout = timeoutMs(source.timeoutMs);
+  const maxOutputTokens = Number(source.maxOutputTokens);
+  const maximumTransportAttempts = Number(source.maximumTransportAttempts);
+  const transportRetryDelayMs = Number(source.transportRetryDelayMs);
+  const endpoint = clean(source.endpoint);
+  const structuredOutputMode = clean(source.structuredOutputMode);
+  const authMode = clean(source.authMode);
+  const extraBody = plainObject(source.extraBody);
   return {
     apiKey,
     baseUrl,
     model,
     type,
     ...(configuredTimeout ? { timeoutMs: configuredTimeout } : {}),
+    ...(endpoint ? { endpoint } : {}),
+    ...(structuredOutputMode ? { structuredOutputMode } : {}),
+    ...(authMode ? { authMode } : {}),
+    ...(Object.keys(extraBody).length ? { extraBody } : {}),
+    ...(Number.isInteger(maxOutputTokens) && maxOutputTokens >= 256 && maxOutputTokens <= 64_000
+      ? { maxOutputTokens }
+      : {}),
+    ...(Number.isInteger(maximumTransportAttempts) && maximumTransportAttempts >= 1 && maximumTransportAttempts <= 5
+      ? { maximumTransportAttempts }
+      : {}),
+    ...(Number.isInteger(transportRetryDelayMs) && transportRetryDelayMs >= 0 && transportRetryDelayMs <= 30_000
+      ? { transportRetryDelayMs }
+      : {}),
   };
 }
 
@@ -93,6 +113,7 @@ function providerFactories({ generationConnection, embeddingConnection }) {
     if (generation) {
       generator = createOpenAiCompatibleStructuredGenerator({
         connection: generation,
+        ...(generation.maxOutputTokens ? { maxOutputTokens: generation.maxOutputTokens } : {}),
       });
     }
   } catch {
@@ -125,6 +146,15 @@ async function resolvedConnection(connectionsService, feature) {
   if (typeof connectionsService?.resolveNamedApiConnection !== "function") return null;
   try {
     return await connectionsService.resolveNamedApiConnection(feature);
+  } catch {
+    return null;
+  }
+}
+
+async function resolvedTextModelConnection(textModelConnectionResolver) {
+  if (typeof textModelConnectionResolver !== "function") return null;
+  try {
+    return await textModelConnectionResolver();
   } catch {
     return null;
   }
@@ -171,6 +201,7 @@ export function createLongTermMemoryService({
   contactProjectsService,
   connectionsService,
   conversationReader = null,
+  textModelConnectionResolver = null,
 } = {}) {
   if (!settingsService?.load || !settingsService?.response) {
     throw new Error("长期记忆需要软件设置服务。");
@@ -222,9 +253,12 @@ export function createLongTermMemoryService({
       if (optional) return { activeContact, contacts, selectedContact, projectRoot, selectedSession: null };
       throw error;
     }
-    const selectedSession = resolved?.hasTranscript === true
-      ? publicSession({ id: resolved.id, title: "固定对话" })
-      : null;
+    // A contact owns one fixed internal session.  Its memory database is
+    // meaningful even before that session has produced a JSONL transcript,
+    // so memory access must be keyed by the persisted session id rather than
+    // by the presence of chat history.  (The compactor keeps its stricter
+    // transcript check in conversation-reader.)
+    const selectedSession = publicSession({ id: resolved?.id, title: "固定对话" });
     if (!selectedSession) {
       if (optional) return { activeContact, contacts, selectedContact, projectRoot, selectedSession: null };
       throw new Error("这位联系人还没有可查看的 Claude 会话。 ");
@@ -247,12 +281,21 @@ export function createLongTermMemoryService({
     const dataRoot = clean(settingsService.response(settings).dataRoot);
     if (!dataRoot) throw new Error("软件数据目录不可用。");
     const [generationConnection, embeddingConnection] = await Promise.all([
-      resolvedConnection(connectionsService, "memory-generation"),
+      resolvedTextModelConnection(textModelConnectionResolver),
       resolvedConnection(connectionsService, "memory-embedding"),
     ]);
     const providerRuntime = providerFactories({ generationConnection, embeddingConnection });
     const agentRoot = resolveAgentDataRoot({ dataRoot, agentId: contact.agentId });
     const sessionMemoryRoot = path.join(agentRoot, "memory", "sessions", normalizedSessionId);
+    const configuredUsageLedgerPath = typeof settingsService.usageLedgerPath === "function"
+      ? settingsService.usageLedgerPath({
+        ...settings,
+        agentId: contact.agentId,
+        projectRoot: contact.projectRoot,
+      })
+      : "";
+    const usageLedgerPath = clean(configuredUsageLedgerPath)
+      || path.join(agentRoot, "cost-ledger", "events.jsonl");
     const identity = {
       companionId: contact.agentId,
       companionName: clean(contact.name) || "联系人",
@@ -269,7 +312,7 @@ export function createLongTermMemoryService({
       dataRoot,
       agentId: contact.agentId,
       databasePath: path.join(sessionMemoryRoot, "suzu-memory.db"),
-      usageLedgerPath: path.join(sessionMemoryRoot, "suzu-memory-usage.jsonl"),
+      usageLedgerPath,
       defaults: {
         companionId: identity.companionId,
         defaultWorldFrame: identity.defaultWorldFrame,
