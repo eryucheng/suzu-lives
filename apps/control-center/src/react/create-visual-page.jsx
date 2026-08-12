@@ -29,6 +29,15 @@ function FormSelect({ defaultValue, name, options, placeholder = "请选择" }) 
   );
 }
 
+function ScopeSelect({ name, onChange, options, value }) {
+  return (
+    <>
+      <input name={name} type="hidden" value={value} />
+      <Select className="create-select-react" fullWidth onChange={onChange} options={options} value={value} />
+    </>
+  );
+}
+
 function VisualRuns({ onOpenCandidate, runs = [] }) {
   return (
     <section className={`drawing-runs${runs.length ? "" : " drawing-runs-empty"}`}>
@@ -74,6 +83,7 @@ function ReferenceTile({ asset, chosen, onSelect, onToggle, preview, selected })
         <div className="reference-tile-copy">
           <span className="reference-role">{ROLES[asset.role] || asset.role}</span>
           <strong>{asset.description}</strong>
+          <span className="reference-source">{asset.scopeLabel}</span>
           <small>{asset.id}</small>
         </div>
       </button>
@@ -94,9 +104,9 @@ function ReferenceTile({ asset, chosen, onSelect, onToggle, preview, selected })
 function ReferenceInspector({ asset, onRemove, onSave, sets = [] }) {
   if (!asset) return null;
   return (
-    <details className="reference-detail reference-inspector" key={asset.id} open>
+    <details className="reference-detail reference-inspector" key={asset.referenceId} open>
       <summary>
-        <span><span className="reference-kicker">已选资料 · {ROLES[asset.role] || asset.role}</span><strong>{asset.description}</strong></span>
+        <span><span className="reference-kicker">{asset.scopeLabel} · {ROLES[asset.role] || asset.role}</span><strong>{asset.description}</strong></span>
         <Status label="查看与编辑" tone="success" />
       </summary>
       <div className="reference-detail-body">
@@ -112,7 +122,7 @@ function ReferenceInspector({ asset, onRemove, onSave, sets = [] }) {
           <fieldset className="wide"><legend>所属分组</legend>
             {sets.length ? sets.map((item) => (
               <label className="reference-set-check" key={item.id}>
-                <input defaultChecked={(asset.sets || []).includes(item.id)} name="sets" type="checkbox" value={item.id} />
+                <input defaultChecked={(asset.sets || []).includes(item.referenceId)} name="sets" type="checkbox" value={item.setId} />
                 <span>{item.description}</span><small>{item.id}</small>
               </label>
             )) : <p className="reference-form-hint">还没有分组；可先在下方创建分组。</p>}
@@ -129,16 +139,17 @@ function ReferenceInspector({ asset, onRemove, onSave, sets = [] }) {
   );
 }
 
-function ReferenceImport({ empty, onCancel, onSelect, onSubmit, pending, role, setRole, sets = [] }) {
+function ReferenceImport({ empty, onCancel, onSelect, onSubmit, pending, role, setRole, scope, scopeOptions, setScope, sets = [] }) {
   return (
     <details className="reference-import-panel" defaultOpen={Boolean(pending) || empty} key={pending?.selectionToken || "reference-import"}>
       <summary><span><span className="reference-kicker">添加资料</span><strong>补充视觉参考</strong></span><span className="reference-detail-summary-note">从本机选择图片</span></summary>
       {pending ? (
         <div className="reference-import-panel-content reference-import-ready">
-          <div><span className="reference-kicker">已选择</span><h2>{pending.fileName}</h2><p>补充资料后保存到视觉参考库，方便下一次创作继续使用。</p></div>
+          <div><span className="reference-kicker">已选择</span><h2>{pending.fileName}</h2><p>补充资料后保存到选定归属；共享资料可供所有联系人使用，专属资料只属于当前联系人。</p></div>
           <form className="reference-form" onSubmit={onSubmit}>
             <label>资料 ID<input defaultValue={pending.candidateId} maxLength="120" name="id" pattern="[a-z0-9.-]+" required /></label>
             <label>角色<FormSelect defaultValue={pending.role} name="role" options={ROLE_OPTIONS} /></label>
+            <label className="wide">保存到<ScopeSelect name="scope" onChange={setScope} options={scopeOptions} value={scope} /></label>
             <label className="wide">描述<textarea maxLength="2000" name="description" placeholder="写下这张图片实际呈现的内容。" required /></label>
             <label>保留特征（一行一项）<textarea name="preserve" placeholder="例如：脸型" /></label>
             <label>忽略特征（一行一项）<textarea name="ignore" placeholder="例如：背景" /></label>
@@ -150,23 +161,23 @@ function ReferenceImport({ empty, onCancel, onSelect, onSubmit, pending, role, s
         </div>
       ) : (
         <div className="reference-import-panel-content">
-          <div><span className="reference-kicker">本机图片</span><h2>添加一张参考资料</h2><p>从本机挑选图片，为它补充准确的描述、角色与分组。</p></div>
-          <div className="reference-import-start"><label>角色<Select className="create-select-react" fullWidth onChange={setRole} options={ROLE_OPTIONS} value={role} /></label><button className="primary-button" onClick={onSelect} type="button">从本机选择图片</button></div>
+          <div><span className="reference-kicker">本机图片</span><h2>添加一张参考资料</h2><p>从本机挑选图片，再明确它属于我的共享资料还是当前联系人的专属资料。</p></div>
+          <div className="reference-import-start"><label>保存到<ScopeSelect name="scope-preview" onChange={setScope} options={scopeOptions} value={scope} /></label><label>角色<Select className="create-select-react" fullWidth onChange={setRole} options={ROLE_OPTIONS} value={role} /></label><button className="primary-button" onClick={onSelect} type="button">从本机选择图片</button></div>
         </div>
       )}
     </details>
   );
 }
 
-function ReferenceGroups({ onRemove, onSubmit, sets = [] }) {
+function ReferenceGroups({ onRemove, onSubmit, scope, scopeOptions, setScope, sets = [] }) {
   return (
     <details className="reference-groups">
       <summary><span><span className="reference-kicker">分组</span><strong>组织一组参考</strong></span><span className="reference-detail-summary-note">{sets.length} 个分组</span></summary>
       <div className="reference-groups-content">
         <div className="reference-group-list">
-          {sets.length ? sets.map((item) => <article key={item.id}><strong>{item.description}</strong><small>{item.id} · {(item.assets || []).length} 项</small><button className="quiet-link" onClick={() => onRemove(item.id)} type="button">移除分组</button></article>) : <p className="reference-form-hint">尚无分组。</p>}
+          {sets.length ? sets.map((item) => <article key={item.referenceId}><strong>{item.description}</strong><small>{item.scopeLabel} · {item.setId} · {(item.assets || []).length} 项</small><button className="quiet-link" onClick={() => onRemove(item)} type="button">移除分组</button></article>) : <p className="reference-form-hint">尚无分组。</p>}
         </div>
-        <form className="reference-set-form" onSubmit={onSubmit}><input maxLength="120" name="id" pattern="[a-z0-9.-]+" placeholder="分组 ID，例如 character-main" required /><input maxLength="2000" name="description" placeholder="分组说明" required /><button className="secondary-button">创建 / 更新分组</button></form>
+        <form className="reference-set-form" onSubmit={onSubmit}><ScopeSelect name="scope" onChange={setScope} options={scopeOptions} value={scope} /><input maxLength="120" name="id" pattern="[a-z0-9.-]+" placeholder="分组 ID，例如 character-main" required /><input maxLength="2000" name="description" placeholder="分组说明" required /><button className="secondary-button">创建 / 更新分组</button></form>
       </div>
     </details>
   );
@@ -179,8 +190,11 @@ export function CreateVisualPage({ actions = {}, api }) {
   const [selectedReferences, setSelectedReferences] = useState(() => new Set());
   const [selectedAssetId, setSelectedAssetId] = useState("");
   const [referenceRole, setReferenceRole] = useState("all");
+  const [referenceScope, setReferenceScope] = useState("all");
   const [referenceSet, setReferenceSet] = useState("all");
   const [importRole, setImportRole] = useState("identity");
+  const [importScope, setImportScope] = useState("shared");
+  const [groupScope, setGroupScope] = useState("shared");
   const [pendingImport, setPendingImport] = useState(null);
   const [feedback, setFeedback] = useState("");
   const [config, setConfig] = useState(EMPTY_DRAWING_CONFIG);
@@ -190,7 +204,7 @@ export function CreateVisualPage({ actions = {}, api }) {
   const reloadReferences = useCallback(async () => {
     const nextReferences = await api.visualReferences.snapshot();
     setReferences(nextReferences);
-    const knownIds = new Set((nextReferences.assets || []).map((asset) => asset.id));
+    const knownIds = new Set((nextReferences.assets || []).map((asset) => asset.referenceId));
     setSelectedReferences((previous) => new Set([...previous].filter((id) => knownIds.has(id))));
     setSelectedAssetId((previous) => knownIds.has(previous) ? previous : "");
     return nextReferences;
@@ -209,26 +223,43 @@ export function CreateVisualPage({ actions = {}, api }) {
 
   useEffect(() => {
     let cancelled = false;
-    const missing = (references?.assets || []).filter((asset) => !(asset.id in thumbnails));
+    const missing = (references?.assets || []).filter((asset) => !(asset.referenceId in thumbnails));
     if (!missing.length) return () => { cancelled = true; };
     void Promise.all(missing.map(async (asset) => {
       try {
-        const image = await api.visualReferences.thumbnail(asset.id);
-        if (!cancelled) setThumbnails((previous) => ({ ...previous, [asset.id]: image || "" }));
+        const image = await api.visualReferences.thumbnail(asset.reference);
+        if (!cancelled) setThumbnails((previous) => ({ ...previous, [asset.referenceId]: image || "" }));
       } catch {
-        if (!cancelled) setThumbnails((previous) => ({ ...previous, [asset.id]: "" }));
+        if (!cancelled) setThumbnails((previous) => ({ ...previous, [asset.referenceId]: "" }));
       }
     }));
     return () => { cancelled = true; };
   }, [api, references, thumbnails]);
 
+  const hasContact = Boolean(references?.contact);
+  const scopeOptions = useMemo(() => (references?.scopes || []).map((item) => ({ label: item.label, value: item.scope })), [references]);
   const assets = useMemo(() => (references?.assets || []).filter((asset) => (
-    (referenceRole === "all" || asset.role === referenceRole)
+    (referenceScope === "all" || asset.scope === referenceScope)
+    && (referenceRole === "all" || asset.role === referenceRole)
     && (referenceSet === "all" || (asset.sets || []).includes(referenceSet))
-  )), [referenceRole, referenceSet, references]);
-  const selectedAsset = useMemo(() => (references?.assets || []).find((asset) => asset.id === selectedAssetId) || null, [references, selectedAssetId]);
+  )), [referenceRole, referenceScope, referenceSet, references]);
+  const selectedAsset = useMemo(() => (references?.assets || []).find((asset) => asset.referenceId === selectedAssetId) || null, [references, selectedAssetId]);
+  const selectedReferenceValues = useMemo(() => (references?.assets || []).filter((asset) => selectedReferences.has(asset.referenceId)).map((asset) => asset.reference), [references, selectedReferences]);
+  const selectedAssetSets = useMemo(() => selectedAsset ? (references?.sets || []).filter((item) => item.scope === selectedAsset.scope) : [], [references, selectedAsset]);
+  const importSets = useMemo(() => (references?.sets || []).filter((item) => item.scope === importScope), [importScope, references]);
   const workflows = drawing?.comfyui?.workflows || [];
   const ready = drawing?.status === "ready";
+
+  useEffect(() => {
+    if (hasContact) return;
+    setReferenceScope((previous) => previous === "contact" ? "all" : previous);
+    setImportScope((previous) => previous === "contact" ? "shared" : previous);
+    setGroupScope((previous) => previous === "contact" ? "shared" : previous);
+  }, [hasContact]);
+
+  useEffect(() => {
+    if (hasContact && importRole === "identity") setImportScope("contact");
+  }, [hasContact, importRole]);
 
   const withReferenceChange = useCallback(async (task, success) => {
     try {
@@ -251,7 +282,7 @@ export function CreateVisualPage({ actions = {}, api }) {
         backend: config.backend,
         count: Number(config.count),
         prompt,
-        referenceIds: [...selectedReferences],
+        referenceIds: selectedReferenceValues,
         seed: rawSeed ? Number(rawSeed) : null,
         size: config.size,
         workflow: config.workflow,
@@ -282,6 +313,12 @@ export function CreateVisualPage({ actions = {}, api }) {
     }
   };
 
+  const selectImportRole = (role) => {
+    setImportRole(role);
+    if (role === "identity" && hasContact) setImportScope("contact");
+    if (role !== "identity") setImportScope("shared");
+  };
+
   const importReference = (event) => {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
@@ -292,6 +329,8 @@ export function CreateVisualPage({ actions = {}, api }) {
         ignore: lines(form.get("ignore")),
         preserve: lines(form.get("preserve")),
         role: form.get("role"),
+        scope: form.get("scope"),
+        contactId: references?.contact?.id || "",
         selectionToken: pendingImport?.selectionToken,
         sets: form.getAll("sets"),
       });
@@ -304,7 +343,7 @@ export function CreateVisualPage({ actions = {}, api }) {
     const form = new FormData(event.currentTarget);
     void withReferenceChange(() => api.visualReferences.update({
       description: form.get("description"),
-      id: selectedAssetId,
+      ...selectedAsset?.reference,
       ignore: lines(form.get("ignore")),
       preserve: lines(form.get("preserve")),
       role: form.get("role"),
@@ -315,19 +354,19 @@ export function CreateVisualPage({ actions = {}, api }) {
   const removeReference = (deleteFile) => {
     const question = deleteFile ? "将同时永久删除 Suzu Lives 数据目录中的图片副本。确定继续吗？" : "只从资料库移除，软件内图片副本会保留。确定继续吗？";
     if (!window.confirm(question)) return;
-    void withReferenceChange(() => api.visualReferences.remove({ id: selectedAssetId, deleteFile, confirmed: true }), deleteFile ? "资料与软件内副本已移除。" : "资料已移除，软件内副本保留。");
+    void withReferenceChange(() => api.visualReferences.remove({ ...selectedAsset?.reference, deleteFile, confirmed: true }), deleteFile ? "资料与软件内副本已移除。" : "资料已移除，软件内副本保留。");
   };
 
   const saveGroup = (event) => {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
-    void withReferenceChange(() => api.visualReferences.upsertSet({ id: form.get("id"), description: form.get("description") }), "分组已保存。");
+    void withReferenceChange(() => api.visualReferences.upsertSet({ id: form.get("id"), scope: form.get("scope"), contactId: references?.contact?.id || "", description: form.get("description") }), "分组已保存。");
     event.currentTarget.reset();
   };
 
-  const removeGroup = (id) => {
+  const removeGroup = (item) => {
     if (!window.confirm("移除此分组不会删除其中的资料。继续吗？")) return;
-    void withReferenceChange(() => api.visualReferences.removeSet(id), "分组已移除。");
+    void withReferenceChange(() => api.visualReferences.removeSet(item.reference), "分组已移除。");
   };
 
   return (
@@ -345,24 +384,24 @@ export function CreateVisualPage({ actions = {}, api }) {
           <div className="drawing-head"><div><span className="reference-kicker">开始创作</span><h2>从灵感到候选</h2><p>{ready ? "写下画面方向，挑选参考，再把可比较的候选留在同一处。" : "选择有效项目后，即可开始整理提示词、参考与候选。"}</p></div><Status label={ready ? "可以开始" : "需要项目"} tone={statusTone(drawing?.status)} /></div>
           <form className="voice-form drawing-generate-form" onSubmit={generate}>
             <label className="wide drawing-prompt-field">绘画提示词<textarea disabled={creating} maxLength="4000" name="prompt" placeholder="描述你想看见的画面、氛围与主体。" required /><small>最多 4000 字</small></label>
-            <div className="drawing-reference-summary"><div><span className="reference-kicker">本次参考</span><strong>{selectedReferences.size ? `已选 ${selectedReferences.size} 张参考图` : "还没有选择参考图"}</strong><p>在下方视觉参考库按分类浏览图片，在图片右下角勾选。</p></div>{selectedReferences.size ? <button className="quiet-link" onClick={() => setSelectedReferences(new Set())} type="button">清空选择</button> : null}</div>
+            <div className="drawing-reference-summary"><div><span className="reference-kicker">本次参考</span><strong>{selectedReferences.size ? `已选 ${selectedReferences.size} 张参考图` : "还没有选择参考图"}</strong><p>共享资料和当前联系人的专属资料都可选；只会带入本次真正需要的图片。</p></div>{selectedReferences.size ? <button className="quiet-link" onClick={() => setSelectedReferences(new Set())} type="button">清空选择</button> : null}</div>
             <div className="voice-form-actions wide drawing-create-actions"><span className="drawing-engine-state">{workflows.some((item) => item.enabled) ? "可使用本机出图" : "可使用已保存的图像服务"}</span><button className="primary-button" disabled={!ready || creating}>{creating ? "正在生成…" : "生成图片"}</button></div>
           </form>
         </section>
         <VisualRuns onOpenCandidate={openCandidate} runs={drawing?.runs || []} />
       </section>
       <section className="drawing-references">
-        <div className="drawing-section-heading"><div><span className="reference-kicker">视觉参考</span><h2>从资料库挑选本次参考</h2><p>先按角色或分组筛选，再在图片右下角勾选；点图片本身可以查看和整理资料。</p></div><span className="drawing-reference-count">已选 {selectedReferences.size} 张</span></div>
+        <div className="drawing-section-heading"><div><span className="reference-kicker">视觉参考</span><h2>从资料库挑选本次参考</h2><p>{hasContact ? `可同时使用我的共享资料和“${references.contact.name}”的专属资料；专属人物不会出现在其他联系人中。` : "未选择联系人时，只能管理我的共享资料；不会再写入未归属资料库。"}</p></div><span className="drawing-reference-count">已选 {selectedReferences.size} 张</span></div>
         <section className="reference-workspace">
           <div className="reference-main">
             <section className="reference-collection">
-              <div className="reference-filters"><div className="filter-row"><span>角色</span>{[["all", "全部"], ...Object.entries(ROLES)].map(([id, label]) => <button className={`filter-button${referenceRole === id ? " active" : ""}`} key={id} onClick={() => setReferenceRole(id)} type="button">{label}</button>)}</div><label className="reference-group-filter">分组<Select className="create-select-react reference-group-filter__select" onChange={setReferenceSet} options={[{ label: "全部分组", value: "all" }, ...(references?.sets || []).map((item) => ({ label: item.description, value: item.id }))]} value={referenceSet} /></label></div>
-              {references?.status === "invalid" ? <section className="reference-empty reference-error"><h2>资料库暂时无法打开</h2><p>请稍后重试，或检查资料库设置。</p></section> : !references ? <section className="reference-empty"><h2>正在读取视觉参考库</h2><p>请稍候，资料会显示在这里。</p></section> : assets.length ? <div className="reference-grid">{assets.map((asset) => <ReferenceTile asset={asset} chosen={selectedReferences.has(asset.id)} key={asset.id} onSelect={() => setSelectedAssetId(asset.id)} onToggle={() => setSelectedReferences((previous) => { const next = new Set(previous); if (next.has(asset.id)) next.delete(asset.id); else next.add(asset.id); return next; })} preview={thumbnails[asset.id]} selected={selectedAssetId === asset.id} />)}</div> : <section className="reference-empty"><h2>{references.assets?.length ? "没有匹配的参考资料" : "资料库还是空的"}</h2><p>{references.assets?.length ? "调整角色或分组筛选，或从本机添加图片。" : "从本机添加第一张图片，建立这次创作的起点。"}</p></section>}
+              <div className="reference-filters"><div className="filter-row"><span>资料来源</span>{[["all", "全部"], ...scopeOptions.map((item) => [item.value, item.label])].map(([id, label]) => <button className={`filter-button${referenceScope === id ? " active" : ""}`} key={id} onClick={() => setReferenceScope(id)} type="button">{label}</button>)}</div><div className="filter-row"><span>角色</span>{[["all", "全部"], ...Object.entries(ROLES)].map(([id, label]) => <button className={`filter-button${referenceRole === id ? " active" : ""}`} key={id} onClick={() => setReferenceRole(id)} type="button">{label}</button>)}</div><label className="reference-group-filter">分组<Select className="create-select-react reference-group-filter__select" onChange={setReferenceSet} options={[{ label: "全部分组", value: "all" }, ...(references?.sets || []).map((item) => ({ label: `${item.scopeLabel} · ${item.description}`, value: item.referenceId }))]} value={referenceSet} /></label></div>
+              {references?.status === "invalid" ? <section className="reference-empty reference-error"><h2>资料库暂时无法打开</h2><p>{references.message || "请稍后重试，或检查资料库设置。"}</p></section> : !references ? <section className="reference-empty"><h2>正在读取视觉参考库</h2><p>请稍候，资料会显示在这里。</p></section> : assets.length ? <div className="reference-grid">{assets.map((asset) => <ReferenceTile asset={asset} chosen={selectedReferences.has(asset.referenceId)} key={asset.referenceId} onSelect={() => setSelectedAssetId(asset.referenceId)} onToggle={() => setSelectedReferences((previous) => { const next = new Set(previous); if (next.has(asset.referenceId)) next.delete(asset.referenceId); else next.add(asset.referenceId); return next; })} preview={thumbnails[asset.referenceId]} selected={selectedAssetId === asset.referenceId} />)}</div> : <section className="reference-empty"><h2>{references.assets?.length ? "没有匹配的参考资料" : "资料库还是空的"}</h2><p>{references.assets?.length ? "调整资料来源、角色或分组筛选，或从本机添加图片。" : "从本机添加第一张图片，建立这次创作的起点。"}</p></section>}
             </section>
-            <ReferenceInspector asset={selectedAsset} onRemove={removeReference} onSave={saveReference} sets={references?.sets || []} />
+            <ReferenceInspector asset={selectedAsset} onRemove={removeReference} onSave={saveReference} sets={selectedAssetSets} />
           </div>
-          <ReferenceImport empty={!references?.assets?.length} onCancel={() => setPendingImport(null)} onSelect={selectLocalReference} onSubmit={importReference} pending={pendingImport} role={importRole} setRole={setImportRole} sets={references?.sets || []} />
-          <ReferenceGroups onRemove={removeGroup} onSubmit={saveGroup} sets={references?.sets || []} />
+          <ReferenceImport empty={!references?.assets?.length} onCancel={() => setPendingImport(null)} onSelect={selectLocalReference} onSubmit={importReference} pending={pendingImport} role={importRole} scope={importScope} scopeOptions={scopeOptions} setRole={selectImportRole} setScope={setImportScope} sets={importSets} />
+          <ReferenceGroups onRemove={removeGroup} onSubmit={saveGroup} scope={groupScope} scopeOptions={scopeOptions} setScope={setGroupScope} sets={references?.sets || []} />
         </section>
       </section>
       <CreateStudioDialog ariaLabel="绘画设置" onClose={() => setSettingsOpen(false)} open={settingsOpen}>

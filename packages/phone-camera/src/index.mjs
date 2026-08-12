@@ -2,13 +2,19 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 import { createCandidates, validateComfyRegistry } from "@suzu-lives/image-workbench";
-import { createVisualReferenceLibrary, VisualReferenceError } from "@suzu-lives/visual-reference-library";
+import {
+  createVisualReferenceLibrary,
+  resolveAgentVisualReferenceLibraryRoot,
+  resolveSharedVisualReferenceLibraryRoot,
+  VisualReferenceError,
+} from "@suzu-lives/visual-reference-library";
 
 import profiles from "../profiles.json" with { type: "json" };
 
 export class PhoneCameraError extends Error {}
 export const MAX_REFERENCES = 16;
 const SHOTS = new Set(["rear", "selfie", "mirror"]);
+const REFERENCE_SCOPES = new Set(["shared", "contact"]);
 
 function clean(value) { return String(value ?? "").trim(); }
 function object(value) { return value && typeof value === "object" && !Array.isArray(value) ? value : {}; }
@@ -22,7 +28,7 @@ export function normalizePhoneConfig(value = {}) {
   const source = object(value); const references = object(source.references); const output = object(source.output); const prompt = object(source.prompt); const sizes = object(source.size_by_shot);
   const maxImages = Number(references.max_images ?? 8);
   if (!Number.isInteger(maxImages) || maxImages < 1 || maxImages > MAX_REFERENCES) throw new PhoneCameraError(`references.max_images 必须在 1 到 ${MAX_REFERENCES} 之间。`);
-  return { sizeByShot: { rear: clean(sizes.rear) || clean(profiles.shots.rear.default_size), selfie: clean(sizes.selfie) || clean(profiles.shots.selfie.default_size), mirror: clean(sizes.mirror) || clean(profiles.shots.mirror.default_size) }, references: { manifest: clean(references.manifest) || "visual-references/manifest.json", maxImages }, output: { directory: clean(output.directory) || "phone-camera" }, prompt: { prefix: clean(prompt.prefix), suffix: clean(prompt.suffix) }, defaultBackend: clean(source.default_backend) || "api" };
+  return { sizeByShot: { rear: clean(sizes.rear) || clean(profiles.shots.rear.default_size), selfie: clean(sizes.selfie) || clean(profiles.shots.selfie.default_size), mirror: clean(sizes.mirror) || clean(profiles.shots.mirror.default_size) }, references: { maxImages }, output: { directory: clean(output.directory) || "phone-camera" }, prompt: { prefix: clean(prompt.prefix), suffix: clean(prompt.suffix) }, defaultBackend: clean(source.default_backend) || "api" };
 }
 
 export async function loadPhoneConfig({ dataRoot, configPath = "" } = {}) {
@@ -58,15 +64,61 @@ export function buildPhonePrompt({ scene, shot, config, references = [] } = {}) 
   return [values.prompt.prefix, parts.join("\n\n"), values.prompt.suffix].filter(Boolean).join("\n\n");
 }
 
-export async function expandReferences({ agentRoot, manifest = "", requested = [], maxImages = 8 } = {}) {
+function referenceRequest(value) {
+  if (typeof value === "string") {
+    const raw = clean(value);
+    const separator = raw.indexOf(":");
+    if (separator < 0) return { scope: "", id: raw };
+    return { scope: raw.slice(0, separator), id: raw.slice(separator + 1) };
+  }
+  const source = object(value);
+  return { scope: clean(source.scope), id: clean(source.id) };
+}
+
+function validateReferenceRequest(value) {
+  const reference = referenceRequest(value);
+  if (!REFERENCE_SCOPES.has(reference.scope) || !reference.id) {
+    throw new PhoneCameraError("视觉参考必须明确包含 shared 或 contact 归属及资料 ID。 ");
+  }
+  return reference;
+}
+
+export async function expandReferences({ agentRoot, dataRoot = "", requested = [], maxImages = 8 } = {}) {
   if (!requested.length) return [];
   if (!Number.isInteger(maxImages) || maxImages < 1 || maxImages > MAX_REFERENCES) throw new PhoneCameraError(`references.max_images 必须在 1 到 ${MAX_REFERENCES} 之间。`);
-  const manifestPath = rooted(agentRoot, manifest || "visual-references/manifest.json", "--manifest"); if (path.basename(manifestPath) !== "manifest.json") throw new PhoneCameraError("--manifest 必须指向软件资料库的 manifest.json。 ");
-  const library = createVisualReferenceLibrary({ libraryRoot: path.dirname(manifestPath) }); const snapshot = await library.snapshot(); if (snapshot.status === "invalid") throw new PhoneCameraError(snapshot.message || "视觉参考库无效。 ");
-  const assets = new Map(snapshot.assets.map((item) => [item.id, item])); const sets = new Map(snapshot.sets.map((item) => [item.id, item])); const selected = []; const seen = new Set();
-  for (const raw of requested) { const id = clean(raw); const candidates = assets.has(id) ? [id] : sets.get(id)?.assets; if (!candidates) throw new PhoneCameraError("找不到参考 asset 或 set：" + id); for (const candidate of candidates) if (!seen.has(candidate)) { seen.add(candidate); selected.push(candidate); } }
+  const root = path.resolve(clean(agentRoot));
+  if (!clean(agentRoot)) throw new PhoneCameraError("缺少当前联系人资料目录。 ");
+  const libraries = {
+    contact: createVisualReferenceLibrary({ libraryRoot: resolveAgentVisualReferenceLibraryRoot(root) }),
+    ...(clean(dataRoot) ? { shared: createVisualReferenceLibrary({ libraryRoot: resolveSharedVisualReferenceLibraryRoot(dataRoot) }) } : {}),
+  };
+  const snapshots = new Map();
+  const getSnapshot = async (scope) => {
+    const library = libraries[scope];
+    if (!library) throw new PhoneCameraError("共享视觉参考需要 Suzu Lives 软件数据目录。 ");
+    if (!snapshots.has(scope)) snapshots.set(scope, await library.snapshot());
+    const snapshot = snapshots.get(scope);
+    if (snapshot.status === "invalid") throw new PhoneCameraError(snapshot.message || "视觉参考库无效。 ");
+    return { library, snapshot };
+  };
+  const selected = [];
+  const seen = new Set();
+  for (const raw of requested) {
+    const reference = validateReferenceRequest(raw);
+    const { snapshot } = await getSnapshot(reference.scope);
+    const assets = new Map(snapshot.assets.map((item) => [item.id, item]));
+    const sets = new Map(snapshot.sets.map((item) => [item.id, item]));
+    const candidates = assets.has(reference.id) ? [reference.id] : sets.get(reference.id)?.assets;
+    if (!candidates) throw new PhoneCameraError("找不到参考 asset 或 set：" + reference.scope + ":" + reference.id);
+    for (const id of candidates) {
+      const key = reference.scope + ":" + id;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      selected.push({ scope: reference.scope, id });
+    }
+  }
   if (selected.length > maxImages) throw new PhoneCameraError(`本次展开出 ${selected.length} 张参考图，超过配置上限 ${maxImages}；请只选择当前场景需要的参考组。`);
-  try { return await Promise.all(selected.map(async (id, index) => { const item = assets.get(id); const filePath = await library.assetPath(id); return { index: index + 1, id, role: item.role, path: path.relative(path.resolve(agentRoot), filePath).split(path.sep).join("/"), description: item.description, preserve: list(item.preserve), ignore: list(item.ignore), filename: path.basename(filePath), mime: { ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp" }[path.extname(filePath).toLowerCase()] || "image/png", data: await fs.readFile(filePath) }; })); }
+  try { return await Promise.all(selected.map(async (reference, index) => { const { library, snapshot } = await getSnapshot(reference.scope); const item = snapshot.assets.find((asset) => asset.id === reference.id); const filePath = await library.assetPath(reference.id); const relativeRoot = reference.scope === "shared" ? path.resolve(dataRoot) : root; return { index: index + 1, id: reference.scope + ":" + reference.id, role: item.role, path: path.relative(relativeRoot, filePath).split(path.sep).join("/"), description: item.description, preserve: list(item.preserve), ignore: list(item.ignore), filename: path.basename(filePath), mime: { ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp" }[path.extname(filePath).toLowerCase()] || "image/png", data: await fs.readFile(filePath) }; })); }
   catch (error) { if (error instanceof VisualReferenceError) throw new PhoneCameraError(error.message); throw error; }
 }
 
@@ -74,7 +126,7 @@ export async function takePhonePhoto({ agentRoot, dataRoot, connection, registry
   const root = path.resolve(clean(agentRoot)); if (!clean(agentRoot)) throw new PhoneCameraError("缺少当前 Agent 数据目录。 ");
   const { config, path: phoneConfigPath, source: configSource } = await loadPhoneConfig({ dataRoot, configPath: options.config });
   const shot = clean(options.shot); const scene = clean(options.scene); const backend = clean(options.backend) || config.defaultBackend; if (!SHOTS.has(shot)) throw new PhoneCameraError("--shot 必须是 rear、selfie 或 mirror。 "); if (!['api', 'comfyui'].includes(backend)) throw new PhoneCameraError("--backend 必须是 api 或 comfyui。 ");
-  const manifest = clean(options.manifest) || config.references.manifest; const references = await expandReferences({ agentRoot: root, manifest, requested: list(options.refs), maxImages: config.references.maxImages }); const prompt = buildPhonePrompt({ scene, shot, config, references }); const size = clean(options.size) || config.sizeByShot[shot];
+  const references = await expandReferences({ agentRoot: root, dataRoot, requested: list(options.refs), maxImages: config.references.maxImages }); const prompt = buildPhonePrompt({ scene, shot, config, references }); const size = clean(options.size) || config.sizeByShot[shot];
   if (options.dryRun) return { status: "dry-run", backend, workflow: clean(options.workflow) || null, shot, size, references: references.map(({ index, id, role, path: referencePath }) => ({ index, id, role, path: referencePath })), prompt, configSource };
   const outputRoot = rooted(root, clean(options.out) || config.output.directory, "--out");
   const result = await createCandidates({ root: outputRoot, connection, registry, input: { prompt, backend, workflow: clean(options.workflow), count: 1, size, seed: Number.isInteger(options.seed) ? options.seed : null, includeReferencePrompt: false }, references, maxReferences: MAX_REFERENCES, fetchImpl });

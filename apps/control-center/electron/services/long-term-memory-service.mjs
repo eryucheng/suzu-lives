@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 
 import { resolveAgentDataRoot } from "@suzu-lives/agent-registry";
@@ -22,6 +23,47 @@ function plainObject(value) {
 
 function isSessionId(value) {
   return SESSION_ID_PATTERN.test(clean(value));
+}
+
+async function fileExists(filePath) {
+  try {
+    await fs.access(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function maintenanceSnapshot(status) {
+  const source = plainObject(status);
+  const taskCounts = plainObject(source.taskCounts);
+  const tasks = Array.isArray(source.tasks) ? source.tasks : [];
+  const state = plainObject(source.stateAnalysisRequests);
+  const consolidation = plainObject(source.consolidationRuns);
+  return JSON.stringify({
+    pendingInputEvents: Number(source.pendingInputEvents) || 0,
+    runnableTaskCount: Number(source.runnableTaskCount) || 0,
+    pendingTasks: tasks.filter((task) => clean(task?.status) === "pending").length,
+    runningTasks: tasks.filter((task) => clean(task?.status) === "running").length,
+    taskCounts,
+    pendingStateRequests: Number(state.pending) || 0,
+    blockedStateRequests: Number(state.blocked) || 0,
+    runningConsolidations: Number(consolidation.running) || 0,
+    plannedConsolidations: Number(consolidation.planned) || 0,
+  });
+}
+
+function maintenanceHasRunnableWork(status) {
+  const source = plainObject(status);
+  const tasks = Array.isArray(source.tasks) ? source.tasks : [];
+  const state = plainObject(source.stateAnalysisRequests);
+  const consolidation = plainObject(source.consolidationRuns);
+  return Number(source.pendingInputEvents) > 0
+    || Number(source.runnableTaskCount) > 0
+    || tasks.some((task) => ["pending", "running"].includes(clean(task?.status)))
+    || Number(state.pending) > 0
+    || Number(consolidation.planned) > 0
+    || Number(consolidation.running) > 0;
 }
 
 function publicSession(value) {
@@ -100,8 +142,31 @@ function providerConnection(value, { fallbackModel = "" } = {}) {
   };
 }
 
+function isDeepSeekAnthropicConnection(connection) {
+  if (clean(connection?.type).toLowerCase() !== "anthropic-compatible") return false;
+  try {
+    return new URL(clean(connection?.baseUrl)).hostname.toLowerCase() === "api.deepseek.com";
+  } catch {
+    return false;
+  }
+}
+
+export function memoryGenerationConnection(value) {
+  const connection = providerConnection(value);
+  if (!connection || !isDeepSeekAnthropicConnection(connection)) return connection;
+  const extraBody = plainObject(connection.extraBody);
+  if (Object.hasOwn(extraBody, "thinking")) return connection;
+  return {
+    ...connection,
+    extraBody: {
+      ...extraBody,
+      thinking: { type: "disabled" },
+    },
+  };
+}
+
 function providerFactories({ generationConnection, embeddingConnection }) {
-  const generation = providerConnection(generationConnection);
+  const generation = memoryGenerationConnection(generationConnection);
   const embedding = providerConnection(embeddingConnection, {
     fallbackModel: clean(embeddingConnection?.type).toLowerCase() === "dashscope"
       ? DEFAULT_DASHSCOPE_EMBEDDING_MODEL
@@ -138,6 +203,7 @@ function providerFactories({ generationConnection, embeddingConnection }) {
       embeddingConfigured: Boolean(embeddingProvider),
       embeddingModel: embedding?.model || "",
       generationConfigured: Boolean(generator),
+      generationModel: generation?.model || "",
     },
   };
 }
@@ -340,19 +406,127 @@ export function createLongTermMemoryService({
     };
   };
 
-  const queueMaintenance = (entry, sessionId = "") => {
-    if (!entry?.adapter || !clean(entry?.contact?.agentId)) return;
+  const rebuildAssociationGraph = (entry) => {
+    try {
+      entry.memory.rebuildAssociationGraph();
+      return true;
+    } catch {
+      // A graph rebuild is additive. The successfully completed archive and
+      // maintenance work must not be reported as failed merely because its
+      // optional association projection could not run.
+      return false;
+    }
+  };
+
+  const drainMaintenance = async (entry, sessionId = "", { rebuildWhenIdle = false } = {}) => {
+    if (!entry?.adapter || !entry?.memory || !clean(entry?.contact?.agentId)) {
+      return { status: "skipped", reason: "memory-entry-unavailable", passes: 0 };
+    }
+    const scopedSessionId = clean(sessionId) || clean(entry.sessionId);
+    let previous = "";
+    let passes = 0;
+    let graphRebuilt = false;
+    while (true) {
+      const before = entry.memory.maintenanceStatus({ limit: 500 });
+      if (!maintenanceHasRunnableWork(before)) {
+        if (rebuildWhenIdle) graphRebuilt = rebuildAssociationGraph(entry);
+        return { status: "completed", passes, graphRebuilt };
+      }
+      const beforeSnapshot = maintenanceSnapshot(before);
+      const result = await entry.adapter.onIdle({ sessionId: scopedSessionId, lane: "all" });
+      passes += 1;
+      const after = entry.memory.maintenanceStatus({ limit: 500 });
+      const afterSnapshot = maintenanceSnapshot(after);
+      if (!maintenanceHasRunnableWork(after)) {
+        // Rebuild only after a queued pipeline has actually converged. This
+        // makes interrupted imports gain their durable association edges
+        // without rebuilding the entire brain merely because it was viewed.
+        graphRebuilt = rebuildAssociationGraph(entry);
+        return { status: clean(result?.status) || "completed", passes, graphRebuilt };
+      }
+      if (clean(result?.status) === "completed-with-failures" || afterSnapshot === beforeSnapshot || afterSnapshot === previous) {
+        return {
+          status: clean(result?.status) || "stalled",
+          reason: "maintenance-made-no-further-progress",
+          passes,
+          graphRebuilt,
+        };
+      }
+      previous = afterSnapshot;
+    }
+  };
+
+  const queueMaintenance = (entry, sessionId = "", options = {}) => {
+    if (!entry?.adapter || !clean(entry?.contact?.agentId)) return Promise.resolve(null);
     const scopeKey = `${entry.contact.agentId}:${clean(entry.sessionId)}`;
     const scopedSessionId = clean(sessionId) || clean(entry.sessionId);
     const previous = maintenanceByAgent.get(scopeKey) || Promise.resolve();
     const next = previous
       .catch(() => undefined)
-      .then(() => entry.adapter.onIdle({ sessionId: scopedSessionId, lane: "all" }))
+      .then(() => drainMaintenance(entry, scopedSessionId, options))
       .catch(() => undefined);
     maintenanceByAgent.set(scopeKey, next);
     void next.finally(() => {
       if (maintenanceByAgent.get(scopeKey) === next) maintenanceByAgent.delete(scopeKey);
     });
+    return next;
+  };
+
+  const resumeExistingMaintenance = async () => {
+    if (typeof reader?.resolveContactSession !== "function") return [];
+    const settings = settingsService.load() || {};
+    const dataRoot = clean(settingsService.response(settings).dataRoot);
+    if (!dataRoot) return [];
+    const snapshot = await contactProjectsService.snapshot();
+    const contacts = Array.isArray(snapshot?.contacts) ? snapshot.contacts : [];
+    const resumed = [];
+    for (const contact of contacts) {
+      const contactId = clean(contact?.id);
+      const agentId = clean(contact?.agentId);
+      const projectRoot = clean(contact?.projectRoot);
+      if (!contactId || !agentId || !projectRoot) continue;
+      let resolved;
+      try {
+        resolved = await reader.resolveContactSession(contactId);
+      } catch {
+        continue;
+      }
+      const sessionId = clean(resolved?.id);
+      if (!isSessionId(sessionId)) continue;
+      const databasePath = path.join(
+        resolveAgentDataRoot({ dataRoot, agentId }),
+        "memory",
+        "sessions",
+        sessionId,
+        "suzu-memory.db",
+      );
+      if (!await fileExists(databasePath)) continue;
+      try {
+        const entry = await entryForProject(projectRoot, { optional: true, sessionId });
+        if (!entry) continue;
+        // The desktop app is the sole owner of this local memory database. A
+        // fresh process therefore knows every active lease belongs to the
+        // process that just stopped. Release both archive and maintenance
+        // work before the normal idle drain, rather than waiting out a stale
+        // lease or requiring another chat turn to kick the queue.
+        const recovery = entry.memory.recoverProcessingEvents({ force: true });
+        const maintenanceRecovery = entry.memory.recoverRunningMaintenance({ force: true });
+        resumed.push({
+          contactId,
+          sessionId,
+          recoveredInputBatches: Number(recovery?.recovered || 0),
+          recoveredMaintenanceTasks: Number(maintenanceRecovery?.tasks?.requeued || 0),
+          failedMaintenanceTasks: Number(maintenanceRecovery?.tasks?.failed || 0),
+          recoveredConsolidations: Number(maintenanceRecovery?.consolidations?.requeued || 0),
+          failedConsolidations: Number(maintenanceRecovery?.consolidations?.failed || 0),
+          result: await queueMaintenance(entry, sessionId, { rebuildWhenIdle: true }),
+        });
+      } catch {
+        // Startup recovery is opportunistic; one unavailable contact must not
+        // block the rest of the desktop app from opening.
+      }
+    }
+    return resumed;
   };
 
   const activeEntry = async ({ contactId = "" } = {}) => {
@@ -476,6 +650,7 @@ export function createLongTermMemoryService({
           embeddingConfigured: entry.providerStatus.embeddingConfigured,
           embeddingModel: entry.providerStatus.embeddingModel,
           generationConfigured: entry.providerStatus.generationConfigured,
+          generationModel: entry.providerStatus.generationModel,
           memories: Number(entry.info.memoryCount || 0),
           activeContact: scope.activeContact,
           contacts: scope.contacts,
@@ -579,6 +754,16 @@ export function createLongTermMemoryService({
       return result;
     },
 
+    async retryLongTermExtractionReview({ proposalId, note, contactId } = {}) {
+      const entry = await activeEntry({ contactId });
+      const result = await entry.memory.retryLongTermExtractionFailure(clean(proposalId), {
+        actor: "human:control-center",
+        reason: clean(note),
+      });
+      queueMaintenance(entry);
+      return result;
+    },
+
     async revokeReviewRelation({ proposalId, note, contactId } = {}) {
       const entry = await activeEntry({ contactId });
       const result = entry.memory.revokeHighLevelRelation(clean(proposalId), {
@@ -604,9 +789,24 @@ export function createLongTermMemoryService({
       return entry.memory.backupDatabase();
     },
 
+    async inspectReviewBackup({ sourcePath, contactId } = {}) {
+      const entry = await activeEntry({ contactId: clean(contactId) });
+      return entry.memory.inspectDatabaseBackup(clean(sourcePath));
+    },
+
+    async restoreReviewBackup({ sourcePath, contactId } = {}) {
+      const entry = await activeEntry({ contactId: clean(contactId) });
+      const result = entry.memory.restoreDatabaseBackup(clean(sourcePath), {
+        confirmAgentId: entry.contact.agentId,
+      });
+      queueMaintenance(entry, entry.sessionId);
+      return result;
+    },
+
     setConversationReader(nextReader) {
       reader = nextReader && typeof nextReader === "object" ? nextReader : null;
     },
+    resumeExistingMaintenance,
     dispose() { maintenanceByAgent.clear(); },
   };
 }

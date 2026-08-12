@@ -149,16 +149,22 @@ function normalizeReferenceIds(value) {
   if (!Array.isArray(value) || value.length > 16) {
     throw new InternalCapabilityCliError("input.referenceIds 必须是至多 16 项的数组。");
   }
-  return Object.freeze(value.map((item, index) => requiredText(item, "input.referenceIds[" + index + "]")));
+  return Object.freeze(value.map((item, index) => {
+    const label = "input.referenceIds[" + index + "]";
+    const source = assertKnownKeys(item, ["scope", "id"], label);
+    return Object.freeze({
+      scope: optionalChoice(requiredText(source.scope, label + ".scope"), label + ".scope", ["shared", "contact"]),
+      id: requiredText(source.id, label + ".id"),
+    });
+  }));
 }
 
 function normalizePhoneCameraGenerateInput(value) {
-  const source = assertKnownKeys(value, ["shot", "scene", "referenceIds", "manifestPath", "backend", "workflow", "size", "seed", "outputDirectory", "configPath", "dryRun"], "phone-camera 输入");
+  const source = assertKnownKeys(value, ["shot", "scene", "referenceIds", "backend", "workflow", "size", "seed", "outputDirectory", "configPath", "dryRun"], "phone-camera 输入");
   return Object.freeze({
     shot: optionalChoice(requiredText(source.shot, "input.shot"), "input.shot", ["rear", "selfie", "mirror"]),
     scene: requiredText(source.scene, "input.scene"),
     referenceIds: normalizeReferenceIds(source.referenceIds),
-    manifestPath: optionalText(source.manifestPath, "input.manifestPath"),
     backend: optionalChoice(source.backend, "input.backend", ["api", "comfyui"]),
     workflow: optionalText(source.workflow, "input.workflow"),
     size: optionalText(source.size, "input.size"),
@@ -397,7 +403,6 @@ export async function executeInternalCapability({ request, runtime } = {}) {
         shot: request.input.shot,
         scene: request.input.scene,
         refs: request.input.referenceIds,
-        manifest: request.input.manifestPath,
         backend: request.input.backend,
         workflow: request.input.workflow,
         size: request.input.size,

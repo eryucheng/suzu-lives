@@ -94,3 +94,10 @@
   min-height: 170px;
   resize: vertical;
 }
+
+.memory-review-storage-actions {
+  display: grid;
+  align-content: center;
+  gap: var(--space-sm);
+  flex: 0 0 auto;
+}

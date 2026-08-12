@@ -23,11 +23,9 @@ Each contact selects its own voice at
 ```
 
 The selected ID must exist in that contact's
-`voice-design/candidates.jsonl` candidate library. For upgrades, an old
-`voiceId` in the shared file is used only when it belongs to the current
-contact's candidate library; saving the selection or the first real synthesis
-then writes the contact file. The shared file is retained unchanged, including
-its legacy `voiceId`.
+`voice-design/candidates.jsonl` candidate library. A `voiceId` left in the
+shared file is ignored: a contact without its own selection receives a
+`tts_voice_missing` error that directs the user to configure a contact voice.
 
 Text synthesis uses the selected Suzu sound connection and writes usage to the
 caller-provided Suzu Lives ledger. Both synthesized and supplied audio are

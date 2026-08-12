@@ -10,7 +10,7 @@ function memoryScope(value) {
   };
 }
 
-export function registerMemoryIpc({ ipcMain, memoryService }) {
+export function registerMemoryIpc({ ipcMain, memoryService, dialog, getMainWindow = () => null }) {
   if (!memoryService) throw new Error("记忆 IPC 需要嵌入式长期记忆服务。");
   const service = memoryService;
   ipcMain.handle("memory:status", (_event, scope) => service.status(plainObject(scope)));
@@ -55,6 +55,11 @@ export function registerMemoryIpc({ ipcMain, memoryService }) {
     note: String(payload?.note || ""),
     ...memoryScope(payload),
   }));
+  ipcMain.handle("memory:retry-long-term-extraction-review", (_event, payload) => service.retryLongTermExtractionReview({
+    proposalId: String(payload?.proposalId || ""),
+    note: String(payload?.note || ""),
+    ...memoryScope(payload),
+  }));
   ipcMain.handle("memory:revoke-review-relation", (_event, payload) => service.revokeReviewRelation({
     proposalId: String(payload?.proposalId || ""),
     note: String(payload?.note || ""),
@@ -66,4 +71,24 @@ export function registerMemoryIpc({ ipcMain, memoryService }) {
     ...memoryScope(payload),
   }));
   ipcMain.handle("memory:create-review-backup", (_event, scope) => service.createReviewBackup(plainObject(scope)));
+  ipcMain.handle("memory:select-review-backup", async () => {
+    if (!dialog?.showOpenDialog) throw new Error("当前环境无法选择记忆备份文件。");
+    const result = await dialog.showOpenDialog(getMainWindow(), {
+      title: "选择要恢复的记忆备份",
+      properties: ["openFile"],
+      filters: [{ name: "记忆数据库备份", extensions: ["db"] }],
+    });
+    return {
+      canceled: result.canceled === true,
+      sourcePath: String(result.filePaths?.[0] || ""),
+    };
+  });
+  ipcMain.handle("memory:inspect-review-backup", (_event, payload) => service.inspectReviewBackup({
+    sourcePath: String(payload?.sourcePath || ""),
+    ...memoryScope(payload),
+  }));
+  ipcMain.handle("memory:restore-review-backup", (_event, payload) => service.restoreReviewBackup({
+    sourcePath: String(payload?.sourcePath || ""),
+    ...memoryScope(payload),
+  }));
 }

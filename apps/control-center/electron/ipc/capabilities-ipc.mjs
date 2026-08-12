@@ -399,7 +399,6 @@ function voiceMessageSettings({ dataRoot, agentRoot, voiceDesign, candidates, cu
   const contactVoiceId = configuredVoiceId(contact);
   const contactProvider = configuredVoiceProvider(contact);
   const contactCustomVoiceId = configuredCustomVoiceId(contact);
-  const legacyVoiceId = configuredVoiceId(shared);
   const availableVoiceIds = new Set(candidates.map((candidate) => candidate.voiceId));
   let voiceId = "";
   let voiceProvider = "qwen";
@@ -428,17 +427,10 @@ function voiceMessageSettings({ dataRoot, agentRoot, voiceDesign, candidates, cu
       selectionSource = "invalid-contact";
         diagnostic = "当前项目保存的音色不在候选库中；发送会被安全拒绝，请重新选择。";
     }
-  } else if (legacyVoiceId && availableVoiceIds.has(legacyVoiceId)) {
-    voiceId = legacyVoiceId;
-    selectionSource = "legacy-fallback";
-    diagnostic = "正在安全沿用旧的全局音色；保存本页或首次合成后会只写入当前项目，旧全局配置会保留。";
-  } else if (legacyVoiceId) {
-    selectionSource = "legacy-unavailable";
-    diagnostic = "旧全局音色不属于当前项目的候选库；请重新选择一个已保存音色。";
   } else if (!candidates.length && !customVoices.length) {
     diagnostic = "当前项目还没有可用音色；请先在音色设计中创建并保存候选，或添加自定义音频。";
   } else {
-    diagnostic = "当前项目尚未选择音色。";
+    diagnostic = "当前联系人尚未选择音色；请点击“配置联系人音色”后再发送。";
   }
   return {
     saved: Object.keys(shared).length > 0 || Object.keys(contact).length > 0 || Object.keys(voiceDesign).length > 0 || candidates.length > 0 || customVoices.length > 0,

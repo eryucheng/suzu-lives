@@ -50,7 +50,7 @@ test("memory route is owned by a React page and scopes every action to a contact
   assert.match(page, /if \(loading \|\| \(!ready && nextView !== "brain"\)\) return;/u);
   assert.match(page, /<div className="memory-library-actions">[\s\S]*修改[\s\S]*删除/u);
   assert.doesNotMatch(page, /editingEnabled|编辑记忆|完成编辑/u);
-  assert.doesNotMatch(page, /\{ready \? <>/u);
+  assert.match(page, /自动整理模型：/u);
   assert.doesNotMatch(page, /dangerouslySetInnerHTML/u);
   assert.doesNotMatch(page, /memory\.sessions/u);
 

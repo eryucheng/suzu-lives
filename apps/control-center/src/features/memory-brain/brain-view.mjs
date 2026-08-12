@@ -219,7 +219,7 @@ function nodePalette(node) {
 function nodeBaseRadius(node) {
   const importance = clamp(node.importance, 0, 1);
   if (node.visualTier === "major") {
-    return Math.min(6.2, 3.05 + Math.log2(1 + Number(node.memberCount || 0)) * 0.42 + importance * 0.7);
+    return Math.min(6.7, 3.38 + Math.log2(1 + Number(node.memberCount || 0)) * 0.46 + importance * 0.74);
   }
   if (node.visualTier === "state") return 1.45 + importance * 0.7;
   return 0.42 + importance * 0.42;
@@ -232,6 +232,9 @@ export function memoryBrainEdgeMode(edge, {
   if (selectedId && (edge?.source === selectedId || edge?.target === selectedId)) {
     return "direct";
   }
+  // 默认状态保留结构骨架。此前只有轮播到的少量环境连线会短暂出现，
+  // 即使数据库里已经有主题、我、Agent、关系的真实归属边，画面也像没有线。
+  if (!selectedId && edge?.structural) return "structural";
   if (!selectedId && Number(ambientStrength) > 0) return "ambient";
   return "hidden";
 }
@@ -470,6 +473,7 @@ export function createMemoryBrainView(canvas, graph, {
     const visibleEdgeIndices = selectedId
       ? new Set((adjacency.get(selectedId) || []).map((connection) => connection.index))
       : new Set([
+        ...edges.map((edge, index) => (edge?.structural ? index : -1)).filter((index) => index >= 0),
         ...ambientGroup.edgeIndices,
         ...(fadingAmbientGroup?.edgeIndices || []),
       ]);
@@ -481,10 +485,11 @@ export function createMemoryBrainView(canvas, graph, {
       if (mode === "hidden") continue;
       const direct = mode === "direct";
       const ambient = mode === "ambient";
+      const structural = mode === "structural";
       const projected = edgeProjection(edge);
       if (!projected) continue;
-      const alpha = direct ? 0.78 : 0.075 + ambientStrength * 0.2;
-      context.lineWidth = direct ? 1.48 : 0.62 + ambientStrength * 0.22;
+      const alpha = direct ? 0.78 : structural ? 0.17 : 0.075 + ambientStrength * 0.2;
+      context.lineWidth = direct ? 1.48 : structural ? 0.8 : 0.62 + ambientStrength * 0.22;
       context.strokeStyle = relationColor(edge, alpha);
       if (ambient) {
         context.shadowColor = relationColor(edge, 0.55);
@@ -545,7 +550,13 @@ export function createMemoryBrainView(canvas, graph, {
       const radius = (selected ? baseSize * 1.72 : direct ? baseSize * 1.3 : baseSize)
         * breathing
         * clamp(projected.scale / 150, 0.76, 1.34);
-      let alpha = (node.visualTier === "minor" ? 0.56 : 0.48) + depth * 0.3;
+      let alpha = (
+        node.visualTier === "minor"
+          ? 0.56
+          : node.visualTier === "major"
+            ? 0.58
+            : 0.48
+      ) + depth * 0.3;
       let color = nodePalette(node);
       if (selected) {
         alpha = 1;
@@ -564,14 +575,14 @@ export function createMemoryBrainView(canvas, graph, {
         context.fill();
       }
       if (node.visualTier === "major") {
-        context.strokeStyle = `rgba(${color}, ${selectedId && !selected && !direct ? 0.07 : 0.24 + depth * 0.16})`;
+        context.strokeStyle = `rgba(${color}, ${selectedId && !selected && !direct ? 0.07 : 0.29 + depth * 0.17})`;
         context.lineWidth = 0.8;
         context.beginPath();
-        context.arc(projected.x, projected.y, radius + 3.5, 0, TAU);
+        context.arc(projected.x, projected.y, radius + 3.8, 0, TAU);
         context.stroke();
-        context.strokeStyle = `rgba(${color}, ${selectedId && !selected && !direct ? 0.035 : 0.12 + depth * 0.1})`;
+        context.strokeStyle = `rgba(${color}, ${selectedId && !selected && !direct ? 0.035 : 0.15 + depth * 0.1})`;
         context.beginPath();
-        context.arc(projected.x, projected.y, radius + 6.5, 0, TAU);
+        context.arc(projected.x, projected.y, radius + 6.9, 0, TAU);
         context.stroke();
       } else if (node.visualTier === "state") {
         context.strokeStyle = `rgba(${color}, ${selectedId && !selected && !direct ? 0.05 : 0.22})`;
@@ -581,8 +592,8 @@ export function createMemoryBrainView(canvas, graph, {
         context.stroke();
       }
       context.fillStyle = `rgba(${color}, ${alpha})`;
-      context.shadowColor = `rgba(${color}, ${selected || direct ? 0.95 : node.visualTier === "minor" ? 0.58 : 0.4})`;
-      context.shadowBlur = selected ? 25 : direct ? 16 : ambient ? 13 : node.visualTier === "minor" ? 5 : 7;
+      context.shadowColor = `rgba(${color}, ${selected || direct ? 0.95 : node.visualTier === "minor" ? 0.58 : node.visualTier === "major" ? 0.54 : 0.4})`;
+      context.shadowBlur = selected ? 25 : direct ? 16 : ambient ? 13 : node.visualTier === "minor" ? 5 : node.visualTier === "major" ? 9 : 7;
       context.beginPath();
       context.arc(projected.x, projected.y, Math.max(node.visualTier === "minor" ? 0.58 : 1, radius), 0, TAU);
       context.fill();

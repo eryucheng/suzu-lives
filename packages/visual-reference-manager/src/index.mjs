@@ -4,6 +4,8 @@ import path from "node:path";
 import { resolveAgentDataRoot, resolveSuzuLivesDataRoot } from "@suzu-lives/agent-registry";
 import {
   createVisualReferenceLibrary,
+  resolveAgentVisualReferenceLibraryRoot,
+  resolveSharedVisualReferenceLibraryRoot,
   ROLE_DIRECTORIES,
   ROLES,
   VisualReferenceError,
@@ -30,7 +32,7 @@ function nextValue(values, index, flag) {
 
 export function parseVisualReferenceManagerArgs(values = []) {
   const result = { command: "", manifest: "", plan: "", query: "", role: "", limit: 20, dryRun: false };
-  const options = new Set(["manifest", "plan", "query", "role", "limit", "data-root", "agent-id", "project-root"]);
+  const options = new Set(["manifest", "plan", "query", "role", "limit", "scope", "data-root", "agent-id", "project-root"]);
   for (let index = 0; index < values.length; index += 1) {
     const token = values[index];
     if (token.startsWith("--")) {
@@ -49,11 +51,11 @@ export function parseVisualReferenceManagerArgs(values = []) {
     throw new VisualReferenceManagerError("命令只能是 init、apply、list、show 或 validate。 ");
   }
   const allowed = {
-    init: new Set(["manifest", "dataRoot", "agentId", "projectRoot"]),
-    apply: new Set(["manifest", "plan", "dryRun", "dataRoot", "agentId", "projectRoot"]),
-    list: new Set(["manifest", "query", "role", "limit", "dataRoot", "agentId", "projectRoot"]),
-    show: new Set(["manifest", "id", "dataRoot", "agentId", "projectRoot"]),
-    validate: new Set(["manifest", "dataRoot", "agentId", "projectRoot"]),
+    init: new Set(["manifest", "scope", "dataRoot", "agentId", "projectRoot"]),
+    apply: new Set(["manifest", "plan", "dryRun", "scope", "dataRoot", "agentId", "projectRoot"]),
+    list: new Set(["manifest", "query", "role", "limit", "scope", "dataRoot", "agentId", "projectRoot"]),
+    show: new Set(["manifest", "id", "scope", "dataRoot", "agentId", "projectRoot"]),
+    validate: new Set(["manifest", "scope", "dataRoot", "agentId", "projectRoot"]),
   }[result.command];
   for (const [key, value] of Object.entries(result)) {
     const defaultValue = { plan: "", query: "", role: "", limit: 20, dryRun: false }[key];
@@ -69,20 +71,34 @@ export function parseVisualReferenceManagerArgs(values = []) {
     result.limit = limit;
     if (result.role && !ROLES.includes(result.role)) throw new VisualReferenceManagerError("--role 必须是 identity、location、object 或 style。 ");
   }
+  if (result.scope && !["shared", "contact"].includes(result.scope)) {
+    throw new VisualReferenceManagerError("--scope 必须是 shared 或 contact。 ");
+  }
+  if (!result.scope) throw new VisualReferenceManagerError("每次视觉资料库操作都必须明确指定 --scope shared 或 --scope contact。 ");
   return result;
 }
 
-export function resolveVisualReferenceManifest(agentRoot, configured = "") {
-  const rawRoot = clean(agentRoot);
-  if (!rawRoot) throw new VisualReferenceManagerError("缺少当前 Agent 数据目录。 ");
+function resolveManifestWithin(libraryRoot, configured = "", label = "资料库") {
+  const rawRoot = clean(libraryRoot);
+  if (!rawRoot) throw new VisualReferenceManagerError("缺少" + label + "目录。 ");
   const root = path.resolve(rawRoot);
   const target = clean(configured)
     ? path.resolve(root, clean(configured))
-    : path.join(root, "visual-references", "manifest.json");
+    : path.join(root, "manifest.json");
   if (!inside(root, target) || path.basename(target).toLowerCase() !== "manifest.json") {
-    throw new VisualReferenceManagerError("--manifest 必须是当前 Agent 的 Suzu Lives 数据目录内的 manifest.json。 ");
+    throw new VisualReferenceManagerError("--manifest 必须是所选视觉资料库内的 manifest.json。 ");
   }
   return target;
+}
+
+export function resolveVisualReferenceManifest(agentRoot, configured = "") {
+  return resolveManifestWithin(resolveAgentVisualReferenceLibraryRoot(agentRoot), configured, "当前联系人资料库");
+}
+
+function resolveScopedManifest({ agentRoot, dataRoot, scope, configured }) {
+  if (scope === "contact") return resolveVisualReferenceManifest(agentRoot, configured);
+  if (!clean(dataRoot)) throw new VisualReferenceManagerError("共享资料库需要 Suzu Lives 软件数据目录。 ");
+  return resolveManifestWithin(resolveSharedVisualReferenceLibraryRoot(dataRoot), configured, "共享资料库");
 }
 
 async function readySnapshot(library) {
@@ -158,18 +174,19 @@ async function readPlan(planPath) {
   }
 }
 
-export async function runVisualReferenceManager({ agentRoot, args } = {}) {
-  const manifestPath = resolveVisualReferenceManifest(agentRoot, args.manifest);
+export async function runVisualReferenceManager({ agentRoot, dataRoot = "", args } = {}) {
+  const scope = clean(args?.scope);
+  const manifestPath = resolveScopedManifest({ agentRoot, dataRoot, scope, configured: args.manifest });
   const libraryRoot = path.dirname(manifestPath);
   const library = createVisualReferenceLibrary({ libraryRoot });
   try {
-    if (args.command === "init") return await initialize(library, manifestPath);
+    if (args.command === "init") return { ...(await initialize(library, manifestPath)), scope };
     const snapshot = await readySnapshot(library);
-    if (args.command === "list") return listLibrary(snapshot, manifestPath, args);
-    if (args.command === "show") return await showLibraryItem(library, snapshot, libraryRoot, args.id);
-    if (args.command === "validate") return { status: "valid", manifest: manifestPath, asset_count: snapshot.assets.length, set_count: snapshot.sets.length };
+    if (args.command === "list") return { ...listLibrary(snapshot, manifestPath, args), scope };
+    if (args.command === "show") return { ...(await showLibraryItem(library, snapshot, libraryRoot, args.id)), scope };
+    if (args.command === "validate") return { status: "valid", scope, manifest: manifestPath, asset_count: snapshot.assets.length, set_count: snapshot.sets.length };
     const result = await library.applyPlan(await readPlan(args.plan), { dryRun: args.dryRun });
-    return { status: result.status, manifest: manifestPath, operations: result.operations, asset_count: result.assetCount, set_count: result.setCount };
+    return { status: result.status, scope, manifest: manifestPath, operations: result.operations, asset_count: result.assetCount, set_count: result.setCount };
   } catch (error) {
     throw asManagerError(error);
   }
@@ -178,6 +195,8 @@ export async function runVisualReferenceManager({ agentRoot, args } = {}) {
 export async function runVisualReferenceManagerCli(values, { environment = process.env } = {}) {
   const args = parseVisualReferenceManagerArgs(values);
   const dataRoot = resolveSuzuLivesDataRoot({ configuredRoot: args.dataRoot || environment.SUZU_LIVES_DATA_ROOT, localAppData: environment.LOCALAPPDATA, appData: environment.APPDATA, fallbackBase: "", fallbackToLocatorWhenMissing: true });
-  const agentRoot = resolveAgentDataRoot({ dataRoot, agentId: args.agentId || environment.SUZU_LIVES_AGENT_ID, projectRoot: args.projectRoot || environment.SUZU_LIVES_PROJECT_ROOT });
-  return runVisualReferenceManager({ agentRoot, args });
+  const agentRoot = args.scope === "contact"
+    ? resolveAgentDataRoot({ dataRoot, agentId: args.agentId || environment.SUZU_LIVES_AGENT_ID, projectRoot: args.projectRoot || environment.SUZU_LIVES_PROJECT_ROOT })
+    : "";
+  return runVisualReferenceManager({ agentRoot, dataRoot, args });
 }

@@ -4,4 +4,6 @@
 
 稳定薄入口：`suzu-lives phone-camera --shot rear --scene "..." --dry-run`。入口需要用 `SUZU_LIVES_DATA_ROOT` 与 `SUZU_LIVES_AGENT_ID`（或 `--data-root` / `--agent-id`）定位软件数据。
 
+视觉参考必须明确归属：重复使用 `--ref shared:<asset-or-set-id>` 读取用户共享资料，或 `--ref contact:<asset-or-set-id>` 读取当前联系人的专属资料。不得使用未带归属的参考 ID，也不能读取其他联系人的专属资料。
+
 API 使用软件保存的阿里百炼连接（或 `DASHSCOPE_API_KEY` 环境覆盖）；Electron 已加密保存的 Key 不会暴露给命令行。无参考图使用 `z-image-turbo`，带参考图使用 `wan2.7-image`。生成后的图片通过当前 Suzu 会话的附件交付命令发送：它会保存在会话缓存中，并在该会话已绑定微信时自动发送。

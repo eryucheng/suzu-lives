@@ -7,7 +7,10 @@ import test from "node:test";
 import { resolveAgentDataRoot } from "@suzu-lives/agent-registry";
 import { createMemoryService as createSuzuMemoryService } from "@suzu-memory/service";
 
-import { createLongTermMemoryService } from "../electron/services/long-term-memory-service.mjs";
+import {
+  createLongTermMemoryService,
+  memoryGenerationConnection,
+} from "../electron/services/long-term-memory-service.mjs";
 
 async function exists(filePath) {
   try {
@@ -17,6 +20,33 @@ async function exists(filePath) {
     return false;
   }
 }
+
+test("DeepSeek Anthropic memory extraction disables thinking before forcing a structured tool", () => {
+  const connection = memoryGenerationConnection({
+    type: "anthropic-compatible",
+    apiKey: "test-key",
+    baseUrl: "https://api.deepseek.com/anthropic",
+    model: "deepseek-v4-flash",
+  });
+  assert.deepEqual(connection?.extraBody, { thinking: { type: "disabled" } });
+
+  const explicitlyConfigured = memoryGenerationConnection({
+    type: "anthropic-compatible",
+    apiKey: "test-key",
+    baseUrl: "https://api.deepseek.com/anthropic",
+    model: "deepseek-v4-flash",
+    extraBody: { thinking: { type: "enabled" } },
+  });
+  assert.deepEqual(explicitlyConfigured?.extraBody, { thinking: { type: "enabled" } });
+
+  const unrelated = memoryGenerationConnection({
+    type: "anthropic-compatible",
+    apiKey: "test-key",
+    baseUrl: "https://api.example.test/anthropic",
+    model: "fixture-model",
+  });
+  assert.equal(unrelated?.extraBody, undefined);
+});
 
 test("embedded long-term memory starts in a new contact database and archives a desktop turn", async () => {
   const dataRoot = await fs.mkdtemp(path.join(os.tmpdir(), "suzu-new-memory-"));
@@ -86,6 +116,17 @@ test("embedded long-term memory starts in a new contact database and archives a 
   assert.equal(reviewOverview.storage.activeDatabase.status, "valid");
   const backup = await runtime.createReviewBackup({ contactId: contact.id });
   assert.equal(backup.status, "valid");
+  const inspectedBackup = await runtime.inspectReviewBackup({
+    contactId: contact.id,
+    sourcePath: backup.databasePath,
+  });
+  assert.equal(inspectedBackup.status, "valid");
+  const restoredBackup = await runtime.restoreReviewBackup({
+    contactId: contact.id,
+    sourcePath: backup.databasePath,
+  });
+  assert.equal(restoredBackup.status, "restored");
+  assert.equal(restoredBackup.safetyBackup.status, "valid");
 
   const stored = createSuzuMemoryService({
     dataRoot,
@@ -102,6 +143,133 @@ test("embedded long-term memory starts in a new contact database and archives a 
     "我周五要去看展。",
   ].sort());
   runtime.dispose();
+});
+
+test("startup recovery drains every queued maintenance batch for an existing contact brain", async () => {
+  const dataRoot = await fs.mkdtemp(path.join(os.tmpdir(), "suzu-memory-recovery-"));
+  const contact = {
+    id: "contact-recovery",
+    name: "恢复验证",
+    agentId: "agent-recovery",
+    projectRoot: path.join(dataRoot, "contact-recovery"),
+    sessionId: "recovery-session",
+  };
+  await fs.mkdir(contact.projectRoot, { recursive: true });
+  const databasePath = path.join(
+    resolveAgentDataRoot({ dataRoot, agentId: contact.agentId }),
+    "memory",
+    "sessions",
+    contact.sessionId,
+    "suzu-memory.db",
+  );
+  const stored = createSuzuMemoryService({
+    dataRoot,
+    agentId: contact.agentId,
+    databasePath,
+  });
+  stored.initialize();
+  stored.withRepository((repository) => {
+    for (let index = 0; index < 11; index += 1) {
+      const memoryId = `recovery-memory-${index}`;
+      repository.upsertMemory({
+        id: memoryId,
+        agentId: contact.agentId,
+        kind: "event",
+        layer: "long_term",
+        title: `恢复记忆 ${index}`,
+        content: `这是一条需要补齐向量任务的历史记忆 ${index}。`,
+        subjectRole: index % 2 ? "agent" : "user",
+        subjectKey: index % 2 ? contact.agentId : "user",
+        reality: "real",
+        evidenceMode: "explicit",
+        recordedAt: `2026-08-10T10:${String(index).padStart(2, "0")}:00.000Z`,
+        status: "active",
+      });
+      repository.enqueueMaintenanceTask({
+        agentId: contact.agentId,
+        lane: "embedding",
+        taskType: "memory-embedding",
+        payload: { memoryIds: [memoryId] },
+      });
+    }
+    const interrupted = repository.listMaintenanceTasks(contact.agentId, {
+      lanes: ["embedding"],
+      statuses: ["pending"],
+      limit: 1,
+    })[0];
+    repository.claimMaintenanceTasks({
+      agentId: contact.agentId,
+      lane: "embedding",
+      taskTypes: ["memory-embedding"],
+      maximumTasks: 1,
+      workerId: "interrupted-desktop-process",
+      leaseSeconds: 3600,
+    });
+    assert.equal(repository.getMaintenanceTask(contact.agentId, interrupted.id).status, "running");
+  });
+
+  const originalFetch = globalThis.fetch;
+  let embeddingRequests = 0;
+  globalThis.fetch = async (_url, request) => {
+    embeddingRequests += 1;
+    const body = JSON.parse(request.body);
+    return {
+      ok: true,
+      status: 200,
+      headers: { get: () => "" },
+      text: async () => JSON.stringify({
+        model: "recovery-embedding",
+        data: body.input.map((_text, index) => ({ index, embedding: [1, index + 1, 0.5] })),
+        usage: {},
+      }),
+    };
+  };
+  try {
+    const runtime = createLongTermMemoryService({
+      conversationReader: {
+        resolveContactSession: async (contactId) => ({
+          contactId,
+          id: contact.sessionId,
+          projectRoot: contact.projectRoot,
+          hasTranscript: true,
+        }),
+      },
+      settingsService: {
+        load: () => ({ projectRoot: contact.projectRoot }),
+        response: () => ({ dataRoot, projectRoot: contact.projectRoot }),
+      },
+      contactProjectsService: {
+        snapshot: async () => ({ contacts: [contact], activeContact: contact }),
+      },
+      connectionsService: {
+        resolveNamedApiConnection: async (feature) => feature === "memory-embedding"
+          ? {
+            type: "openai-compatible",
+            apiKey: "test-key",
+            baseUrl: "https://memory.test/v1",
+            model: "recovery-embedding",
+          }
+          : null,
+      },
+    });
+    const resumed = await runtime.resumeExistingMaintenance();
+    assert.equal(resumed.length, 1);
+    assert.equal(resumed[0].recoveredMaintenanceTasks, 1);
+    assert.equal(resumed[0].failedMaintenanceTasks, 0);
+    assert.equal(resumed[0].result.status, "completed");
+    assert.equal(resumed[0].result.passes, 2);
+    assert.equal(resumed[0].result.graphRebuilt, true);
+    assert.equal(embeddingRequests, 2);
+    const status = stored.maintenanceStatus({ limit: 50 });
+    assert.equal(status.tasks.some((task) => ["pending", "running"].includes(task.status)), false);
+    assert.equal(stored.withRepository((repository) => repository.listEmbeddings(
+      contact.agentId,
+      "recovery-embedding",
+    ).length), 11);
+    runtime.dispose();
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test("embedded long-term memory keeps contacts' fixed Claude sessions in separate brains", async () => {

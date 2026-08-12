@@ -5,6 +5,7 @@ import path from "node:path";
 export const ROLES = Object.freeze(["identity", "location", "object", "style"]);
 export const ROLE_DIRECTORIES = Object.freeze({ identity: "characters", location: "places", object: "objects", style: "styles" });
 export const SUPPORTED_EXTENSIONS = Object.freeze([".png", ".jpg", ".jpeg", ".webp"]);
+export const VISUAL_REFERENCE_LIBRARY_DIRECTORY = "visual-references";
 const ID_PATTERN = /^[a-z0-9]+(?:[.-][a-z0-9]+)*$/u;
 const MAX_IMAGE_BYTES = 50 * 1024 * 1024;
 
@@ -14,6 +15,16 @@ function clean(value) { return String(value ?? "").trim(); }
 function emptyManifest() { return { version: 1, assets: {}, sets: {} }; }
 function role(value) { const result = clean(value); if (!ROLES.includes(result)) throw new VisualReferenceError("角色必须是有效的 identity、location、object 或 style。"); return result; }
 export function validateId(value, label = "ID") { const id = clean(value); if (!ID_PATTERN.test(id) || id.length > 120) throw new VisualReferenceError(label + " 只能使用小写字母、数字、点和连字符。"); return id; }
+export function resolveSharedVisualReferenceLibraryRoot(dataRoot) {
+  const root = clean(dataRoot);
+  if (!root) throw new VisualReferenceError("缺少 Suzu Lives 软件数据目录。 ");
+  return path.join(path.resolve(root), VISUAL_REFERENCE_LIBRARY_DIRECTORY);
+}
+export function resolveAgentVisualReferenceLibraryRoot(agentRoot) {
+  const root = clean(agentRoot);
+  if (!root) throw new VisualReferenceError("缺少联系人资料目录。 ");
+  return path.join(path.resolve(root), VISUAL_REFERENCE_LIBRARY_DIRECTORY);
+}
 function stringList(value, label) { if (value === undefined || value === null) return []; if (!Array.isArray(value)) throw new VisualReferenceError(label + " 必须是文本列表。"); return value.map((item, index) => { const text = clean(item); if (!text) throw new VisualReferenceError(label + " 的第 " + (index + 1) + " 项不能为空。"); return text.slice(0, 500); }); }
 function text(value, label, { required = false, max = 2_000 } = {}) { const result = clean(value).slice(0, max); if (required && !result) throw new VisualReferenceError(label + " 不能为空。"); return result; }
 function isWithin(root, target) { const relative = path.relative(root, target); return relative && !relative.startsWith("..") && !path.isAbsolute(relative); }
