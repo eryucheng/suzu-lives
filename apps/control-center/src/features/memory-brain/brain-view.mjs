@@ -4,7 +4,6 @@ const AMBIENT_TRANSITION_DURATION = 720;
 const AMBIENT_BREATH_CYCLE = 1_650;
 const AMBIENT_BREATH_DURATION = 1_230;
 const AMBIENT_BREATH_COUNT = 3;
-
 function clamp(value, minimum, maximum) {
   return Math.min(maximum, Math.max(minimum, Number(value)));
 }
@@ -219,10 +218,12 @@ function nodePalette(node) {
 function nodeBaseRadius(node) {
   const importance = clamp(node.importance, 0, 1);
   if (node.visualTier === "major") {
-    return Math.min(6.7, 3.38 + Math.log2(1 + Number(node.memberCount || 0)) * 0.46 + importance * 0.74);
+    const memberWeight = clamp(Math.log2(1 + Number(node.memberCount || 0)) / 4, 0, 1);
+    return 1.5 + importance * 0.32 + memberWeight * 0.18;
   }
-  if (node.visualTier === "state") return 1.45 + importance * 0.7;
-  return 0.42 + importance * 0.42;
+  // 原文证据（utterance）默认不进入大脑画面；在展开时保留最小一层。
+  if (node.kind === "utterance") return 0.5 + importance * 0.3;
+  return 1 + importance * 0.3;
 }
 
 export function memoryBrainEdgeMode(edge, {
@@ -578,11 +579,11 @@ export function createMemoryBrainView(canvas, graph, {
         context.strokeStyle = `rgba(${color}, ${selectedId && !selected && !direct ? 0.07 : 0.29 + depth * 0.17})`;
         context.lineWidth = 0.8;
         context.beginPath();
-        context.arc(projected.x, projected.y, radius + 3.8, 0, TAU);
+        context.arc(projected.x, projected.y, radius + 2.55, 0, TAU);
         context.stroke();
         context.strokeStyle = `rgba(${color}, ${selectedId && !selected && !direct ? 0.035 : 0.15 + depth * 0.1})`;
         context.beginPath();
-        context.arc(projected.x, projected.y, radius + 6.9, 0, TAU);
+        context.arc(projected.x, projected.y, radius + 4.6, 0, TAU);
         context.stroke();
       } else if (node.visualTier === "state") {
         context.strokeStyle = `rgba(${color}, ${selectedId && !selected && !direct ? 0.05 : 0.22})`;
