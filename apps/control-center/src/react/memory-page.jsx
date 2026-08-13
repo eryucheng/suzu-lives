@@ -484,11 +484,23 @@ function BrainDetail({ detail, graph, loading, onDelete, onEdit, selectedNode })
   </div>;
 }
 
+function EvidenceDetail({ source }) {
+  if (!source) return null;
+  return <div className="brain-detail-content brain-evidence-detail">
+    <span className="eyebrow">SOURCE EVIDENCE</span>
+    <div className="brain-detail-date">{dateText(source.occurred_at || source.recorded_at || source.known_at)}</div>
+    <h2>{clean(source.speaker) || "原始对话"}</h2>
+    <p>{clean(source.content) || "这条原文证据没有可显示的正文。"}</p>
+    <div className="brain-detail-tags"><span>原文证据</span>{clean(source.source_kind) ? <span>{clean(source.source_kind)}</span> : null}</div>
+  </div>;
+}
+
 function MemoryBrain({ api, available = true, contactId, onDelete, onEdit, onError, onSuccess }) {
   const [graph, setGraph] = useState(null);
   const [loading, setLoading] = useState(false);
   const [selectedNode, setSelectedNode] = useState(null);
   const [detail, setDetail] = useState(null);
+  const [selectedEvidence, setSelectedEvidence] = useState(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [query, setQuery] = useState("");
   const canvasRef = useRef(null);
@@ -502,6 +514,7 @@ function MemoryBrain({ api, available = true, contactId, onDelete, onEdit, onErr
     }
     setLoading(true);
     setDetail(null);
+    setSelectedEvidence(null);
     setSelectedNode(null);
     try {
       const next = await api.memory.brainGraph({ contactId });
@@ -536,13 +549,18 @@ function MemoryBrain({ api, available = true, contactId, onDelete, onEdit, onErr
       onReset: () => {
         setSelectedNode(null);
         setDetail(null);
+        setSelectedEvidence(null);
         setDetailLoading(false);
+      },
+      onSelectEvidence: (source) => {
+        setSelectedEvidence(source || null);
       },
       onSelect: (node) => {
         const id = clean(node?.id);
         if (!id) return;
         setSelectedNode(node);
         setDetail(null);
+        setSelectedEvidence(null);
         const request = ++detailRequestRef.current;
         if (node.graphNodeType) {
           setDetailLoading(false);
@@ -552,6 +570,7 @@ function MemoryBrain({ api, available = true, contactId, onDelete, onEdit, onErr
         void api.memory.detail(id, { contactId }).then((next) => {
           if (!active || request !== detailRequestRef.current || viewer.selectedId() !== id) return;
           setDetail(next);
+          viewer.setEvidenceSources(id, next?.sources || []);
         }).catch((error) => {
           if (!active || request !== detailRequestRef.current) return;
           onError(`详情读取失败：${error?.message || error}`);
@@ -622,7 +641,7 @@ function MemoryBrain({ api, available = true, contactId, onDelete, onEdit, onErr
       <canvas aria-label="可旋转的三维记忆大脑" id="memoryBrainCanvas" ref={canvasRef} tabIndex="0" />
       {loading ? <div className="memory-brain-loading"><span className="brain-loader" /><strong>正在组织记忆空间…</strong></div> : null}
       {!loading && graph && !nodeCount ? <div className="memory-brain-loading"><strong>还没有结构化记忆</strong><span>原始对话不会直接堆进大脑视图。</span></div> : null}
-      {selectedNode ? <aside aria-live="polite" className="memory-brain-detail"><BrainDetail detail={detail} graph={graph} loading={detailLoading} onDelete={remove} onEdit={onEdit} selectedNode={selectedNode} /></aside> : null}
+      {selectedNode ? <aside aria-live="polite" className="memory-brain-detail">{selectedEvidence ? <EvidenceDetail source={selectedEvidence} /> : <BrainDetail detail={detail} graph={graph} loading={detailLoading} onDelete={remove} onEdit={onEdit} selectedNode={selectedNode} />}</aside> : null}
       <div className="memory-brain-hint"><span className="brain-legend-major">主题 / 事件簇 / 人物关系</span><span className="brain-legend-state">人物状态</span><span className="brain-legend-minor">具体记忆</span><span>拖动浏览 · 滚轮缩放 · 双击回到全景</span></div>
     </div>
   </section>;

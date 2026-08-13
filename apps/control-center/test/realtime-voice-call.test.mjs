@@ -83,13 +83,15 @@ test("realtime call uses the configured contact voice and streams ASR audio", as
   const started = await service.start({ senderId: "renderer-1" });
   assert.match(started.callId, /^call-/u);
   assert.equal(started.contactName, "Suzu");
-  assert.equal(JSON.parse(socket.sent[0]).type, "session.update");
-  assert.equal(JSON.parse(socket.sent[0]).session.turn_detection, null);
+  assert.equal(socket, null);
 
   const audio = new Int16Array([0, 1, -1, 2048]);
   assert.deepEqual(service.pushAudio({ callId: started.callId, senderId: "renderer-1", audio: audio.buffer }), { accepted: true });
+  assert.deepEqual(await service.commitAudio({ callId: started.callId, senderId: "renderer-1" }), { accepted: true, committed: true });
+  assert.ok(socket);
+  assert.equal(JSON.parse(socket.sent[0]).type, "session.update");
+  assert.equal(JSON.parse(socket.sent[0]).session.turn_detection, null);
   assert.equal(JSON.parse(socket.sent[1]).type, "input_audio_buffer.append");
-  assert.deepEqual(service.commitAudio({ callId: started.callId, senderId: "renderer-1" }), { accepted: true, committed: true });
   assert.equal(JSON.parse(socket.sent[2]).type, "input_audio_buffer.commit");
 
   socket.emit("message", Buffer.from(JSON.stringify({
@@ -128,13 +130,7 @@ test("realtime call uses the configured contact voice and streams ASR audio", as
   assert.equal(voice.index, 0);
   assert.equal(voice.audioBase64, Buffer.from("voice-bytes").toString("base64"));
 
-  const initialSocket = socket;
-  initialSocket.close();
-  await flush();
-  await flush();
-  assert.notEqual(socket, initialSocket);
-  assert.ok(events.some((event) => event.type === "call-state" && event.state === "connecting"));
-
+  assert.deepEqual(service.pushAudio({ callId: started.callId, senderId: "renderer-1", audio: audio.buffer }), { accepted: true });
   socket.emit("message", Buffer.from(JSON.stringify({ type: "input_audio_buffer.speech_started" })));
   await flush();
   assert.ok(events.some((event) => event.type === "call-clear-audio"));
@@ -154,7 +150,7 @@ test("realtime call uses the configured contact voice and streams ASR audio", as
     { accepted: false, reason: "inactive" },
   );
   assert.deepEqual(
-    service.commitAudio({ callId: started.callId, senderId: "renderer-1" }),
+    await service.commitAudio({ callId: started.callId, senderId: "renderer-1" }),
     { accepted: false, committed: false, reason: "inactive" },
   );
 });

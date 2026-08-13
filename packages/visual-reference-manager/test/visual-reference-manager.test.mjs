@@ -16,7 +16,8 @@ async function temporary() { return fs.mkdtemp(path.join(os.tmpdir(), "suzu-visu
 test("stable manager preserves init, dry-run/apply, list, show, validate, and data-root ownership", async () => {
   const root = await temporary(); const source = path.join(root, "source.png"); const planPath = path.join(root, "plan.json");
   await fs.writeFile(source, png);
-  const environment = { SUZU_LIVES_DATA_ROOT: path.join(root, "software-data"), SUZU_LIVES_AGENT_ID: "fixture" };
+  const dataRoot = path.join(root, "software-data"); await fs.mkdir(dataRoot, { recursive: true });
+  const environment = { SUZU_LIVES_DATA_ROOT: dataRoot, SUZU_LIVES_AGENT_ID: "fixture" };
   const call = (values) => runVisualReferenceManagerCli(values, { environment });
   const initialized = await call(["init", "--scope", "contact"]);
   assert.equal(initialized.status, "ready");
@@ -44,7 +45,8 @@ test("stable manager preserves init, dry-run/apply, list, show, validate, and da
 test("apply validates a whole plan before writing any partial library state", async () => {
   const root = await temporary(); const source = path.join(root, "source.png"); const planPath = path.join(root, "bad-plan.json");
   await fs.writeFile(source, png);
-  const environment = { SUZU_LIVES_DATA_ROOT: path.join(root, "software-data"), SUZU_LIVES_AGENT_ID: "fixture" };
+  const dataRoot = path.join(root, "software-data"); await fs.mkdir(dataRoot, { recursive: true });
+  const environment = { SUZU_LIVES_DATA_ROOT: dataRoot, SUZU_LIVES_AGENT_ID: "fixture" };
   const call = (values) => runVisualReferenceManagerCli(values, { environment });
   const initialized = await call(["init", "--scope", "contact"]);
   await fs.writeFile(planPath, JSON.stringify({ version: 1, sets: {}, operations: [
@@ -61,8 +63,9 @@ test("argument validation accepts supported commands while preventing manifest e
   assert.deepEqual(parseVisualReferenceManagerArgs(["list", "--scope", "contact", "--query", "卧室", "--limit", "10"]), { command: "list", manifest: "", plan: "", query: "卧室", role: "", limit: 10, dryRun: false, scope: "contact" });
   assert.throws(() => parseVisualReferenceManagerArgs(["apply"]), VisualReferenceManagerError);
   const root = await temporary();
+  const dataRoot = path.join(root, "software-data"); await fs.mkdir(dataRoot, { recursive: true });
   await assert.rejects(
-    () => runVisualReferenceManagerCli(["init", "--scope", "contact", "--manifest", "../outside/manifest.json"], { environment: { SUZU_LIVES_DATA_ROOT: path.join(root, "software-data"), SUZU_LIVES_AGENT_ID: "fixture" } }),
+    () => runVisualReferenceManagerCli(["init", "--scope", "contact", "--manifest", "../outside/manifest.json"], { environment: { SUZU_LIVES_DATA_ROOT: dataRoot, SUZU_LIVES_AGENT_ID: "fixture" } }),
     VisualReferenceManagerError,
   );
   assert.equal(await fs.stat(path.join(root, "outside", "manifest.json")).then(() => true).catch(() => false), false);
