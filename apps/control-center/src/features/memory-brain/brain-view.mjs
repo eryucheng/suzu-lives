@@ -1,9 +1,14 @@
 const TAU = Math.PI * 2;
-const AMBIENT_GROUP_DURATION = 6_200;
-const AMBIENT_TRANSITION_DURATION = 720;
-const AMBIENT_BREATH_CYCLE = 1_650;
-const AMBIENT_BREATH_DURATION = 1_230;
-const AMBIENT_BREATH_COUNT = 3;
+const AMBIENT_GROUP_IDLE_MIN_DURATION = 520;
+const AMBIENT_GROUP_IDLE_MAX_DURATION = 1_900;
+const AMBIENT_NODE_START_MAX_DELAY = 1_350;
+const AMBIENT_NODE_MIN_DURATION = 430;
+const AMBIENT_NODE_MAX_DURATION = 1_260;
+// 脑内坐标单位 / 毫秒；所有脉冲按同一速度走完整条真实连线。
+const SIGNAL_TRAVEL_SPEED = 0.0005;
+const FOCUSED_GROUP_IDLE_MIN_DURATION = 620;
+const FOCUSED_GROUP_IDLE_MAX_DURATION = 1_600;
+const FOCUSED_NODE_START_MAX_DELAY = 850;
 function clamp(value, minimum, maximum) {
   return Math.min(maximum, Math.max(minimum, Number(value)));
 }
@@ -143,40 +148,9 @@ function buildBrainWireframe() {
   return polylines;
 }
 
-function relationColor(edge, alpha) {
-  const family = edge?.visualFamily || ({
-    part_of_episode: "structural",
-    supports_topic: "structural",
-    corrects: "lifecycle",
-    supersedes: "lifecycle",
-    contradicts: "lifecycle",
-    scoped_exception_to: "lifecycle",
-    established_from: "lifecycle",
-    completes: "lifecycle",
-    cancels: "lifecycle",
-    supported_by: "evidence",
-    challenged_by: "evidence",
-    causes: "causal",
-    timeline_next: "temporal",
-    same_thread: "temporal",
-    followed_by: "temporal",
-    shares_entity: "entity",
-    about_subject: "actor",
-    belongs_to_relationship: "relationship",
-    member_of_relationship: "relationship",
-  }[edge?.relation] || "associative");
-  const color = {
-    structural: "166, 144, 255",
-    lifecycle: "255, 184, 112",
-    evidence: "111, 180, 255",
-    causal: "255, 125, 137",
-    temporal: "103, 229, 205",
-    entity: "105, 218, 242",
-    actor: "105, 218, 242",
-    relationship: "255, 165, 208",
-    associative: "151, 142, 255",
-  }[family] || "151, 142, 255";
-  return `rgba(${color}, ${alpha})`;
+function relationColor(_edge, alpha) {
+  // 语义颜色只归节点所有；边复用普通 event 节点的默认色，不另起一套色值。
+  return `rgba(220, 246, 255, ${alpha})`;
 }
 
 function nodePalette(node) {
@@ -219,11 +193,11 @@ function nodeBaseRadius(node) {
   const importance = clamp(node.importance, 0, 1);
   if (node.visualTier === "major") {
     const memberWeight = clamp(Math.log2(1 + Number(node.memberCount || 0)) / 4, 0, 1);
-    return 1.5 + importance * 0.32 + memberWeight * 0.18;
+    return 1.7 + importance * 0.2 + memberWeight * 0.1;
   }
   // 原文证据（utterance）默认不进入大脑画面；在展开时保留最小一层。
   if (node.kind === "utterance") return 0.5 + importance * 0.3;
-  return 1 + importance * 0.3;
+  return 1.3 + importance * 0.3;
 }
 
 export function memoryBrainEdgeMode(edge, {
@@ -233,10 +207,12 @@ export function memoryBrainEdgeMode(edge, {
   if (selectedId && (edge?.source === selectedId || edge?.target === selectedId)) {
     return "direct";
   }
+  // 一条原本属于结构骨架的边也可以在随机放电时被激活；否则它只会静态显示，
+  // 无法由节点亮起带动脉冲。
+  if (!selectedId && Number(ambientStrength) > 0) return "ambient";
   // 默认状态保留结构骨架。此前只有轮播到的少量环境连线会短暂出现，
   // 即使数据库里已经有主题、我、Agent、关系的真实归属边，画面也像没有线。
   if (!selectedId && edge?.structural) return "structural";
-  if (!selectedId && Number(ambientStrength) > 0) return "ambient";
   return "hidden";
 }
 
@@ -256,68 +232,207 @@ function squaredDistance(left, right) {
   return x * x + y * y + z * z;
 }
 
-function ambientPulse(groupAge, phase = 0) {
-  if (groupAge >= AMBIENT_BREATH_CYCLE * AMBIENT_BREATH_COUNT) return 0.06;
-  const cycleAge = (groupAge + phase) % AMBIENT_BREATH_CYCLE;
-  if (cycleAge >= AMBIENT_BREATH_DURATION) return 0.06;
-  const progress = cycleAge / AMBIENT_BREATH_DURATION;
-  return 0.12 + Math.pow(Math.sin(progress * Math.PI), 1.65) * 0.88;
+function edgeSignalDuration(source, target) {
+  if (!source?.position || !target?.position) return 1;
+  return Math.max(1, Math.round(Math.sqrt(squaredDistance(source.position, target.position)) / SIGNAL_TRAVEL_SPEED));
 }
 
-function createAmbientGroup(nodes, adjacency, groupIndex) {
-  const candidates = nodes.filter((node) => node.position);
+function hashUnit(value, salt = "") {
+  return stableHash(`${salt}\u001f${value}`) / 0xffff_ffff;
+}
+
+function evidenceStarPosition(parent, source, index, total) {
+  const sourceId = String(source?.id || source?.external_id || index);
+  const count = Math.max(1, total);
+  const angle = (index / count) * TAU + hashUnit(sourceId, "evidence-angle") * 0.82;
+  const layer = Math.floor(index / 7);
+  const radius = 0.15 + layer * 0.08 + hashUnit(sourceId, "evidence-radius") * 0.08;
+  const vertical = (hashUnit(sourceId, "evidence-y") - 0.5) * 0.32;
+  const depth = (hashUnit(sourceId, "evidence-z") - 0.5) * 0.28;
+  return {
+    x: parent.x + Math.cos(angle) * radius,
+    y: parent.y + Math.sin(angle) * radius * 0.74 + vertical,
+    z: parent.z + depth,
+  };
+}
+
+function createEvidenceStars(parent, sources) {
+  const uniqueSources = [...new Map((Array.isArray(sources) ? sources : [])
+    .filter((source) => source && typeof source === "object")
+    .map((source, index) => [String(source.id || source.external_id || `source-${index}`), source]))
+    .values()];
+  return uniqueSources.map((source, index) => ({
+    id: `evidence:${String(source.id || source.external_id || index)}`,
+    source,
+    position: evidenceStarPosition(parent, source, index, uniqueSources.length),
+    radius: 0.5 + clamp(Number(source.evidence_strength) || 0, 0, 1) * 0.3,
+  }));
+}
+
+function evidenceTwinkle(evidenceId, time) {
+  const duration = 3_800 + hashUnit(evidenceId, "evidence-twinkle-duration") * 3_400;
+  const phase = hashUnit(evidenceId, "evidence-twinkle-phase") * TAU;
+  // 每颗证据星只做缓慢、错相的呼吸，不再周期性突然炸出一层光圈。
+  return Math.pow((Math.sin(time / duration * TAU + phase) + 1) * 0.5, 1.45);
+}
+
+function randomInteger(minimum, maximum) {
+  return Math.floor(Math.random() * (maximum - minimum + 1)) + minimum;
+}
+
+function shuffle(items) {
+  const result = [...items];
+  for (let index = result.length - 1; index > 0; index -= 1) {
+    const swapIndex = randomInteger(0, index);
+    [result[index], result[swapIndex]] = [result[swapIndex], result[index]];
+  }
+  return result;
+}
+
+function ambientPulse(groupAge, activityOrActivities) {
+  const activities = Array.isArray(activityOrActivities)
+    ? activityOrActivities
+    : activityOrActivities ? [activityOrActivities] : [];
+  let strongest = { progress: 0, strength: 0 };
+  for (const activity of activities) {
+    const elapsed = groupAge - activity.start;
+    if (elapsed <= 0 || elapsed >= activity.duration) continue;
+    const progress = elapsed / activity.duration;
+    const strength = Math.pow(Math.sin(progress * Math.PI), 1.45);
+    if (strength > strongest.strength) strongest = { progress, strength };
+  }
+  return strongest;
+}
+
+function createAmbientGroup(nodes, adjacency, nodeById, groupIndex) {
+  const candidates = nodes.filter((node) => node.position && (adjacency.get(node.id)?.length || 0) > 0);
+  const fallbackCandidates = candidates.length ? candidates : nodes.filter((node) => node.position);
   const groupSize = Math.min(
-    candidates.length,
-    Math.min(5, Math.max(2, Math.round(Math.sqrt(candidates.length)))),
+    fallbackCandidates.length,
+    randomInteger(3, Math.min(6, Math.max(3, Math.ceil(Math.sqrt(fallbackCandidates.length)) + 2))),
   );
   const selected = [];
   while (selected.length < groupSize) {
     let choice = null;
-    for (const candidate of candidates) {
+    // 从一小组随机候选中优先选彼此有距离的点：活动仍是随机的，
+    // 但不会每次都挤在同一个小区域里闪。
+    for (const candidate of shuffle(fallbackCandidates).slice(0, Math.min(8, fallbackCandidates.length))) {
       if (selected.includes(candidate)) continue;
-      const seed = stableHash(`${groupIndex}:${selected.length}:${candidate.id}`) / 0xffff_ffff;
       const separation = selected.length
         ? Math.min(...selected.map((node) => squaredDistance(candidate.position, node.position)))
         : 0;
-      const score = selected.length ? separation * 0.78 + seed : seed;
+      const score = Math.random() * 0.86 + (selected.length ? Math.min(1, separation / 4) * 0.34 : 0);
       if (!choice || score > choice.score) choice = { node: candidate, score };
     }
     if (!choice) break;
     selected.push(choice.node);
   }
 
-  const connectedCandidates = [];
-  for (const node of selected) {
-    const connected = [...(adjacency.get(node.id) || [])]
-      .sort((left, right) => (
-        stableHash(`${groupIndex}:${node.id}:${left.edge.id}`)
-        - stableHash(`${groupIndex}:${node.id}:${right.edge.id}`)
-      ))
-      .slice(0, 2);
-    connectedCandidates.push(...connected);
-  }
-  connectedCandidates.sort((left, right) => (
-    stableHash(`${groupIndex}:edge:${left.edge.id}`)
-    - stableHash(`${groupIndex}:edge:${right.edge.id}`)
-  ));
   const edgeIndices = new Set();
   const nodeIds = new Set(selected.map((node) => node.id));
-  const maximumEdges = Math.min(4, Math.max(1, Math.round(Math.sqrt(candidates.length))));
-  for (const connection of connectedCandidates) {
-    if (edgeIndices.size >= maximumEdges) break;
-    if (edgeIndices.has(connection.index)) continue;
-    edgeIndices.add(connection.index);
-    nodeIds.add(connection.neighborId);
+  const nodeActivities = new Map();
+  const addNodeActivity = (nodeId, activity) => {
+    const activities = nodeActivities.get(nodeId) || [];
+    activities.push(activity);
+    nodeActivities.set(nodeId, activities);
+  };
+  for (const node of selected) {
+    addNodeActivity(node.id, {
+      start: randomInteger(0, AMBIENT_NODE_START_MAX_DELAY),
+      duration: randomInteger(AMBIENT_NODE_MIN_DURATION, AMBIENT_NODE_MAX_DURATION),
+    });
   }
+  const edgeActivities = new Map();
+  for (const node of selected) {
+    const nodeActivity = nodeActivities.get(node.id)?.[0];
+    const connected = shuffle(adjacency.get(node.id) || []);
+    const edgeCount = Math.min(connected.length, randomInteger(1, Math.min(3, Math.max(1, connected.length))));
+    for (const connection of connected.slice(0, edgeCount)) {
+      if (edgeIndices.has(connection.index)) continue;
+      edgeIndices.add(connection.index);
+      const duration = edgeSignalDuration(node, nodeById.get(connection.neighborId));
+      const start = nodeActivity.start + randomInteger(90, 360);
+      // 方向由正在放电的节点决定：信号从它沿真实相邻边传向另一端，
+      // 不再随机反向穿过整条线。
+      const direction = connection.edge.source === node.id ? 1 : -1;
+      edgeActivities.set(connection.index, {
+        start,
+        duration,
+        direction,
+        tailLength: randomInteger(82, 132) / 1_000,
+      });
+      nodeIds.add(connection.neighborId);
+      // 信号接近另一端时，邻近节点才亮起；同一节点可接收多次活动。
+      addNodeActivity(connection.neighborId, {
+        start: start + Math.round(duration * randomInteger(72, 88) / 100),
+        duration: randomInteger(AMBIENT_NODE_MIN_DURATION, AMBIENT_NODE_MAX_DURATION),
+      });
+    }
+  }
+  const latestPulseEnd = Math.max(
+    0,
+    ...[...nodeActivities.values()].flat().map((activity) => activity.start + activity.duration),
+    ...[...edgeActivities.values()].map((activity) => activity.start + activity.duration),
+  );
   return {
     nodeIds,
     edgeIndices,
+    nodeActivities,
+    edgeActivities,
+    duration: latestPulseEnd + randomInteger(AMBIENT_GROUP_IDLE_MIN_DURATION, AMBIENT_GROUP_IDLE_MAX_DURATION),
+    index: groupIndex,
+  };
+}
+
+function createFocusedGroup(selectedId, adjacency, nodeById, groupIndex) {
+  const connected = shuffle(adjacency.get(selectedId) || []);
+  const nodeIds = new Set([selectedId]);
+  const nodeActivities = new Map();
+  const addNodeActivity = (nodeId, activity) => {
+    const activities = nodeActivities.get(nodeId) || [];
+    activities.push(activity);
+    nodeActivities.set(nodeId, activities);
+  };
+  const sourceActivity = {
+    start: randomInteger(80, FOCUSED_NODE_START_MAX_DELAY),
+    duration: randomInteger(AMBIENT_NODE_MIN_DURATION, AMBIENT_NODE_MAX_DURATION),
+  };
+  addNodeActivity(selectedId, sourceActivity);
+  const edgeActivities = new Map();
+  const edgeCount = Math.min(connected.length, randomInteger(1, Math.min(3, Math.max(1, connected.length))));
+  for (const connection of connected.slice(0, edgeCount)) {
+    const duration = edgeSignalDuration(nodeById.get(selectedId), nodeById.get(connection.neighborId));
+    const start = sourceActivity.start + randomInteger(90, 260);
+    edgeActivities.set(connection.index, {
+      start,
+      duration,
+      direction: connection.edge.source === selectedId ? 1 : -1,
+      tailLength: randomInteger(74, 118) / 1_000,
+    });
+    nodeIds.add(connection.neighborId);
+    addNodeActivity(connection.neighborId, {
+      start: start + Math.round(duration * randomInteger(74, 90) / 100),
+      duration: randomInteger(AMBIENT_NODE_MIN_DURATION, AMBIENT_NODE_MAX_DURATION),
+    });
+  }
+  const latestPulseEnd = Math.max(
+    0,
+    ...[...nodeActivities.values()].flat().map((activity) => activity.start + activity.duration),
+    ...[...edgeActivities.values()].map((activity) => activity.start + activity.duration),
+  );
+  return {
+    nodeIds,
+    edgeIndices: new Set(edgeActivities.keys()),
+    nodeActivities,
+    edgeActivities,
+    duration: latestPulseEnd + randomInteger(FOCUSED_GROUP_IDLE_MIN_DURATION, FOCUSED_GROUP_IDLE_MAX_DURATION),
     index: groupIndex,
   };
 }
 
 export function createMemoryBrainView(canvas, graph, {
   onSelect = () => {},
+  onSelectEvidence = () => {},
   onReset = () => {},
 } = {}) {
   if (!(canvas instanceof HTMLCanvasElement)) {
@@ -347,15 +462,18 @@ export function createMemoryBrainView(canvas, graph, {
   let zoom = reducedMotion ? 1 : 0.87;
   let targetZoom = 1;
   let selectedId = "";
+  let selectedEvidenceId = "";
   let directIds = new Set();
+  let evidenceStars = [];
   let hitTargets = [];
   let pointerDown = null;
   let destroyed = false;
   let frame = 0;
   let lastInteractionAt = performance.now();
-  let ambientGroup = createAmbientGroup(nodes, adjacency, 0);
-  let fadingAmbientGroup = null;
+  let ambientGroup = createAmbientGroup(nodes, adjacency, nodeById, 0);
   let ambientGroupAge = 0;
+  let focusedGroup = null;
+  let focusedGroupAge = 0;
   let lastAmbientFrameAt = performance.now();
 
   function resize() {
@@ -410,33 +528,45 @@ export function createMemoryBrainView(canvas, graph, {
   }
 
   function updateAmbientState(time) {
-    if (reducedMotion || selectedId) {
+    if (reducedMotion) {
       lastAmbientFrameAt = time;
       return;
     }
-    ambientGroupAge += Math.min(80, Math.max(0, time - lastAmbientFrameAt));
+    const elapsed = Math.min(80, Math.max(0, time - lastAmbientFrameAt));
     lastAmbientFrameAt = time;
-    if (ambientGroupAge >= AMBIENT_GROUP_DURATION) {
-      ambientGroupAge -= AMBIENT_GROUP_DURATION;
-      fadingAmbientGroup = ambientGroup;
-      ambientGroup = createAmbientGroup(nodes, adjacency, ambientGroup.index + 1);
+    if (selectedId) {
+      if (!focusedGroup) focusedGroup = createFocusedGroup(selectedId, adjacency, nodeById, 0);
+      focusedGroupAge += elapsed;
+      if (focusedGroupAge >= focusedGroup.duration) {
+        focusedGroupAge = 0;
+        focusedGroup = createFocusedGroup(selectedId, adjacency, nodeById, focusedGroup.index + 1);
+      }
+      return;
+    }
+    ambientGroupAge += elapsed;
+    if (ambientGroupAge >= ambientGroup.duration) {
+      // 每一组的节点起点、放电时长、边脉冲和静默时间都重新抽样，
+      // 不保留循环相位，避免形成可以预期的节奏。
+      ambientGroupAge = 0;
+      ambientGroup = createAmbientGroup(nodes, adjacency, nodeById, ambientGroup.index + 1);
     }
   }
 
-  function ambientStrengthFor(nodeOrEdgeId, kind) {
-    if (reducedMotion || selectedId) return 0;
-    const collection = kind === "edge" ? ambientGroup.edgeIndices : ambientGroup.nodeIds;
-    const phase = stableHash(`${ambientGroup.index}:${kind}:${nodeOrEdgeId}`) % 140;
-    let strength = collection.has(nodeOrEdgeId) ? ambientPulse(ambientGroupAge, phase) : 0;
-    if (fadingAmbientGroup) {
-      const fadingCollection = kind === "edge"
-        ? fadingAmbientGroup.edgeIndices
-        : fadingAmbientGroup.nodeIds;
-      const transition = clamp(1 - ambientGroupAge / AMBIENT_TRANSITION_DURATION, 0, 1);
-      if (fadingCollection.has(nodeOrEdgeId)) strength = Math.max(strength, 0.18 * transition);
-      if (!transition) fadingAmbientGroup = null;
-    }
-    return strength;
+  function ambientActivityFor(nodeOrEdgeId, kind) {
+    if (reducedMotion) return { progress: 0, strength: 0, direction: 1, tailLength: 0 };
+    const group = selectedId ? focusedGroup : ambientGroup;
+    if (!group) return { progress: 0, strength: 0, direction: 1, tailLength: 0 };
+    const collection = kind === "edge" ? group.edgeIndices : group.nodeIds;
+    const activities = kind === "edge" ? group.edgeActivities : group.nodeActivities;
+    const activity = activities.get(nodeOrEdgeId);
+    const pulse = collection.has(nodeOrEdgeId)
+      ? ambientPulse(selectedId ? focusedGroupAge : ambientGroupAge, activity)
+      : { progress: 0, strength: 0 };
+    return {
+      ...pulse,
+      direction: kind === "edge" ? (activity?.direction || 1) : 1,
+      tailLength: kind === "edge" ? (activity?.tailLength || 0.1) : 0,
+    };
   }
 
   function quadraticPoint(start, control, end, progress) {
@@ -445,6 +575,43 @@ export function createMemoryBrainView(canvas, graph, {
       x: inverse * inverse * start.x + 2 * inverse * progress * control.x + progress * progress * end.x,
       y: inverse * inverse * start.y + 2 * inverse * progress * control.y + progress * progress * end.y,
     };
+  }
+
+  function drawSignalTail(projected, activity) {
+    if (activity.strength <= 0) return;
+    const headProgress = activity.direction < 0 ? 1 - activity.progress : activity.progress;
+    const tailLength = activity.tailLength || 0.1;
+    const tailProgress = activity.direction < 0
+      ? Math.min(1, headProgress + tailLength)
+      : Math.max(0, headProgress - tailLength);
+    const segmentCount = 18;
+    const strokePulse = (widthMultiplier, alphaMultiplier, shadowBlur = 0) => {
+      context.shadowColor = shadowBlur ? "rgba(232, 248, 255, .8)" : "transparent";
+      context.shadowBlur = shadowBlur;
+      for (let segment = 1; segment <= segmentCount; segment += 1) {
+        const from = (segment - 1) / segmentCount;
+        const to = segment / segmentCount;
+        const center = (from + to) * 0.5;
+        // 两端压回原线宽，中间局部膨起；前端略亮、后端渐隐，像管道里的信号而非一颗珠子。
+        const envelope = Math.pow(Math.sin(center * Math.PI), 0.72) * (0.5 + center * 0.5);
+        const startProgress = tailProgress + (headProgress - tailProgress) * from;
+        const endProgress = tailProgress + (headProgress - tailProgress) * to;
+        const start = quadraticPoint(projected.start, projected.control, projected.end, startProgress);
+        const end = quadraticPoint(projected.start, projected.control, projected.end, endProgress);
+        context.lineWidth = 0.42 + activity.strength * envelope * widthMultiplier;
+        context.strokeStyle = `rgba(248, 253, 255, ${activity.strength * envelope * alphaMultiplier})`;
+        context.beginPath();
+        context.moveTo(start.x, start.y);
+        context.lineTo(end.x, end.y);
+        context.stroke();
+      }
+    };
+    context.save();
+    context.lineCap = "butt";
+    // 这两层都贴着原有连线绘制：外层是局部的管壁膨胀，内层是白色信号芯。
+    strokePulse(1.22, 0.17, 4 + activity.strength * 3);
+    strokePulse(0.62, 0.62);
+    context.restore();
   }
 
   function edgeProjection(edge) {
@@ -468,20 +635,21 @@ export function createMemoryBrainView(canvas, graph, {
     };
   }
 
-  function drawConnections(time) {
+  function drawConnections() {
     context.save();
-    context.globalCompositeOperation = "lighter";
+    // 纤维重叠不能彼此相加烧成白色，否则汇聚的大神经元会被线盖住。
+    context.globalCompositeOperation = "source-over";
     const visibleEdgeIndices = selectedId
       ? new Set((adjacency.get(selectedId) || []).map((connection) => connection.index))
       : new Set([
         ...edges.map((edge, index) => (edge?.structural ? index : -1)).filter((index) => index >= 0),
         ...ambientGroup.edgeIndices,
-        ...(fadingAmbientGroup?.edgeIndices || []),
       ]);
     for (const edgeIndex of visibleEdgeIndices) {
       const edge = edges[edgeIndex];
       if (!edge) continue;
-      const ambientStrength = ambientStrengthFor(edgeIndex, "edge");
+      const ambientActivity = ambientActivityFor(edgeIndex, "edge");
+      const ambientStrength = ambientActivity.strength;
       const mode = memoryBrainEdgeMode(edge, { selectedId, ambientStrength });
       if (mode === "hidden") continue;
       const direct = mode === "direct";
@@ -506,24 +674,8 @@ export function createMemoryBrainView(canvas, graph, {
       );
       context.stroke();
       context.shadowBlur = 0;
-      if (direct || ambient) {
-        const speed = direct ? 0.00028 : 0.00021;
-        const progress = reducedMotion ? 0.5 : ((time * speed + edgeIndex * 0.17) % 1);
-        const pulse = quadraticPoint(
-          projected.start,
-          projected.control,
-          projected.end,
-          progress,
-        );
-        const pulseAlpha = direct ? 0.98 : 0.3 + ambientStrength * 0.62;
-        context.fillStyle = relationColor(edge, pulseAlpha);
-        context.shadowColor = relationColor(edge, direct ? 1 : 0.76);
-        context.shadowBlur = direct ? 12 : 7 + ambientStrength * 4;
-        context.beginPath();
-        context.arc(pulse.x, pulse.y, direct ? 2 : 1.05 + ambientStrength * 0.45, 0, TAU);
-        context.fill();
-        context.shadowBlur = 0;
-      }
+      // 选中时保留稳定的关系线；只有环境活动才产生一次由源节点传向邻点的短尾迹。
+      if (ambientStrength > 0 && (ambient || direct)) drawSignalTail(projected, ambientActivity);
     }
     context.restore();
   }
@@ -536,14 +688,15 @@ export function createMemoryBrainView(canvas, graph, {
       .sort((left, right) => left.projected.z - right.projected.z);
     hitTargets = [];
     context.save();
-    context.globalCompositeOperation = "lighter";
+    // 节点正常覆盖在纤维之上，保留自己的分类色而不是与底下白线混成白点。
+    context.globalCompositeOperation = "source-over";
     for (const value of projectedNodes) {
       const { node, projected } = value;
       const selected = node.id === selectedId;
       const direct = directIds.has(node.id);
       const depth = clamp((projected.z + 1.2) / 2.4, 0, 1);
-      const ambientStrength = ambientStrengthFor(node.id, "node");
-      const ambient = !selected && !direct && ambientStrength > 0;
+      const ambientStrength = ambientActivityFor(node.id, "node").strength;
+      const ambient = ambientStrength > 0;
       const baseSize = nodeBaseRadius(node);
       const breathing = ambient
         ? 0.98 + ambientStrength * 0.12
@@ -563,11 +716,16 @@ export function createMemoryBrainView(canvas, graph, {
         alpha = 1;
         color = "232, 255, 249";
       } else if (direct) {
-        alpha = 0.96;
+        alpha = ambient ? Math.min(1, 0.96 + ambientStrength * 0.04) : 0.96;
       } else if (selectedId) {
-        alpha *= 0.2;
+        alpha *= ambient ? 0.56 + ambientStrength * 0.28 : 0.2;
       } else if (ambient) {
         alpha = Math.min(1, alpha + 0.1 + ambientStrength * 0.24);
+      }
+      if (node.visualTier === "major" && !selected) {
+        alpha = Math.max(alpha, 0.96);
+      }
+      if (ambient) {
         context.fillStyle = `rgba(${color}, ${0.025 + ambientStrength * 0.045})`;
         context.shadowColor = `rgba(${color}, 0.7)`;
         context.shadowBlur = 13 + ambientStrength * 9;
@@ -606,11 +764,57 @@ export function createMemoryBrainView(canvas, graph, {
         context.stroke();
       }
       hitTargets.push({
+        kind: "node",
         id: node.id,
         x: projected.x,
         y: projected.y,
         radius: Math.max(node.visualTier === "major" ? 14 : node.visualTier === "state" ? 10 : 7, radius + 5),
         z: projected.z,
+      });
+    }
+    context.restore();
+  }
+
+  function drawEvidenceStars(time) {
+    if (!selectedId || !evidenceStars.length) return;
+    context.save();
+    context.globalCompositeOperation = "lighter";
+    for (const evidence of evidenceStars) {
+      const projected = project(evidence.position);
+      if (!projected.visible) continue;
+      const selected = evidence.id === selectedEvidenceId;
+      const twinkle = reducedMotion ? 0 : evidenceTwinkle(evidence.id, time);
+      const radius = Math.max(1.15, evidence.radius * clamp(projected.scale / 150, 0.76, 1.34));
+      const glowRadius = selected ? radius + 7.5 : radius + 3.5;
+      context.fillStyle = `rgba(232, 251, 255, ${selected ? 0.25 : 0.035 + twinkle * 0.055})`;
+      context.shadowColor = selected ? "rgba(173, 240, 255, .98)" : "rgba(157, 220, 255, .82)";
+      context.shadowBlur = selected ? 17 : 4 + twinkle * 4;
+      context.beginPath();
+      context.arc(projected.x, projected.y, glowRadius, 0, TAU);
+      context.fill();
+      context.shadowBlur = 0;
+      context.fillStyle = selected
+        ? "rgba(250, 255, 255, 1)"
+        : `rgba(222, 247, 255, ${0.38 + twinkle * 0.58})`;
+      context.beginPath();
+      context.moveTo(projected.x, projected.y - radius * 2.7);
+      context.lineTo(projected.x + radius * 0.78, projected.y - radius * 0.78);
+      context.lineTo(projected.x + radius * 2.7, projected.y);
+      context.lineTo(projected.x + radius * 0.78, projected.y + radius * 0.78);
+      context.lineTo(projected.x, projected.y + radius * 2.7);
+      context.lineTo(projected.x - radius * 0.78, projected.y + radius * 0.78);
+      context.lineTo(projected.x - radius * 2.7, projected.y);
+      context.lineTo(projected.x - radius * 0.78, projected.y - radius * 0.78);
+      context.closePath();
+      context.fill();
+      hitTargets.push({
+        kind: "evidence",
+        id: evidence.id,
+        source: evidence.source,
+        x: projected.x,
+        y: projected.y,
+        radius: Math.max(7, radius + 4.8),
+        z: projected.z + 0.001,
       });
     }
     context.restore();
@@ -624,6 +828,10 @@ export function createMemoryBrainView(canvas, graph, {
     const node = nodeById.get(id);
     if (!node?.position) return false;
     selectedId = id;
+    focusedGroup = null;
+    focusedGroupAge = 0;
+    selectedEvidenceId = "";
+    evidenceStars = [];
     updateRelated();
     const point = node.position;
     const yaw = Math.atan2(point.x, point.z);
@@ -639,7 +847,11 @@ export function createMemoryBrainView(canvas, graph, {
 
   function reset() {
     selectedId = "";
+    focusedGroup = null;
+    focusedGroupAge = 0;
+    selectedEvidenceId = "";
     directIds = new Set();
+    evidenceStars = [];
     targetRotationX = restingRotationX;
     targetRotationY = nearestAngle(restingRotationY, rotationY);
     targetZoom = 1;
@@ -696,7 +908,12 @@ export function createMemoryBrainView(canvas, graph, {
     const point = pointerPosition(event);
     if (!pointerDown.moved) {
       const target = hitTest(point.x, point.y);
-      if (target) focusNode(target.id);
+      if (target?.kind === "evidence") {
+        selectedEvidenceId = target.id;
+        onSelectEvidence(target.source);
+      } else if (target) {
+        focusNode(target.id);
+      }
     }
     pointerDown = null;
     canvas.releasePointerCapture(event.pointerId);
@@ -731,8 +948,9 @@ export function createMemoryBrainView(canvas, graph, {
     zoom += (targetZoom - zoom) * 0.085;
     context.clearRect(0, 0, width, height);
     drawBrain();
-    drawConnections(time);
+    drawConnections();
     drawNodes(time);
+    drawEvidenceStars(time);
   }
   frame = requestAnimationFrame(render);
 
@@ -752,6 +970,13 @@ export function createMemoryBrainView(canvas, graph, {
   return {
     destroy,
     focusNode,
+    setEvidenceSources(memoryId, sources) {
+      const node = nodeById.get(memoryId);
+      if (!node?.position || selectedId !== memoryId) return false;
+      selectedEvidenceId = "";
+      evidenceStars = createEvidenceStars(node.position, sources);
+      return evidenceStars.length > 0;
+    },
     reset,
     selectedId: () => selectedId,
   };

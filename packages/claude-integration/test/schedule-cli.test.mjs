@@ -27,9 +27,8 @@ async function runCli(args) {
 
 test("stable CLI exposes the unified schedule add, list, and remove commands", async () => {
   const dataRoot = await temporaryDirectory("suzu-schedule-stable-cli-");
-  const projectRoot = path.join(dataRoot, "project");
   const added = await runCli([
-    "schedule", "add", "--data-root", dataRoot, "--delay", "10m", "--session-id", "session-1", "--project-root", projectRoot,
+    "schedule", "add", "--data-root", dataRoot, "--delay", "10m", "--contact-id", "contact-fixture",
     "--prompt", "稍后自然回访", "--desc", "临时回访",
   ]);
   assert.equal(added.status, "ok");

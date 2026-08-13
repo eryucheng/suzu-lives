@@ -16,6 +16,7 @@ test("conversation attachments are copied into the local cache for their Claude 
   const source = path.join(root, "agent-report.txt");
   const dataRoot = path.join(root, "suzu-data");
   const projectRoot = path.join(root, "agent-project");
+  await fs.mkdir(dataRoot, { recursive: true });
   await fs.writeFile(source, "附件内容", "utf8");
   let output = "";
   const originalWrite = process.stdout.write;
@@ -43,6 +44,7 @@ test("MP3 conversation attachments retain the audio kind in the session cache re
   const source = path.join(root, "voice.mp3");
   const dataRoot = path.join(root, "suzu-data");
   const projectRoot = path.join(root, "agent-project");
+  await fs.mkdir(dataRoot, { recursive: true });
   await fs.writeFile(source, "mp3 内容", "utf8");
   let output = "";
   const originalWrite = process.stdout.write;
