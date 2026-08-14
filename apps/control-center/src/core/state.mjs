@@ -18,6 +18,7 @@ export const state = {
   settingsTab: "general",
   settingsContacts: null,
   settingsContactsLoading: false,
+  appUpdate: null,
   onboardingInitialized: false,
   onboardingOpen: false,
   onboardingStep: "text-model",

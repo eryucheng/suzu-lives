@@ -45,7 +45,47 @@ function DirectoryCard({ action, configured, description, onOpen, onSelect, pend
   );
 }
 
-function GeneralSettings({ onOpenOnboarding, onThemeChange, pending, settings }) {
+function SoftwareUpdate({ onCheckForUpdate, onDownloadUpdate, onInstallUpdate, pending, update }) {
+  const status = cleanText(update?.status).toLowerCase();
+  const version = cleanText(update?.version);
+  const availableVersion = cleanText(update?.availableVersion);
+  const copy = cleanText(update?.message) || (version ? `当前版本 v${version}，点击检查更新。` : "点击检查更新。");
+  const presentation = {
+    available: { action: onDownloadUpdate, button: "下载更新", label: "可更新", tone: "success" },
+    current: { action: onCheckForUpdate, button: "检查更新", label: "已是最新", tone: "success" },
+    development: { action: onCheckForUpdate, button: "检查更新", label: "开发构建", tone: "muted" },
+    downloaded: { action: onInstallUpdate, button: "重启并安装", label: "等待安装", tone: "success" },
+    error: { action: onCheckForUpdate, button: "重新检查", label: "暂时不可用", tone: "warning" },
+    manual: { action: onCheckForUpdate, button: "检查更新", label: "手动更新", tone: "muted" },
+    ready: { action: onCheckForUpdate, button: "检查更新", label: "可检查", tone: "muted" },
+    unavailable: { action: onCheckForUpdate, button: "重新检查", label: "暂未发布", tone: "warning" },
+  }[status] || { action: onCheckForUpdate, button: "检查更新", label: "未检查", tone: "muted" };
+  const busyLabel = pending === "check-update"
+    ? "正在检查…"
+    : pending === "download-update"
+      ? "正在下载…"
+      : pending === "install-update"
+        ? "正在安装…"
+        : presentation.button;
+
+  return (
+    <SettingCard>
+      <div className="settings-card__layout">
+        <div className="settings-card__copy">
+          <div className="settings-card__meta"><span className="settings-card__eyebrow">SOFTWARE</span><Status label={presentation.label} tone={presentation.tone} /></div>
+          <h2>软件更新</h2>
+          <p>{copy}</p>
+          {version ? <span className="settings-update-version">当前版本 v{version}{availableVersion ? ` · 可更新至 v${availableVersion}` : ""}</span> : null}
+        </div>
+        <div className="settings-card__actions">
+          <Button className="settings-action-button" disabled={Boolean(pending)} onClick={presentation.action} size="md" variant="secondary">{busyLabel}</Button>
+        </div>
+      </div>
+    </SettingCard>
+  );
+}
+
+function GeneralSettings({ appUpdate, onCheckForUpdate, onDownloadUpdate, onInstallUpdate, onOpenOnboarding, onThemeChange, pending, settings }) {
   const completed = settings.onboardingCompleted === true;
   const theme = settings.theme === "dark" ? "dark" : "light";
   return (
@@ -62,6 +102,14 @@ function GeneralSettings({ onOpenOnboarding, onThemeChange, pending, settings })
           </div>
         </div>
       </SettingCard>
+
+      <SoftwareUpdate
+        onCheckForUpdate={onCheckForUpdate}
+        onDownloadUpdate={onDownloadUpdate}
+        onInstallUpdate={onInstallUpdate}
+        pending={pending}
+        update={appUpdate}
+      />
 
       <SettingCard>
         <div className="settings-card__layout">
@@ -211,9 +259,13 @@ export function SettingsPage({ actions = {}, snapshot = {} }) {
           />
         ) : (
           <GeneralSettings
+            appUpdate={snapshot.appUpdate}
+            onCheckForUpdate={() => run("check-update", actions.checkForUpdate)}
+            onDownloadUpdate={() => run("download-update", actions.downloadUpdate)}
+            onInstallUpdate={() => run("install-update", actions.installUpdate)}
             onOpenOnboarding={() => run("onboarding", actions.openOnboarding)}
             onThemeChange={(theme) => run("theme", () => actions.changeTheme?.(theme))}
-            pending={Boolean(pending)}
+            pending={pending}
             settings={settings}
           />
         )}

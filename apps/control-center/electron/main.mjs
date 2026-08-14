@@ -2,12 +2,14 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { app, BrowserWindow, ipcMain, Menu, safeStorage } from "electron";
+import { autoUpdater } from "electron-updater";
 
 import { runSuzuLivesCli } from "@suzu-lives/claude-integration/agent-cli";
 import { asDashScopeImageConnection, createDashScopeConnectionService, createImageVisionCredentialService, createNamedApiConnectionService, createVideoUnderstandingCredentialService } from "@suzu-lives/service-connections";
 import { createSettingsService, registerIpcHandlers } from "./ipc/index.mjs";
 import { runProjectHookCli } from "./hooks/runtime.mjs";
 import { applyFeatureConnectionOverrides } from "./services/connection-model-overrides.mjs";
+import { createAppUpdateService } from "./services/app-update.mjs";
 import { createDataStorageLocationService } from "./services/data-storage-location.mjs";
 import { applyWindowControl, windowControlState } from "./services/window-controls.mjs";
 
@@ -196,9 +198,11 @@ if (cliArgumentIndex !== -1) {
     app.setAppUserModelId("com.suzulives.console");
     Menu.setApplicationMenu(null);
     const settingsService = createSettingsService({ app, dataStorageService });
+    const appUpdateService = createAppUpdateService({ app, autoUpdater });
     const cliLauncherCommand = conversationAttachmentCli();
     registerIpcHandlers({
       app,
+      appUpdateService,
       getMainWindow: () => mainWindow,
       settingsService,
       dataStorageService,

@@ -28,6 +28,7 @@ const INCOMING_CONVERSATION_NOTICE_TIMEOUT_MS = 6_000;
 let globalNoticeTimeout = null;
 let incomingConversationNoticeTimeout = null;
 let settingsContactsRequest = 0;
+let appUpdateRequest = 0;
 
 document.documentElement.dataset.theme = new URLSearchParams(window.location.search).get("theme") === "dark" ? "dark" : "light";
 
@@ -93,6 +94,7 @@ function setView(view) {
   }
   render();
   if (view === "settings" && state.settingsTab === "privacy") void loadSettingsContacts();
+  if (view === "settings") void loadAppUpdateStatus();
   if (view === "capabilities") loadCapabilities(context);
   if (view === "plans") loadSchedules();
   if (view === "today") refreshTodayCalendar();
@@ -360,6 +362,55 @@ async function changeSettingsDataLocation() {
   } catch (error) {
     setNotice(`无法更换数据位置：${error?.message || error}`);
   }
+}
+
+function appUpdateMessage(result, fallback) {
+  return String(result?.message || "").trim() || fallback;
+}
+
+async function loadAppUpdateStatus() {
+  const request = ++appUpdateRequest;
+  if (typeof api.settings?.appUpdateStatus !== "function") return;
+  try {
+    const result = await api.settings.appUpdateStatus();
+    if (request !== appUpdateRequest || state.view !== "settings") return;
+    state.appUpdate = result;
+  } catch (error) {
+    if (request !== appUpdateRequest || state.view !== "settings") return;
+    state.appUpdate = {
+      status: "error",
+      message: `无法读取更新状态：${error?.message || error}`,
+    };
+  }
+  if (request === appUpdateRequest && state.view === "settings") render();
+}
+
+async function runAppUpdateAction(method, fallback) {
+  const action = api.settings?.[method];
+  if (typeof action !== "function") return;
+  const request = ++appUpdateRequest;
+  try {
+    const result = await action();
+    if (request !== appUpdateRequest) return;
+    state.appUpdate = result;
+    setNotice(appUpdateMessage(result, fallback));
+  } catch (error) {
+    if (request !== appUpdateRequest) return;
+    setNotice(`${fallback}：${error?.message || error}`);
+  }
+  if (request === appUpdateRequest && state.view === "settings") render();
+}
+
+function checkAppUpdate() {
+  return runAppUpdateAction("checkForUpdate", "无法检查更新");
+}
+
+function downloadAppUpdate() {
+  return runAppUpdateAction("downloadUpdate", "无法下载更新");
+}
+
+function installAppUpdate() {
+  return runAppUpdateAction("installUpdate", "无法安装更新");
 }
 
 async function removeSettingsPreviousCopy() {
@@ -1188,6 +1239,9 @@ function routeForCurrentView() {
         actions: {
           changeDataLocation: changeSettingsDataLocation,
           changeTheme: changeSettingsTheme,
+          checkForUpdate: checkAppUpdate,
+          downloadUpdate: downloadAppUpdate,
+          installUpdate: installAppUpdate,
           openDirectory: openSettingsDirectory,
           openOnboarding,
           removePreviousCopy: removeSettingsPreviousCopy,
@@ -1201,6 +1255,7 @@ function routeForCurrentView() {
         snapshot: {
           contacts: state.settingsContacts,
           contactsLoading: state.settingsContactsLoading,
+          appUpdate: state.appUpdate,
           settings: state.settings,
           tab: state.settingsTab,
         },

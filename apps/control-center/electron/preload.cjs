@@ -15,6 +15,10 @@ contextBridge.exposeInMainWorld("suzuConsole", {
   },
   settings: {
     get: () => ipcRenderer.invoke("settings:get"),
+    appUpdateStatus: () => ipcRenderer.invoke("settings:app-update-status"),
+    checkForUpdate: () => ipcRenderer.invoke("settings:check-for-update"),
+    downloadUpdate: () => ipcRenderer.invoke("settings:download-update"),
+    installUpdate: () => ipcRenderer.invoke("settings:install-update"),
     selectProject: () => ipcRenderer.invoke("settings:select-project"),
     changeDataLocation: () => ipcRenderer.invoke("settings:change-data-location"),
     removePreviousDataCopy: () => ipcRenderer.invoke("settings:remove-previous-data-copy"),

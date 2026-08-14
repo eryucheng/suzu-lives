@@ -113,7 +113,7 @@ function merchantTaskContent(message) {
   ].join("\n");
 }
 
-export function registerIpcHandlers({ app, dataStorageService, getMainWindow, settingsService, wechatAttachmentCli = "", cliLauncherCommand = "", claudeWorkspaceDirectories = [] }) {
+export function registerIpcHandlers({ app, appUpdateService = null, dataStorageService, getMainWindow, settingsService, wechatAttachmentCli = "", cliLauncherCommand = "", claudeWorkspaceDirectories = [] }) {
   const currentCliLauncher = clean(cliLauncherCommand) || (app.isPackaged ? packagedCliCommand(app.getPath("exe")) : "");
   const dataRoot = settingsService.response(settingsService.load()).dataRoot;
   let removeContactAssociations = async () => undefined;
@@ -178,6 +178,7 @@ export function registerIpcHandlers({ app, dataStorageService, getMainWindow, se
     .catch(() => undefined);
   registerSettingsIpc({
     app,
+    appUpdateService,
     contactProjectsService,
     dataStorageService,
     dialog,

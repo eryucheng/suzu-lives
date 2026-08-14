@@ -246,9 +246,19 @@ export function createSettingsService({ app, dataStorageService = null }) {
   return { load, response, save, safePatch, usageLedgerPath };
 }
 
-export function registerSettingsIpc({ app, contactProjectsService = null, dataStorageService, dialog, getMainWindow, ipcMain, shell, settingsService }) {
+export function registerSettingsIpc({ app, appUpdateService = null, contactProjectsService = null, dataStorageService, dialog, getMainWindow, ipcMain, shell, settingsService }) {
   const contacts = contactProjectsService || createContactProjectsService({ settingsService });
+  const updateService = appUpdateService || {
+    status: () => ({ status: "unavailable", mode: "manual", version: "未知", message: "当前版本没有启用更新服务。" }),
+    checkForUpdates: () => ({ status: "unavailable", mode: "manual", version: "未知", message: "当前版本没有启用更新服务。" }),
+    downloadUpdate: () => ({ status: "unavailable", mode: "manual", version: "未知", message: "当前版本没有启用更新服务。" }),
+    installUpdate: () => ({ status: "unavailable", mode: "manual", version: "未知", message: "当前版本没有启用更新服务。" }),
+  };
   ipcMain.handle("settings:get", () => settingsService.response());
+  ipcMain.handle("settings:app-update-status", () => updateService.status());
+  ipcMain.handle("settings:check-for-update", () => updateService.checkForUpdates());
+  ipcMain.handle("settings:download-update", () => updateService.downloadUpdate());
+  ipcMain.handle("settings:install-update", () => updateService.installUpdate());
   ipcMain.handle("settings:select-project", async () => {
     const current = settingsService.load();
     const result = await dialog.showOpenDialog(getMainWindow(), {

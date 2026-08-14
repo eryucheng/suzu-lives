@@ -10,7 +10,8 @@
   "scripts": {
     "start": "node scripts/start-desktop.mjs",
     "test": "node --test test/*.test.mjs",
-    "dist": "electron-builder --win zip --x64"
+    "dist": "electron-builder --win zip --x64",
+    "dist:installer": "electron-builder --win nsis --x64"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^6.0.4",
@@ -43,6 +44,7 @@
     "@suzu-memory/ingestion": "0.1.0",
     "@suzu-memory/providers": "0.1.0",
     "@suzu-memory/service": "0.1.0",
+    "electron-updater": "^6.8.9",
     "qrcode": "1.5.4",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
@@ -62,6 +64,14 @@
     "directories": {
       "output": "dist"
     },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "eryucheng",
+        "repo": "suzu-lives",
+        "releaseType": "release"
+      }
+    ],
     "files": [
       "assets/**/*",
       "electron/**/*",
@@ -81,6 +91,11 @@
         }
       ],
       "artifactName": "Suzu-Lives-Console-${version}-win-${arch}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "perMachine": false
     }
   }
 }

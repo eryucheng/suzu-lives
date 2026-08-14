@@ -303,3 +303,40 @@ test("old-copy cleanup IPC requires a second destructive confirmation", async ()
   assert.equal(result.status, "removed");
   assert.deepEqual(calls, ["removed"]);
 });
+
+test("settings update IPC delegates the check, download, and install actions to the update service", async () => {
+  const handlers = new Map();
+  const calls = [];
+  const appUpdateService = {
+    status: () => ({ status: "ready" }),
+    checkForUpdates: () => {
+      calls.push("check");
+      return { status: "available" };
+    },
+    downloadUpdate: () => {
+      calls.push("download");
+      return { status: "downloaded" };
+    },
+    installUpdate: () => {
+      calls.push("install");
+      return { status: "installing" };
+    },
+  };
+  registerSettingsIpc({
+    app: { relaunch: () => {}, exit: () => {} },
+    appUpdateService,
+    contactProjectsService: {},
+    dataStorageService: null,
+    dialog: { showOpenDialog: async () => ({ canceled: true }), showMessageBox: async () => ({ response: 1 }) },
+    getMainWindow: () => null,
+    ipcMain: { handle: (name, handler) => handlers.set(name, handler) },
+    shell: { showItemInFolder: () => {}, openPath: () => {} },
+    settingsService: { load: () => ({}), save: (next) => next, response: () => ({}) },
+  });
+
+  assert.deepEqual(await handlers.get("settings:app-update-status")(), { status: "ready" });
+  assert.deepEqual(await handlers.get("settings:check-for-update")(), { status: "available" });
+  assert.deepEqual(await handlers.get("settings:download-update")(), { status: "downloaded" });
+  assert.deepEqual(await handlers.get("settings:install-update")(), { status: "installing" });
+  assert.deepEqual(calls, ["check", "download", "install"]);
+});

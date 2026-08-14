@@ -94,6 +94,11 @@
   white-space:nowrap;
 }
 
+.settings-update-version {
+  color:var(--text-muted);
+  font-size:var(--font-size-xs);
+}
+
 .settings-card__actions {
   display:flex;
   flex-wrap:wrap;

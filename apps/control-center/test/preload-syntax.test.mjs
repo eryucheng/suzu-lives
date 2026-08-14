@@ -173,4 +173,18 @@ test("Electron preload exposes the memory bridge", async () => {
     "window-chrome:control",
   ]);
   assert.equal(calls.at(-1).args[0], "toggle-maximize");
+  assert.equal(typeof bridge?.settings?.appUpdateStatus, "function");
+  assert.equal(typeof bridge?.settings?.checkForUpdate, "function");
+  assert.equal(typeof bridge?.settings?.downloadUpdate, "function");
+  assert.equal(typeof bridge?.settings?.installUpdate, "function");
+  await bridge.settings.appUpdateStatus();
+  await bridge.settings.checkForUpdate();
+  await bridge.settings.downloadUpdate();
+  await bridge.settings.installUpdate();
+  assert.deepEqual(calls.slice(-4).map((call) => call.channel), [
+    "settings:app-update-status",
+    "settings:check-for-update",
+    "settings:download-update",
+    "settings:install-update",
+  ]);
 });
