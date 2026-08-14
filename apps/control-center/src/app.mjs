@@ -1106,6 +1106,20 @@ async function runConversationCompactor(value) {
   return snapshot;
 }
 
+async function selectConversationCompactorImportJsonl() {
+  return api.conversationCompactor.selectImportJsonl();
+}
+
+async function importConversationCompactorJsonl(value) {
+  const snapshot = await api.conversationCompactor.importJsonl(value);
+  state.conversationCompactorSnapshot = snapshot;
+  state.conversationCompactorLoading = false;
+  state.conversationCompactorError = "";
+  setNotice("历史 JSONL 已替换当前联系人的会话记录，并完成会话绑定。 ");
+  if (state.view === "relationships" && state.relationshipPage === "compactor") render();
+  return snapshot;
+}
+
 function currentGlobalNotice() {
   const warning = state.data?.status === "needs-project" ? "" : String(state.data?.warning || "");
   return state.globalNotice || warning;
@@ -1353,8 +1367,10 @@ function routeForCurrentView() {
       props: {
         actions: {
           returnToOverview: () => setRelationshipPage("overview"),
+          importJsonl: importConversationCompactorJsonl,
           run: runConversationCompactor,
           save: saveConversationCompactorSettings,
+          selectImportJsonl: selectConversationCompactorImportJsonl,
           selectContact: selectConversationCompactorContact,
         },
         error: state.conversationCompactorError,

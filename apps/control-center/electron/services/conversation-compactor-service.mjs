@@ -10,6 +10,7 @@ import {
   DEFAULT_COMPACTION_RULES,
   chooseTokenTailCompactionPlan,
   createClaudeCliGenerator,
+  importConversationHistory,
   parseJsonlText,
   reconstructLogicalContext,
   runCompaction,
@@ -202,6 +203,7 @@ async function readReport(fsOps, target) {
       messagesToCompact: Number.isFinite(Number(source.messagesToCompact)) ? Number(source.messagesToCompact) : 0,
       messagesCompacted: Number.isFinite(Number(source.messagesCompacted)) ? Number(source.messagesCompacted) : 0,
       summaryChars: Number.isFinite(Number(source.summaryChars)) ? Number(source.summaryChars) : 0,
+      sourceFileName: clean(source.sourceFileName),
       warnings,
     };
   } catch {
@@ -305,6 +307,7 @@ export function createConversationCompactorService({
   createGeneratorImpl = createClaudeCliGenerator,
   createScheduleTaskImpl = createScheduleTask,
   fsOps = fs,
+  importConversationHistoryImpl = importConversationHistory,
   listScheduleTasksImpl = listScheduleTasks,
   now = () => new Date(),
   reader,
@@ -320,6 +323,9 @@ export function createConversationCompactorService({
   }
   if (typeof runCompactionImpl !== "function") {
     throw new ConversationCompactorError("记忆压缩器没有可用的压缩执行器。 ");
+  }
+  if (typeof importConversationHistoryImpl !== "function") {
+    throw new ConversationCompactorError("记忆压缩器没有可用的历史导入器。 ");
   }
 
   const activeRuns = new Map();
@@ -435,6 +441,15 @@ export function createConversationCompactorService({
     return input;
   };
 
+  const importHistoryInput = ({ scope, sourcePath }) => ({
+      agentId: scope.paths.agentId,
+      sessionId: scope.session.id,
+      softwareDataDirectory: scope.dataRoot,
+      sourceTranscriptPath: sourcePath,
+      targetProjectRoot: scope.session.projectRoot,
+      transcriptPath: scope.session.transcriptPath,
+  });
+
   const runWithSettings = async ({ dryRun = false, minimumContextTokens = 0, retainTokens, saved, scope }) => {
     if (scope.session.hasTranscript !== true) {
       throw new ConversationCompactorError("当前会话还没有可压缩的聊天记录。 ");
@@ -519,6 +534,22 @@ export function createConversationCompactorService({
     return snapshot({ contactId: scope.session.contact?.id });
   };
 
+  const importHistory = async ({ contactId, sourcePath } = {}) => {
+    const source = clean(sourcePath);
+    if (!source || path.extname(source).toLowerCase() !== ".jsonl") {
+      throw new ConversationCompactorError("请选择 Claude 会话 JSONL 文件。 ");
+    }
+    const scope = await scopeFor({ contactId });
+    if (scope.session.hasTranscript !== true) {
+      throw new ConversationCompactorError("先在当前联系人对话中发送一条消息，再导入历史 JSONL。 ");
+    }
+    await runScoped(scope, () => importConversationHistoryImpl(importHistoryInput({
+      scope,
+      sourcePath: path.resolve(source),
+    })));
+    return snapshot({ contactId: scope.session.contact?.id });
+  };
+
   const enqueueTokenAuto = async ({ sessionId, projectRoot } = {}) => {
     const scope = await scopeForRuntime({ sessionId, projectRoot });
     const saved = await readJson(fsOps, scope.paths.configPath);
@@ -574,6 +605,7 @@ export function createConversationCompactorService({
   return {
     check: (value = {}) => runManual(value, { dryRun: true }),
     enqueueTokenAuto,
+    importHistory,
     run: (value = {}) => runManual(value),
     runScheduledAutomaticTask,
     save,

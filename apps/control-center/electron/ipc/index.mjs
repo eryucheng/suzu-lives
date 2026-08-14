@@ -218,7 +218,12 @@ export function registerIpcHandlers({ app, appUpdateService = null, dataStorageS
     reader: conversation.reader,
     settingsService,
   });
-  registerConversationCompactorIpc({ ipcMain, compactorService: conversationCompactorService });
+  registerConversationCompactorIpc({
+    ipcMain,
+    compactorService: conversationCompactorService,
+    dialog,
+    getMainWindow,
+  });
   const unsubscribeCompactorAuto = conversation.chat.subscribe((event) => {
     if (event?.type !== "turn-complete") return;
     // Token-triggered compaction is still executed by the shared scheduler;

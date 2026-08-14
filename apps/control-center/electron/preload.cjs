@@ -90,6 +90,8 @@ contextBridge.exposeInMainWorld("suzuConsole", {
     save: (value) => ipcRenderer.invoke("conversation-compactor:save", value),
     check: (value) => ipcRenderer.invoke("conversation-compactor:check", value),
     run: (value) => ipcRenderer.invoke("conversation-compactor:run", value),
+    selectImportJsonl: () => ipcRenderer.invoke("conversation-compactor:select-import-jsonl"),
+    importJsonl: (value) => ipcRenderer.invoke("conversation-compactor:import-jsonl", value),
   },
   schedule: {
     snapshot: () => ipcRenderer.invoke("schedule:snapshot"),

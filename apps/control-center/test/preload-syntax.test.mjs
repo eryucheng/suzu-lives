@@ -77,6 +77,8 @@ test("Electron preload exposes the memory bridge", async () => {
   assert.equal(typeof bridge?.conversationCompactor?.save, "function");
   assert.equal(typeof bridge?.conversationCompactor?.check, "function");
   assert.equal(typeof bridge?.conversationCompactor?.run, "function");
+  assert.equal(typeof bridge?.conversationCompactor?.selectImportJsonl, "function");
+  assert.equal(typeof bridge?.conversationCompactor?.importJsonl, "function");
   assert.equal(typeof bridge?.capabilities?.companionTargets, "function");
   assert.equal(typeof bridge?.wechat?.begin, "function");
   assert.equal(typeof bridge?.wechat?.saveSettings, "function");
@@ -160,11 +162,15 @@ test("Electron preload exposes the memory bridge", async () => {
   await bridge.conversationCompactor.save({ contactId: "contact-suzu", prompt: "联系人专属提示词" });
   await bridge.conversationCompactor.check({ contactId: "contact-suzu" });
   await bridge.conversationCompactor.run({ contactId: "contact-suzu" });
-  assert.deepEqual(calls.slice(-4).map((call) => call.channel), [
+  await bridge.conversationCompactor.selectImportJsonl();
+  await bridge.conversationCompactor.importJsonl({ contactId: "contact-suzu", sourcePath: "C:/tmp/history.jsonl" });
+  assert.deepEqual(calls.slice(-6).map((call) => call.channel), [
     "conversation-compactor:snapshot",
     "conversation-compactor:save",
     "conversation-compactor:check",
     "conversation-compactor:run",
+    "conversation-compactor:select-import-jsonl",
+    "conversation-compactor:import-jsonl",
   ]);
   await bridge.windowChrome.state();
   await bridge.windowChrome.control("toggle-maximize");

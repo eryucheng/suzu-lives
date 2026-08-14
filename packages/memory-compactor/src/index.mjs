@@ -32,6 +32,7 @@ export {
 } from "./session-summary.mjs";
 
 export {
+  importConversationHistory,
   runCompaction,
 } from "./service.mjs";
 

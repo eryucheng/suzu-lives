@@ -30,6 +30,7 @@ test("conversation compactor keeps prompts and invocations isolated by contact p
     },
   ];
   const calls = [];
+  const importCalls = [];
   const reader = {
     compactorSnapshot: async () => ({
       status: "ready",
@@ -52,6 +53,10 @@ test("conversation compactor keeps prompts and invocations isolated by contact p
   };
   const service = createConversationCompactorService({
     createGeneratorImpl: () => async () => ({}),
+    importConversationHistoryImpl: async (input) => {
+      importCalls.push(input);
+      return { status: "imported" };
+    },
     now: () => new Date("2026-08-10T12:00:00.000Z"),
     reader,
     runCompactionImpl: async (input) => { calls.push(input); return { status: "written" }; },
@@ -109,6 +114,20 @@ test("conversation compactor keeps prompts and invocations isolated by contact p
   const workConfig = path.join(dataRoot, "agents", workAgentId, "conversations", "shared-session", "compactor.json");
   assert.equal(JSON.parse(await fs.readFile(suzuConfig, "utf8")).prompt, "Suzu 会话的提示词");
   assert.equal(JSON.parse(await fs.readFile(workConfig, "utf8")).prompt, "工作会话的提示词");
+
+  const sourcePath = path.join(root, "older-suzu-history.jsonl");
+  await service.importHistory({ contactId: "contact-suzu", sourcePath });
+  assert.deepEqual(importCalls.map((input) => ({
+    sessionId: input.sessionId,
+    sourceTranscriptPath: input.sourceTranscriptPath,
+    targetProjectRoot: input.targetProjectRoot,
+    transcriptPath: input.transcriptPath,
+  })), [{
+    sessionId: "shared-session",
+    sourceTranscriptPath: sourcePath,
+    targetProjectRoot: contacts[0].projectRoot,
+    transcriptPath: path.join(contacts[0].projectRoot, "shared-session.jsonl"),
+  }]);
 });
 
 test("conversation compactor creates and removes only its own per-session automatic tasks", async () => {
