@@ -190,17 +190,27 @@ export function wechatTimeLabel(timestamp, now = new Date()) {
   return date.getFullYear() === current.getFullYear() ? `${monthDay} ${clock}` : `${date.getFullYear()}年${monthDay} ${clock}`;
 }
 
-function chronologicalMessages(items) {
-  return items
-    .map((item, sourceIndex) => ({ item, sourceIndex, timestamp: Date.parse(item.timestamp) }))
-    .sort((left, right) => {
-      const leftValid = Number.isFinite(left.timestamp);
-      const rightValid = Number.isFinite(right.timestamp);
-      if (leftValid && rightValid && left.timestamp !== right.timestamp) return left.timestamp - right.timestamp;
-      if (leftValid !== rightValid) return leftValid ? -1 : 1;
-      return left.sourceIndex - right.sourceIndex;
-    })
-    .map(({ item }) => item);
+function timestampsFollowAppendOrder(items) {
+  let previousTimestamp = Number.NaN;
+  for (const item of items || []) {
+    const timestamp = Date.parse(item?.timestamp);
+    if (!Number.isFinite(timestamp)) continue;
+    if (Number.isFinite(previousTimestamp) && timestamp < previousTimestamp) return false;
+    previousTimestamp = timestamp;
+  }
+  return true;
+}
+
+function insertLiveReplyAtTimestamp(items, reply) {
+  const timestamp = Date.parse(reply?.timestamp);
+  if (!Number.isFinite(timestamp)) return [...items, reply];
+  const index = items.findIndex((item) => {
+    const itemTimestamp = Date.parse(item?.timestamp);
+    return Number.isFinite(itemTimestamp) && itemTimestamp > timestamp;
+  });
+  return index < 0
+    ? [...items, reply]
+    : [...items.slice(0, index), reply, ...items.slice(index)];
 }
 
 export function mergeConversationMessages(items, pendingItems = [], liveReplyItems = new Map(), activeSessionId = "") {
@@ -231,7 +241,13 @@ export function mergeConversationMessages(items, pendingItems = [], liveReplyIte
       timestamp: item.timestamp,
       blocks: [{ kind: "text", text: item.content }],
     }));
-  return chronologicalMessages([...source, ...pending, ...liveReplies]);
+  const appended = [...source, ...pending];
+  // Source rows are already in the transcript's append order.  Preserve that
+  // order for special turns such as calls; only place a local unfinished reply
+  // back between normal chronological rows so a later message can push it up.
+  return timestampsFollowAppendOrder(appended)
+    ? liveReplies.reduce((result, reply) => insertLiveReplyAtTimestamp(result, reply), appended)
+    : [...appended, ...liveReplies];
 }
 
 function displayedMessages(items) {
