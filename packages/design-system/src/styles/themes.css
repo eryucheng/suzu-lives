@@ -1,0 +1,95 @@
+/**
+ * themes.css
+ * 设计 token 的 CSS 落地层 —— 把 tokens/ 中的值映射为 CSS 变量。
+ *
+ * 结构：
+ * - :root 定义「语义角色变量」（--bg, --text, --accent …）→ 暗色为默认（暗色优先）。
+ * - [data-theme="light"] 覆盖为亮色值。
+ * - 原始色阶（--brand-500 等）始终可用，供需要精确取色的地方使用。
+ */
+
+/* ---------- 原始色阶（始终可用） ---------- */
+:root {
+  --brand-50: #f0efff;   --brand-100: #e0dcff;  --brand-200: #c4bcff;
+  --brand-300: #a196ff;  --brand-400: #8b82ff;  --brand-500: #7a6dff;
+  --brand-600: #6657ef;  --brand-700: #5548cf;  --brand-800: #443b9e;
+  --brand-900: #2f2a6b;  --brand-950: #1d1a42;
+
+  --accent-50: #e6fbf6;  --accent-100: #c2f2ea; --accent-200: #8de7d8;
+  --accent-300: #59d9c4; --accent-400: #33c7ae; --accent-500: #1ea993;
+  --accent-600: #178576; --accent-700: #136a5e; --accent-800: #0f5047;
+  --accent-900: #0b3a34;
+
+  --neutral-0: #ffffff;  --neutral-50: #f5f7fb; --neutral-100: #eef0f6;
+  --neutral-200: #dce1ec; --neutral-300: #c2c9da; --neutral-400: #97a1bc;
+  --neutral-500: #6b7592; --neutral-600: #4a526d; --neutral-700: #363c53;
+  --neutral-800: #24283a; --neutral-900: #161a29; --neutral-950: #0c0f1c;
+
+  --success: #34c98a; --warning: #f2b05e; --danger: #f26b8e; --info: #4da6ff;
+
+  --radius-none: 0px; --radius-sm: 6px; --radius-md: 10px;
+  --radius-lg: 14px; --radius-xl: 20px; --radius-pill: 999px;
+
+  --space-xs: 4px; --space-sm: 8px; --space-md: 12px; --space-lg: 16px;
+  --space-xl: 24px; --space-2xl: 32px; --space-3xl: 48px;
+
+  --font-size-xs: 11px; --font-size-sm: 12px; --font-size-md: 13px;
+  --font-size-lg: 14px; --font-size-xl: 16px; --font-size-2xl: 20px;
+  --font-size-3xl: 27px;
+
+  --font-weight-regular: 400; --font-weight-medium: 500;
+  --font-weight-semibold: 600; --font-weight-bold: 700;
+
+  --shadow-sm: 0 1px 2px rgba(0,0,0,.25), 0 1px 3px rgba(0,0,0,.18);
+  --shadow-md: 0 4px 12px rgba(0,0,0,.28), 0 2px 4px rgba(0,0,0,.20);
+  --shadow-lg: 0 12px 28px rgba(0,0,0,.35), 0 4px 8px rgba(0,0,0,.22);
+
+  /* 毛玻璃（静态渐变模拟，见 tokens/glass） */
+  --glass-bg: linear-gradient(160deg, rgba(255,255,255,0.08), rgba(255,255,255,0.02));
+  --glass-border: rgba(255,255,255,0.14);
+  --glass-top-highlight: rgba(255,255,255,0.18);
+  --glass-backdrop: 8px;
+  --glass-shadow: 0 12px 32px rgba(0,0,0,0.40), 0 2px 6px rgba(0,0,0,0.25);
+}
+
+/* ---------- 暗色主题（默认）的语义角色 ---------- */
+:root,
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --bg: var(--neutral-950);
+  --bg-elevated: var(--neutral-900);
+  --panel: var(--neutral-900);
+  --panel-soft: var(--neutral-800);
+  --border: color-mix(in srgb, var(--neutral-600) 35%, transparent);
+  --text: var(--neutral-50);
+  --text-secondary: var(--neutral-400);
+  --text-muted: var(--neutral-500);
+  --accent: var(--brand-400);
+  --accent-hover: var(--brand-300);
+  --accent-contrast: var(--neutral-950);
+  --accent2: var(--accent-400);
+}
+
+/* ---------- 亮色主题覆盖 ---------- */
+:root[data-theme='light'] {
+  color-scheme: light;
+  --bg: var(--neutral-50);
+  --bg-elevated: var(--neutral-0);
+  --panel: var(--neutral-0);
+  --panel-soft: var(--neutral-100);
+  --border: color-mix(in srgb, var(--neutral-400) 45%, transparent);
+  --text: var(--neutral-900);
+  --text-secondary: var(--neutral-600);
+  --text-muted: var(--neutral-500);
+  --accent: var(--brand-600);
+  --accent-hover: var(--brand-500);
+  --accent-contrast: var(--neutral-0);
+  --accent2: var(--accent-600);
+
+  /* 毛玻璃（亮色覆盖） */
+  --glass-bg: linear-gradient(160deg, rgba(255,255,255,0.72), rgba(255,255,255,0.45));
+  --glass-border: rgba(255,255,255,0.85);
+  --glass-top-highlight: rgba(255,255,255,0.95);
+  --glass-backdrop: 8px;
+  --glass-shadow: 0 12px 32px rgba(30,30,60,0.18), 0 2px 6px rgba(30,30,60,0.12);
+}

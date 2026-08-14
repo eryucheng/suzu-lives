@@ -1,0 +1,61 @@
+/* Switch —— 开关（移植自 Suzu-Lives .capability-toggle） */
+
+.switch {
+  position: relative;
+  display: inline-flex;
+  flex: 0 0 auto;
+  cursor: pointer;
+}
+
+.switch input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+}
+
+.track {
+  position: relative;
+  display: block;
+  width: 45px;
+  height: 25px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--panel-soft) 86%, transparent);
+  transition: background 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.track::after {
+  position: absolute;
+  top: 50%;
+  margin-top: -9px; /* 垂直居中：-(thumb高/2) */
+  left: 3px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.28);
+  content: '';
+  transition: transform 0.2s cubic-bezier(0.2, 0.8, 0.2, 1), background 0.2s ease;
+}
+
+.switch input:checked + .track {
+  border-color: color-mix(in srgb, var(--success) 68%, var(--border));
+  background: color-mix(in srgb, var(--success) 46%, var(--panel));
+  box-shadow: 0 0 16px color-mix(in srgb, var(--success) 18%, transparent);
+}
+
+.switch input:checked + .track::after {
+  transform: translateX(19px);
+  background: #f4fffd;
+}
+
+.switch input:focus-visible + .track {
+  outline: 3px solid color-mix(in srgb, var(--accent) 28%, transparent);
+  outline-offset: 3px;
+}
+
+.switch:has(input:disabled) {
+  cursor: not-allowed;
+  opacity: 0.48;
+}

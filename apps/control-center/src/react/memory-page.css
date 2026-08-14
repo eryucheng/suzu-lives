@@ -1,0 +1,103 @@
+#memoryReactRoot {
+  min-width: 920px;
+}
+
+#content.content--memory {
+  scrollbar-gutter: stable;
+}
+
+.memory-react-page {
+  display: grid;
+  min-width: 920px;
+  gap: 22px;
+}
+
+.memory-react-page .memory-overview {
+  grid-template-columns: minmax(300px, .82fr) minmax(480px, 1.48fr);
+}
+
+.memory-react-page .memory-library-controls,
+.memory-react-page .memory-library-item-head,
+.memory-react-page .memory-editor-meta,
+.memory-react-page .memory-attribution-intro,
+.memory-react-page .memory-attribution-head {
+  align-items: center;
+  flex-direction: row;
+}
+
+.memory-react-page .memory-attribution-intro {
+  align-items: flex-end;
+}
+
+.memory-react-page .memory-attribution-intro > p {
+  text-align: right;
+}
+
+.memory-react-page .memory-brain-toolbar {
+  grid-template-columns: auto auto minmax(320px, 1fr);
+}
+
+.memory-react-page .memory-brain-search {
+  grid-column: auto;
+  justify-content: flex-end;
+}
+
+.memory-react-page .memory-brain-search .search-input {
+  flex: 0 1 auto;
+  width: min(340px, 100%);
+}
+
+.memory-page-error {
+  margin: 0;
+}
+
+.memory-page-empty {
+  min-height: 260px;
+}
+
+.memory-react-page .memory-page-actions {
+  gap: var(--space-sm);
+}
+
+.memory-recall-control {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-sm);
+  height: 36px;
+  box-sizing: border-box;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--panel) 70%, transparent);
+  color: var(--text);
+  font-size: var(--font-size-xs);
+  white-space: nowrap;
+}
+
+.memory-view-tabs {
+  flex: 0 0 auto;
+}
+
+.memory-editor-form {
+  display: grid;
+  gap: 16px;
+}
+
+.memory-editor-form > label {
+  display: grid;
+  gap: 7px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.memory-editor-form textarea {
+  min-height: 170px;
+  resize: vertical;
+}
+
+.memory-review-storage-actions {
+  display: grid;
+  align-content: center;
+  gap: var(--space-sm);
+  flex: 0 0 auto;
+}

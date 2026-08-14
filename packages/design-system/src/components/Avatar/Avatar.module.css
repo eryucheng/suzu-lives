@@ -1,0 +1,32 @@
+/* Avatar —— 头像（移植自 Suzu-Lives .agent-avatar） */
+
+.avatar {
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--accent) 42%, transparent);
+  border-radius: 10px;
+  background: linear-gradient(145deg, #9088ff, #635ed8);
+  box-shadow: 0 5px 15px color-mix(in srgb, var(--brand-500) 26%, transparent);
+  color: #fff;
+  user-select: none;
+}
+
+.avatar img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.initial {
+  font-weight: 720;
+  line-height: 1;
+}
+
+/* ---- 尺寸 ---- */
+.size-sm { width: 24px; height: 24px; border-radius: 8px; font-size: var(--font-size-xs); }
+.size-md { width: 31px; height: 31px; border-radius: 10px; font-size: var(--font-size-md); }
+.size-lg { width: 40px; height: 40px; border-radius: 12px; font-size: var(--font-size-xl); }
+.size-xl { width: 48px; height: 48px; border-radius: 14px; font-size: var(--font-size-2xl); }

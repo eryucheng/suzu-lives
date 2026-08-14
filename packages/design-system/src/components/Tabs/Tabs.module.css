@@ -1,0 +1,57 @@
+/* Tabs —— 分段页签（移植自 Suzu-Lives .admin-tabs / .admin-tab） */
+
+.tabs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  min-width: 0;
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--panel) 55%, transparent);
+  padding: 4px;
+  width: max-content;
+}
+
+.tabs.fullWidth {
+  width: 100%;
+}
+
+.tab {
+  height: 31px;
+  flex: 0 0 auto;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  padding: 0 11px;
+  font-family: inherit;
+  font-size: var(--font-size-xs);
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+
+.tab:hover {
+  color: var(--text);
+}
+
+.tab.active,
+.tabActive {
+  border-color: color-mix(in srgb, var(--accent) 30%, transparent);
+  background: color-mix(in srgb, var(--accent) 13%, transparent);
+  color: var(--text);
+}
+
+.tab:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--accent) 28%, transparent);
+  outline-offset: 2px;
+}
+
+/* ---- 尺寸 ---- */
+.size-md { height: 36px; padding: 0 13px; font-size: var(--font-size-sm); border-radius: 9px; }
+.size-lg { height: 42px; padding: 0 16px; font-size: var(--font-size-md); border-radius: 10px; }

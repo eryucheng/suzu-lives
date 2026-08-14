@@ -1,0 +1,167 @@
+/* Select —— 自绘毛玻璃浮层面板下拉 */
+
+.wrapper {
+  position: relative;
+  display: inline-flex;
+  width: 220px;
+}
+
+.wrapper.fullWidth {
+  width: 100%;
+}
+
+/* ---- 触发器 ---- */
+.trigger {
+  display: flex;
+  width: 100%;
+  height: 38px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  outline: 0;
+  background: var(--panel-soft);
+  color: var(--text);
+  padding: 0 14px;
+  font: inherit;
+  font-size: var(--font-size-md);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.16s ease, box-shadow 0.16s ease;
+}
+
+.trigger:hover {
+  border-color: color-mix(in srgb, var(--accent) 50%, var(--border));
+}
+
+.trigger:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--accent) 28%, transparent);
+  outline-offset: 2px;
+}
+
+.trigger.open {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 9%, transparent);
+}
+
+.placeholder {
+  color: var(--text-muted);
+}
+
+.label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---- 箭头 ---- */
+.chevron {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  color: var(--text-muted);
+  transition: transform 0.2s ease;
+}
+
+.chevronOpen {
+  transform: rotate(180deg);
+}
+
+/* ---- 浮层面板 ---- */
+.panel {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 2px);
+  left: 0;
+  right: 0;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--panel);
+  box-shadow: var(--glass-shadow);
+  padding-top: 2px;
+  padding-bottom: 2px;
+  padding-left: 4px;
+  padding-right: 4px;
+  animation: pop-in 0.16s ease;
+}
+
+/* 顶部受光高光 */
+.panel::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    var(--glass-top-highlight, rgba(255, 255, 255, 0.18)) 20%,
+    var(--glass-top-highlight, rgba(255, 255, 255, 0.18)) 80%,
+    transparent
+  );
+  pointer-events: none;
+}
+
+/* ---- 选项 ---- */
+.option {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 10px;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text-secondary);
+  padding: 8px 12px;
+  font: inherit;
+  font-size: var(--font-size-md);
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 0.14s ease, color 0.14s ease;
+}
+
+.option:hover,
+.option:focus-visible,
+.option.active {
+  outline: none;
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--text);
+}
+
+.option.selected {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.check {
+  margin-left: auto;
+  flex: 0 0 auto;
+  width: 16px;
+  color: var(--accent);
+  opacity: 0;
+}
+
+.option.selected .check {
+  opacity: 1;
+}
+
+@keyframes pop-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* ---- 禁用 ---- */
+.wrapper.disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  pointer-events: none;
+}

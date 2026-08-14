@@ -1,0 +1,239 @@
+{
+  "schemaVersion": 1,
+  "updatedAt": "2026-07-30",
+  "models": {
+    "deepseek-v4-pro": {
+      "label": "DeepSeek V4 Pro",
+      "provider": "DeepSeek",
+      "currency": "CNY",
+      "aliases": [
+        "deepseek-v4-pro"
+      ],
+      "sourceUrl": "https://api-docs.deepseek.com/zh-cn/quick_start/pricing/",
+      "rateDefinitions": {
+        "inputUncachedTokens": {
+          "label": "未缓存输入",
+          "unitLabel": "元 / 百万 Token",
+          "per": 1000000
+        },
+        "inputCachedTokens": {
+          "label": "缓存命中输入",
+          "unitLabel": "元 / 百万 Token",
+          "per": 1000000
+        },
+        "outputTextTokens": {
+          "label": "输出",
+          "unitLabel": "元 / 百万 Token",
+          "per": 1000000
+        }
+      },
+      "revisions": [
+        {
+          "id": "official-current",
+          "effectiveFrom": "1970-01-01T00:00:00.000Z",
+          "publishedAt": "2026-07-29",
+          "label": "当前官方公开价",
+          "rates": {
+            "inputUncachedTokens": 3,
+            "inputCachedTokens": 0.025,
+            "outputTextTokens": 6
+          }
+        }
+      ]
+    },
+    "deepseek-v4-flash": {
+      "label": "DeepSeek V4 Flash",
+      "provider": "DeepSeek",
+      "currency": "CNY",
+      "aliases": [
+        "deepseek-v4-flash"
+      ],
+      "sourceUrl": "https://api-docs.deepseek.com/zh-cn/quick_start/pricing/",
+      "rateDefinitions": {
+        "inputUncachedTokens": {
+          "label": "未缓存输入",
+          "unitLabel": "元 / 百万 Token",
+          "per": 1000000
+        },
+        "inputCachedTokens": {
+          "label": "缓存命中输入",
+          "unitLabel": "元 / 百万 Token",
+          "per": 1000000
+        },
+        "outputTextTokens": {
+          "label": "输出",
+          "unitLabel": "元 / 百万 Token",
+          "per": 1000000
+        }
+      },
+      "revisions": [
+        {
+          "id": "official-current",
+          "effectiveFrom": "1970-01-01T00:00:00.000Z",
+          "publishedAt": "2026-07-29",
+          "label": "当前官方公开价",
+          "rates": {
+            "inputUncachedTokens": 1,
+            "inputCachedTokens": 0.02,
+            "outputTextTokens": 2
+          }
+        }
+      ]
+    },
+    "qwen3.5-omni-flash": {
+      "label": "Qwen3.5 Omni Flash",
+      "provider": "阿里云百炼",
+      "currency": "CNY",
+      "aliases": [
+        "qwen3.5-omni-flash"
+      ],
+      "sourceUrl": "https://help.aliyun.com/zh/model-studio/qwen3-5-omni-flash",
+      "rateDefinitions": {
+        "inputTextImageVideoTokens": {
+          "label": "文本 / 图片 / 视频输入",
+          "unitLabel": "元 / 百万 Token",
+          "per": 1000000
+        },
+        "inputAudioTokens": {
+          "label": "音频输入",
+          "unitLabel": "元 / 百万 Token",
+          "per": 1000000
+        },
+        "outputTextTokens": {
+          "label": "文本输出",
+          "unitLabel": "元 / 百万 Token",
+          "per": 1000000
+        },
+        "outputAudioTokens": {
+          "label": "音频输出",
+          "unitLabel": "元 / 百万 Token",
+          "per": 1000000
+        }
+      },
+      "revisions": [
+        {
+          "id": "official-current",
+          "effectiveFrom": "1970-01-01T00:00:00.000Z",
+          "publishedAt": "2026-07-29",
+          "label": "北京地域当前官方公开价",
+          "rates": {
+            "inputTextImageVideoTokens": 2.2,
+            "inputAudioTokens": 18,
+            "outputTextTokens": 13.3,
+            "outputAudioTokens": 72
+          }
+        }
+      ]
+    },
+    "text-embedding-v4": {
+      "label": "Text Embedding V4",
+      "provider": "阿里云百炼",
+      "currency": "CNY",
+      "aliases": [
+        "text-embedding-v4"
+      ],
+      "sourceUrl": "https://help.aliyun.com/zh/model-studio/text-embedding-v4",
+      "rateDefinitions": {
+        "inputTokens": {
+          "label": "输入",
+          "unitLabel": "元 / 百万 Token",
+          "per": 1000000
+        }
+      },
+      "revisions": [
+        {
+          "id": "official-current",
+          "effectiveFrom": "1970-01-01T00:00:00.000Z",
+          "publishedAt": "2026-07-29",
+          "label": "当前官方公开价",
+          "rates": {
+            "inputTokens": 0.5
+          }
+        }
+      ]
+    },
+    "qwen3-tts-vd-2026-01-26": {
+      "label": "Qwen3 TTS VD",
+      "provider": "阿里云百炼",
+      "currency": "CNY",
+      "aliases": [
+        "qwen3-tts-vd-2026-01-26"
+      ],
+      "sourceUrl": "https://help.aliyun.com/zh/model-studio/qwen3-tts-vd",
+      "rateDefinitions": {
+        "inputCharacters": {
+          "label": "输入字符",
+          "unitLabel": "元 / 万字符",
+          "per": 10000
+        }
+      },
+      "revisions": [
+        {
+          "id": "official-current",
+          "effectiveFrom": "1970-01-01T00:00:00.000Z",
+          "publishedAt": "2026-07-29",
+          "label": "当前官方公开价",
+          "rates": {
+            "inputCharacters": 0.8
+          }
+        }
+      ]
+    },
+    "qwen3-asr-flash-realtime": {
+      "label": "Qwen3 ASR Flash Realtime",
+      "provider": "阿里云百炼",
+      "currency": "CNY",
+      "aliases": [
+        "qwen3-asr-flash-realtime",
+        "qwen3-asr-flash-realtime-2026-02-10",
+        "qwen3-asr-flash-realtime-2025-10-27"
+      ],
+      "sourceUrl": "https://help.aliyun.com/zh/model-studio/qwen3-asr-flash-realtime",
+      "rateDefinitions": {
+        "inputAudioSeconds": {
+          "label": "输入音频时长",
+          "unitLabel": "元 / 秒",
+          "per": 1
+        }
+      },
+      "revisions": [
+        {
+          "id": "official-current",
+          "effectiveFrom": "1970-01-01T00:00:00.000Z",
+          "publishedAt": "2026-08-10",
+          "label": "北京地域当前官方公开价",
+          "rates": {
+            "inputAudioSeconds": 0.00033
+          }
+        }
+      ]
+    },
+    "qwen-voice-design": {
+      "label": "Qwen Voice Design",
+      "provider": "阿里云百炼",
+      "currency": "CNY",
+      "aliases": [
+        "qwen-voice-design"
+      ],
+      "sourceUrl": "https://help.aliyun.com/zh/model-studio/voice-design-user-guide",
+      "rateDefinitions": {
+        "generatedVoices": {
+          "label": "成功创建音色",
+          "unitLabel": "元 / 个",
+          "per": 1
+        }
+      },
+      "revisions": [
+        {
+          "id": "official-current",
+          "effectiveFrom": "1970-01-01T00:00:00.000Z",
+          "publishedAt": "2026-07-30",
+          "label": "官方标准价，不扣除新账号免费额度",
+          "rates": {
+            "generatedVoices": 0.2
+          }
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,70 @@
+/* Button —— 基于设计 token 的按钮 */
+
+.button {
+  font-family: inherit;
+  font-weight: var(--font-weight-medium);
+  line-height: 1;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: background-color 0.16s ease, color 0.16s ease,
+    border-color 0.16s ease, box-shadow 0.16s ease;
+  white-space: nowrap;
+}
+
+/* ---- 尺寸 ---- */
+.size-sm { height: 30px; padding: 0 var(--space-md); font-size: var(--font-size-xs); }
+.size-md { height: 36px; padding: 0 var(--space-lg); font-size: var(--font-size-sm); }
+.size-lg { height: 44px; padding: 0 var(--space-xl); font-size: var(--font-size-md); }
+
+/* ---- 变体 ---- */
+.variant-primary {
+  background: linear-gradient(135deg, var(--brand-400), var(--brand-600));
+  color: var(--accent-contrast);
+  box-shadow: 0 8px 20px color-mix(in srgb, var(--brand-500) 35%, transparent);
+}
+.variant-primary:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+.variant-primary:active:not(:disabled) {
+  filter: brightness(0.95);
+}
+
+.variant-secondary {
+  background: color-mix(in srgb, var(--panel) 70%, transparent);
+  color: var(--text);
+  border-color: var(--border);
+}
+.variant-secondary:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--brand-400) 50%, var(--border));
+  background: rgba(129, 121, 255, 0.08);
+}
+
+.variant-ghost {
+  background: transparent;
+  color: var(--text-secondary);
+}
+.variant-ghost:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--brand-400) 8%, transparent);
+  color: var(--text);
+}
+
+.variant-danger {
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 40%, transparent);
+}
+.variant-danger:hover:not(:disabled) {
+  background: var(--danger);
+  color: var(--neutral-0);
+}
+
+/* ---- 状态 ---- */
+.button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.button:focus-visible {
+  outline: 2px solid var(--brand-300);
+  outline-offset: 2px;
+}

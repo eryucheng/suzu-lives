@@ -1,0 +1,20 @@
+{
+  "name": "@suzu-lives/agent-image-generation",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.mjs",
+  "bin": {
+    "suzu-lives-image-generation": "./bin/image-generation.mjs"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  },
+  "dependencies": {
+    "@suzu-lives/agent-registry": "0.1.0",
+    "@suzu-lives/cost-ledger": "0.1.0",
+    "@suzu-lives/image-workbench": "0.1.0",
+    "@suzu-lives/service-connections": "0.1.0",
+    "@suzu-lives/visual-reference-library": "0.1.0"
+  }
+}

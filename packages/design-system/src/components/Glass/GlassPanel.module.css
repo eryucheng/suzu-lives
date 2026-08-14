@@ -1,0 +1,41 @@
+/* GlassPanel —— 静态渐变模拟的磨砂玻璃面板 */
+
+.panel {
+  position: relative;
+  overflow: hidden; /* 让 ::before 高光在圆角处被裁剪，不露出边角 */
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--glass-border);
+  background: var(--glass-bg);
+  box-shadow: var(--glass-shadow);
+}
+
+/* 强度变体 */
+.intensity-subtle {
+  opacity: 0.92;
+}
+.intensity-soft {
+  opacity: 1;
+}
+.intensity-prominent {
+  opacity: 1;
+  border-color: rgba(255, 255, 255, 0.24);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.5), 0 4px 10px rgba(0, 0, 0, 0.3);
+}
+
+/* 顶部受光高光条 —— 用渐变让两侧自然消隐，避免出现硬直线 */
+.panel::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    var(--glass-top-highlight, rgba(255, 255, 255, 0.18)) 20%,
+    var(--glass-top-highlight, rgba(255, 255, 255, 0.18)) 80%,
+    transparent
+  );
+  pointer-events: none;
+}

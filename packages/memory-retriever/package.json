@@ -1,0 +1,17 @@
+{
+  "name": "@suzu-lives/memory-retriever",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.mjs",
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  },
+  "dependencies": {
+    "@suzu-lives/cost-ledger": "0.1.0",
+    "@suzu-lives/memory-core": "0.1.0"
+  },
+  "files": [
+    "src/**/*"
+  ]
+}

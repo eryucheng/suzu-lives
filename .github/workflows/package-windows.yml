@@ -1,0 +1,54 @@
+name: Package Windows test build
+
+run-name: Package Windows test build from ${{ github.ref_name }} (${{ github.sha }})
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: package-windows-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  package:
+    name: Build Windows x64 ZIP
+    runs-on: windows-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out source and memory submodule
+        uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Run tests before packaging
+        run: npm test
+
+      - name: Build React renderer
+        working-directory: apps/control-center
+        run: npx --no-install vite build
+
+      - name: Package Windows x64 ZIP
+        run: npm run dist
+
+      - name: Upload test package
+        uses: actions/upload-artifact@v7
+        with:
+          path: apps/control-center/dist/Suzu-Lives-Console-*-win-x64.zip
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+          archive: false

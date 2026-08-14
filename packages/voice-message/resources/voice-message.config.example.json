@@ -1,0 +1,6 @@
+{
+  "languageType": "Chinese",
+  "apiKeyEnv": "DASHSCOPE_API_KEY",
+  "timeoutMs": 30000,
+  "ffmpegPath": "ffmpeg"
+}

@@ -1,0 +1,19 @@
+{
+  "provider": {
+    "api_key": "",
+    "api_key_env": "DASHSCOPE_API_KEY",
+    "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    "model": "qwen3.5-omni-flash"
+  },
+  "video": {
+    "fps": 1,
+    "timeout_seconds": 240,
+    "max_output_tokens": 350,
+    "temperature": 0.2,
+    "max_binary_bytes": 7000000,
+    "ffmpeg_path": "ffmpeg",
+    "ffprobe_path": "ffprobe",
+    "cache_enabled": true,
+    "cache_dir": "runtime/cache"
+  }
+}

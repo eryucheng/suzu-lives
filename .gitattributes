@@ -1,7 +1,0 @@
-* text=auto
-*.md text eol=lf
-*.mjs text eol=lf
-*.json text eol=lf
-*.yml text eol=lf
-*.cmd text eol=crlf
-
