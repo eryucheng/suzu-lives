@@ -1,0 +1,78 @@
+/* ListRow —— 列表行（移植自 Suzu-Lives .activity-row） */
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 69px;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  width: 100%;
+  text-align: left;
+  padding: 0;
+  font-family: inherit;
+  cursor: pointer;
+  border-radius: var(--radius-md);
+}
+
+.row.interactive:hover {
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+}
+
+.icon {
+  display: grid;
+  width: 36px;
+  height: 36px;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  color: var(--accent);
+}
+
+.icon svg {
+  display: block;
+  width: 19px;
+  height: 19px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+}
+
+.copy {
+  min-width: 0;
+  flex: 1;
+}
+
+.title {
+  display: block;
+  margin: 0;
+  color: var(--text);
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  line-height: 1.35;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.description {
+  display: block;
+  margin: 4px 0 0;
+  color: var(--text-muted);
+  font-size: var(--font-size-xs);
+  line-height: 1.5;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.action {
+  flex: 0 0 auto;
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  color: var(--text-secondary);
+}

@@ -1,0 +1,50 @@
+/* PageHeader —— 页内标题（移植自 Suzu-Lives pageIntro） */
+
+.header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 24px;
+  max-width: 1200px;
+  margin-bottom: 27px;
+}
+
+.copy {
+  min-width: 0;
+}
+
+.eyebrow {
+  color: var(--accent2);
+  font-size: var(--font-size-xs);
+  font-weight: 700;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+}
+
+.title {
+  margin: 6px 0 0;
+  font-size: var(--font-size-3xl);
+  font-weight: 690;
+  letter-spacing: -0.6px;
+  color: var(--text);
+}
+
+.subtitle {
+  max-width: 660px;
+  margin: 8px 0 0;
+  color: var(--text-muted);
+  font-size: var(--font-size-sm);
+  line-height: 1.65;
+}
+
+.action {
+  flex: 0 0 auto;
+}
+
+/* 窄屏下改为纵向堆叠，action 左对齐 */
+@media (max-width: 820px) {
+  .header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}

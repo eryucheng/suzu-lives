@@ -1,0 +1,46 @@
+/* Table —— 数据表（移植自 Suzu-Lives .data-table） */
+
+.scroll {
+  overflow: auto;
+}
+
+.table {
+  width: 100%;
+  min-width: 670px;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+
+.header {
+  padding: 0 9px 10px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-muted);
+  font-size: 9px;
+  font-weight: 650;
+  letter-spacing: 0.5px;
+  text-align: left;
+  text-transform: uppercase;
+}
+
+.cell {
+  overflow: hidden;
+  padding: 11px 9px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-secondary);
+  font-size: var(--font-size-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.row:last-child .cell {
+  border-bottom: 0;
+}
+
+.align-right {
+  text-align: right;
+}
+
+/* 斑马纹 */
+.striped .row:nth-child(even) .cell {
+  background: color-mix(in srgb, var(--panel-soft) 55%, transparent);
+}

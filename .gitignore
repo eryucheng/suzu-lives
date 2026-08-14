@@ -5,6 +5,10 @@ dist-*/
 apps/*/dist/
 apps/*/dist-preview/
 apps/*/renderer/
+# The internal design-system workspace ships its built runtime so a clean
+# checkout can build the desktop renderer without any external Git dependency.
+!packages/design-system/dist/
+!packages/design-system/dist/**
 .playwright-cli/
 output/playwright/
 *.log

@@ -1,0 +1,174 @@
+/* ChatComposer —— 消息输入框（忠实移植 Suzu-Lives .conversation-composer @conversation.css:2400-2531） */
+
+/* 外层：底部输入条 */
+.composer {
+  position: relative;
+  display: block;
+  min-width: 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
+  background: color-mix(in srgb, var(--panel) 94%, #13182a);
+  padding: 12px clamp(14px, 2vw, 26px);
+}
+
+/* 圆角底：textarea + 工具行叠在同一张深色表面里 */
+.surface {
+  position: relative;
+  display: grid;
+  min-height: 142px;
+  grid-template-rows: minmax(78px, 1fr) 42px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--panel) 60%, #000);
+}
+
+/* textarea：无边框、透明，直接嵌在表面里 */
+.textarea {
+  display: block;
+  width: 100%;
+  min-height: 78px;
+  resize: none;
+  border: 0;
+  border-radius: 0;
+  outline: 0;
+  background: transparent;
+  box-shadow: none;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 1.55;
+  padding: 14px 16px 8px;
+  box-sizing: border-box;
+}
+
+.textarea::placeholder {
+  color: var(--text-muted);
+}
+
+.textarea:focus {
+  box-shadow: none;
+}
+
+.textarea:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+/* 工具行 */
+.footer,
+.tools,
+.submitArea {
+  display: flex;
+  align-items: center;
+}
+
+.footer {
+  justify-content: space-between;
+  padding: 0 9px 8px 10px;
+}
+
+.tools,
+.submitArea {
+  gap: 4px;
+}
+
+.tool,
+.staticTool {
+  display: grid;
+  width: 31px;
+  height: 31px;
+  place-items: center;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-secondary);
+}
+
+.tool {
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease, transform 0.15s ease;
+}
+
+.tool:hover,
+.tool.isActive {
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+  color: var(--text);
+}
+
+.tool:active {
+  transform: scale(0.9);
+}
+
+.tool:disabled {
+  cursor: default;
+  opacity: 0.42;
+}
+
+.staticTool {
+  opacity: 0.54;
+}
+
+.tool svg,
+.staticTool svg {
+  width: 21px;
+  height: 21px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.7;
+}
+
+/* 发送按钮：绿色 */
+.sendButton {
+  min-width: 64px;
+  height: 31px;
+  border: 0;
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--success) 62%, #062);
+  color: #fff;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 650;
+  padding: 0 13px;
+  transition: filter 0.15s ease, transform 0.15s ease;
+}
+
+.sendButton:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+
+.sendButton:active:not(:disabled) {
+  transform: scale(0.96);
+}
+
+.sendButton:disabled {
+  background: color-mix(in srgb, var(--text) 12%, transparent);
+  color: var(--text-muted);
+  cursor: default;
+}
+
+/* 亮色主题覆盖：底更白、文字深、发送键为微信绿 */
+[data-theme='light'] .composer {
+  border-top-color: #e5e5e5;
+  background: color-mix(in srgb, var(--panel) 96%, #f0f0f0);
+}
+
+[data-theme='light'] .surface {
+  border-color: var(--border);
+  background: color-mix(in srgb, var(--panel) 88%, #fff);
+}
+
+[data-theme='light'] .textarea {
+  color: var(--text);
+}
+
+[data-theme='light'] .sendButton {
+  background: #07c160;
+}
+
+[data-theme='light'] .sendButton:disabled {
+  background: var(--border);
+  color: var(--text-muted);
+}
