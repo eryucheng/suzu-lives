@@ -2,7 +2,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { app, BrowserWindow, ipcMain, Menu, safeStorage } from "electron";
-import { autoUpdater } from "electron-updater";
+import electronUpdater from "electron-updater";
 
 import { runSuzuLivesCli } from "@suzu-lives/claude-integration/agent-cli";
 import { asDashScopeImageConnection, createDashScopeConnectionService, createImageVisionCredentialService, createNamedApiConnectionService, createVideoUnderstandingCredentialService } from "@suzu-lives/service-connections";
@@ -13,6 +13,7 @@ import { createAppUpdateService } from "./services/app-update.mjs";
 import { createDataStorageLocationService } from "./services/data-storage-location.mjs";
 import { applyWindowControl, windowControlState } from "./services/window-controls.mjs";
 
+const { autoUpdater } = electronUpdater;
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const APP_ROOT = path.resolve(HERE, "..");
 const APP_ICON = path.join(APP_ROOT, "assets", "app-icon.png");

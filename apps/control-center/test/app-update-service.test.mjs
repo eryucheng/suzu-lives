@@ -4,8 +4,17 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 
 import { createAppUpdateService } from "../electron/services/app-update.mjs";
+
+test("main process imports the CommonJS updater through its default export", async () => {
+  const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+  const main = await fs.promises.readFile(path.join(appRoot, "electron", "main.mjs"), "utf8");
+  assert.match(main, /^import electronUpdater from "electron-updater";$/mu);
+  assert.match(main, /^const \{ autoUpdater \} = electronUpdater;$/mu);
+  assert.doesNotMatch(main, /import\s*\{\s*autoUpdater\s*\}\s*from\s*["']electron-updater["']/u);
+});
 
 function packagedApp(version = "0.1.0") {
   return { isPackaged: true, getVersion: () => version };
