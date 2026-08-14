@@ -4,6 +4,7 @@
   "private": true,
   "author": "儿玉诚也",
   "description": "Desktop software and shared runtime for Claude-connected personal AI capabilities.",
+  "license": "Apache-2.0",
   "scripts": {
     "start": "npm run start --workspace=suzu-lives-console",
     "test": "npm run test --workspaces --if-present",
