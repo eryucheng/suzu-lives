@@ -43,9 +43,9 @@ test("one-shot schedule tasks persist below the Suzu data root and use the selec
 
 test("cron accepts the merchant schedule and matches in local time", () => {
   const cron = parseCronExpression("2 8,12,16,20 * * *");
-  assert.equal(cronMatches(cron, new Date("2026-08-05T08:02:00+08:00")), true);
-  assert.equal(cronMatches(cron, new Date("2026-08-05T08:03:00+08:00")), false);
-  assert.equal(cronMatches("*/15 9-17 * * 1-5", new Date("2026-08-05T09:15:00+08:00")), true);
+  assert.equal(cronMatches(cron, new Date(2026, 7, 5, 8, 2)), true);
+  assert.equal(cronMatches(cron, new Date(2026, 7, 5, 8, 3)), false);
+  assert.equal(cronMatches("*/15 9-17 * * 1-5", new Date(2026, 7, 5, 9, 15)), true);
 });
 
 test("schedule CLI keeps delay and cron under one command with parameters", async () => {
@@ -171,7 +171,7 @@ test("runner keeps a closed task stored and does not execute it", async () => {
 
 test("runner executes future tasks only while Suzu is running and does not catch up after startup", async () => {
   const root = await temporaryDirectory("suzu-schedule-runner-");
-  let current = new Date("2026-08-05T10:00:00+08:00");
+  let current = new Date(2026, 7, 5, 10, 0);
   const delivered = [];
   const operations = [];
   const expired = await createScheduleTask({
@@ -179,7 +179,7 @@ test("runner executes future tasks only while Suzu is running and does not catch
     delay: "1m",
     prompt: "已经错过",
     contactId: "contact-expired",
-    now: new Date("2026-08-05T09:00:00+08:00"),
+    now: new Date(2026, 7, 5, 9, 0),
   });
   await createScheduleTask({
     dataRoot: root,
@@ -192,7 +192,7 @@ test("runner executes future tasks only while Suzu is running and does not catch
     dataRoot: root,
     cron: "2 10 * * *",
     exec: "traveling-merchant",
-    now: new Date("2026-08-05T09:00:00+08:00"),
+    now: new Date(2026, 7, 5, 9, 0),
   });
   const runner = createScheduleRunner({
     dataRoot: root,
@@ -206,11 +206,11 @@ test("runner executes future tasks only while Suzu is running and does not catch
   assert.deepEqual(delivered, []);
   assert.deepEqual(operations, []);
 
-  current = new Date("2026-08-05T10:01:00+08:00");
+  current = new Date(2026, 7, 5, 10, 1);
   await runner.poll();
   assert.deepEqual(delivered, ["未来任务"]);
 
-  current = new Date("2026-08-05T10:02:00+08:00");
+  current = new Date(2026, 7, 5, 10, 2);
   await runner.poll();
   assert.deepEqual(operations, ["traveling-merchant"]);
   await runner.poll();
