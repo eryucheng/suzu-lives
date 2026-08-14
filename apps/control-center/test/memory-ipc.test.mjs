@@ -29,6 +29,8 @@ test("memory IPC requires the embedded service and forwards React memory actions
     createReviewBackup(scope) { calls.push(["backup", scope]); return {}; },
     inspectReviewBackup(payload) { calls.push(["inspect-backup", payload]); return {}; },
     restoreReviewBackup(payload) { calls.push(["restore-backup", payload]); return {}; },
+    inspectMemoryImport(payload) { calls.push(["inspect-import", payload]); return {}; },
+    importMemoryDatabase(payload) { calls.push(["import-database", payload]); return {}; },
   };
 
   assert.throws(
@@ -60,8 +62,11 @@ test("memory IPC requires the embedded service and forwards React memory actions
   await handlers.get("memory:recover-review-input-batch")(null, { batchId: "batch-1", force: true, contactId });
   await handlers.get("memory:create-review-backup")(null, { contactId });
   await handlers.get("memory:select-review-backup")(null);
+  await handlers.get("memory:select-import-database")(null);
   await handlers.get("memory:inspect-review-backup")(null, { sourcePath: "C:/tmp/memory-backup.db", contactId });
+  await handlers.get("memory:inspect-import-database")(null, { sourcePath: "C:/tmp/memory-import.db", contactId });
   await handlers.get("memory:restore-review-backup")(null, { sourcePath: "C:/tmp/memory-backup.db", contactId });
+  await handlers.get("memory:import-database")(null, { sourcePath: "C:/tmp/memory-import.db", contactId });
 
   assert.deepEqual(calls, [
     ["status", { contactId }],
@@ -80,6 +85,8 @@ test("memory IPC requires the embedded service and forwards React memory actions
     ["recover", { batchId: "batch-1", force: true, contactId }],
     ["backup", { contactId }],
     ["inspect-backup", { sourcePath: "C:/tmp/memory-backup.db", contactId }],
+    ["inspect-import", { sourcePath: "C:/tmp/memory-import.db", contactId }],
     ["restore-backup", { sourcePath: "C:/tmp/memory-backup.db", contactId }],
+    ["import-database", { sourcePath: "C:/tmp/memory-import.db", contactId }],
   ]);
 });

@@ -155,6 +155,80 @@ test("realtime call uses the configured contact voice and streams ASR audio", as
   );
 });
 
+test("a connected call asks Claude for one greeting, speaks it, and lets the first utterance interrupt it", async () => {
+  const events = [];
+  const sentTurns = [];
+  const stoppedTurns = [];
+  const spoken = [];
+  let chatSubscriber = null;
+  const chat = {
+    sendToSession: async (value) => {
+      sentTurns.push(value);
+      return { accepted: true, requestId: value.requestId, sessionId: value.sessionId };
+    },
+    stop: async (value) => {
+      stoppedTurns.push(value);
+      return { accepted: true, stopped: true };
+    },
+    subscribe: (callback) => {
+      chatSubscriber = callback;
+      return () => { chatSubscriber = null; };
+    },
+  };
+  const service = createRealtimeVoiceCallService({
+    chat,
+    connectionsService: { resolveDashScope: async () => ({ key: "dashscope-key", baseUrl: "https://dashscope.aliyuncs.com/api/v1" }) },
+    dataRootProvider: () => "D:/suzu-data",
+    ledgerPathProvider: () => "D:/suzu-data/usage.json",
+    onEvent: (event) => events.push(event),
+    reader: {
+      snapshot: async () => ({ activeContact: { agentId: "agent-suzu", name: "Suzu" } }),
+      ensureActiveSession: async () => ({ id: "session-suzu", projectRoot: "D:/project", hasTranscript: true }),
+    },
+    resolveVoiceRuntime: ({ agentId }) => ({
+      agentId,
+      tts: { provider: "minimax", apiKey: "minimax-key", voiceId: "voice-suzu", model: "speech-2.8" },
+    }),
+    settingsService: { load: () => ({}) },
+    synthesizeVoice: async ({ text }) => {
+      spoken.push(text);
+      return { audio: Buffer.from("voice-bytes"), format: "mp3" };
+    },
+  });
+
+  const started = await service.start({ senderId: "renderer-1", initiator: "agent" });
+  const opening = await service.open({ callId: started.callId, senderId: "renderer-1" });
+  assert.deepEqual(opening, { accepted: true, opened: true });
+  assert.equal(sentTurns.length, 1);
+  assert.equal(sentTurns[0].kind, "call-open");
+  assert.equal(sentTurns[0].content, "");
+  assert.equal(sentTurns[0].callDirection, "agent");
+  assert.match(sentTurns[0].requestId, /^suzu-call-open-/u);
+  assert.deepEqual(
+    await service.open({ callId: started.callId, senderId: "renderer-1" }),
+    { accepted: true, opened: false, reason: "opened" },
+  );
+
+  chatSubscriber({
+    type: "reply-stream",
+    kind: "call-open",
+    requestId: sentTurns[0].requestId,
+    sessionId: "session-suzu",
+    projectRoot: "D:/project",
+    content: "喂，我在。",
+  });
+  await flush();
+  assert.deepEqual(spoken, ["喂，我在。"]);
+  assert.ok(events.some((event) => event.type === "call-audio" && event.text === "喂，我在。"));
+
+  assert.deepEqual(
+    await service.interrupt({ callId: started.callId, senderId: "renderer-1" }),
+    { accepted: true, interrupted: true },
+  );
+  assert.equal(stoppedTurns.at(-1).requestId, sentTurns[0].requestId);
+  await service.stop({ callId: started.callId, senderId: "renderer-1" });
+});
+
 test("call helpers keep the configured endpoint and speakable clauses", () => {
   assert.equal(
     realtimeAsrWebSocketUrl("https://dashscope.aliyuncs.com/api/v1", "qwen3-asr-flash-realtime"),

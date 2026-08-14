@@ -16,6 +16,22 @@ test("relationship files read and atomically save only the selected project root
   await service(root).save({ path: "notes/season.md", content: "新的相处设定" }); assert.equal(await fs.readFile(path.join(root, "notes", "season.md"), "utf8"), "新的相处设定"); assert.match(await fs.readFile(path.join(root, "CLAUDE.md"), "utf8"), /@abilities\.md/u);
 });
 
+test("hides managed CLAUDE references from the editor and restores them on save", async () => {
+  const root = await project();
+  const claudePath = path.join(root, "CLAUDE.md");
+  await fs.writeFile(claudePath, "# 规则\n@abilities.md\n@persona.md\n@notes/bond.md\n@CLAUDE.md\n", "utf8");
+  await fs.mkdir(path.join(root, "notes"));
+  await fs.writeFile(path.join(root, "notes", "bond.md"), "相处备注", "utf8");
+  const current = service(root);
+
+  const snapshot = await current.snapshot();
+  assert.equal(snapshot.files.find((file) => file.path === "CLAUDE.md")?.content, "# 规则\n");
+  assert.ok(snapshot.files.some((file) => file.path === "notes/bond.md"));
+
+  await current.save({ path: "CLAUDE.md", content: "# 新规则\n@user.md\n" });
+  assert.equal(await fs.readFile(claudePath, "utf8"), "# 新规则\n@abilities.md\n@persona.md\n@notes/bond.md");
+});
+
 test("custom Markdown creation inserts one CLAUDE reference without changing abilities references", async () => {
   const root = await project(); await fs.writeFile(path.join(root, "CLAUDE.md"), "# 用户原文\n@abilities.md\n@notes/bond.md\n@notes/bond.md\n", "utf8"); const current = service(root);
   const result = await current.create({ path: "notes/bond.md", content: "相处备注" }); assert.equal(result.files.find((item) => item.path === "notes/bond.md").content, "相处备注"); const claude = await fs.readFile(path.join(root, "CLAUDE.md"), "utf8"); assert.equal((claude.match(/^@notes\/bond\.md$/gmu) || []).length, 1); assert.match(claude, /# 用户原文/u); assert.match(claude, /@abilities\.md/u);

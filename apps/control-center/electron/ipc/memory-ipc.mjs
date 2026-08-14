@@ -83,11 +83,31 @@ export function registerMemoryIpc({ ipcMain, memoryService, dialog, getMainWindo
       sourcePath: String(result.filePaths?.[0] || ""),
     };
   });
+  ipcMain.handle("memory:select-import-database", async () => {
+    if (!dialog?.showOpenDialog) throw new Error("当前环境无法选择记忆数据库文件。");
+    const result = await dialog.showOpenDialog(getMainWindow(), {
+      title: "选择要导入的记忆数据库",
+      properties: ["openFile"],
+      filters: [{ name: "Suzu 记忆数据库", extensions: ["db"] }],
+    });
+    return {
+      canceled: result.canceled === true,
+      sourcePath: String(result.filePaths?.[0] || ""),
+    };
+  });
   ipcMain.handle("memory:inspect-review-backup", (_event, payload) => service.inspectReviewBackup({
     sourcePath: String(payload?.sourcePath || ""),
     ...memoryScope(payload),
   }));
+  ipcMain.handle("memory:inspect-import-database", (_event, payload) => service.inspectMemoryImport({
+    sourcePath: String(payload?.sourcePath || ""),
+    ...memoryScope(payload),
+  }));
   ipcMain.handle("memory:restore-review-backup", (_event, payload) => service.restoreReviewBackup({
+    sourcePath: String(payload?.sourcePath || ""),
+    ...memoryScope(payload),
+  }));
+  ipcMain.handle("memory:import-database", (_event, payload) => service.importMemoryDatabase({
     sourcePath: String(payload?.sourcePath || ""),
     ...memoryScope(payload),
   }));

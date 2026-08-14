@@ -143,7 +143,12 @@ test("chat starts the local Claude CLI and forwards its stream", async () => {
     }),
     claudeWorkspaceDirectories: [workspaceDirectory],
     settingsService: { load: () => ({ projectRoot }) },
-    reader: { ensureActiveSession: async () => ({ id: "session-1", projectRoot, hasTranscript: false }) },
+    reader: {
+      contactIdForSession: async ({ sessionId, projectRoot: sessionProjectRoot }) => (
+        sessionId === "session-1" && sessionProjectRoot === projectRoot ? "contact-suzu" : ""
+      ),
+      ensureActiveSession: async () => ({ id: "session-1", projectRoot, hasTranscript: false }),
+    },
     homeDirectory,
     suzuCliCommand: '"Suzu Lives Console.exe" --suzu-lives-cli',
     spawnImpl: (command, args, options) => {
@@ -199,6 +204,16 @@ test("chat starts the local Claude CLI and forwards its stream", async () => {
       ],
     }),
   }] } });
+  spawned[0].child.emitJson({ type: "user", message: { content: [{
+    type: "tool_result",
+    content: JSON.stringify({
+      schemaVersion: 1,
+      status: "ok",
+      capabilityId: "voice-call",
+      action: "request",
+      result: { type: "suzu-voice-call-request", reason: "想听听你的声音" },
+    }),
+  }] } });
   spawned[0].child.emitJson({ type: "result", result: "我在。", session_id: "session-1", usage: { input_tokens: 3, output_tokens: 2 } });
   spawned[0].child.close();
   await flush();
@@ -222,6 +237,10 @@ test("chat starts the local Claude CLI and forwards its stream", async () => {
     fileName: "voice.mp3",
     size: 24,
   }]);
+  const callRequest = events.find((event) => event.type === "call-request");
+  assert.equal(callRequest?.contactId, "contact-suzu");
+  assert.equal(callRequest?.reason, "想听听你的声音");
+  assert.match(callRequest?.requestId || "", /^suzu-.*:voice-call$/u);
 });
 
 test("chat uses the embedded memory lifecycle without handing recall back to Claude Hooks", async () => {
@@ -360,6 +379,7 @@ test("scheduled turns hide NO_REPLY and deliver a visible answer only after comp
 
   await service.sendToSession({
     content: "<suzu-schedule-task>\\n自然回访\\n</suzu-schedule-task>",
+    contactId: "contact-a1b2c3d4-1111-2222-3333-444444444444",
     sessionId: "scheduled-session",
     projectRoot,
     hasTranscript: true,
@@ -370,6 +390,7 @@ test("scheduled turns hide NO_REPLY and deliver a visible answer only after comp
   spawned[1].close();
   await flush();
   assert.deepEqual(events.filter((event) => event.type === "agent-reply").map((event) => event.content), ["你那边现在怎么样？"]);
+  assert.equal(events.filter((event) => event.type === "agent-reply").at(-1)?.contactId, "contact-a1b2c3d4-1111-2222-3333-444444444444");
   assert.equal(events.filter((event) => event.type === "reply").at(-1)?.done, true);
   service.dispose();
 });
@@ -564,6 +585,72 @@ test("normal text and an active voice call share one Claude stream", async () =>
   assert.equal(inputs.length, 2);
   const thirdInput = JSON.parse(spawned[0].child.input.trim().split("\n")[2]);
   assert.equal(thirdInput.message.content, "通话后继续打字");
+  service.dispose();
+});
+
+test("call opening stays hidden from Claude's user transcript while the existing memory lifecycle receives call context", async () => {
+  const root = await temporaryDirectory("suzu-chat-call-open-");
+  const projectRoot = path.join(root, "project");
+  const homeDirectory = path.join(root, "home");
+  const commandPath = path.join(homeDirectory, ".local", "bin", "claude.exe");
+  await fs.mkdir(projectRoot, { recursive: true });
+  await fs.mkdir(path.dirname(commandPath), { recursive: true });
+  await fs.writeFile(commandPath, "fixture");
+  const prepared = [];
+  const completed = [];
+  const spawned = [];
+  const service = createConversationChatService({
+    settingsService: { load: () => ({ projectRoot }) },
+    reader: { ensureActiveSession: async () => ({ id: "call-open-session", projectRoot, hasTranscript: true }) },
+    homeDirectory,
+    memoryRuntime: {
+      prepareTurn: async (value) => {
+        prepared.push(value);
+        return { systemPrompt: "" };
+      },
+      completeTurn: async (turn, value) => { completed.push({ turn, value }); },
+      abortTurn: async () => undefined,
+    },
+    spawnImpl: (_command, args) => {
+      const child = new FakeChild();
+      spawned.push({ args, child });
+      return child;
+    },
+  });
+
+  await service.sendToSession({
+    content: "",
+    sessionId: "call-open-session",
+    projectRoot,
+    hasTranscript: true,
+    kind: "call-open",
+    requestId: "suzu-call-open-fixture",
+  });
+  const promptIndex = spawned[0].args.indexOf("--append-system-prompt");
+  assert.match(spawned[0].args[promptIndex + 1], /suzu-voice-call-open/u);
+  const openingInput = JSON.parse(spawned[0].child.input.trim());
+  assert.match(openingInput.message.content, /^<suzu-voice-call-open>/u);
+  assert.doesNotMatch(openingInput.message.content, /用户打来了电话/u);
+  assert.match(prepared[0].userText, /系统事件：实时语音通话已接通/u);
+  assert.match(prepared[0].userText, /不是用户说的话/u);
+
+  spawned[0].child.emitJson({ type: "result", result: "喂，我在。" });
+  await flush();
+  await flush();
+  assert.equal(completed[0]?.value?.assistantText, "喂，我在。");
+
+  await service.sendToSession({
+    content: "能听见吗？",
+    sessionId: "call-open-session",
+    projectRoot,
+    hasTranscript: true,
+    kind: "call",
+    requestId: "suzu-call-turn-fixture",
+  });
+  const callInput = JSON.parse(spawned[0].child.input.trim().split("\n")[1]);
+  assert.match(callInput.message.content, /^<suzu-voice-call-turn>/u);
+  assert.match(prepared[1].userText, /来自用户与联系人的实时语音通话/u);
+  assert.match(prepared[1].userText, /能听见吗？/u);
   service.dispose();
 });
 

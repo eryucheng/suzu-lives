@@ -495,7 +495,7 @@ function EvidenceDetail({ source }) {
   </div>;
 }
 
-function MemoryBrain({ api, available = true, contactId, onDelete, onEdit, onError, onSuccess }) {
+function MemoryBrain({ api, available = true, contactId, onDelete, onEdit, onError, onSuccess, refreshToken = 0 }) {
   const [graph, setGraph] = useState(null);
   const [loading, setLoading] = useState(false);
   const [selectedNode, setSelectedNode] = useState(null);
@@ -526,7 +526,7 @@ function MemoryBrain({ api, available = true, contactId, onDelete, onEdit, onErr
     } finally {
       setLoading(false);
     }
-  }, [api, available, contactId, onError]);
+  }, [api, available, contactId, onError, refreshToken]);
 
   useEffect(() => {
     let cancelled = false;
@@ -732,12 +732,6 @@ function ReviewDetail({ detail, onDecide, onRetryLongTermExtraction, pending }) 
       <div className="memory-review-section-title"><h3>{humanFallback ? "人工判断" : "准备写入"}</h3>{humanFallback ? null : <span>置信度 {percentage(detail.confidence)}</span>}</div>
       <ReviewWritePreview preview={detail.writePreview} />
     </section>
-    {detail.currentState ? <section className="memory-review-detail-section"><div className="memory-review-section-title"><h3>当前状态</h3></div><div className="memory-review-state-change"><ReviewMemoryCard memory={detail.currentState} /><span>{detail.action || "变更"} →</span><ReviewWritePreview preview={detail.writePreview} /></div></section> : null}
-    <ReviewEndpoints endpoints={detail.endpoints} />
-    <ReviewMembers members={detail.members} />
-    <MaintenanceFailure failure={detail.maintenanceFailure} />
-    <section className="memory-review-detail-section"><div className="memory-review-section-title"><h3>直接证据</h3><span>{Array.isArray(detail.evidence) ? detail.evidence.length : 0} 条</span></div><ReviewEvidence evidence={detail.evidence} /></section>
-    <details className="memory-review-json"><summary>完整审计记录</summary><pre>{jsonText(detail.proposal)}</pre></details>
     {canDecide ? <div className="memory-review-decision">
       <label>审核备注（可选）<Textarea disabled={pending} onChange={(event) => setNote(event.target.value)} placeholder="记录本次判断理由" rows={2} value={note} /></label>
       <div>
@@ -746,7 +740,13 @@ function ReviewDetail({ detail, onDecide, onRetryLongTermExtraction, pending }) 
         {detail.permissions?.canAccept ? <Button disabled={pending} onClick={() => void onDecide("accept", note)} type="button">{pending ? "处理中…" : humanFallback ? "人工通过并写入" : "接受并写入"}</Button> : null}
         {detail.permissions?.canRevoke ? <Button disabled={pending} onClick={() => void onDecide("revoke", note)} type="button" variant="danger">撤销关系</Button> : null}
       </div>
-    </div> : null}
+    </div> : <p className="memory-review-empty-inline">该审核项已处理，当前仅可查看审计记录。</p>}
+    {detail.currentState ? <section className="memory-review-detail-section"><div className="memory-review-section-title"><h3>当前状态</h3></div><div className="memory-review-state-change"><ReviewMemoryCard memory={detail.currentState} /><span>{detail.action || "变更"} →</span><ReviewWritePreview preview={detail.writePreview} /></div></section> : null}
+    <ReviewEndpoints endpoints={detail.endpoints} />
+    <ReviewMembers members={detail.members} />
+    <MaintenanceFailure failure={detail.maintenanceFailure} />
+    <section className="memory-review-detail-section"><div className="memory-review-section-title"><h3>直接证据</h3><span>{Array.isArray(detail.evidence) ? detail.evidence.length : 0} 条</span></div><ReviewEvidence evidence={detail.evidence} /></section>
+    <details className="memory-review-json"><summary>完整审计记录</summary><pre>{jsonText(detail.proposal)}</pre></details>
   </div>;
 }
 
@@ -767,7 +767,7 @@ function ReviewItem({ detail, detailError, detailLoading, item, onDecide, onRetr
     </div>
     <p className="memory-attribution-content">{item.statement || "没有候选正文"}</p>
     <div className="memory-attribution-decision"><span>动作：{item.action || "create"}</span><span>主体：{plainText(item.subjectRole || item.subjectKey || "未指定")}</span><span>置信度：{percentage(item.confidence)}</span></div>
-    <div className="memory-review-item-footer"><span>{item.batchId ? `批次 ${shortId(item.batchId)}` : "独立候选"}</span><Button onClick={() => void onToggle(item.type, item.id)} type="button" variant="secondary">{selected ? "收起依据" : "查看依据"}</Button></div>
+    <div className="memory-review-item-footer"><span>{item.batchId ? `批次 ${shortId(item.batchId)}` : "独立候选"}</span><Button onClick={() => void onToggle(item.type, item.id)} type="button" variant="secondary">{selected ? "收起审核内容" : "查看并审核"}</Button></div>
     {selected ? detailLoading ? <div className="memory-review-detail-loading"><span className="brain-loader" />正在读取候选依据…</div>
       : detailError ? <div className="memory-review-detail-error">{detailError}</div>
         : detail ? <ReviewDetail detail={detail} key={key} onDecide={onDecide} onRetryLongTermExtraction={onRetryLongTermExtraction} pending={pending} /> : null : null}
@@ -813,7 +813,7 @@ function StorageHealth({ backingUp, onBackup, onRestore, overview, restoring }) 
   </details>;
 }
 
-function MemoryReview({ actions, api, contactId, onError, onSuccess }) {
+function MemoryReview({ actions, api, contactId, onError, onSuccess, refreshToken = 0 }) {
   const [type, setType] = useState("all");
   const [reviewState, setReviewState] = useState("pending");
   const [overview, setOverview] = useState(null);
@@ -853,7 +853,7 @@ function MemoryReview({ actions, api, contactId, onError, onSuccess }) {
     } finally {
       if (request === overviewRequestRef.current) setLoading(false);
     }
-  }, [api, contactId, onError, reviewState, type]);
+  }, [api, contactId, onError, refreshToken, reviewState, type]);
 
   useEffect(() => {
     void load();
@@ -1027,13 +1027,16 @@ export function MemoryPage({ actions = {}, api, loading = false, snapshot = {} }
   const [contactPickerOpen, setContactPickerOpen] = useState(false);
   const [contactPending, setContactPending] = useState(false);
   const [editing, setEditing] = useState(null);
-  const [libraryRefreshToken, setLibraryRefreshToken] = useState(0);
+  const [memoryRefreshToken, setMemoryRefreshToken] = useState(0);
+  const [importDialogOpen, setImportDialogOpen] = useState(false);
+  const [importing, setImporting] = useState(false);
   const [pageError, setPageError] = useState("");
 
   useEffect(() => {
     setView("brain");
     setContactPickerOpen(false);
     setEditing(null);
+    setImportDialogOpen(false);
     setPageError("");
   }, [contactId]);
 
@@ -1081,6 +1084,36 @@ export function MemoryPage({ actions = {}, api, loading = false, snapshot = {} }
     await actions.refreshStatus?.();
   };
 
+  const importMemoryDatabase = async () => {
+    if (!contactId || importing || loading) return;
+    setImporting(true);
+    try {
+      const selected = await api.memory.selectImportDatabase();
+      if (selected?.canceled || !clean(selected?.sourcePath)) return;
+      const inspection = await api.memory.inspectImportDatabase(selected.sourcePath, { contactId });
+      const size = Number(inspection?.bytes || 0);
+      const agentScopes = Array.isArray(inspection?.agentIds) ? inspection.agentIds.filter(Boolean) : [];
+      const sourceSummary = `${size ? `${Math.max(1, Math.round(size / 1024))} KB` : "大小未知"}${agentScopes.length ? ` · ${agentScopes.length} 个 Agent 范围` : " · 未记录 Agent 范围"}`;
+      const targetName = contactName(selectedContact);
+      if (!window.confirm(`导入会覆盖「${targetName}」当前的记忆数据库；导入前会自动创建一份安全备份。\n\n来源：${sourceSummary}\n\n数据库内的 Agent 标识会自动绑定到「${targetName}」。源文件不会被修改。\n\n确定导入吗？`)) return;
+      reportSuccess("正在导入、重绑并校验记忆数据库…");
+      await api.memory.importDatabase(selected.sourcePath, { contactId });
+      await refreshStatus();
+      setMemoryRefreshToken((current) => current + 1);
+      reportSuccess(`已导入「${targetName}」的记忆，并创建导入前安全备份。`);
+    } catch (importError) {
+      reportError(`导入记忆失败：${importError?.message || importError}`);
+    } finally {
+      setImporting(false);
+    }
+  };
+
+  const confirmMemoryImport = () => {
+    if (!contactId || importing || loading) return;
+    setImportDialogOpen(false);
+    void importMemoryDatabase();
+  };
+
   const deleteMemory = async (memoryId) => {
     if (!memoryId) return false;
     if (!window.confirm("删除后这条记忆将立即退出召回和关联链。仍可在“已删除”中恢复。确定删除吗？")) return false;
@@ -1117,7 +1150,7 @@ export function MemoryPage({ actions = {}, api, loading = false, snapshot = {} }
 
   const finishEdit = async () => {
     await refreshStatus();
-    setLibraryRefreshToken((current) => current + 1);
+    setMemoryRefreshToken((current) => current + 1);
   };
 
   const visibleView = ["brain", "library", "review"].includes(view) ? view : "brain";
@@ -1128,6 +1161,7 @@ export function MemoryPage({ actions = {}, api, loading = false, snapshot = {} }
   };
   const headerActions = <div className="memory-page-actions">
     <Button aria-expanded={contactPickerOpen} aria-haspopup="dialog" className={`memory-contact-picker-trigger${contactPickerOpen ? " is-active" : ""}`} disabled={!contacts.length || loading || contactPending} onClick={() => setContactPickerOpen((current) => !current)} type="button" variant="secondary">联系人：{contactName(selectedContact)}</Button>
+    <Button disabled={!contactId || loading || importing} onClick={() => setImportDialogOpen(true)} type="button" variant="secondary">{importing ? "正在导入…" : "导入记忆"}</Button>
     <div className="memory-recall-control"><span id="memoryRecallLabel">记忆召回</span><Switch aria-labelledby="memoryRecallLabel" checked={recallEnabled} disabled={loading} onChange={(event) => void setRecallEnabled(event.target.checked)} /></div>
     <Tabs active={visibleView} className="memory-view-tabs" items={MEMORY_VIEW_TABS} onChange={selectView} size="sm" />
     <Button onClick={actions.returnToOverview} type="button" variant="secondary">返回关系</Button>
@@ -1141,16 +1175,28 @@ export function MemoryPage({ actions = {}, api, loading = false, snapshot = {} }
       title="记忆"
     />
     <ContactPicker contacts={contacts} onClose={() => setContactPickerOpen(false)} onSelect={selectContact} open={contactPickerOpen} selectedContactId={contactId} switching={loading || contactPending} />
+    <Dialog
+      footer={<div className="memory-import-dialog-actions"><Button onClick={() => setImportDialogOpen(false)} type="button" variant="secondary">取消</Button><Button onClick={confirmMemoryImport} type="button">选择 .db 文件</Button></div>}
+      onClose={() => setImportDialogOpen(false)}
+      open={importDialogOpen}
+      title="导入 Suzu Memory 记忆"
+    >
+      <div className="memory-import-dialog-copy">
+        <p>请选择由 Suzu Memory 创建的 <code>.db</code> 记忆数据库。</p>
+        <p>不要选择其他软件的普通数据库；导入时会检查数据库结构和其中唯一的 Agent 范围。</p>
+        <p>导入会覆盖「{contactName(selectedContact)}」当前的记忆库，但会先创建安全备份，源文件不会被修改。</p>
+      </div>
+    </Dialog>
     {pageError ? <Banner className="memory-page-error" tone="danger">{pageError}</Banner> : null}
     {!contactId && !contacts.length ? <GlassPanel as="section" className="memory-page-empty" intensity="soft"><Empty description="先在关系页创建一位联系人，再为对方建立长期记忆。" title="还没有联系人" /></GlassPanel>
       : visibleView === "brain" ? <MemoryBrain api={api} available={ready} contactId={contactId} onDelete={deleteMemory} onEdit={(detail) => {
         setView("library");
         openEdit(detail);
-      }} onError={reportError} onSuccess={reportSuccess} />
-        : visibleView === "review" ? <MemoryReview actions={{ refreshStatus }} api={api} contactId={contactId} onError={reportError} onSuccess={reportSuccess} />
+      }} onError={reportError} onSuccess={reportSuccess} refreshToken={memoryRefreshToken} />
+        : visibleView === "review" ? <MemoryReview actions={{ refreshStatus }} api={api} contactId={contactId} onError={reportError} onSuccess={reportSuccess} refreshToken={memoryRefreshToken} />
           : <>
             <MemoryOverview api={api} contactId={contactId} memory={memory} onError={reportError} onSuccess={reportSuccess} />
-            <MemoryLibrary api={api} contactId={contactId} onDelete={deleteMemory} onEdit={openEdit} onError={reportError} onRestore={restoreMemory} onSuccess={reportSuccess} refreshToken={libraryRefreshToken} />
+            <MemoryLibrary api={api} contactId={contactId} onDelete={deleteMemory} onEdit={openEdit} onError={reportError} onRestore={restoreMemory} onSuccess={reportSuccess} refreshToken={memoryRefreshToken} />
           </>}
     <MemoryEditorDialog api={api} contactId={contactId} detail={editing} onClose={() => setEditing(null)} onError={reportError} onSaved={finishEdit} onSuccess={reportSuccess} />
   </div>;

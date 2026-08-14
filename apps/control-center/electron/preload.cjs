@@ -3,6 +3,15 @@ const { contextBridge, ipcRenderer } = require("electron");
 contextBridge.exposeInMainWorld("suzuConsole", {
   windowChrome: {
     applyTheme: (theme) => ipcRenderer.invoke("window-chrome:apply-theme", theme),
+    customControls: process.platform === "win32",
+    state: () => ipcRenderer.invoke("window-chrome:state"),
+    control: (action) => ipcRenderer.invoke("window-chrome:control", action),
+    onState: (callback) => {
+      if (typeof callback !== "function") return () => {};
+      const listener = (_event, state) => callback(state);
+      ipcRenderer.on("window-chrome:state", listener);
+      return () => ipcRenderer.removeListener("window-chrome:state", listener);
+    },
   },
   settings: {
     get: () => ipcRenderer.invoke("settings:get"),
@@ -48,13 +57,17 @@ contextBridge.exposeInMainWorld("suzuConsole", {
     openMediaDirectory: (value) => ipcRenderer.invoke("conversation:open-media-directory", value),
     create: () => ipcRenderer.invoke("conversation:create"),
     createContact: (value) => ipcRenderer.invoke("conversation:create-contact", value),
+    renameContact: (value) => ipcRenderer.invoke("conversation:rename-contact", value),
     selectContact: (value) => ipcRenderer.invoke("conversation:select-contact", value),
     setPreferredContact: (value) => ipcRenderer.invoke("conversation:set-preferred-contact", value),
+    updateContactPresentation: (value) => ipcRenderer.invoke("conversation:update-contact-presentation", value),
+    removeContact: (value) => ipcRenderer.invoke("conversation:remove-contact", value),
     send: (value) => ipcRenderer.invoke("conversation:send", value),
     stop: (value) => ipcRenderer.invoke("conversation:stop", value),
     steer: (value) => ipcRenderer.invoke("conversation:steer", value),
     call: {
-      start: () => ipcRenderer.invoke("conversation:call-start"),
+      start: (value) => ipcRenderer.invoke("conversation:call-start", value),
+      open: (value) => ipcRenderer.invoke("conversation:call-open", value),
       audio: (value) => ipcRenderer.send("conversation:call-audio", value),
       commit: (value) => ipcRenderer.invoke("conversation:call-commit", value),
       interrupt: (value) => ipcRenderer.invoke("conversation:call-interrupt", value),
@@ -180,12 +193,21 @@ contextBridge.exposeInMainWorld("suzuConsole", {
     ),
     createReviewBackup: (scope = {}) => ipcRenderer.invoke("memory:create-review-backup", scope),
     selectReviewBackup: () => ipcRenderer.invoke("memory:select-review-backup"),
+    selectImportDatabase: () => ipcRenderer.invoke("memory:select-import-database"),
     inspectReviewBackup: (sourcePath, scope = {}) => ipcRenderer.invoke(
       "memory:inspect-review-backup",
       { sourcePath, ...scope },
     ),
+    inspectImportDatabase: (sourcePath, scope = {}) => ipcRenderer.invoke(
+      "memory:inspect-import-database",
+      { sourcePath, ...scope },
+    ),
     restoreReviewBackup: (sourcePath, scope = {}) => ipcRenderer.invoke(
       "memory:restore-review-backup",
+      { sourcePath, ...scope },
+    ),
+    importDatabase: (sourcePath, scope = {}) => ipcRenderer.invoke(
+      "memory:import-database",
       { sourcePath, ...scope },
     ),
   },

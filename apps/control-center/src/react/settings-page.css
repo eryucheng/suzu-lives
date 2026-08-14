@@ -121,11 +121,58 @@
   border-color:color-mix(in srgb, var(--warning) 38%, var(--glass-border));
 }
 
+.settings-privacy-card {
+  display:grid;
+  gap:clamp(14px,1.5cqw,19px);
+}
+
+.settings-privacy-card__status {
+  margin:0;
+}
+
+.settings-privacy-card__status.is-error {
+  color:var(--danger, #c74a55);
+}
+
+.settings-privacy-contact-list {
+  display:grid;
+  gap:2px;
+}
+
+.settings-privacy-contact {
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:var(--space-md);
+  border-top:1px solid var(--border);
+  padding:13px 0 0;
+}
+
+.settings-privacy-contact > div {
+  display:grid;
+  min-width:0;
+  gap:3px;
+}
+
+.settings-privacy-contact strong {
+  overflow:hidden;
+  color:var(--text);
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+
+.settings-privacy-contact span {
+  color:var(--text-muted);
+  font-size:var(--font-size-xs);
+}
+
 @container (max-width:760px) {
   .settings-card__layout { grid-template-columns:minmax(0,1fr); }
   .settings-card__actions { justify-content:flex-start; }
   .settings-card__actions > .settings-action-button { flex:1 1 138px; }
   .settings-directory-card__path { width:100%; }
+  .settings-privacy-contact { align-items:stretch; flex-direction:column; }
+  .settings-privacy-contact > .settings-action-button { align-self:flex-start; }
 }
 
 @media (max-width:1100px) {

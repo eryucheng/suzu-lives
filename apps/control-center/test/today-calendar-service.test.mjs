@@ -94,6 +94,16 @@ test("today calendar never overwrites an unreadable global calendar", async () =
   await assert.rejects(() => service.saveEvent({ contactId: contacts[0].id, name: "不覆盖", date: "2026-08-14", type: "纪念日", repeat: true, enabled: true }), /未覆盖原有内容/u);
 });
 
+test("removing a contact prunes only its calendar entries", async () => {
+  const { contacts, dataRoot, service } = await fixture();
+  await service.saveEvent({ contactId: contacts[0].id, name: "小苏的日子", date: "2026-08-14", type: "纪念日", repeat: true, enabled: true });
+  await service.saveEvent({ contactId: contacts[1].id, name: "工作的日子", date: "2026-08-15", type: "日程", repeat: true, enabled: true });
+  const result = await service.removeContact({ contactId: contacts[0].id });
+  assert.equal(result.removed, 1);
+  const stored = JSON.parse(await fs.readFile(path.join(dataRoot, "calendar", "calendar.local.json"), "utf8"));
+  assert.deepEqual(stored.events.map((event) => event.contactId), [contacts[1].id]);
+});
+
 test("today calendar requires a current contact before creating personal events", async () => {
   const dataRoot = await fs.mkdtemp(path.join(os.tmpdir(), "suzu-calendar-data-"));
   const service = createTodayCalendarService({

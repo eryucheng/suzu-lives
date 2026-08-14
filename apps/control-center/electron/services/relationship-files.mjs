@@ -111,8 +111,57 @@ async function writeRelationshipTransaction(root, files, fsOps) {
   }
 }
 
+function managedClaudeReference(value) {
+  const raw = clean(value).replaceAll("\\", "/");
+  if (raw.toLowerCase() === EXCLUDED_FILE) return EXCLUDED_FILE;
+  try {
+    const normalized = normalizeRelationshipPath(raw);
+    return normalized.toLowerCase() === "claude.md" ? "" : normalized;
+  } catch {
+    return "";
+  }
+}
+
+function managedClaudeReferenceLine(line) {
+  const value = String(line ?? "").trim();
+  return value.startsWith("@") ? managedClaudeReference(value.slice(1)) : "";
+}
+
+function markdownReferenceLine(line) {
+  return /^@.+\.md$/iu.test(String(line ?? "").trim());
+}
+
+function managedClaudeReferences(content) {
+  const references = [];
+  const seen = new Set();
+  for (const line of String(content ?? "").split(/\r?\n/u)) {
+    const reference = managedClaudeReferenceLine(line);
+    const key = reference.toLowerCase();
+    if (!reference || seen.has(key)) continue;
+    seen.add(key);
+    references.push(reference);
+  }
+  return references;
+}
+
+function visibleClaudeContent(content) {
+  const source = String(content ?? "");
+  const eol = source.includes("\r\n") ? "\r\n" : "\n";
+  return source.split(/\r?\n/u).filter((line) => !markdownReferenceLine(line)).join(eol);
+}
+
+function restoreClaudeReferences(content, existingClaude) {
+  const references = managedClaudeReferences(existingClaude);
+  const next = visibleClaudeContent(content);
+  if (!references.length) return next;
+  const eol = next.includes("\r\n") || (!next.includes("\n") && String(existingClaude ?? "").includes("\r\n")) ? "\r\n" : "\n";
+  const suffix = references.map((reference) => `@${reference}`).join(eol);
+  if (!next) return suffix;
+  return next.endsWith("\n") ? `${next}${suffix}` : `${next}${eol}${suffix}`;
+}
+
 export function ensureUniqueClaudeReference(content, relativePath) {
-  const reference = normalizeRelationshipPath(relativePath); const eol = content.includes("\r\n") ? "\r\n" : "\n"; const lines = String(content ?? "").split(/\r?\n/u); const expected = `@${reference}`; let kept = false;
+  const reference = managedClaudeReference(relativePath); if (!reference) return String(content ?? ""); const eol = content.includes("\r\n") ? "\r\n" : "\n"; const lines = String(content ?? "").split(/\r?\n/u); const expected = `@${reference}`; let kept = false;
   const next = lines.filter((line) => { if (line.trim() !== expected) return true; if (kept) return false; kept = true; return true; });
   if (!kept) { if (next.length === 1 && next[0] === "") next.length = 0; next.push(expected); }
   return next.join(eol);
@@ -133,13 +182,14 @@ export function createRelationshipFilesService({ settingsService, fsOps = fs } =
   const snapshot = async () => {
     const configured = clean(settingsService.load()?.projectRoot); if (!configured) return { status: "needs-project", files: [] };
     const selectedRoot = await root(); const claude = await readText(selectedRoot, "CLAUDE.md", fsOps); const requested = [...STANDARD_FILES, ...referencedFiles(claude.content)].filter((item, index, all) => all.indexOf(item) === index && item !== EXCLUDED_FILE);
+    const visibleClaude = { ...claude, content: visibleClaudeContent(claude.content) };
     const files = [];
-    for (const relativePath of requested) { const file = relativePath === "CLAUDE.md" ? claude : await readText(selectedRoot, relativePath, fsOps); files.push({ ...file, kind: isStandardFile(relativePath) ? "standard" : "custom" }); }
+    for (const relativePath of requested) { const file = relativePath === "CLAUDE.md" ? visibleClaude : await readText(selectedRoot, relativePath, fsOps); files.push({ ...file, kind: isStandardFile(relativePath) ? "standard" : "custom" }); }
     return { status: "ready", files };
   };
   const save = async ({ path: relativePath, content } = {}) => {
     const selectedRoot = await root(); const normalized = normalizeRelationshipPath(relativePath);
-    if (normalized === "CLAUDE.md") { await writeAtomic(selectedRoot, normalized, content, fsOps); return snapshot(); }
+    if (normalized === "CLAUDE.md") { const claude = await readText(selectedRoot, normalized, fsOps); await writeAtomic(selectedRoot, normalized, restoreClaudeReferences(content, claude.content), fsOps); return snapshot(); }
     const claude = await readText(selectedRoot, "CLAUDE.md", fsOps);
     if (!isStandardFile(normalized) && !referencedFiles(claude.content).includes(normalized)) throw new RelationshipFilesError("只能编辑当前相处设定页已引用的自定义 Markdown 文件。 ");
     const nextClaude = ensureUniqueClaudeReference(claude.content, normalized);

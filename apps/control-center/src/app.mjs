@@ -1,10 +1,11 @@
 import { state } from "./core/state.mjs";
 import { CLAUDE_CODE_API_PROVIDERS, loadClaudeCodeApi, loadApiServices, loadCapabilities } from "./features/agent/runtime.mjs";
 import { resolveOnboardingStep, shouldShowOnboarding } from "./features/onboarding/index.mjs";
-import { conversationReactSnapshot, createConversationReactActions, startConversationPolling, stopConversationPolling } from "./features/conversation/index.mjs";
+import { conversationReactSnapshot, createConversationReactActions, isScheduledAgentReply, startConversationPolling, stopConversationPolling } from "./features/conversation/index.mjs";
 import { loadRelationshipFiles, selectRelationshipContact } from "./features/relationship-settings/index.mjs";
-import { getIdentity } from "./core/identity.mjs";
+import { getAgentProfile, getIdentity } from "./core/identity.mjs";
 import { renderAppWorkspace, setGlobalNotice } from "./react/app-shell.jsx";
+import { endActiveConversationCall } from "./react/conversation-call-coordinator.mjs";
 
 const api = window.suzuConsole;
 const loading = document.querySelector("#loading");
@@ -22,10 +23,13 @@ const CAPABILITY_SETTINGS_LABELS = Object.freeze({
   "voice-message": "语音设置",
 });
 const GLOBAL_NOTICE_TIMEOUT_MS = 6_000;
+const INCOMING_CONVERSATION_NOTICE_TIMEOUT_MS = 6_000;
 
 let globalNoticeTimeout = null;
+let incomingConversationNoticeTimeout = null;
+let settingsContactsRequest = 0;
 
-document.documentElement.dataset.theme = new URLSearchParams(window.location.search).get("theme") === "light" ? "light" : "dark";
+document.documentElement.dataset.theme = new URLSearchParams(window.location.search).get("theme") === "dark" ? "dark" : "light";
 
 function setLoading(active, text = "正在读取本地状态…") {
   loading.classList.toggle("hidden", !active);
@@ -50,7 +54,7 @@ function setNotice(message = "") {
 }
 
 function applyTheme() {
-  const theme = state.settings?.theme === "light" ? "light" : "dark";
+  const theme = state.settings?.theme === "dark" ? "dark" : "light";
   document.documentElement.dataset.theme = theme;
   void api.windowChrome?.applyTheme(theme).catch(() => undefined);
 }
@@ -88,6 +92,7 @@ function setView(view) {
     state.siteAutomationSelectedSiteId = "";
   }
   render();
+  if (view === "settings" && state.settingsTab === "privacy") void loadSettingsContacts();
   if (view === "capabilities") loadCapabilities(context);
   if (view === "plans") loadSchedules();
   if (view === "today") refreshTodayCalendar();
@@ -99,6 +104,7 @@ function setRelationshipPage(page) {
   const nextPage = ["overview", "conversation", "memory", "settings", "compactor"].includes(page) ? page : "overview";
   stopConversationPolling();
   state.relationshipPage = nextPage;
+  if (nextPage === "conversation") clearIncomingConversationNotice();
   render();
   if (nextPage === "conversation") startConversationPolling(context);
   if (nextPage === "settings") loadRelationshipFiles(context);
@@ -178,7 +184,8 @@ function setCapabilityPage(page, category = "", abilityId = "") {
 }
 
 function setSettingsTab(tab) {
-  state.settingsTab = ["general", "data"].includes(tab) ? tab : "general";
+  state.settingsTab = ["general", "data", "privacy"].includes(tab) ? tab : "general";
+  if (state.settingsTab === "privacy") void loadSettingsContacts();
 }
 
 function openOnboarding() {
@@ -373,6 +380,54 @@ async function openSettingsDirectory(targetPath) {
   await api.settings.showItemInFolder(path);
 }
 
+async function loadSettingsContacts() {
+  const request = ++settingsContactsRequest;
+  state.settingsContactsLoading = true;
+  if (state.view === "settings" && state.settingsTab === "privacy") render();
+  try {
+    const snapshot = await api.conversation?.snapshot?.();
+    if (request !== settingsContactsRequest) return;
+    state.settingsContacts = {
+      contacts: Array.isArray(snapshot?.contacts) ? snapshot.contacts : [],
+      status: String(snapshot?.status || "missing").trim() || "missing",
+    };
+  } catch (error) {
+    if (request !== settingsContactsRequest) return;
+    state.settingsContacts = {
+      contacts: [],
+      error: error?.message || String(error),
+      status: "unavailable",
+    };
+  } finally {
+    if (request !== settingsContactsRequest) return;
+    state.settingsContactsLoading = false;
+    if (state.view === "settings" && state.settingsTab === "privacy") render();
+  }
+}
+
+async function restoreHiddenContact(id) {
+  const contactId = String(id || "").trim();
+  if (!contactId || typeof api.conversation?.updateContactPresentation !== "function") return;
+  const request = ++settingsContactsRequest;
+  state.settingsContactsLoading = false;
+  const contact = (Array.isArray(state.settingsContacts?.contacts) ? state.settingsContacts.contacts : [])
+    .find((item) => String(item?.id || "").trim() === contactId) || null;
+  const name = String(contact?.name || "这位联系人").trim() || "这位联系人";
+  try {
+    const snapshot = await api.conversation.updateContactPresentation({ id: contactId, hidden: false });
+    if (request !== settingsContactsRequest) return;
+    state.settingsContacts = {
+      contacts: Array.isArray(snapshot?.contacts) ? snapshot.contacts : [],
+      status: String(snapshot?.status || "missing").trim() || "missing",
+    };
+    setNotice(`已恢复“${name}”到对话页。`);
+  } catch (error) {
+    if (request !== settingsContactsRequest) return;
+    setNotice(`无法恢复联系人：${error?.message || error}`);
+  }
+  if (request === settingsContactsRequest && state.view === "settings" && state.settingsTab === "privacy") render();
+}
+
 function selectAdminTab(tab) {
   setAdminTab(tab);
   render();
@@ -390,7 +445,9 @@ async function saveAdminIdentity(changes) {
       owner: { ...(identity.owner || {}), ...changes },
     },
   });
-  setNotice("身份已保存。");
+  setNotice(state.settings.ownerProfileTitleSync?.status === "partial"
+    ? "身份已保存；部分“关于我”资料标题未能同步。"
+    : "身份已保存。");
   render();
   return state.settings;
 }
@@ -654,6 +711,149 @@ async function openTravelingMerchantPage() {
 }
 
 const context = { api, applyTheme, loadClaudeCodeApi, loadApiServices, loadSchedules, openOnboarding, refreshData, refreshTodayCalendar, render, setAdminTab, setCapabilityPage, setCreatePage, setNotice, setRelationshipPage, setSettingsTab, setView, state };
+
+function conversationInterfaceIsOpen() {
+  return state.view === "relationships" && state.relationshipPage === "conversation";
+}
+
+function clearIncomingConversationNotice() {
+  state.conversationUnread = false;
+  state.incomingConversationNotice = null;
+  if (incomingConversationNoticeTimeout) window.clearTimeout(incomingConversationNoticeTimeout);
+  incomingConversationNoticeTimeout = null;
+}
+
+async function showIncomingConversationNotice(event) {
+  if (!isScheduledAgentReply(event)) return;
+  const contactId = String(event?.contactId || "").trim();
+  const conversationOpen = conversationInterfaceIsOpen();
+  let contact = null;
+  let activeContactId = "";
+  if (contactId && typeof api.conversation?.snapshot === "function") {
+    try {
+      const snapshot = await api.conversation.snapshot();
+      const contacts = Array.isArray(snapshot?.contacts) ? snapshot.contacts : [];
+      contact = contacts.find((item) => String(item?.id || "").trim() === contactId) || null;
+      activeContactId = String(snapshot?.activeContact?.id || "").trim();
+    } catch {
+      // A notification remains useful even if the contact list is momentarily unavailable.
+    }
+  }
+  const shouldMarkUnread = !conversationOpen || !contactId || contactId !== activeContactId;
+  if (shouldMarkUnread) {
+    state.conversationUnread = true;
+    if (contact && contact.unread !== true && typeof api.conversation?.updateContactPresentation === "function") {
+      try {
+        await api.conversation.updateContactPresentation({ id: contactId, unread: true });
+      } catch {
+        // Do not suppress an incoming-message signal if only its saved badge fails.
+      }
+    }
+  }
+  if (contact?.muted === true || conversationOpen) {
+    if (shouldMarkUnread) render();
+    return;
+  }
+  const profile = getAgentProfile(state.settings);
+  const preview = String(event.content).replace(/\s+/gu, " ").trim().slice(0, 160);
+  if (!preview) return;
+  state.incomingConversationNotice = {
+    contactId,
+    preview,
+    senderName: String(profile?.displayName || "Suzu").trim() || "Suzu",
+  };
+  if (incomingConversationNoticeTimeout) window.clearTimeout(incomingConversationNoticeTimeout);
+  incomingConversationNoticeTimeout = window.setTimeout(() => {
+    incomingConversationNoticeTimeout = null;
+    state.incomingConversationNotice = null;
+    render();
+  }, INCOMING_CONVERSATION_NOTICE_TIMEOUT_MS);
+  render();
+}
+
+async function showIncomingVoiceCall(event) {
+  if (event?.type !== "call-request") return;
+  const requestId = String(event?.requestId || "").trim();
+  const contactId = String(event?.contactId || "").trim();
+  if (!requestId || !contactId || state.incomingVoiceCall || state.pendingIncomingVoiceCall) return;
+  let contact = null;
+  try {
+    const snapshot = await api.conversation?.snapshot?.();
+    const contacts = Array.isArray(snapshot?.contacts) ? snapshot.contacts : [];
+    contact = contacts.find((item) => String(item?.id || "").trim() === contactId) || null;
+  } catch {
+    // A call request cannot safely target an unknown contact.
+  }
+  if (!contact) return;
+  const identity = getIdentity(state.settings);
+  const profile = identity.agents?.[String(contact.agentId || "").trim()] || identity.defaultAgent || getAgentProfile(state.settings);
+  state.conversationUnread = true;
+  if (contact.unread !== true && typeof api.conversation?.updateContactPresentation === "function") {
+    try {
+      await api.conversation.updateContactPresentation({ id: contactId, unread: true });
+    } catch {
+      // A visible incoming call remains useful if saving its badge fails.
+    }
+  }
+  state.incomingVoiceCall = {
+    avatar: String(profile?.avatarDataUrl || "").trim(),
+    contactId,
+    reason: String(event?.reason || "").replace(/\s+/gu, " ").trim().slice(0, 160),
+    requestId,
+    senderName: String(contact.name || profile?.displayName || "Suzu").trim() || "Suzu",
+  };
+  render();
+}
+
+async function answerIncomingVoiceCall(requestId) {
+  const incoming = state.incomingVoiceCall;
+  if (!incoming || String(incoming.requestId || "") !== String(requestId || "")) return;
+  state.incomingVoiceCall = { ...incoming, phase: "answering" };
+  render();
+  try {
+    if (typeof api.conversation?.selectContact !== "function") throw new Error("当前版本无法切换联系人。");
+    await endActiveConversationCall();
+    await api.conversation.selectContact({ id: incoming.contactId });
+    if (typeof api.settings?.get === "function") state.settings = await api.settings.get().catch(() => state.settings);
+    state.pendingIncomingVoiceCall = incoming;
+    if (state.view !== "relationships") setView("relationships");
+    setRelationshipPage("conversation");
+  } catch (error) {
+    state.pendingIncomingVoiceCall = null;
+    state.incomingVoiceCall = { ...incoming, phase: "ringing" };
+    setNotice(`无法接听来电：${error?.message || error}`);
+    render();
+  }
+}
+
+function declineIncomingVoiceCall(requestId) {
+  if (!state.incomingVoiceCall || String(state.incomingVoiceCall.requestId || "") !== String(requestId || "")) return;
+  state.incomingVoiceCall = null;
+  render();
+}
+
+function consumeIncomingVoiceCall(requestId) {
+  if (!state.pendingIncomingVoiceCall || String(state.pendingIncomingVoiceCall.requestId || "") !== String(requestId || "")) return;
+  state.pendingIncomingVoiceCall = null;
+  if (String(state.incomingVoiceCall?.requestId || "") === String(requestId || "")) state.incomingVoiceCall = null;
+  render();
+}
+
+function observeIncomingConversationMessages() {
+  if (typeof api.conversation?.onEvent !== "function") return;
+  api.conversation.onEvent((event) => {
+    if (event?.type === "call-request") {
+      void showIncomingVoiceCall(event);
+      return;
+    }
+    void showIncomingConversationNotice(event);
+  });
+  // This also records the renderer as the event recipient in the main process,
+  // so scheduled replies can arrive while another page is open.
+  void api.conversation.snapshot?.().catch(() => undefined);
+}
+
+observeIncomingConversationMessages();
 
 async function refreshTodayCalendar() {
   try {
@@ -991,13 +1191,19 @@ function routeForCurrentView() {
           openDirectory: openSettingsDirectory,
           openOnboarding,
           removePreviousCopy: removeSettingsPreviousCopy,
+          restoreHiddenContact,
           selectWorkspace: selectSettingsWorkspace,
           setTab: (tab) => {
             setSettingsTab(tab);
             render();
           },
         },
-        snapshot: { settings: state.settings, tab: state.settingsTab },
+        snapshot: {
+          contacts: state.settingsContacts,
+          contactsLoading: state.settingsContactsLoading,
+          settings: state.settings,
+          tab: state.settingsTab,
+        },
       },
     };
   }
@@ -1075,8 +1281,12 @@ function routeForCurrentView() {
     return {
       kind: "conversation",
       props: {
-        actions: createConversationReactActions(context),
+        actions: {
+          ...createConversationReactActions(context),
+          consumeIncomingVoiceCall,
+        },
         api,
+        incomingCall: state.pendingIncomingVoiceCall,
         snapshot: conversationReactSnapshot(context),
       },
     };
@@ -1136,9 +1346,12 @@ function routeForCurrentView() {
 
 function buildWorkspace() {
   return {
-    actions: { navigate: setView },
+    actions: { answerIncomingVoiceCall, declineIncomingVoiceCall, navigate: setView },
     activeView: state.view,
     contentClassName: contentClassName(),
+    conversationUnread: state.conversationUnread,
+    incomingConversationNotice: state.incomingConversationNotice,
+    incomingVoiceCall: state.incomingVoiceCall,
     notice: currentGlobalNotice(),
     onboarding: onboardingWorkspace(),
     route: routeForCurrentView(),

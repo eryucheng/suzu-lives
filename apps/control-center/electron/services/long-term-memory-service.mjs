@@ -794,9 +794,28 @@ export function createLongTermMemoryService({
       return entry.memory.inspectDatabaseBackup(clean(sourcePath));
     },
 
+    async inspectMemoryImport({ sourcePath, contactId } = {}) {
+      const entry = await activeEntry({ contactId: clean(contactId) });
+      return entry.memory.inspectDatabaseImport(clean(sourcePath));
+    },
+
     async restoreReviewBackup({ sourcePath, contactId } = {}) {
       const entry = await activeEntry({ contactId: clean(contactId) });
       const result = entry.memory.restoreDatabaseBackup(clean(sourcePath), {
+        confirmAgentId: entry.contact.agentId,
+      });
+      queueMaintenance(entry, entry.sessionId);
+      return result;
+    },
+
+    async importMemoryDatabase({ sourcePath, contactId } = {}) {
+      const entry = await activeEntry({ contactId: clean(contactId) });
+      const scopeKey = `${entry.contact.agentId}:${clean(entry.sessionId)}`;
+      // Let an already queued local maintenance pass finish before the target
+      // database is swapped. New maintenance is queued against the imported
+      // database immediately afterwards.
+      await (maintenanceByAgent.get(scopeKey) || Promise.resolve()).catch(() => undefined);
+      const result = entry.memory.importDatabaseAsAgent(clean(sourcePath), {
         confirmAgentId: entry.contact.agentId,
       });
       queueMaintenance(entry, entry.sessionId);

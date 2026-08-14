@@ -28,7 +28,7 @@ const DEFAULT_SETTINGS = Object.freeze({
     askUserQuestion: false,
     write: true,
   },
-  theme: "dark",
+  theme: "light",
   agentId: "",
   priceRevisions: [],
   identity: {
@@ -76,6 +76,10 @@ function normalizeIdentity(value = {}) {
     defaultAgent: normalizeProfile(value.defaultAgent, "Suzu"),
     agents,
   };
+}
+
+function ownerDisplayName(settings) {
+  return String(settings?.identity?.owner?.displayName || "我").trim() || "我";
 }
 
 export function normalizeConversationPreferences(value = {}) {
@@ -183,7 +187,7 @@ function normalizeSettings(value = {}) {
     claudeToolPermissions: normalizeClaudeToolPermissions(value.claudeToolPermissions),
     ...(hasClaudeProjectDefaults ? { claudeProjectDefaults: normalizeClaudeProjectDefaults(value.claudeProjectDefaults) } : {}),
     claudeRuntimeFeatures: normalizeClaudeRuntimeFeatures(value.claudeRuntimeFeatures),
-    theme: value.theme === "light" ? "light" : "dark",
+    theme: value.theme === "dark" ? "dark" : "light",
     agentId: stableAgentId(projectRoot),
     priceRevisions: sanitizePriceRevisions(value.priceRevisions),
     identity: normalizeIdentity(value.identity),
@@ -261,10 +265,21 @@ export function registerSettingsIpc({ app, contactProjectsService = null, dataSt
     const current = settingsService.load();
     const patch = settingsService.safePatch(value);
     const settings = settingsService.save({ ...current, ...patch });
+    let ownerProfileTitleSync = null;
+    if (Object.hasOwn(patch, "identity")) {
+      const previousName = ownerDisplayName(current);
+      const nextName = ownerDisplayName(settings);
+      if (previousName !== nextName && typeof contacts.syncOwnerProfileTitle === "function") {
+        ownerProfileTitleSync = await contacts.syncOwnerProfileTitle({ previousName, name: nextName });
+      }
+    }
     if (Object.hasOwn(patch, "claudeToolPermissions") || Object.hasOwn(patch, "claudeProjectDefaults")) {
       await contacts.syncClaudeProjectSettings({ previousProjectDefaults: current.claudeProjectDefaults });
     }
-    return settingsService.response(settings);
+    return {
+      ...settingsService.response(settings),
+      ...(ownerProfileTitleSync ? { ownerProfileTitleSync } : {}),
+    };
   });
   ipcMain.handle("settings:change-data-location", async () => {
     if (!dataStorageService) throw new Error("当前版本不支持更换数据位置。");

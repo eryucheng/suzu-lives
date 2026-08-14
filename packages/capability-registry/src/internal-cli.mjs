@@ -45,6 +45,14 @@ function optionalText(value, label) {
   return value.trim();
 }
 
+function optionalBoundedText(value, label, maximum) {
+  const text = optionalText(value, label);
+  if ([...text].length > maximum) {
+    throw new InternalCapabilityCliError(`${label} 不能超过 ${maximum} 个字符。`);
+  }
+  return text.replace(/\s+/gu, " ");
+}
+
 function optionalBoolean(value, label) {
   if (value === undefined) return false;
   if (typeof value !== "boolean") throw new InternalCapabilityCliError(`${label} 必须是布尔值。`);
@@ -190,6 +198,13 @@ function normalizeVoiceMessageInput(value, { inspect = false } = {}) {
   });
 }
 
+function normalizeVoiceCallRequestInput(value) {
+  const source = assertKnownKeys(value, ["reason"], "voice-call 输入");
+  return Object.freeze({
+    reason: optionalBoundedText(source.reason, "input.reason", 240),
+  });
+}
+
 const CAPABILITY_ACTIONS = Object.freeze({
   "image-vision": Object.freeze({ analyze: normalizeImageVisionAnalyzeInput }),
   "video-understanding": Object.freeze({ analyze: normalizeVideoUnderstandingAnalyzeInput }),
@@ -203,6 +218,7 @@ const CAPABILITY_ACTIONS = Object.freeze({
     generate: (value) => normalizeVoiceMessageInput(value),
     inspect: (value) => normalizeVoiceMessageInput(value, { inspect: true }),
   }),
+  "voice-call": Object.freeze({ request: normalizeVoiceCallRequestInput }),
 });
 
 function definitionFor(capabilityId, action) {
@@ -317,6 +333,13 @@ export async function executeInternalCapability({ request, runtime } = {}) {
   const ledgerPath = requiredRuntimeText(runtime?.ledgerPath, "ledgerPath");
   const connection = normalizedConnection(runtime?.connection);
   const environment = plainObject(runtime?.environment) ? runtime.environment : process.env;
+
+  if (request.capabilityId === "voice-call" && request.action === "request") {
+    return {
+      type: "suzu-voice-call-request",
+      reason: request.input.reason,
+    };
+  }
 
   if (request.capabilityId === "image-vision" && request.action === "analyze") {
     const response = await runDirectImageVision({

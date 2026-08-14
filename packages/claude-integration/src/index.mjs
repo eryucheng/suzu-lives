@@ -51,6 +51,7 @@ const CLAUDE_REGISTERABLE_ABILITIES = new Map([
   ["image-vision", { id: "image-vision", name: "图像理解", renderSkill: renderImageVisionSkill }],
   ["video-understanding", { id: "video-understanding", name: "视频理解", renderSkill: renderVideoUnderstandingSkill }],
   ["voice-message", { id: "voice-message", name: "语音消息", renderSkill: renderVoiceMessageSkill }],
+  ["voice-call", { id: "voice-call", name: "软件内语音来电", renderSkill: renderVoiceCallSkill }],
   ["visual-reference-manager", { id: "visual-reference-manager", name: "视觉参考资料库", renderSkill: renderVisualReferenceManagerSkill }],
   [TIME_AWARENESS_ID, { id: TIME_AWARENESS_ID, name: "时间感知", renderSkill: renderTimeAwarenessSkill }],
   ["site-automation", { id: "site-automation", name: "网页自动化", renderSkill: renderSiteAutomationSkill }],
@@ -544,6 +545,7 @@ export function renderClaudeManagedBlock({ abilityIds, command = "suzu-lives" } 
     .sort();
   const bullets = ids.map((id) => {
     if (id === "voice-message") return standardCapabilityBullet(id, internalCapabilityCliUsage({ launcher, capabilityId: id, action: "generate" }));
+    if (id === "voice-call") return standardCapabilityBullet(id, internalCapabilityCliUsage({ launcher, capabilityId: id, action: "request" }));
     if (id === "image-generation") return standardCapabilityBullet(id, internalCapabilityCliUsage({ launcher, capabilityId: id, action: "generate" }));
     if (id === "phone-camera") return standardCapabilityBullet(id, internalCapabilityCliUsage({ launcher, capabilityId: id, action: "generate" }));
     if (id === "image-vision") return `- <!-- suzu-lives:ability:${id} --> \`${id}\`：使用 \`${internalCapabilityCliUsage({ launcher, capabilityId: id })}\` 调用软件拥有的标准能力执行器。`;
@@ -561,6 +563,7 @@ export function renderClaudeManagedBlock({ abilityIds, command = "suzu-lives" } 
   if (ids.includes("video-understanding")) notices.push(`\`video-understanding\` 使用 Suzu 的标准 \`capability <id> <action> --input-json\` 协议；它只处理明确给出的本地视频或 http(s) URL，并把临时片段、缓存、保留片段和配置限制在软件数据目录。`);
   if (ids.includes(TIME_AWARENESS_ID)) notices.push(`\`time-awareness\` 通过 Suzu 受管的 \`UserPromptSubmit\` Hook 检查本轮当前本地时间；同一 Claude 会话仅按软件中设定的间隔写入新的时间提醒。它不读取消息正文、不联网、不替代其他同事件 Hook。`);
   if (ids.includes("voice-message")) notices.push("`voice-message` 使用 Suzu 的标准 `capability <id> <action> --input-json` 协议；它只在软件数据目录中生成 MP3，再由当前 Suzu 会话的附件交付命令显示和投递。");
+  if (ids.includes("voice-call")) notices.push("`voice-call` 只会向当前 Suzu 软件发起一通应用内来电请求；用户必须在软件中亲自接听，之后才会开启麦克风和实时语音，不会拨打真实电话号码。");
   if (ids.includes("image-generation")) notices.push("`image-generation` 使用 Suzu 的标准 `capability <id> <action> --input-json` 协议；默认后端与 ComfyUI 配置位于统一软件数据目录，运行记录和候选图片仍属于当前 Agent 的数据目录。");
   if (ids.includes("phone-camera")) notices.push("`phone-camera` 使用 Suzu 的标准 `capability <id> <action> --input-json` 协议；它可明确读取共享或当前联系人的视觉资料，但不能读取其他联系人的专属资料，失败不会静默切换后端。");
   if (ids.includes("visual-reference-manager")) notices.push(`\`visual-reference-manager\` 使用独立的软件拥有命令；共享资料与当前联系人专属资料物理隔离，写入前仍需先 dry-run 和用户确认。`);
@@ -664,6 +667,30 @@ function renderStandardPhoneCameraSkill(launcher) {
 
 function renderVoiceMessageSkill(launcher) {
   return renderStandardVoiceMessageSkill(launcher);
+}
+
+function renderVoiceCallSkill(launcher) {
+  const command = internalCapabilityCliUsage({ launcher, capabilityId: "voice-call", action: "request" });
+  return [
+    "---",
+    "name: suzu-lives-voice-call",
+    "description: 通过 Suzu Lives 向当前联系人发起一通需要对方亲自接听的应用内语音来电。",
+    "---",
+    "",
+    "<!-- suzu-lives:ability:voice-call -->",
+    "# 发起语音来电",
+    "",
+    "这是一通 Suzu Lives 软件内的来电，不会拨打真实电话号码，也不会自行打开麦克风。用户会先看到来电并决定接听或拒绝；只有接听后软件才会开始现有的实时语音通话。",
+    "",
+    "当用户明确让你打电话，或在主动关心时你确实自然地想听听对方声音、适合用电话继续交流时，才可以请求一次来电：",
+    "",
+    markdownCode(command),
+    "",
+    "输入 JSON 可写为 " + markdownCode('{\"reason\":\"想听听你的声音\"}') + "；reason 可省略，只简短说明来电缘由。一次回复最多请求一次，不能把它当作催促、提醒或重复追呼工具。用户拒绝、未接或没有回应时不要自动重试，也不要假装已经接通或听到了对方声音。",
+    "",
+    "命令成功仅代表软件已收到来电请求；不要绕过此入口，不要伪造来电文本或使用其他方式访问麦克风、电话或音频设备。",
+    "",
+  ].join("\n");
 }
 
 function renderImageGenerationSkill(launcher) {

@@ -17,7 +17,10 @@ const TEXT_STREAM_IDLE_TIMEOUT_MS = 3 * 60 * 1000;
 const TEXT_STREAM_CLOSE_GRACE_MS = 5_000;
 const VOICE_CALL_TURN_OPEN = "<suzu-voice-call-turn>";
 const VOICE_CALL_TURN_CLOSE = "</suzu-voice-call-turn>";
+const VOICE_CALL_OPEN_OPEN = "<suzu-voice-call-open>";
+const VOICE_CALL_OPEN_CLOSE = "</suzu-voice-call-open>";
 const CONVERSATION_ATTACHMENT_RECEIPT = "suzu-conversation-attachment";
+const VOICE_CALL_REQUEST_RECEIPT = "suzu-voice-call-request";
 const WECHAT_MEDIA_MANIFEST_OPEN = "<suzu-wechat-media>";
 const WECHAT_MEDIA_MANIFEST_CLOSE = "</suzu-wechat-media>";
 const CLAUDE_RUNTIME_FEATURE_DEFAULTS = Object.freeze({
@@ -35,7 +38,8 @@ const CLAUDE_RUNTIME_FEATURE_DEFAULTS = Object.freeze({
 const VOICE_CALL_SYSTEM_PROMPT = [
   `Suzu 会把实时语音通话的一轮输入包装为 ${VOICE_CALL_TURN_OPEN}JSON${VOICE_CALL_TURN_CLOSE}。`,
   "仅在收到这个标记时，读取 JSON 中的 transcript 作为用户本轮说的话；用自然、口语化、简短的中文回答，先给一两句可以独立朗读的短句。",
-  "标记约束只适用于这一轮；后续没有该标记的普通文字消息保持正常回答方式。",
+  `电话真正接通时，Suzu 会发送 ${VOICE_CALL_OPEN_OPEN}JSON${VOICE_CALL_OPEN_CLOSE}。这不是用户说的话；JSON 的 initiator 是本次通话请求方（agent 或 user）。收到它时只用一句自然、简短的电话问候开场，例如“喂，我在。”，不要假设或回答用户尚未说出的内容。`,
+  "这些标记约束只适用于各自所在的一轮；后续没有标记的普通文字消息保持正常回答方式。",
   "不要提及这个标记、JSON、语音通话的内部机制，也不要朗读 Markdown、文件路径、工具过程、内部状态或“正在处理”。如确实需要操作工具，先用一句简短的话说明，再继续完成事情。",
 ].join("\n");
 const SELECTABLE_CLAUDE_ALLOWED_TOOLS = Object.freeze([
@@ -243,6 +247,32 @@ function attachmentReceiptsFromToolResults(content) {
   });
 }
 
+function normalizeAgentVoiceCallRequest(value) {
+  const source = plainObject(parsedObject(value));
+  if (source.status !== "ok" || clean(source.capabilityId) !== "voice-call" || clean(source.action) !== "request") return null;
+  const result = plainObject(source.result);
+  if (clean(result.type) !== VOICE_CALL_REQUEST_RECEIPT) return null;
+  return {
+    reason: clean(result.reason).replace(/\s+/gu, " ").slice(0, 240),
+  };
+}
+
+function voiceCallRequestsFromToolResults(content) {
+  if (!Array.isArray(content)) return [];
+  return content.flatMap((part) => {
+    if (clean(part?.type) !== "tool_result" || part?.is_error === true) return [];
+    const source = part.content;
+    if (Array.isArray(source)) {
+      return source.flatMap((item) => {
+        const request = normalizeAgentVoiceCallRequest(item?.text ?? item?.content ?? item);
+        return request ? [request] : [];
+      });
+    }
+    const request = normalizeAgentVoiceCallRequest(source);
+    return request ? [request] : [];
+  });
+}
+
 function isDirectory(stat) {
   return Boolean(stat?.isDirectory?.());
 }
@@ -346,6 +376,27 @@ function wechatMediaManifest(media, mediaSource = "wechat") {
 
 function voiceCallInputContent(text) {
   return `${VOICE_CALL_TURN_OPEN}\n${JSON.stringify({ source: "suzu-live-call", transcript: text })}\n${VOICE_CALL_TURN_CLOSE}`;
+}
+
+function voiceCallInitiator(value) {
+  return clean(value).toLowerCase() === "agent" ? "agent" : "user";
+}
+
+function voiceCallOpeningContent(initiator = "user") {
+  return `${VOICE_CALL_OPEN_OPEN}\n${JSON.stringify({ source: "suzu-live-call", event: "open", initiator: voiceCallInitiator(initiator) })}\n${VOICE_CALL_OPEN_CLOSE}`;
+}
+
+function voiceCallMemoryText(text) {
+  return [
+    "[系统事件：实时语音通话] 以下内容来自用户与联系人的实时语音通话，不是文字聊天。",
+    `用户在本轮通话中说：${text}`,
+  ].join("\n");
+}
+
+function voiceCallOpeningMemoryText(initiator = "user") {
+  return voiceCallInitiator(initiator) === "agent"
+    ? "[系统事件：实时语音通话已接通] 这不是用户说的话。联系人主动发起来电，用户接听后与联系人进入了一次实时语音通话；对方将以电话问候回应。"
+    : "[系统事件：实时语音通话已接通] 这不是用户说的话。用户发起并接通了与联系人的一次实时语音通话；对方将以电话问候回应。";
 }
 
 function claudeInputContent(text, media, mediaSource = "wechat") {
@@ -653,10 +704,12 @@ export function createConversationChatService({
   };
 
   const createTurn = (request, memoryTurn, child, textStream = null) => ({
+    agentCallRequestEmitted: false,
     agentMediaReceipts: new Set(),
     auxiliaryEvents: new Set(),
     child,
     completed: false,
+    contactId: clean(request.contactId),
     finished: false,
     interrupted: false,
     kind: request.kind,
@@ -709,6 +762,7 @@ export function createConversationChatService({
       projectRoot: turn.projectRoot,
       kind: turn.kind,
       content: text,
+      ...(clean(turn.contactId) ? { contactId: clean(turn.contactId) } : {}),
       timestamp: new Date().toISOString(),
     });
   };
@@ -757,6 +811,23 @@ export function createConversationChatService({
     }
   };
 
+  const emitAgentVoiceCallRequest = (turn, requests) => {
+    if (turn.agentCallRequestEmitted || !clean(turn.contactId)) return;
+    const request = requests[0];
+    if (!request) return;
+    turn.agentCallRequestEmitted = true;
+    emit({
+      type: "call-request",
+      requestId: `${turn.requestId}:voice-call`,
+      sessionId: turn.sessionId,
+      projectRoot: turn.projectRoot,
+      kind: turn.kind,
+      contactId: turn.contactId,
+      reason: clean(request.reason),
+      timestamp: new Date().toISOString(),
+    });
+  };
+
   const handleWireMessage = (turn, raw, textStream = null) => {
     if (turn.interrupted || turn.settling || turn.finished) return;
     const type = clean(raw?.type);
@@ -780,6 +851,7 @@ export function createConversationChatService({
     }
     if (type === "assistant") {
       emitAgentMedia(turn, attachmentReceiptsFromToolResults(raw?.message?.content));
+      emitAgentVoiceCallRequest(turn, voiceCallRequestsFromToolResults(raw?.message?.content));
       for (const item of auxiliaryParts(raw?.message?.content)) emitAuxiliary(turn, item.type, item.content);
       const next = messageText(raw?.message?.content);
       if (next) {
@@ -794,6 +866,7 @@ export function createConversationChatService({
     }
     if (type === "user") {
       emitAgentMedia(turn, attachmentReceiptsFromToolResults(raw?.message?.content));
+      emitAgentVoiceCallRequest(turn, voiceCallRequestsFromToolResults(raw?.message?.content));
       for (const item of auxiliaryParts(raw?.message?.content)) emitAuxiliary(turn, item.type, item.content);
       return;
     }
@@ -968,7 +1041,7 @@ export function createConversationChatService({
     const currentSettings = settingsService.load() || {};
     const claudeRuntimeFeatures = currentSettings.claudeRuntimeFeatures;
     let memoryTurn = null;
-    if (["message", "call", "iphone-feedback"].includes(request.kind)
+    if (["message", "call", "call-open", "iphone-feedback"].includes(request.kind)
       && clean(request.memoryText)
       && typeof memoryRuntime?.prepareTurn === "function") {
       try {
@@ -987,7 +1060,7 @@ export function createConversationChatService({
       try { await memoryRuntime?.abortTurn?.(memoryTurn); } catch { /* A stopped chat needs no memory cursor. */ }
       return;
     }
-    const supportsVoiceCallTurns = ["message", "call"].includes(request.kind);
+    const supportsVoiceCallTurns = ["message", "call", "call-open"].includes(request.kind);
     const args = claudeCliArguments({
       sessionId: request.sessionId,
       hasTranscript: request.hasTranscript || knownTranscripts.has(request.key),
@@ -1134,24 +1207,47 @@ export function createConversationChatService({
     return { id, projectRoot: root, hasTranscript: hasTranscript === true };
   };
 
-  const enqueue = async ({ content, kind = "message", media: suppliedMedia = [], mediaSource = "wechat", requestId: suppliedRequestId = "", session: requestedSession = null } = {}) => {
+  const enqueue = async ({ content, contactId = "", kind = "message", callDirection = "", media: suppliedMedia = [], mediaSource = "wechat", requestId: suppliedRequestId = "", session: requestedSession = null } = {}) => {
     if (disposed) throw new ConversationChatError("聊天服务已经停止。");
     const media = normalizeInboundMedia(suppliedMedia, mediaSource);
-    const text = validateContent(content, { allowEmpty: media.length > 0 });
+    const voiceCallOpening = kind === "call-open";
+    const text = validateContent(content, { allowEmpty: media.length > 0 || voiceCallOpening });
     const session = await resolveSession(requestedSession || {});
     if (!session?.id || !session.projectRoot) throw new ConversationChatError("请先选择 Claude 工作目录。");
+    let resolvedContactId = clean(contactId);
+    if (!resolvedContactId && typeof reader.contactIdForSession === "function") {
+      try {
+        resolvedContactId = clean(await reader.contactIdForSession({ sessionId: session.id, projectRoot: session.projectRoot }));
+      } catch {
+        // A missing optional contact lookup must not prevent a normal chat turn.
+      }
+    }
+    const callInitiator = voiceCallInitiator(callDirection);
     let projectStat;
     try { projectStat = await fsOps.stat(session.projectRoot); }
     catch { throw new ConversationChatError("当前 Claude 工作目录不存在或无法读取。"); }
     if (!isDirectory(projectStat)) throw new ConversationChatError("当前 Claude 工作目录不是文件夹。");
 
     const request = {
-      content: claudeInputContent(kind === "call" ? voiceCallInputContent(text) : text, media, mediaSource),
+      content: claudeInputContent(
+        kind === "call"
+          ? voiceCallInputContent(text)
+          : voiceCallOpening
+            ? voiceCallOpeningContent(callInitiator)
+            : text,
+        media,
+        mediaSource,
+      ),
+      contactId: resolvedContactId,
       hasTranscript: Boolean(session.hasTranscript) || knownTranscripts.has(turnKey(session.id, session.projectRoot)),
       kind,
       key: turnKey(session.id, session.projectRoot),
       memoryOccurredAt: new Date().toISOString(),
-      memoryText: text,
+      memoryText: kind === "call"
+        ? voiceCallMemoryText(text)
+        : voiceCallOpening
+          ? voiceCallOpeningMemoryText(callInitiator)
+          : text,
       projectRoot: session.projectRoot,
       requestId: clean(suppliedRequestId) || `suzu-${randomUUID()}`,
       sessionId: session.id,
@@ -1194,8 +1290,8 @@ export function createConversationChatService({
   };
 
   const send = ({ content } = {}) => enqueue({ content });
-  const sendToSession = ({ content, sessionId, projectRoot, hasTranscript = false, kind = "message", media = [], mediaSource = "wechat", requestId = "" } = {}) => (
-    enqueue({ content, kind, media, mediaSource, requestId, session: { sessionId, projectRoot, hasTranscript } })
+  const sendToSession = ({ content, contactId = "", sessionId, projectRoot, hasTranscript = false, kind = "message", callDirection = "", media = [], mediaSource = "wechat", requestId = "" } = {}) => (
+    enqueue({ content, contactId, kind, callDirection, media, mediaSource, requestId, session: { sessionId, projectRoot, hasTranscript } })
   );
 
   const stop = ({ sessionId, projectRoot, requestId } = {}) => {

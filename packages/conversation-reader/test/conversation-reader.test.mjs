@@ -64,14 +64,63 @@ test("Claude internal resume records stay out of chat without hiding real matchi
   ]);
 });
 
-test("voice call protocol rows render only the spoken transcript", () => {
-  const messages = buildDisplayMessages([{
-    type: "user",
-    message: {
-      content: "<suzu-voice-call-turn>\n{\"source\":\"suzu-live-call\",\"transcript\":\"你好，能听见我说话吗？\"}\n</suzu-voice-call-turn>",
+test("voice call records become system transcript rows without reclassifying the next typed message", () => {
+  const messages = buildDisplayMessages([
+    {
+      type: "user",
+      uuid: "call-open",
+      message: {
+        content: "<suzu-voice-call-open>\n{\"source\":\"suzu-live-call\",\"event\":\"open\"}\n</suzu-voice-call-open>",
+      },
     },
-  }]);
-  assert.deepEqual(messages.map((message) => message.blocks[0].text), ["你好，能听见我说话吗？"]);
+    {
+      type: "assistant",
+      uuid: "call-open-answer",
+      parentUuid: "call-open",
+      message: { content: [{ type: "text", text: "喂，我在。" }] },
+    },
+    {
+      type: "user",
+      uuid: "call-user",
+      parentUuid: "call-open-answer",
+      message: {
+        content: "<suzu-voice-call-turn>\n{\"source\":\"suzu-live-call\",\"transcript\":\"你好，能听见我说话吗？\"}\n</suzu-voice-call-turn>",
+      },
+    },
+    {
+      type: "user",
+      uuid: "call-skill-context",
+      parentUuid: "call-user",
+      message: {
+        content: "Base directory for this skill: C:\\call\\.claude\\skills\\voice\n\n<!-- suzu-lives:ability:voice -->\n# 通话上下文",
+      },
+    },
+    {
+      type: "assistant",
+      uuid: "call-answer",
+      parentUuid: "call-skill-context",
+      message: { content: [{ type: "text", text: "能听见，我在。" }] },
+    },
+    {
+      type: "user",
+      uuid: "typed-user",
+      parentUuid: "call-answer",
+      message: { content: "现在继续打字。" },
+    },
+    {
+      type: "assistant",
+      uuid: "typed-answer",
+      parentUuid: "typed-user",
+      message: { content: [{ type: "text", text: "好的，已经回到文字聊天。" }] },
+    },
+  ]);
+  assert.deepEqual(messages.map((message) => [message.kind, message.blocks[0].text]), [
+    ["system", "通话 · 对方：喂，我在。"],
+    ["system", "通话 · 我：你好，能听见我说话吗？"],
+    ["system", "通话 · 对方：能听见，我在。"],
+    ["user", "现在继续打字。"],
+    ["assistant", "好的，已经回到文字聊天。"],
+  ]);
 });
 
 test("search categories return real media and date records that can be reopened around their source line", async () => {
