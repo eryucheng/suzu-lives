@@ -1,0 +1,66 @@
+/* Roster —— 成员列表项（组合：Avatar + 名称 + 右侧 meta） */
+
+.row {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 12px;
+  min-height: 54px;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  padding: 8px 12px;
+  font-family: inherit;
+  transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+
+.row:hover {
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+  border-color: var(--border);
+}
+
+.row.selected,
+.rowActive {
+  background: color-mix(in srgb, var(--accent) 11%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 30%, transparent);
+}
+
+.avatar {
+  flex: 0 0 auto;
+}
+
+.copy {
+  min-width: 0;
+  flex: 1;
+}
+
+.name {
+  display: block;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+  font-size: var(--font-size-md);
+  font-weight: 600;
+}
+
+.subtitle {
+  display: block;
+  margin: 3px 0 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-muted);
+  font-size: var(--font-size-xs);
+}
+
+.meta {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}

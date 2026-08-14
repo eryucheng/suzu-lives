@@ -1,0 +1,222 @@
+.onboarding-overlay {
+  position: fixed;
+  z-index: 70;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  overflow: auto;
+  background: rgba(8, 11, 20, .68);
+  padding: 28px;
+  backdrop-filter: blur(9px);
+}
+
+.onboarding-dialog {
+  width: min(660px, 100%);
+  border: 1px solid color-mix(in srgb, var(--accent) 42%, var(--line));
+  border-radius: 20px;
+  background: linear-gradient(145deg, color-mix(in srgb, var(--panel) 97%, #222943), var(--panel));
+  box-shadow: 0 28px 80px rgba(0, 0, 0, .42);
+  padding: 24px;
+}
+
+.onboarding-header,
+.onboarding-footer,
+.onboarding-actions,
+.onboarding-capability-list {
+  display: flex;
+  align-items: center;
+}
+
+.onboarding-header,
+.onboarding-footer {
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.onboarding-header h1 {
+  margin: 4px 0 0;
+  font-size: 22px;
+  letter-spacing: -.3px;
+}
+
+.onboarding-close {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 22px;
+  line-height: 1;
+}
+
+.onboarding-close:hover {
+  border-color: color-mix(in srgb, var(--accent) 48%, var(--line));
+  color: var(--text);
+}
+
+.onboarding-steps {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 7px;
+  margin: 22px 0;
+  padding: 0;
+  list-style: none;
+}
+
+.onboarding-steps li {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 6px;
+  color: var(--muted2);
+  font-size: 10px;
+}
+
+.onboarding-steps span {
+  display: grid;
+  width: 19px;
+  height: 19px;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  color: var(--muted2);
+  font-size: 9px;
+}
+
+.onboarding-steps b {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.onboarding-steps li.active,
+.onboarding-steps li.complete {
+  color: var(--text);
+}
+
+.onboarding-steps li.active span,
+.onboarding-steps li.complete span {
+  border-color: color-mix(in srgb, var(--accent) 62%, var(--line));
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  color: #fff;
+}
+
+.onboarding-body {
+  min-height: 296px;
+  border: 1px solid var(--line);
+  border-radius: 15px;
+  background: color-mix(in srgb, var(--panel-soft) 76%, transparent);
+  padding: 21px;
+}
+
+.onboarding-body h2 {
+  margin: 6px 0 0;
+  font-size: 18px;
+}
+
+.onboarding-body > p,
+.onboarding-form > p {
+  margin: 7px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.65;
+}
+
+.onboarding-form {
+  display: grid;
+  gap: 12px;
+  margin-top: 17px;
+}
+
+.onboarding-form label {
+  display: grid;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.onboarding-form input,
+.onboarding-form select {
+  width: 100%;
+}
+
+.onboarding-hint {
+  padding: 9px 11px;
+  border: 1px solid color-mix(in srgb, var(--accent2) 23%, var(--line));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--accent2) 6%, transparent);
+}
+
+.onboarding-error {
+  border: 1px solid color-mix(in srgb, var(--bad) 48%, var(--line));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--bad) 8%, transparent);
+  color: color-mix(in srgb, var(--bad) 75%, var(--text));
+  padding: 9px 11px;
+}
+
+.onboarding-capability-list {
+  align-items: stretch;
+  gap: 9px;
+  margin-top: 18px;
+}
+
+.onboarding-capability-list article,
+.onboarding-path {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: var(--panel);
+  padding: 11px;
+}
+
+.onboarding-capability-list article {
+  flex: 1;
+}
+
+.onboarding-capability-list strong,
+.onboarding-path strong {
+  overflow-wrap: anywhere;
+  color: var(--text);
+  font-size: 12px;
+}
+
+.onboarding-capability-list span,
+.onboarding-path span {
+  color: var(--muted2);
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.onboarding-path {
+  margin-top: 18px;
+}
+
+.onboarding-path.ready {
+  border-color: color-mix(in srgb, var(--good) 40%, var(--line));
+}
+
+.onboarding-actions {
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 9px;
+  margin-top: 7px;
+}
+
+.onboarding-footer {
+  margin-top: 16px;
+}
+
+@media (max-width: 620px) {
+  .onboarding-overlay { padding: 12px; }
+  .onboarding-dialog { padding: 18px; }
+  .onboarding-steps { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .onboarding-capability-list { display: grid; grid-template-columns: 1fr; }
+}

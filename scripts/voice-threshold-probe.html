@@ -1,0 +1,317 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta content="width=device-width, initial-scale=1" name="viewport">
+  <title>Suzu Lives · 麦克风阈值采样</title>
+  <style>
+    :root {
+      color-scheme: light;
+      font-family: Inter, "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
+      background: #f4f7fb;
+      color: #13213d;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-width: 720px; }
+    main { margin: 0 auto; max-width: 900px; padding: 48px 32px 72px; }
+    header { margin-bottom: 28px; }
+    .eyebrow { color: #098c80; font-size: 13px; font-weight: 800; letter-spacing: .14em; margin: 0 0 10px; }
+    h1 { font-size: 31px; margin: 0 0 12px; }
+    h2 { font-size: 17px; margin: 0 0 14px; }
+    p { color: #56657f; line-height: 1.7; margin: 0; }
+    .panel { background: rgba(255, 255, 255, .92); border: 1px solid #dbe3f0; border-radius: 18px; box-shadow: 0 10px 28px rgba(35, 56, 96, .07); margin-top: 18px; padding: 24px; }
+    .controls { align-items: center; display: flex; gap: 12px; margin: 18px 0 20px; }
+    button { appearance: none; border: 1px solid #cfd8e8; border-radius: 10px; color: #263652; cursor: pointer; font: inherit; font-weight: 700; padding: 10px 16px; }
+    button.primary { background: #5964ee; border-color: #5964ee; color: #fff; }
+    button:disabled { cursor: default; opacity: .5; }
+    .status { background: #f2f5fa; border-radius: 12px; color: #334868; font-weight: 700; padding: 14px 16px; }
+    .meter { background: #e6ecf5; border-radius: 999px; height: 9px; margin: 14px 0 8px; overflow: hidden; }
+    .meter > i { background: linear-gradient(90deg, #51d6ba, #625ef0); display: block; height: 100%; transition: width 80ms linear; width: 0; }
+    .numbers { color: #61718a; display: flex; font-feature-settings: "tnum" 1; font-size: 13px; gap: 20px; }
+    .steps { color: #52617a; line-height: 1.9; padding-left: 22px; }
+    .privacy { color: #098c80; font-size: 13px; margin-top: 14px; }
+    .result-grid { display: grid; gap: 14px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .metric { background: #f7f9fc; border: 1px solid #e4e9f2; border-radius: 13px; padding: 14px; }
+    .metric strong { display: block; font-size: 20px; margin-top: 6px; }
+    .metric span { color: #6a7890; font-size: 13px; }
+    .recommendation { background: #e8f8f3; border: 1px solid #aae7d4; border-radius: 13px; margin-top: 16px; padding: 16px; }
+    .recommendation strong { color: #087b6f; display: block; font-size: 21px; margin: 5px 0; }
+    .warning { background: #fff5e6; border-color: #f4cd87; }
+    .warning strong { color: #a76600; }
+    pre { background: #18233b; border-radius: 12px; color: #dfe9ff; font: 12px/1.65 ui-monospace, SFMono-Regular, Consolas, monospace; margin: 14px 0 0; overflow: auto; padding: 16px; white-space: pre-wrap; }
+    .result-actions { display: flex; gap: 10px; margin-top: 14px; }
+    [hidden] { display: none !important; }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <p class="eyebrow">SUZU LIVES / DIAGNOSTIC</p>
+      <h1>麦克风阈值采样</h1>
+      <p>用和语音通话相同的 RMS 音量算法，先采集安静环境，再采集连续正常说话。完成后把报告复制给我，我据此确定通话的阈值。</p>
+    </header>
+
+    <section class="panel" aria-live="polite">
+      <h2>采样流程</h2>
+      <ol class="steps">
+        <li>点击“开始采样”，允许浏览器使用麦克风。</li>
+        <li>先保持安静 6 秒。</li>
+        <li>页面提示后，连续正常说话 12 秒；不要刻意压低或提高音量。</li>
+      </ol>
+      <div class="controls">
+        <button class="primary" id="start" type="button">开始采样</button>
+        <button disabled id="stop" type="button">提前结束</button>
+      </div>
+      <div class="status" id="status">尚未开始</div>
+      <div aria-hidden="true" class="meter"><i id="meterFill"></i></div>
+      <div class="numbers"><span>当前 RMS：<b id="currentEnergy">0.0000</b></span><span>已记录帧：<b id="frameCount">0</b></span></div>
+      <p class="privacy">只保留每一帧的数字音量，不录音、不上传语音，也不会写入项目数据。</p>
+    </section>
+
+    <section class="panel" hidden id="results">
+      <h2>分析结果</h2>
+      <div class="result-grid" id="metrics"></div>
+      <div class="recommendation" id="recommendation"></div>
+      <div class="result-actions"><button id="copy" type="button">复制报告</button></div>
+      <pre id="report"></pre>
+    </section>
+  </main>
+
+  <script type="module">
+    const QUIET_DURATION_MS = 6_000;
+    const SPEECH_DURATION_MS = 12_000;
+    const CURRENT_THRESHOLD = 0.025;
+    const NOISE_MARGIN = 1.35;
+
+    const elements = {
+      copy: document.querySelector("#copy"),
+      currentEnergy: document.querySelector("#currentEnergy"),
+      frameCount: document.querySelector("#frameCount"),
+      meterFill: document.querySelector("#meterFill"),
+      metrics: document.querySelector("#metrics"),
+      recommendation: document.querySelector("#recommendation"),
+      report: document.querySelector("#report"),
+      results: document.querySelector("#results"),
+      start: document.querySelector("#start"),
+      status: document.querySelector("#status"),
+      stop: document.querySelector("#stop"),
+    };
+
+    const state = {
+      audioContext: null,
+      finalReport: "",
+      meterTimer: null,
+      processor: null,
+      quiet: [],
+      silentGain: null,
+      source: null,
+      speech: [],
+      startedAt: 0,
+      stopTimer: null,
+      stream: null,
+      value: 0,
+    };
+
+    function inputEnergy(input) {
+      if (!input?.length) return 0;
+      let total = 0;
+      for (let index = 0; index < input.length; index += 1) total += input[index] * input[index];
+      return Math.sqrt(total / input.length);
+    }
+
+    function percentile(values, percentileValue) {
+      if (!values.length) return 0;
+      const sorted = [...values].sort((left, right) => left - right);
+      const position = Math.max(0, Math.min(sorted.length - 1, (sorted.length - 1) * percentileValue));
+      const lower = Math.floor(position);
+      const upper = Math.ceil(position);
+      if (lower === upper) return sorted[lower];
+      return sorted[lower] + (sorted[upper] - sorted[lower]) * (position - lower);
+    }
+
+    function distribution(values) {
+      return {
+        count: values.length,
+        median: percentile(values, 0.5),
+        p10: percentile(values, 0.1),
+        p90: percentile(values, 0.9),
+        p95: percentile(values, 0.95),
+        p99: percentile(values, 0.99),
+        maximum: values.length ? Math.max(...values) : 0,
+      };
+    }
+
+    function fixed(value) {
+      return Number(value || 0).toFixed(4);
+    }
+
+    function describePhase(elapsed) {
+      if (elapsed < QUIET_DURATION_MS) return { key: "quiet", remaining: QUIET_DURATION_MS - elapsed, text: "请保持安静" };
+      if (elapsed < QUIET_DURATION_MS + SPEECH_DURATION_MS) return { key: "speech", remaining: QUIET_DURATION_MS + SPEECH_DURATION_MS - elapsed, text: "请连续正常说话" };
+      return { key: "done", remaining: 0, text: "正在生成报告" };
+    }
+
+    function updateStatus() {
+      if (!state.startedAt) return;
+      const phase = describePhase(performance.now() - state.startedAt);
+      const seconds = Math.max(0, Math.ceil(phase.remaining / 1_000));
+      elements.status.textContent = phase.key === "done" ? phase.text : `${phase.text}（${seconds} 秒）`;
+      elements.currentEnergy.textContent = fixed(state.value);
+      elements.frameCount.textContent = String(state.quiet.length + state.speech.length);
+      elements.meterFill.style.width = `${Math.min(100, state.value * 900)}%`;
+    }
+
+    function renderResults() {
+      const quiet = distribution(state.quiet);
+      const allSpeech = distribution(state.speech);
+      const quietCeiling = quiet.p99;
+      const activeSpeechValues = state.speech.filter((value) => value > quietCeiling);
+      const activeSpeech = distribution(activeSpeechValues);
+      const minimumThreshold = quietCeiling * NOISE_MARGIN;
+      const maximumThreshold = activeSpeech.count ? activeSpeech.p10 * 0.8 : 0;
+      const hasClearGap = Boolean(activeSpeech.count && maximumThreshold > minimumThreshold);
+      const recommended = hasClearGap ? (minimumThreshold + maximumThreshold) / 2 : minimumThreshold;
+
+      const metricRows = [
+        ["安静环境 P95", fixed(quiet.p95)],
+        ["安静环境 P99", fixed(quiet.p99)],
+        ["安静环境最大值", fixed(quiet.maximum)],
+        ["说话帧 P50", fixed(activeSpeech.median)],
+        ["说话帧 P90", fixed(activeSpeech.p90)],
+        ["当前通话阈值", fixed(CURRENT_THRESHOLD)],
+      ];
+      elements.metrics.replaceChildren(...metricRows.map(([label, value]) => {
+        const metric = document.createElement("div");
+        metric.className = "metric";
+        metric.innerHTML = `<span>${label}</span><strong>${value}</strong>`;
+        return metric;
+      }));
+
+      elements.recommendation.className = `recommendation${hasClearGap ? "" : " warning"}`;
+      if (hasClearGap) {
+        elements.recommendation.innerHTML = `<span>建议通话上传阈值</span><strong>${fixed(recommended)}</strong><p>可用范围约为 ${fixed(minimumThreshold)} ～ ${fixed(maximumThreshold)}。下限来自安静环境 P99 的 ${NOISE_MARGIN} 倍，上限保留了较轻声音的余量。</p>`;
+      } else {
+        elements.recommendation.innerHTML = `<span>环境与说话音量重叠较多</span><strong>至少 ${fixed(recommended)}</strong><p>这次无法给出可靠的自动阈值；请把下面报告发给我，我们再结合实际误触发情况决定。</p>`;
+      }
+
+      state.finalReport = [
+        "Suzu Lives 麦克风阈值采样报告",
+        `当前通话阈值: ${fixed(CURRENT_THRESHOLD)}`,
+        `环境帧数: ${quiet.count}`,
+        `环境 RMS: P50=${fixed(quiet.median)}, P95=${fixed(quiet.p95)}, P99=${fixed(quiet.p99)}, Max=${fixed(quiet.maximum)}`,
+        `说话采样帧数: ${allSpeech.count}`,
+        `高于环境 P99 的说话帧数: ${activeSpeech.count}`,
+        `有效说话 RMS: P10=${fixed(activeSpeech.p10)}, P50=${fixed(activeSpeech.median)}, P90=${fixed(activeSpeech.p90)}`,
+        `建议下限（环境 P99 × ${NOISE_MARGIN}）: ${fixed(minimumThreshold)}`,
+        `建议上限（有效说话 P10 × 0.8）: ${fixed(maximumThreshold)}`,
+        hasClearGap ? `自动建议阈值: ${fixed(recommended)}` : "自动建议阈值: 环境与说话分布重叠，需要人工判断",
+      ].join("\n");
+      elements.report.textContent = state.finalReport;
+      elements.results.hidden = false;
+    }
+
+    async function releaseMicrophone() {
+      if (state.stopTimer) window.clearTimeout(state.stopTimer);
+      if (state.meterTimer) window.clearInterval(state.meterTimer);
+      state.stopTimer = null;
+      state.meterTimer = null;
+      try { state.processor?.disconnect(); } catch { /* already released */ }
+      try { state.source?.disconnect(); } catch { /* already released */ }
+      try { state.silentGain?.disconnect(); } catch { /* already released */ }
+      for (const track of state.stream?.getTracks?.() || []) track.stop();
+      try { await state.audioContext?.close(); } catch { /* already released */ }
+      state.audioContext = null;
+      state.processor = null;
+      state.silentGain = null;
+      state.source = null;
+      state.stream = null;
+    }
+
+    async function finishSampling() {
+      if (!state.startedAt) return;
+      const shouldRender = state.quiet.length > 0 || state.speech.length > 0;
+      state.startedAt = 0;
+      await releaseMicrophone();
+      elements.start.disabled = false;
+      elements.stop.disabled = true;
+      elements.status.textContent = shouldRender ? "采样完成" : "没有采集到麦克风数据";
+      if (shouldRender) renderResults();
+    }
+
+    async function startSampling() {
+      if (!navigator.mediaDevices?.getUserMedia) {
+        elements.status.textContent = "当前浏览器不能读取麦克风。请用 Chrome 或 Edge 打开此文件。";
+        return;
+      }
+      await releaseMicrophone();
+      state.quiet = [];
+      state.speech = [];
+      state.value = 0;
+      elements.results.hidden = true;
+      elements.start.disabled = true;
+      elements.stop.disabled = false;
+      elements.status.textContent = "正在请求麦克风权限…";
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            autoGainControl: true,
+            channelCount: 1,
+            echoCancellation: true,
+            noiseSuppression: true,
+          },
+        });
+        const AudioContextConstructor = window.AudioContext || window.webkitAudioContext;
+        const audioContext = new AudioContextConstructor({ latencyHint: "interactive" });
+        await audioContext.resume();
+        state.audioContext = audioContext;
+        state.stream = stream;
+        state.source = audioContext.createMediaStreamSource(stream);
+        state.processor = audioContext.createScriptProcessor(2048, 1, 1);
+        state.silentGain = audioContext.createGain();
+        state.silentGain.gain.value = 0;
+        state.source.connect(state.processor);
+        state.processor.connect(state.silentGain);
+        state.silentGain.connect(audioContext.destination);
+        state.startedAt = performance.now();
+        state.processor.onaudioprocess = (event) => {
+          if (!state.startedAt) return;
+          const phase = describePhase(performance.now() - state.startedAt);
+          if (phase.key === "done") return;
+          const value = inputEnergy(event.inputBuffer.getChannelData(0));
+          state.value = value;
+          if (phase.key === "quiet") state.quiet.push(value);
+          else state.speech.push(value);
+        };
+        state.meterTimer = window.setInterval(updateStatus, 80);
+        state.stopTimer = window.setTimeout(() => { void finishSampling(); }, QUIET_DURATION_MS + SPEECH_DURATION_MS);
+        updateStatus();
+      } catch (error) {
+        await releaseMicrophone();
+        elements.start.disabled = false;
+        elements.stop.disabled = true;
+        elements.status.textContent = `无法开始采样：${error?.message || error}`;
+      }
+    }
+
+    elements.start.addEventListener("click", () => { void startSampling(); });
+    elements.stop.addEventListener("click", () => { void finishSampling(); });
+    elements.copy.addEventListener("click", async () => {
+      if (!state.finalReport) return;
+      try {
+        await navigator.clipboard.writeText(state.finalReport);
+        elements.copy.textContent = "已复制";
+      } catch {
+        const selection = window.getSelection();
+        const range = document.createRange();
+        range.selectNodeContents(elements.report);
+        selection.removeAllRanges();
+        selection.addRange(range);
+        document.execCommand("copy");
+        selection.removeAllRanges();
+        elements.copy.textContent = "已复制";
+      }
+      window.setTimeout(() => { elements.copy.textContent = "复制报告"; }, 1_500);
+    });
+  </script>
+</body>
+</html>

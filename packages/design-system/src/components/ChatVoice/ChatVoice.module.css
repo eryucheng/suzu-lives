@@ -1,0 +1,127 @@
+/* ChatVoice —— 语音条气泡（移植自 Suzu-Lives .conversation-voice） */
+
+.voice {
+  display: flex;
+  width: min(290px, 64vw);
+  min-height: 56px;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 12px 9px 9px;
+  box-sizing: border-box;
+  border: 1px solid var(--border);
+  border-radius: 15px;
+  background: color-mix(in srgb, var(--panel-soft) 86%, transparent);
+  cursor: pointer;
+}
+
+/* 播放按钮 */
+.toggle {
+  display: grid;
+  flex: 0 0 auto;
+  width: 36px;
+  height: 36px;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  color: var(--accent);
+  cursor: pointer;
+  transition: background-color 0.15s ease, transform 0.15s ease;
+}
+
+.voice:hover .toggle {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+.toggle:active {
+  transform: scale(0.94);
+}
+
+.toggleIcon {
+  display: grid;
+  width: 14px;
+  height: 14px;
+}
+
+.iconPlay {
+  margin-left: 2px;
+}
+
+/* ---- 内容区：波形 + 进度 + 时长 ---- */
+.content {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.wave {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 22px;
+  overflow: hidden;
+}
+
+.bar {
+  display: block;
+  flex: 1 1 auto;
+  max-width: 3px;
+  min-width: 2px;
+  height: var(--voice-bar-height, 40%);
+  min-height: 4px;
+  border-radius: 999px;
+  background: var(--text-muted);
+}
+
+.playing .bar {
+  background: color-mix(in srgb, var(--accent2) 80%, transparent);
+  animation: voice-pulse 0.5s ease-in-out infinite alternate;
+  transform-origin: center;
+}
+
+/* 正在播放：波形上下律动（逐根错开、幅度随机由 --voice-bar-height 控制） */
+@keyframes voice-pulse {
+  from {
+    transform: scaleY(0.65);
+  }
+  to {
+    transform: scaleY(1.15);
+  }
+}
+
+.playing .bar:nth-child(2n) {
+  animation-delay: 0.15s;
+}
+.playing .bar:nth-child(3n) {
+  animation-delay: 0.3s;
+}
+
+.meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.progress {
+  flex: 1;
+  height: 3px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text-muted) 22%, transparent);
+}
+
+.progressFill {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: var(--accent2);
+}
+
+.time {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}

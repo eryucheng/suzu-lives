@@ -1,0 +1,204 @@
+#content.content--relationship-settings {
+  display:flex;
+  min-height:0;
+  flex-direction:column;
+  overflow:hidden;
+  padding:34px clamp(17px,2.5vw,36px) clamp(20px,3.8dvh,36px);
+}
+
+#content.content--relationship-settings > #relationshipSettingsReactRoot {
+  display:flex;
+  min-height:0;
+  flex:1;
+}
+
+.relationship-settings-react-page {
+  --relationship-settings-layout-max-width:1200px;
+  display:grid;
+  align-content:start;
+  grid-template-rows:auto minmax(0,1fr);
+  gap:clamp(18px,2cqw,28px);
+  container-type:inline-size;
+  width:100%;
+  min-width:0;
+  min-height:0;
+  flex:1;
+  max-width:var(--relationship-settings-layout-max-width);
+  margin:0 auto;
+}
+
+.relationship-settings-return-button,
+.relationship-settings-new-file-button {
+  background:var(--panel);
+  border-color:var(--border);
+  box-shadow:none;
+  color:var(--text);
+}
+
+.relationship-settings-return-button:hover:not(:disabled),
+.relationship-settings-new-file-button:hover:not(:disabled) {
+  background:var(--panel-soft);
+  border-color:color-mix(in srgb, var(--accent) 42%, var(--border));
+}
+
+.relationship-settings-page-error,
+.relationship-settings-editor-error { margin:0; }
+
+.relationship-settings-loading {
+  display:grid;
+  min-height:260px;
+  place-items:center;
+  padding:clamp(20px,3cqw,34px);
+}
+
+.relationship-settings-empty { width:min(100%,520px); }
+
+.relationship-settings-workspace {
+  display:grid;
+  grid-template-columns:minmax(210px,.3fr) minmax(0,1fr);
+  align-items:stretch;
+  gap:var(--space-lg);
+  min-height:0;
+}
+
+.relationship-settings-contact-rail {
+  display:grid;
+  grid-template-rows:auto minmax(0,1fr);
+  align-content:start;
+  gap:var(--space-md);
+  min-width:0;
+  min-height:0;
+  padding:var(--space-md);
+}
+
+.relationship-settings-contact-rail__heading {
+  display:flex;
+  align-items:flex-end;
+  justify-content:space-between;
+  gap:var(--space-sm);
+  padding:4px 4px 7px;
+}
+
+.relationship-settings-contact-rail__heading > div { display:grid; gap:3px; }
+.relationship-settings-contact-rail__heading span { color:var(--accent2); font-size:var(--font-size-xs); font-weight:var(--font-weight-bold); letter-spacing:1.2px; }
+.relationship-settings-contact-rail__heading strong { color:var(--text); font-size:var(--font-size-md); }
+.relationship-settings-contact-rail__heading b { color:var(--text-muted); font-size:var(--font-size-xs); font-weight:var(--font-weight-medium); }
+
+.relationship-settings-contact-list {
+  display:grid;
+  align-content:start;
+  gap:var(--space-xs);
+  min-width:0;
+  min-height:0;
+  overflow:auto;
+}
+
+.relationship-settings-contact { width:100%; }
+
+.relationship-settings-workspace__main {
+  display:flex;
+  min-height:0;
+  flex-direction:column;
+  min-width:0;
+  gap:var(--space-md);
+  padding:clamp(16px,2cqw,24px);
+}
+
+.relationship-settings-workspace__main > .relationship-settings-empty {
+  flex:1;
+  align-self:stretch;
+  margin:auto;
+}
+
+.relationship-settings-editor-header,
+.relationship-settings-editor-contact,
+.relationship-settings-editor__toolbar {
+  display:flex;
+  min-width:0;
+  align-items:center;
+  justify-content:space-between;
+  gap:var(--space-md);
+}
+
+.relationship-settings-editor-header {
+  justify-content:flex-start;
+  padding-bottom:var(--space-md);
+  border-bottom:1px solid color-mix(in srgb, var(--glass-border) 72%, transparent);
+}
+
+.relationship-settings-editor-contact { justify-content:flex-start; }
+.relationship-settings-editor-contact > div { display:grid; min-width:0; gap:3px; }
+.relationship-settings-editor-contact span,
+.relationship-settings-editor__toolbar span { color:var(--text-muted); font-size:var(--font-size-md); }
+.relationship-settings-editor-contact h2 { margin:0; overflow:hidden; color:var(--text); font-size:var(--font-size-xl); text-overflow:ellipsis; white-space:nowrap; }
+
+.relationship-settings-file-tabs {
+  min-width:0;
+  max-width:100%;
+  margin-left:clamp(4px,1.5cqw,20px);
+}
+
+.relationship-settings-file-tabs button { font-size:var(--font-size-lg); }
+.relationship-settings-new-file-button { margin-left:auto; }
+
+.relationship-settings-editor {
+  display:grid;
+  grid-template-rows:auto minmax(0,1fr);
+  min-width:0;
+  min-height:0;
+  flex:1;
+  gap:var(--space-md);
+  padding:var(--space-md);
+  border:1px solid var(--border);
+  border-radius:var(--radius-lg);
+  background:var(--panel);
+}
+
+.relationship-settings-editor__toolbar > div { display:grid; min-width:0; gap:2px; }
+.relationship-settings-editor__toolbar strong { overflow:hidden; color:var(--text); font-size:var(--font-size-xl); text-overflow:ellipsis; white-space:nowrap; }
+.relationship-settings-editor__toolbar code { overflow:hidden; color:var(--text-secondary); font-family:inherit; font-size:var(--font-size-lg); text-overflow:ellipsis; white-space:nowrap; }
+
+.relationship-settings-editor__textarea {
+  min-height:0;
+  height:100%;
+  box-sizing:border-box;
+  resize:vertical;
+  border-color:var(--border);
+  border-radius:var(--radius-md);
+  background:var(--panel-soft);
+  color:var(--text);
+  font-family:"Cascadia Mono", Consolas, monospace;
+  font-size:var(--font-size-lg);
+  line-height:1.7;
+}
+
+.relationship-settings-dialog-actions { display:flex; width:100%; justify-content:flex-end; gap:var(--space-sm); }
+
+.relationship-settings-create-form { display:grid; gap:var(--space-md); }
+.relationship-settings-create-form label { display:grid; gap:6px; color:var(--text); font-size:var(--font-size-xs); }
+.relationship-settings-create-form label span > small { color:var(--text-secondary); font-size:inherit; }
+.relationship-settings-create-form input,
+.relationship-settings-create-form textarea { background:var(--panel); color:var(--text); opacity:1; }
+.relationship-settings-create-form input::placeholder,
+.relationship-settings-create-form textarea::placeholder { color:var(--text-secondary); opacity:1; }
+.relationship-settings-create-form textarea { min-height:128px; }
+.relationship-settings-form-error { margin:0; color:var(--danger); font-size:var(--font-size-xs); line-height:1.5; }
+
+body:has(.relationship-settings-create-form) [role="dialog"] {
+  background:var(--panel);
+}
+
+/* Desktop workspaces keep one editing canvas. When zoom leaves too little room,
+   the secondary contact pane is tucked away instead of becoming a mobile stack. */
+@container (max-width:1140px) {
+  .relationship-settings-workspace { grid-template-columns:minmax(0,1fr); min-height:0; }
+  .relationship-settings-contact-rail { display:none; }
+}
+
+@container (max-width:680px) {
+  .relationship-settings-editor-contact > div > span,
+  .relationship-settings-editor__toolbar span,
+  .relationship-settings-editor__toolbar code { display:none; }
+  .relationship-settings-file-tabs { flex:1; overflow-x:auto; }
+  .relationship-settings-editor { padding:var(--space-sm); }
+}

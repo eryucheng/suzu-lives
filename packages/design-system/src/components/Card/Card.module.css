@@ -1,0 +1,49 @@
+/* Card —— 卡片（移植自 Suzu-Lives .panel） */
+
+.card {
+  min-width: 0;
+  padding: 20px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  background: var(--panel);
+  box-shadow: var(--shadow-md);
+}
+
+.header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 17px;
+}
+
+.copy {
+  min-width: 0;
+}
+
+.title {
+  margin: 0;
+  color: var(--text);
+  font-size: var(--font-size-lg);
+  font-weight: 670;
+  line-height: 1.4;
+}
+
+.description {
+  margin: 5px 0 0;
+  color: var(--text-muted);
+  font-size: var(--font-size-xs);
+  line-height: 1.6;
+}
+
+.action {
+  flex: 0 0 auto;
+}
+
+.body {
+  min-width: 0;
+  color: var(--text-secondary);
+  font-size: var(--font-size-md);
+  line-height: 1.65;
+}

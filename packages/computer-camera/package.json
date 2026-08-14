@@ -1,0 +1,16 @@
+{
+  "name": "@suzu-lives/computer-camera",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.mjs",
+  "bin": {
+    "suzu-lives-computer-camera": "./bin/computer-camera.mjs"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs && python test/camera-worker.test.py"
+  },
+  "dependencies": {
+    "@suzu-lives/agent-registry": "0.1.0"
+  }
+}

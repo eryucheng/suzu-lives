@@ -1,0 +1,28 @@
+/* Status —— 状态徽章（移植自 Suzu-Lives .status-pill） */
+
+.pill {
+  display: inline-flex;
+  width: max-content;
+  align-items: center;
+  gap: 5px;
+  border-radius: var(--radius-pill);
+  padding: 4px 8px;
+  font-size: var(--font-size-xs);
+  font-weight: 620;
+  line-height: 1;
+}
+
+/* 前置小圆点 */
+.pill::before {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+  content: '';
+}
+
+.tone-success { background: color-mix(in srgb, var(--success) 10%, transparent); color: var(--success); }
+.tone-warning { background: color-mix(in srgb, var(--warning) 10%, transparent); color: var(--warning); }
+.tone-danger  { background: color-mix(in srgb, var(--danger) 10%, transparent);  color: var(--danger); }
+.tone-info    { background: color-mix(in srgb, var(--info) 12%, transparent);    color: var(--info); }
+.tone-muted   { background: color-mix(in srgb, var(--text-muted) 10%, transparent); color: var(--text-muted); }

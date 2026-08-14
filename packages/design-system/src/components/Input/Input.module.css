@@ -1,0 +1,54 @@
+/* Input —— 文本输入（移植自 Suzu-Lives .setting-input） */
+
+.wrapper {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  width: 100%;
+}
+
+.input {
+  width: 100%;
+  height: 34px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  outline: 0;
+  background: var(--panel-soft);
+  color: var(--text);
+  padding: 0 10px;
+  font: inherit;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.input::placeholder { color: var(--text-muted); }
+
+.input:focus {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 9%, transparent);
+}
+
+.input:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* ---- 尺寸 ---- */
+.size-sm { height: 28px; padding: 0 8px; font-size: var(--font-size-sm); }
+.size-md { height: 34px; padding: 0 10px; font-size: var(--font-size-sm); }
+.size-lg { height: 44px; padding: 0 16px; font-size: var(--font-size-md); }
+
+/* ---- 前后缀 ---- */
+.has-prefix { padding-left: 30px; }
+.has-suffix { padding-right: 30px; }
+
+.affix {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  color: var(--text-muted);
+  pointer-events: none;
+}
+.prefix { left: 10px; }
+.suffix { right: 10px; }

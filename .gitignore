@@ -1,48 +1,48 @@
-# Local configuration and credentials
+node_modules/
+__pycache__/
+dist/
+dist-*/
+apps/*/dist/
+apps/*/dist-preview/
+apps/*/renderer/
+# The internal design-system workspace ships its built runtime so a clean
+# checkout can build the desktop renderer without any external Git dependency.
+!packages/design-system/dist/
+!packages/design-system/dist/**
+.playwright-cli/
+output/playwright/
+*.log
+logs/
+
+# Local databases, caches and recoverable working state
+*.db
+*.db-*
+*.sqlite
+*.sqlite3
+cache/
+caches/
+*.cache
+backup/
+backups/
+*.bak
+*.backup
+
+# Local application state and private agent data
+data/
+runtime/
 .env
 .env.*
 !.env.example
-memory/manual_compactor/config.local.json
-memory/rag/config.local.json
-user.md
-scripts/abilities/phone-camera/config.local.json
-scripts/abilities/image-generation/config.local.json
-scripts/abilities/image-generation/workflows/registry.local.json
-scripts/abilities/image-vision/config.local.json
-assets/visual-references/manifest.json
-assets/visual-references/characters/
-assets/visual-references/places/
-assets/visual-references/objects/
-assets/visual-references/styles/
-assets/visual-references/work/
-# Keep ignoring the first release's location so upgrades never expose private images.
-visual-references/manifest.json
-visual-references/characters/
-visual-references/places/
-visual-references/objects/
-visual-references/styles/
-visual-references/work/
-.claude/settings.local.json
-.playwright/
-.playwright-cli/
 
-# Private conversation data and derived indexes
-memory/rag/history.jsonl
-memory/rag/events.jsonl
-memory/rag/embeddings.jsonl
-memory/manual_compactor/backups/
-memory/manual_compactor/work/
-scripts/abilities/web-browser/runtime/
-scripts/abilities/connect_iphone/runtime/
-
-# Runtime output
-output/
-*.log
-*.lock
-node_modules/
-__pycache__/
-*.py[cod]
-.DS_Store
-Thumbs.db
-.idea/
-.vscode/
+# Secrets and machine-local configuration
+secrets/
+credentials/
+*.pem
+*.key
+*.p12
+*.pfx
+*.secret
+*.token
+*.local.json
+*.local.yaml
+*.local.yml

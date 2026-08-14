@@ -1,0 +1,189 @@
+#content.content--settings {
+  display:flex;
+  min-height:0;
+  flex-direction:column;
+  padding:34px clamp(17px,2.5vw,36px) clamp(20px,3.8dvh,36px);
+}
+
+#content.content--settings > #settingsReactRoot {
+  display:flex;
+  min-height:0;
+  flex:1;
+}
+
+.settings-react-page {
+  --settings-layout-max-width:1480px;
+  display:grid;
+  align-content:start;
+  gap:clamp(15px,1.7cqw,24px);
+  container-type:inline-size;
+  width:100%;
+  min-width:0;
+  max-width:var(--settings-layout-max-width);
+  margin:0 auto;
+}
+
+.settings-page-tabs {
+  width:min(100%,1200px);
+  margin:0;
+}
+
+.settings-page-body,
+.settings-card-stack {
+  display:grid;
+  min-width:0;
+  gap:clamp(12px,1.4cqw,18px);
+}
+
+.settings-card {
+  min-width:0;
+  padding:clamp(17px,1.8cqw,25px);
+}
+
+.settings-card__layout {
+  display:grid;
+  grid-template-columns:minmax(0,1fr) auto;
+  align-items:center;
+  gap:clamp(16px,2.2cqw,30px);
+}
+
+.settings-card__copy {
+  display:grid;
+  min-width:0;
+  gap:6px;
+}
+
+.settings-card__meta {
+  display:flex;
+  align-items:center;
+  flex-wrap:wrap;
+  gap:var(--space-sm);
+}
+
+.settings-card__eyebrow {
+  color:var(--accent2);
+  font-size:var(--font-size-xs);
+  font-weight:var(--font-weight-bold);
+  letter-spacing:1.45px;
+  text-transform:uppercase;
+}
+
+.settings-card h2 {
+  margin:0;
+  color:var(--text);
+  font-size:clamp(17px,1.6cqw,21px);
+  letter-spacing:-.3px;
+}
+
+.settings-card p {
+  max-width:760px;
+  margin:0;
+  color:var(--text-secondary);
+  font-size:var(--font-size-sm);
+  line-height:1.65;
+}
+
+.settings-directory-card__path {
+  display:block;
+  width:min(100%,860px);
+  margin-top:clamp(6px,.7cqw,10px);
+  overflow:hidden;
+  color:var(--text-muted);
+  font:var(--font-size-xs) Consolas,"Microsoft YaHei UI",monospace;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+
+.settings-update-version {
+  color:var(--text-muted);
+  font-size:var(--font-size-xs);
+}
+
+.settings-card__actions {
+  display:flex;
+  flex-wrap:wrap;
+  justify-content:flex-end;
+  gap:var(--space-sm);
+}
+
+.settings-action-button {
+  background:var(--panel);
+  box-shadow:none;
+}
+
+.settings-action-button:hover:not(:disabled) {
+  background:var(--panel);
+  border-color:color-mix(in srgb, var(--accent2) 45%, var(--border));
+}
+
+.settings-theme-choice.is-active {
+  border-color:color-mix(in srgb, var(--accent) 30%, transparent);
+  background:color-mix(in srgb, var(--accent) 13%, transparent);
+  color:var(--text);
+}
+
+.settings-warning-card {
+  border-color:color-mix(in srgb, var(--warning) 38%, var(--glass-border));
+}
+
+.settings-privacy-card {
+  display:grid;
+  gap:clamp(14px,1.5cqw,19px);
+}
+
+.settings-privacy-card__status {
+  margin:0;
+}
+
+.settings-privacy-card__status.is-error {
+  color:var(--danger, #c74a55);
+}
+
+.settings-privacy-contact-list {
+  display:grid;
+  gap:2px;
+}
+
+.settings-privacy-contact {
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:var(--space-md);
+  border-top:1px solid var(--border);
+  padding:13px 0 0;
+}
+
+.settings-privacy-contact > div {
+  display:grid;
+  min-width:0;
+  gap:3px;
+}
+
+.settings-privacy-contact strong {
+  overflow:hidden;
+  color:var(--text);
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+
+.settings-privacy-contact span {
+  color:var(--text-muted);
+  font-size:var(--font-size-xs);
+}
+
+@container (max-width:760px) {
+  .settings-card__layout { grid-template-columns:minmax(0,1fr); }
+  .settings-card__actions { justify-content:flex-start; }
+  .settings-card__actions > .settings-action-button { flex:1 1 138px; }
+  .settings-directory-card__path { width:100%; }
+  .settings-privacy-contact { align-items:stretch; flex-direction:column; }
+  .settings-privacy-contact > .settings-action-button { align-self:flex-start; }
+}
+
+@media (max-width:1100px) {
+  #content.content--settings { padding-top:28px; }
+}
+
+@media (max-width:820px) {
+  #content.content--settings { padding-top:23px; }
+}

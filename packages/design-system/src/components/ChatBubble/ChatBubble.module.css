@@ -1,0 +1,104 @@
+/* ChatBubble —— 聊天气泡（移植自 Suzu-Lives .conversation-message） */
+
+/* 包裹层：time 居中时垂直排列【时间行 + 消息行】 */
+.wrap {
+  display: flex;
+  width: 100%;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.message {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  width: 100%;
+}
+
+/* 用户消息：头像在右、气泡靠右 */
+.message.user {
+  flex-direction: row-reverse;
+}
+
+.avatar {
+  flex: 0 0 auto;
+}
+
+.bubble {
+  max-width: min(78%, 780px);
+  border: 1px solid var(--border);
+  border-radius: 5px 16px 16px;
+  background: color-mix(in srgb, var(--panel-soft) 94%, #20253a);
+  padding: 11px 13px;
+  box-shadow: 0 5px 16px rgba(0, 0, 0, 0.08);
+}
+
+/* 亮色：对方气泡更干净的近白底 */
+[data-theme='light'] .bubble {
+  background: color-mix(in srgb, var(--panel) 96%, #fff);
+}
+
+/* 亮色：用户侧渐变更通透（避免深紫混入发浊） */
+[data-theme='light'] .user .bubble {
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--accent) 22%, transparent),
+    color-mix(in srgb, var(--brand-600) 12%, transparent)
+  );
+}
+
+/* 用户侧气泡：右上角切角朝向头像，紫色渐变底 */
+.message.user .bubble {
+  border-color: color-mix(in srgb, var(--accent) 34%, transparent);
+  border-radius: 16px 5px 16px 16px;
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--accent) 30%, transparent),
+    color-mix(in srgb, var(--brand-800) 22%, transparent)
+  );
+}
+
+/* 正在生成：发光微动 */
+.message.live .bubble {
+  box-shadow: 0 5px 16px rgba(0, 0, 0, 0.08),
+    0 0 0 1px color-mix(in srgb, var(--accent) 22%, transparent),
+    0 0 22px color-mix(in srgb, var(--accent) 20%, transparent);
+}
+
+/* 仅媒体：去掉气泡底，透明展示 */
+.message.mediaOnly .bubble {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  padding: 0;
+}
+
+.text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--text);
+  font-size: var(--font-size-sm);
+  line-height: 1.7;
+}
+
+.meta {
+  margin-bottom: 6px;
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
+/* 时间戳：气泡内右下角（timeInline 模式） */
+.time {
+  margin-top: 6px;
+  text-align: right;
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
+/* 时间戳：消息上方居中独立行（微信模式，默认） */
+.timeline {
+  align-self: center;
+  color: var(--text-muted);
+  font-size: 10px;
+  padding: 2px 8px;
+}

@@ -1,0 +1,3 @@
+[submodule "external/suzu-memory"]
+	path = external/suzu-memory
+	url = https://github.com/eryucheng/suzu-memory.git
