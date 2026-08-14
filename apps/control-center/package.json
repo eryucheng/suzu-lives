@@ -1,6 +1,6 @@
 {
   "name": "suzu-lives-console",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "author": "儿玉诚也",
   "description": "Local desktop control center for Suzu Lives.",
@@ -11,7 +11,7 @@
     "start": "node scripts/start-desktop.mjs",
     "test": "node --test test/*.test.mjs",
     "dist": "electron-builder --win zip --x64",
-    "dist:installer": "electron-builder --win nsis --x64"
+    "dist:installer": "vite build && electron-builder --win nsis --x64 --publish never"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^6.0.4",
@@ -55,11 +55,26 @@
     "appId": "com.suzulives.console",
     "productName": "Suzu Lives Console",
     "asar": true,
+    "afterPack": "./scripts/package-type-hook.cjs",
     "asarUnpack": [
       "node_modules/@suzu-lives/iphone-bridge/python/**",
       "node_modules/@suzu-lives/browser-automation/src/web-browser/**",
       "node_modules/@suzu-lives/media-understanding/worker/**",
       "node_modules/@suzu-lives/traveling-merchant/worker/**"
+    ],
+    "extraResources": [
+      {
+        "from": "../../LICENSE.md",
+        "to": "LICENSE.md"
+      },
+      {
+        "from": "../../NOTICE",
+        "to": "NOTICE"
+      },
+      {
+        "from": "../../release-keys/eryuchengye.ed25519.pub",
+        "to": "release-provenance/eryuchengye.ed25519.pub"
+      }
     ],
     "directories": {
       "output": "dist"

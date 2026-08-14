@@ -31,4 +31,38 @@ npm test
 npm run dist
 ```
 
-`npm run dist` 生成 Windows ZIP 发布包，输出位于 `apps/control-center/dist/`。解压 ZIP 后运行其中的 `Suzu Lives Console.exe`；目标电脑不需要另装 Node.js 或 Electron。
+`npm run dist` 生成 Windows ZIP 测试包，输出位于 `apps/control-center/dist/`。ZIP 包不能自动覆盖安装，不用于正式更新发布。
+
+正式发布请构建 NSIS 安装包：
+
+```powershell
+npm run dist:installer
+```
+
+首次使用者手动安装 NSIS 包后，后续正式版本可在软件的“设置 → 软件更新”中检查、下载并重启安装。
+
+## 官方发布签名
+
+官方发布包会同时提供同名的 `.sig` 文件。它是由 Ed25519 私钥签发的可验证发布声明，而不是 Windows 代码签名证书。
+
+- Key ID：`eryuchengye`
+- 公钥：`release-keys/eryuchengye.ed25519.pub`
+- 公钥指纹（SHA-256）：`c64c364830cebaa7e605f2fb5097296dca54076d3eef0a704301cebed6c982e7`
+
+首次在可信的发布电脑上生成密钥：
+
+```powershell
+npm run generate:release-key
+```
+
+私钥默认仅保存于 `%USERPROFILE%\.suzu-lives\release-signing\eryuchengye.ed25519.private.pem`，不在仓库中。打包后对具体发布包签名并校验：
+
+```powershell
+npm run dist:installer
+npm run sign:release -- --artifact "apps/control-center/dist/Suzu-Lives-Console-0.1.1-win-x64.exe"
+npm run verify:release -- --artifact "apps/control-center/dist/Suzu-Lives-Console-0.1.1-win-x64.exe"
+```
+
+需要换电脑发布时，可以通过加密 U 盘、密码管理器等可信方式复制这一个私钥文件到新电脑的相同位置；或者先设置 `SUZU_RELEASE_SIGNING_KEY` 指向其受保护的本地副本。任何拿到私钥的人都能伪装成官方发布者，因此不要提交、上传或发到聊天记录中。
+
+公开仓库的 `v<版本号>` tag 会触发 Windows Release 工作流，自动上传 NSIS 安装程序、`latest.yml`、blockmap 和安装程序签名。首次触发前，维护者需要在 `eryucheng/suzu-lives` 的 Actions Secrets 中设置 `SUZU_RELEASE_SIGNING_PRIVATE_KEY`；值为私钥 PEM 文件的完整内容。

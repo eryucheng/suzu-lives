@@ -1,0 +1,129 @@
+name: Publish Windows installer
+
+run-name: Publish ${{ github.ref_name }}
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: publish-windows-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: github.repository == 'eryucheng/suzu-lives'
+    name: Build and publish Windows x64 installer
+    runs-on: windows-latest
+    timeout-minutes: 50
+
+    steps:
+      - name: Check out tagged source and memory submodule
+        uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Confirm tag matches the application version
+        shell: pwsh
+        run: |
+          $version = node -p "JSON.parse(require('node:fs').readFileSync('apps/control-center/package.json', 'utf8')).version"
+          if ($env:GITHUB_REF_NAME -ne "v$version") {
+            throw "Git tag $env:GITHUB_REF_NAME 必须与应用版本 v$version 一致。"
+          }
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Run tests before publishing
+        run: npm test
+
+      - name: Package the NSIS installer
+        run: npm run dist:installer
+
+      - name: Verify update metadata in the installer
+        shell: pwsh
+        run: |
+          $distRoot = Join-Path $PWD "apps/control-center/dist"
+          $resourcesRoot = Join-Path $distRoot "win-unpacked/resources"
+          $requiredResources = @(
+            "package-type",
+            "app-update.yml",
+            "LICENSE.md",
+            "NOTICE",
+            "release-provenance/eryuchengye.ed25519.pub"
+          )
+          foreach ($relativePath in $requiredResources) {
+            $candidate = Join-Path $resourcesRoot $relativePath
+            if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) {
+              throw "安装包缺少资源：$relativePath"
+            }
+          }
+          if ((Get-Content -Raw -LiteralPath (Join-Path $resourcesRoot "package-type")).Trim() -ne "nsis") {
+            throw "NSIS 安装包的 package-type 标识不正确。"
+          }
+          $installer = @(Get-ChildItem -LiteralPath $distRoot -File -Filter "Suzu-Lives-Console-*-win-x64.exe")
+          if ($installer.Count -ne 1) {
+            throw "预期恰好一个 Windows x64 安装程序，实际找到 $($installer.Count) 个。"
+          }
+          if (-not (Test-Path -LiteralPath (Join-Path $distRoot "latest.yml") -PathType Leaf)) {
+            throw "安装包未生成 latest.yml，无法提供自动更新。"
+          }
+          if (@(Get-ChildItem -LiteralPath $distRoot -File -Filter "*.blockmap").Count -lt 1) {
+            throw "安装包未生成 blockmap，无法提供差分更新。"
+          }
+
+      - name: Sign the official installer
+        shell: pwsh
+        env:
+          SUZU_RELEASE_SIGNING_PRIVATE_KEY: ${{ secrets.SUZU_RELEASE_SIGNING_PRIVATE_KEY }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:SUZU_RELEASE_SIGNING_PRIVATE_KEY)) {
+            throw "请先在 eryucheng/suzu-lives 设置 Actions Secret：SUZU_RELEASE_SIGNING_PRIVATE_KEY。"
+          }
+          $privateKeyPath = Join-Path $env:RUNNER_TEMP "suzu-lives-release-signing.pem"
+          try {
+            [System.IO.File]::WriteAllText($privateKeyPath, $env:SUZU_RELEASE_SIGNING_PRIVATE_KEY, [System.Text.UTF8Encoding]::new($false))
+            $installer = @(Get-ChildItem -LiteralPath "apps/control-center/dist" -File -Filter "Suzu-Lives-Console-*-win-x64.exe")
+            if ($installer.Count -ne 1) { throw "未找到唯一的 Windows x64 安装程序。" }
+            $env:SUZU_RELEASE_SIGNING_KEY = $privateKeyPath
+            npm run sign:release -- --artifact $installer[0].FullName
+            if ($LASTEXITCODE -ne 0) { throw "安装程序签名失败：$LASTEXITCODE" }
+          } finally {
+            if (Test-Path -LiteralPath $privateKeyPath) {
+              Remove-Item -LiteralPath $privateKeyPath -Force
+            }
+          }
+
+      - name: Create or refresh the GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $distRoot = Join-Path $PWD "apps/control-center/dist"
+          $installer = @(Get-ChildItem -LiteralPath $distRoot -File -Filter "Suzu-Lives-Console-*-win-x64.exe")
+          if ($installer.Count -ne 1) { throw "未找到唯一的 Windows x64 安装程序。" }
+          $latest = Join-Path $distRoot "latest.yml"
+          $signature = "$($installer[0].FullName).sig"
+          $blockmaps = @(Get-ChildItem -LiteralPath $distRoot -File -Filter "*.blockmap")
+          $assets = @($installer[0].FullName, $latest, $signature) + @($blockmaps.FullName)
+          foreach ($asset in $assets) {
+            if (-not (Test-Path -LiteralPath $asset -PathType Leaf)) { throw "待发布文件不存在：$asset" }
+          }
+          & gh release view $env:GITHUB_REF_NAME --repo $env:GITHUB_REPOSITORY *> $null
+          if ($LASTEXITCODE -eq 0) {
+            & gh release upload $env:GITHUB_REF_NAME @assets --repo $env:GITHUB_REPOSITORY --clobber
+          } else {
+            & gh release create $env:GITHUB_REF_NAME @assets --repo $env:GITHUB_REPOSITORY --title $env:GITHUB_REF_NAME --generate-notes
+          }
+          if ($LASTEXITCODE -ne 0) { throw "GitHub Release 发布失败：$LASTEXITCODE" }
