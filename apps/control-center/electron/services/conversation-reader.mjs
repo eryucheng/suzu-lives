@@ -63,6 +63,14 @@ function candidateProjectKeys(projectRoot) {
   ].map(clean).filter(Boolean))];
 }
 
+/** Returns every legacy and current Claude transcript directory for one project. */
+export function claudeProjectDirectoryCandidates({ projectRoot, homeDirectory = os.homedir() } = {}) {
+  const root = clean(projectRoot);
+  if (!root) return [];
+  const projectsRoot = path.join(path.resolve(clean(homeDirectory) || os.homedir()), ".claude", "projects");
+  return candidateProjectKeys(path.resolve(root)).map((key) => path.join(projectsRoot, key));
+}
+
 async function directoryExists(fsOps, targetPath) {
   try {
     return (await fsOps.stat(targetPath)).isDirectory();
@@ -120,6 +128,10 @@ function publicContact(contact) {
     id: clean(contact.id),
     name: clean(contact.name),
     agentId: clean(contact.agentId),
+    hidden: contact.hidden === true,
+    muted: contact.muted === true,
+    pinned: contact.pinned === true,
+    unread: contact.unread === true,
     ...(clean(contact.updatedAt) ? { updatedAt: clean(contact.updatedAt) } : {}),
   };
 }
@@ -145,10 +157,8 @@ export async function locateClaudeProjectDirectory({
   const root = clean(projectRoot);
   if (!root) return { status: "missing-project", projectRoot: "", projectDir: "", exists: false };
   const absoluteRoot = path.resolve(root);
-  const projectsRoot = path.join(homeDirectory, ".claude", "projects");
-  const candidates = candidateProjectKeys(absoluteRoot);
-  for (const key of candidates) {
-    const directory = path.join(projectsRoot, key);
+  const candidates = claudeProjectDirectoryCandidates({ projectRoot: absoluteRoot, homeDirectory });
+  for (const directory of candidates) {
     if (await directoryExists(fsOps, directory)) {
       return { status: "ready", projectRoot: absoluteRoot, projectDir: directory, exists: true };
     }
@@ -156,7 +166,7 @@ export async function locateClaudeProjectDirectory({
   return {
     status: "ready",
     projectRoot: absoluteRoot,
-    projectDir: path.join(projectsRoot, encodeClaudeProjectKey(absoluteRoot)),
+    projectDir: candidates[0] || path.join(path.resolve(homeDirectory), ".claude", "projects", encodeClaudeProjectKey(absoluteRoot)),
     exists: false,
   };
 }
@@ -294,6 +304,15 @@ export function createConversationReader({
 
   const context = async () => {
     const currentCatalog = await catalog();
+    const contactsVersion = JSON.stringify(currentCatalog.contacts.map((contact) => [
+      clean(contact?.id),
+      clean(contact?.name),
+      clean(contact?.agentId),
+      contact?.hidden === true,
+      contact?.pinned === true,
+      contact?.unread === true,
+      contact?.muted === true,
+    ]));
     if (!currentCatalog.projectRoot) {
       return {
         status: "missing",
@@ -310,7 +329,7 @@ export function createConversationReader({
         fileName: "",
         filePath: "",
         records: [],
-        version: `missing:${selectionVersion}`,
+        version: `missing:${selectionVersion}:${contactsVersion}`,
         pollIntervalMs: 2000,
       };
     }
@@ -332,7 +351,7 @@ export function createConversationReader({
         fileName: "",
         filePath: "",
         records: [],
-        version: `${selectionVersion}:${session?.id || "none"}:0:${catalogVersion}`,
+        version: `${selectionVersion}:${session?.id || "none"}:0:${catalogVersion}:${contactsVersion}`,
         pollIntervalMs: 2000,
         updatedAt: new Date().toISOString(),
       };
@@ -361,7 +380,7 @@ export function createConversationReader({
         fileName: path.basename(session.filePath),
         filePath: session.filePath,
         records: [],
-        version: `${selectionVersion}:${session.id}:missing:${catalogVersion}`,
+        version: `${selectionVersion}:${session.id}:missing:${catalogVersion}:${contactsVersion}`,
         pollIntervalMs: 2000,
         updatedAt: new Date().toISOString(),
       };
@@ -381,7 +400,7 @@ export function createConversationReader({
       fileName: path.basename(session.filePath),
       filePath: session.filePath,
       records: [...tail.records],
-      version: `${selectionVersion}:${session.id}:${tail.version}:${catalogVersion}`,
+      version: `${selectionVersion}:${session.id}:${tail.version}:${catalogVersion}:${contactsVersion}`,
       scannedRecords: tail.scannedRecords,
       malformedLines: tail.malformedLines,
       pollIntervalMs: 2000,
@@ -426,13 +445,34 @@ export function createConversationReader({
 
   const selectContact = async ({ id } = {}) => {
     if (!contactProjectsService?.select) throw new ConversationReaderError("当前版本未接入联系人项目服务。 ");
-    await contactProjectsService.select({ id });
+    const selected = await contactProjectsService.select({ id });
+    if (selected?.activeContact?.unread === true && contactProjectsService.updatePresentation) {
+      await contactProjectsService.updatePresentation({ id: selected.activeContact.id, unread: false });
+    }
     return snapshot();
   };
 
   const setPreferredContact = async ({ id } = {}) => {
     if (!contactProjectsService?.setPreferred) throw new ConversationReaderError("当前版本未接入联系人项目服务。 ");
     await contactProjectsService.setPreferred({ id });
+    return snapshot();
+  };
+
+  const renameContact = async ({ id, name } = {}) => {
+    if (!contactProjectsService?.rename) throw new ConversationReaderError("当前版本未接入联系人项目服务。 ");
+    await contactProjectsService.rename({ id, name });
+    return snapshot();
+  };
+
+  const updateContactPresentation = async (value = {}) => {
+    if (!contactProjectsService?.updatePresentation) throw new ConversationReaderError("当前版本未接入联系人项目服务。 ");
+    await contactProjectsService.updatePresentation(value);
+    return snapshot();
+  };
+
+  const removeContact = async (value = {}) => {
+    if (!contactProjectsService?.remove) throw new ConversationReaderError("当前版本未接入联系人项目服务。 ");
+    await contactProjectsService.remove(value);
     return snapshot();
   };
 
@@ -611,5 +651,5 @@ export function createConversationReader({
     };
   };
 
-  return { compactorSnapshot, contactIdForSession, context, create, createContact, ensureActiveSession, focus, resolveCompactorSession, resolveCompactorSessionForRuntime, resolveContactSession, search, selectContact, setPreferredContact, snapshot };
+  return { compactorSnapshot, contactIdForSession, context, create, createContact, ensureActiveSession, focus, removeContact, renameContact, resolveCompactorSession, resolveCompactorSessionForRuntime, resolveContactSession, search, selectContact, setPreferredContact, snapshot, updateContactPresentation };
 }

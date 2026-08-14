@@ -59,6 +59,12 @@ test("reader keeps each contact bound to its stored native Claude Code session",
   assert.equal(snapshot.sessions.find((session) => session.id === sessionId)?.title, "这是固定联系人的原生会话");
   assert.equal(snapshot.sessions.some((session) => session.id === extraSessionId), false);
   assert.equal(snapshot.messages.at(-1).blocks[0].text, "已经在 Claude 官方目录中。");
+  const renamed = await reader.renameContact({ id: contact.activeContact.id, name: "新备注" });
+  assert.equal(renamed.activeContact.id, contact.activeContact.id);
+  assert.equal(renamed.activeContact.name, "新备注");
+  assert.equal(renamed.activeSessionId, sessionId);
+  assert.equal(renamed.messages.at(-1).blocks[0].text, "已经在 Claude 官方目录中。");
+  assert.notEqual(renamed.version, snapshot.version);
   await assert.rejects(reader.create(), /只保留一个 Claude 会话/u);
 });
 
@@ -109,6 +115,38 @@ test("reader keeps each contact's native Claude history inside its own project",
   assert.equal(restored.activeContact.name, "小苏");
   assert.equal(restored.activeSessionId, sessionId);
   assert.notEqual(secondContact.activeContact.id, created.activeContact.id);
+});
+
+test("reader exposes contact presentation state and clears an unread contact when it is opened", async () => {
+  const root = await temporaryDirectory("suzu-reader-contact-presentation-");
+  const contactsRoot = path.join(root, "contacts");
+  await fs.mkdir(contactsRoot, { recursive: true });
+  let settings = { contactsRoot, projectRoot: "" };
+  const contactProjectsService = createContactProjectsService({
+    settingsService: { load: () => settings, save: (next) => { settings = next; return settings; } },
+  });
+  const first = await contactProjectsService.create({ name: "小苏" });
+  await contactProjectsService.create({ name: "工作" });
+  await contactProjectsService.updatePresentation({ id: first.activeContact.id, pinned: true, unread: true, muted: true, hidden: true });
+  const reader = createConversationReader({
+    contactProjectsService,
+    settingsService: { load: () => settings, save: (next) => { settings = next; return settings; } },
+    homeDirectory: path.join(root, "home"),
+  });
+
+  const beforeOpen = await reader.snapshot();
+  assert.equal(beforeOpen.contacts[0].id, first.activeContact.id);
+  assert.deepEqual(
+    { hidden: beforeOpen.contacts[0].hidden, pinned: beforeOpen.contacts[0].pinned, unread: beforeOpen.contacts[0].unread, muted: beforeOpen.contacts[0].muted },
+    { hidden: true, pinned: true, unread: true, muted: true },
+  );
+
+  const opened = await reader.selectContact({ id: first.activeContact.id });
+  assert.equal(opened.activeContact.id, first.activeContact.id);
+  assert.deepEqual(
+    { hidden: opened.activeContact.hidden, pinned: opened.activeContact.pinned, unread: opened.activeContact.unread, muted: opened.activeContact.muted },
+    { hidden: true, pinned: true, unread: false, muted: true },
+  );
 });
 
 test("reader lists every contact for the compactor without changing the active contact", async () => {

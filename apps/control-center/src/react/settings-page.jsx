@@ -6,6 +6,7 @@ import "./settings-page.css";
 const SETTINGS_TABS = [
   { label: "常规", value: "general" },
   { label: "数据", value: "data" },
+  { label: "隐私", value: "privacy" },
 ];
 
 function cleanText(value) {
@@ -46,7 +47,7 @@ function DirectoryCard({ action, configured, description, onOpen, onSelect, pend
 
 function GeneralSettings({ onOpenOnboarding, onThemeChange, pending, settings }) {
   const completed = settings.onboardingCompleted === true;
-  const theme = settings.theme === "light" ? "light" : "dark";
+  const theme = settings.theme === "dark" ? "dark" : "light";
   return (
     <div className="settings-card-stack">
       <SettingCard>
@@ -139,9 +140,43 @@ function DataSettings({ onChangeDataLocation, onOpenDirectory, onRemovePreviousC
   );
 }
 
+function PrivacySettings({ contactsSnapshot, loading, onRestoreContact, pending }) {
+  const contacts = Array.isArray(contactsSnapshot?.contacts) ? contactsSnapshot.contacts : [];
+  const hiddenContacts = contacts.filter((contact) => contact?.hidden === true);
+  const error = cleanText(contactsSnapshot?.error);
+  return (
+    <div className="settings-card-stack">
+      <SettingCard className="settings-privacy-card">
+        <div className="settings-card__copy">
+          <span className="settings-card__eyebrow">PRIVACY</span>
+          <h2>隐藏联系人</h2>
+          <p>隐藏只会让联系人不再出现在对话页列表中；消息、主动关心、记忆和其他资料都不会被删除或停用。</p>
+        </div>
+        {loading ? <p className="settings-privacy-card__status">正在读取隐藏联系人…</p> : null}
+        {!loading && error ? <p className="settings-privacy-card__status is-error">无法读取隐藏联系人：{error}</p> : null}
+        {!loading && !error && hiddenContacts.length ? (
+          <div className="settings-privacy-contact-list">
+            {hiddenContacts.map((contact) => {
+              const id = cleanText(contact?.id);
+              const name = cleanText(contact?.name) || "未命名联系人";
+              return (
+                <div className="settings-privacy-contact" key={id || name}>
+                  <div><strong>{name}</strong><span>已从对话页隐藏</span></div>
+                  <Button className="settings-action-button" disabled={Boolean(pending) || !id} onClick={() => onRestoreContact(id)} size="md" variant="secondary">显示联系人</Button>
+                </div>
+              );
+            })}
+          </div>
+        ) : null}
+        {!loading && !error && !hiddenContacts.length ? <p className="settings-privacy-card__status">没有隐藏的联系人。</p> : null}
+      </SettingCard>
+    </div>
+  );
+}
+
 export function SettingsPage({ actions = {}, snapshot = {} }) {
   const settings = snapshot.settings || {};
-  const tab = snapshot.tab === "data" ? "data" : "general";
+  const tab = SETTINGS_TABS.some((item) => item.value === snapshot.tab) ? snapshot.tab : "general";
   const [pending, setPending] = useState("");
   const run = async (key, action) => {
     if (!action || pending) return;
@@ -155,9 +190,9 @@ export function SettingsPage({ actions = {}, snapshot = {} }) {
 
   return (
     <div className="settings-react-page">
-      <PageHeader eyebrow="SETTINGS" subtitle="调整软件外观与数据存储。" title="设置" />
+      <PageHeader eyebrow="SETTINGS" subtitle="调整软件外观、数据存储与联系人隐私。" title="设置" />
       <Tabs active={tab} className="settings-page-tabs" items={SETTINGS_TABS} onChange={actions.setTab} size="md" />
-      <section className="settings-page-body" aria-label={tab === "data" ? "数据设置" : "常规设置"}>
+      <section className="settings-page-body" aria-label={tab === "data" ? "数据设置" : tab === "privacy" ? "隐私设置" : "常规设置"}>
         {tab === "data" ? (
           <DataSettings
             onChangeDataLocation={() => run("data-location", actions.changeDataLocation)}
@@ -166,6 +201,13 @@ export function SettingsPage({ actions = {}, snapshot = {} }) {
             onSelectWorkspace={() => run("workspace", actions.selectWorkspace)}
             pending={pending}
             settings={settings}
+          />
+        ) : tab === "privacy" ? (
+          <PrivacySettings
+            contactsSnapshot={snapshot.contacts}
+            loading={snapshot.contactsLoading === true}
+            onRestoreContact={(id) => run(`restore-${id}`, () => actions.restoreHiddenContact?.(id))}
+            pending={pending}
           />
         ) : (
           <GeneralSettings

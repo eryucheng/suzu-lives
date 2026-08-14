@@ -9,6 +9,13 @@ const SIGNAL_TRAVEL_SPEED = 0.0005;
 const FOCUSED_GROUP_IDLE_MIN_DURATION = 620;
 const FOCUSED_GROUP_IDLE_MAX_DURATION = 1_600;
 const FOCUSED_NODE_START_MAX_DELAY = 850;
+const BRAIN_AWAKENING_DURATION = 2_000;
+const BRAIN_AWAKENING_NODE_START = 140;
+const BRAIN_AWAKENING_NODE_STAGGER = 620;
+const BRAIN_AWAKENING_NODE_DURATION = 360;
+const BRAIN_AWAKENING_EDGE_START = 620;
+const BRAIN_AWAKENING_EDGE_STAGGER = 440;
+const BRAIN_AWAKENING_EDGE_DURATION = 440;
 function clamp(value, minimum, maximum) {
   return Math.min(maximum, Math.max(minimum, Number(value)));
 }
@@ -241,6 +248,37 @@ function hashUnit(value, salt = "") {
   return stableHash(`${salt}\u001f${value}`) / 0xffff_ffff;
 }
 
+function easeOutCubic(progress) {
+  const clamped = clamp(progress, 0, 1);
+  return 1 - (1 - clamped) ** 3;
+}
+
+function nodeAwakeningTiming(node) {
+  const id = String(node?.id || node?.title || "node");
+  const tierDelay = node?.visualTier === "major" ? 0 : node?.visualTier === "state" ? 110 : 230;
+  return {
+    start: BRAIN_AWAKENING_NODE_START + tierDelay + hashUnit(id, "brain-awakening-node") * BRAIN_AWAKENING_NODE_STAGGER,
+    duration: BRAIN_AWAKENING_NODE_DURATION + hashUnit(id, "brain-awakening-node-duration") * 120,
+  };
+}
+
+function nodeAwakeningProgress(node, age) {
+  const timing = nodeAwakeningTiming(node);
+  return easeOutCubic((age - timing.start) / timing.duration);
+}
+
+function edgeAwakeningProgress(edge, source, target, age) {
+  const sourceTiming = nodeAwakeningTiming(source);
+  const targetTiming = nodeAwakeningTiming(target);
+  const id = String(edge?.id || `${edge?.source || "source"}:${edge?.target || "target"}`);
+  const start = Math.max(
+    BRAIN_AWAKENING_EDGE_START + hashUnit(id, "brain-awakening-edge") * BRAIN_AWAKENING_EDGE_STAGGER,
+    sourceTiming.start + sourceTiming.duration * 0.66,
+    targetTiming.start + targetTiming.duration * 0.66,
+  );
+  return easeOutCubic((age - start) / BRAIN_AWAKENING_EDGE_DURATION);
+}
+
 function evidenceStarPosition(parent, source, index, total) {
   const sourceId = String(source?.id || source?.external_id || index);
   const count = Math.max(1, total);
@@ -444,7 +482,6 @@ export function createMemoryBrainView(canvas, graph, {
   const edges = Array.isArray(graph?.edges) ? graph.edges : [];
   const nodeById = new Map(nodes.map((node) => [node.id, node]));
   const adjacency = new Map(nodes.map((node) => [node.id, []]));
-  const reducedMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches || false;
   for (const [index, edge] of edges.entries()) {
     adjacency.get(edge.source)?.push({ edge, index, neighborId: edge.target });
     adjacency.get(edge.target)?.push({ edge, index, neighborId: edge.source });
@@ -455,11 +492,11 @@ export function createMemoryBrainView(canvas, graph, {
   let pixelRatio = 1;
   const restingRotationX = -0.08;
   const restingRotationY = 0.42;
-  let rotationX = reducedMotion ? restingRotationX : -0.17;
-  let rotationY = reducedMotion ? restingRotationY : 0.72;
+  let rotationX = -0.17;
+  let rotationY = 0.72;
   let targetRotationX = restingRotationX;
   let targetRotationY = restingRotationY;
-  let zoom = reducedMotion ? 1 : 0.87;
+  let zoom = 0.87;
   let targetZoom = 1;
   let selectedId = "";
   let selectedEvidenceId = "";
@@ -475,6 +512,7 @@ export function createMemoryBrainView(canvas, graph, {
   let focusedGroup = null;
   let focusedGroupAge = 0;
   let lastAmbientFrameAt = performance.now();
+  let awakeningStartedAt = null;
 
   function resize() {
     const bounds = canvas.getBoundingClientRect();
@@ -484,6 +522,11 @@ export function createMemoryBrainView(canvas, graph, {
     canvas.width = Math.round(width * pixelRatio);
     canvas.height = Math.round(height * pixelRatio);
     context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
+  }
+
+  function awakeningAge(time) {
+    if (awakeningStartedAt === null) awakeningStartedAt = time;
+    return Math.max(0, time - awakeningStartedAt);
   }
 
   const observer = new ResizeObserver(resize);
@@ -528,10 +571,6 @@ export function createMemoryBrainView(canvas, graph, {
   }
 
   function updateAmbientState(time) {
-    if (reducedMotion) {
-      lastAmbientFrameAt = time;
-      return;
-    }
     const elapsed = Math.min(80, Math.max(0, time - lastAmbientFrameAt));
     lastAmbientFrameAt = time;
     if (selectedId) {
@@ -553,7 +592,6 @@ export function createMemoryBrainView(canvas, graph, {
   }
 
   function ambientActivityFor(nodeOrEdgeId, kind) {
-    if (reducedMotion) return { progress: 0, strength: 0, direction: 1, tailLength: 0 };
     const group = selectedId ? focusedGroup : ambientGroup;
     if (!group) return { progress: 0, strength: 0, direction: 1, tailLength: 0 };
     const collection = kind === "edge" ? group.edgeIndices : group.nodeIds;
@@ -575,6 +613,29 @@ export function createMemoryBrainView(canvas, graph, {
       x: inverse * inverse * start.x + 2 * inverse * progress * control.x + progress * progress * end.x,
       y: inverse * inverse * start.y + 2 * inverse * progress * control.y + progress * progress * end.y,
     };
+  }
+
+  function strokeConnectionPath(projected, progress = 1) {
+    const reveal = clamp(progress, 0, 1);
+    if (reveal >= 0.999) {
+      context.beginPath();
+      context.moveTo(projected.start.x, projected.start.y);
+      context.quadraticCurveTo(
+        projected.control.x,
+        projected.control.y,
+        projected.end.x,
+        projected.end.y,
+      );
+      return;
+    }
+    const segmentCount = Math.max(2, Math.ceil(18 * reveal));
+    const start = quadraticPoint(projected.start, projected.control, projected.end, 0);
+    context.beginPath();
+    context.moveTo(start.x, start.y);
+    for (let index = 1; index <= segmentCount; index += 1) {
+      const point = quadraticPoint(projected.start, projected.control, projected.end, reveal * (index / segmentCount));
+      context.lineTo(point.x, point.y);
+    }
   }
 
   function drawSignalTail(projected, activity) {
@@ -635,7 +696,7 @@ export function createMemoryBrainView(canvas, graph, {
     };
   }
 
-  function drawConnections() {
+  function drawConnections(awakeningAge) {
     context.save();
     // 纤维重叠不能彼此相加烧成白色，否则汇聚的大神经元会被线盖住。
     context.globalCompositeOperation = "source-over";
@@ -657,30 +718,33 @@ export function createMemoryBrainView(canvas, graph, {
       const structural = mode === "structural";
       const projected = edgeProjection(edge);
       if (!projected) continue;
-      const alpha = direct ? 0.78 : structural ? 0.17 : 0.075 + ambientStrength * 0.2;
-      context.lineWidth = direct ? 1.48 : structural ? 0.8 : 0.62 + ambientStrength * 0.22;
+      const reveal = edgeAwakeningProgress(
+        edge,
+        nodeById.get(edge.source),
+        nodeById.get(edge.target),
+        awakeningAge,
+      );
+      if (reveal <= 0) continue;
+      // 聚焦某个节点时，直接关联线只改变可见范围，不改变静态纤维的深浅。
+      // 它们和全景的结构线共用底色，脉冲仍在其上单独绘制。
+      const stableRelation = direct || structural;
+      const alpha = (stableRelation ? 0.17 : 0.075 + ambientStrength * 0.2) * reveal;
+      context.lineWidth = stableRelation ? 0.8 : 0.62 + ambientStrength * 0.22;
       context.strokeStyle = relationColor(edge, alpha);
       if (ambient) {
         context.shadowColor = relationColor(edge, 0.55);
         context.shadowBlur = 6 + ambientStrength * 5;
       }
-      context.beginPath();
-      context.moveTo(projected.start.x, projected.start.y);
-      context.quadraticCurveTo(
-        projected.control.x,
-        projected.control.y,
-        projected.end.x,
-        projected.end.y,
-      );
+      strokeConnectionPath(projected, reveal);
       context.stroke();
       context.shadowBlur = 0;
-      // 选中时保留稳定的关系线；只有环境活动才产生一次由源节点传向邻点的短尾迹。
-      if (ambientStrength > 0 && (ambient || direct)) drawSignalTail(projected, ambientActivity);
+      // 全景环境线和选中节点的直接关联线都复用同一条脉冲尾迹。
+      if (reveal >= 0.985 && ambientStrength > 0 && (ambient || direct)) drawSignalTail(projected, ambientActivity);
     }
     context.restore();
   }
 
-  function drawNodes(time) {
+  function drawNodes(time, awakeningAge) {
     const projectedNodes = nodes.map((node) => ({
       node,
       projected: project(node.position),
@@ -692,6 +756,8 @@ export function createMemoryBrainView(canvas, graph, {
     context.globalCompositeOperation = "source-over";
     for (const value of projectedNodes) {
       const { node, projected } = value;
+      const reveal = nodeAwakeningProgress(node, awakeningAge);
+      if (reveal <= 0) continue;
       const selected = node.id === selectedId;
       const direct = directIds.has(node.id);
       const depth = clamp((projected.z + 1.2) / 2.4, 0, 1);
@@ -703,7 +769,8 @@ export function createMemoryBrainView(canvas, graph, {
         : 1;
       const radius = (selected ? baseSize * 1.72 : direct ? baseSize * 1.3 : baseSize)
         * breathing
-        * clamp(projected.scale / 150, 0.76, 1.34);
+        * clamp(projected.scale / 150, 0.76, 1.34)
+        * (0.42 + reveal * 0.58);
       let alpha = (
         node.visualTier === "minor"
           ? 0.56
@@ -725,52 +792,55 @@ export function createMemoryBrainView(canvas, graph, {
       if (node.visualTier === "major" && !selected) {
         alpha = Math.max(alpha, 0.96);
       }
+      alpha *= reveal;
       if (ambient) {
-        context.fillStyle = `rgba(${color}, ${0.025 + ambientStrength * 0.045})`;
-        context.shadowColor = `rgba(${color}, 0.7)`;
-        context.shadowBlur = 13 + ambientStrength * 9;
+        context.fillStyle = `rgba(${color}, ${(0.025 + ambientStrength * 0.045) * reveal})`;
+        context.shadowColor = `rgba(${color}, ${0.7 * reveal})`;
+        context.shadowBlur = (13 + ambientStrength * 9) * (0.35 + reveal * 0.65);
         context.beginPath();
-        context.arc(projected.x, projected.y, Math.max(2.8, radius + 2.7), 0, TAU);
+        context.arc(projected.x, projected.y, Math.max(2.8 * reveal, radius + 2.7 * reveal), 0, TAU);
         context.fill();
       }
       if (node.visualTier === "major") {
-        context.strokeStyle = `rgba(${color}, ${selectedId && !selected && !direct ? 0.07 : 0.29 + depth * 0.17})`;
+        context.strokeStyle = `rgba(${color}, ${(selectedId && !selected && !direct ? 0.07 : 0.29 + depth * 0.17) * reveal})`;
         context.lineWidth = 0.8;
         context.beginPath();
-        context.arc(projected.x, projected.y, radius + 2.55, 0, TAU);
+        context.arc(projected.x, projected.y, radius + 2.55 * reveal, 0, TAU);
         context.stroke();
-        context.strokeStyle = `rgba(${color}, ${selectedId && !selected && !direct ? 0.035 : 0.15 + depth * 0.1})`;
+        context.strokeStyle = `rgba(${color}, ${(selectedId && !selected && !direct ? 0.035 : 0.15 + depth * 0.1) * reveal})`;
         context.beginPath();
-        context.arc(projected.x, projected.y, radius + 4.6, 0, TAU);
+        context.arc(projected.x, projected.y, radius + 4.6 * reveal, 0, TAU);
         context.stroke();
       } else if (node.visualTier === "state") {
-        context.strokeStyle = `rgba(${color}, ${selectedId && !selected && !direct ? 0.05 : 0.22})`;
+        context.strokeStyle = `rgba(${color}, ${(selectedId && !selected && !direct ? 0.05 : 0.22) * reveal})`;
         context.lineWidth = 0.65;
         context.beginPath();
-        context.arc(projected.x, projected.y, radius + 2.2, 0, TAU);
+        context.arc(projected.x, projected.y, radius + 2.2 * reveal, 0, TAU);
         context.stroke();
       }
       context.fillStyle = `rgba(${color}, ${alpha})`;
-      context.shadowColor = `rgba(${color}, ${selected || direct ? 0.95 : node.visualTier === "minor" ? 0.58 : node.visualTier === "major" ? 0.54 : 0.4})`;
-      context.shadowBlur = selected ? 25 : direct ? 16 : ambient ? 13 : node.visualTier === "minor" ? 5 : node.visualTier === "major" ? 9 : 7;
+      context.shadowColor = `rgba(${color}, ${(selected || direct ? 0.95 : node.visualTier === "minor" ? 0.58 : node.visualTier === "major" ? 0.54 : 0.4) * reveal})`;
+      context.shadowBlur = (selected ? 25 : direct ? 16 : ambient ? 13 : node.visualTier === "minor" ? 5 : node.visualTier === "major" ? 9 : 7) * (0.35 + reveal * 0.65);
       context.beginPath();
       context.arc(projected.x, projected.y, Math.max(node.visualTier === "minor" ? 0.58 : 1, radius), 0, TAU);
       context.fill();
       if (selected) {
-        context.strokeStyle = "rgba(187, 255, 241, .82)";
+        context.strokeStyle = `rgba(187, 255, 241, ${0.82 * reveal})`;
         context.lineWidth = 1;
         context.beginPath();
-        context.arc(projected.x, projected.y, radius + 8 + (reducedMotion ? 0 : Math.sin(time * 0.003) * 2), 0, TAU);
+        context.arc(projected.x, projected.y, radius + 8 * reveal + Math.sin(time * 0.003) * 2, 0, TAU);
         context.stroke();
       }
-      hitTargets.push({
-        kind: "node",
-        id: node.id,
-        x: projected.x,
-        y: projected.y,
-        radius: Math.max(node.visualTier === "major" ? 14 : node.visualTier === "state" ? 10 : 7, radius + 5),
-        z: projected.z,
-      });
+      if (reveal >= 0.72) {
+        hitTargets.push({
+          kind: "node",
+          id: node.id,
+          x: projected.x,
+          y: projected.y,
+          radius: Math.max(node.visualTier === "major" ? 14 : node.visualTier === "state" ? 10 : 7, radius + 5),
+          z: projected.z,
+        });
+      }
     }
     context.restore();
   }
@@ -783,7 +853,7 @@ export function createMemoryBrainView(canvas, graph, {
       const projected = project(evidence.position);
       if (!projected.visible) continue;
       const selected = evidence.id === selectedEvidenceId;
-      const twinkle = reducedMotion ? 0 : evidenceTwinkle(evidence.id, time);
+      const twinkle = evidenceTwinkle(evidence.id, time);
       const radius = Math.max(1.15, evidence.radius * clamp(projected.scale / 150, 0.76, 1.34));
       const glowRadius = selected ? radius + 7.5 : radius + 3.5;
       context.fillStyle = `rgba(232, 251, 255, ${selected ? 0.25 : 0.035 + twinkle * 0.055})`;
@@ -939,8 +1009,9 @@ export function createMemoryBrainView(canvas, graph, {
       return;
     }
     frame = requestAnimationFrame(render);
+    const age = awakeningAge(time);
     updateAmbientState(time);
-    if (!reducedMotion && !selectedId && !pointerDown && time - lastInteractionAt > 2_100) {
+    if (age >= BRAIN_AWAKENING_DURATION && !selectedId && !pointerDown && time - lastInteractionAt > BRAIN_AWAKENING_DURATION) {
       targetRotationY += 0.00048;
     }
     rotationX += (targetRotationX - rotationX) * 0.085;
@@ -948,8 +1019,8 @@ export function createMemoryBrainView(canvas, graph, {
     zoom += (targetZoom - zoom) * 0.085;
     context.clearRect(0, 0, width, height);
     drawBrain();
-    drawConnections();
-    drawNodes(time);
+    drawConnections(age);
+    drawNodes(time, age);
     drawEvidenceStars(time);
   }
   frame = requestAnimationFrame(render);

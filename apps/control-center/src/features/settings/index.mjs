@@ -33,7 +33,7 @@ export function renderManagedAgentRuntimeSettings({ state }) {
 
 function renderGeneral({ state }) {
   const settings = state.settings || {};
-  return `<section class="settings-list">${settingRow("首次设置", settings.onboardingCompleted === true ? "已经完成初次设置；需要时可以重新查看文字模型、多模态 API 和联系人步骤。" : "还没有完成初次设置；可以继续配置文字模型并创建联系人。", settings.onboardingCompleted === true ? "已完成" : "待完成", '<button class="secondary-button" data-open-onboarding>打开引导</button>')}${settingRow("外观", "选择软件的显示风格，会自动保留到下次打开。", `<span class="theme-options"><button class="theme-choice ${settings.theme === "light" ? "active" : ""}" data-theme-choice="light">浅色</button><button class="theme-choice ${settings.theme !== "light" ? "active" : ""}" data-theme-choice="dark">深色</button></span>`, "", true)}</section>`;
+  return `<section class="settings-list">${settingRow("首次设置", settings.onboardingCompleted === true ? "已经完成初次设置；需要时可以重新查看文字模型、多模态 API 和联系人步骤。" : "还没有完成初次设置；可以继续配置文字模型并创建联系人。", settings.onboardingCompleted === true ? "已完成" : "待完成", '<button class="secondary-button" data-open-onboarding>打开引导</button>')}${settingRow("外观", "选择软件的显示风格，会自动保留到下次打开。", `<span class="theme-options"><button class="theme-choice ${settings.theme !== "dark" ? "active" : ""}" data-theme-choice="light">浅色</button><button class="theme-choice ${settings.theme === "dark" ? "active" : ""}" data-theme-choice="dark">深色</button></span>`, "", true)}</section>`;
 }
 
 function renderData({ state }) {

@@ -83,7 +83,6 @@ export function ConversationCallProvider({ active = false, api = null, snapshot 
   const apiRef = useRef(api);
   const audioRef = useRef(null);
   const callRef = useRef(null);
-  const partialRenderRef = useRef({ lastRenderAt: 0, pending: null, timer: null });
   const playNextAudioRef = useRef(() => {});
   const snapshotRef = useRef(snapshot);
 
@@ -107,13 +106,6 @@ export function ConversationCallProvider({ active = false, api = null, snapshot 
   }, [replaceCall]);
 
   const isCurrentCall = useCallback((token) => callRef.current?.token === token, []);
-
-  const clearPartialTranscriptRender = useCallback(() => {
-    const state = partialRenderRef.current;
-    if (state.timer) window.clearTimeout(state.timer);
-    state.timer = null;
-    state.pending = null;
-  }, []);
 
   const stopPlayback = useCallback((audio = audioRef.current) => {
     if (!audio) return;
@@ -163,26 +155,6 @@ export function ConversationCallProvider({ active = false, api = null, snapshot 
   }, [patchCall]);
 
   playNextAudioRef.current = playNextAudio;
-
-  const schedulePartialTranscriptRender = useCallback((token, text) => {
-    const state = partialRenderRef.current;
-    const render = () => {
-      state.timer = null;
-      const pending = state.pending;
-      state.pending = null;
-      if (!pending || !isCurrentCall(pending.token)) return;
-      state.lastRenderAt = Date.now();
-      patchCall({ partialTranscript: pending.text });
-    };
-    const now = Date.now();
-    if (now - state.lastRenderAt >= 120) {
-      state.pending = { token, text };
-      render();
-      return;
-    }
-    state.pending = { token, text };
-    if (!state.timer) state.timer = window.setTimeout(render, 120 - (now - state.lastRenderAt));
-  }, [isCurrentCall, patchCall]);
 
   const receiveAudio = useCallback(async (event) => {
     const current = callRef.current;
@@ -332,14 +304,13 @@ export function ConversationCallProvider({ active = false, api = null, snapshot 
     } catch (error) {
       if (isCurrentCall(token)) patchCall({ error: `无法挂断通话：${error?.message || error}` });
     } finally {
-      clearPartialTranscriptRender();
       await disposeAudio(token);
       if (isCurrentCall(token)) replaceCall(null);
     }
     return true;
-  }, [clearPartialTranscriptRender, disposeAudio, isCurrentCall, patchCall, replaceCall]);
+  }, [disposeAudio, isCurrentCall, patchCall, replaceCall]);
 
-  const start = useCallback(async () => {
+  const start = useCallback(async ({ initiator = "user" } = {}) => {
     const existing = callRef.current;
     if (existing) return true;
     const callApi = apiRef.current?.conversation?.call;
@@ -347,6 +318,7 @@ export function ConversationCallProvider({ active = false, api = null, snapshot 
       setStartError("当前版本没有加载实时语音通话。");
       return false;
     }
+    const callInitiator = cleanCallText(initiator).toLowerCase() === "agent" ? "agent" : "user";
     const token = Symbol("conversation-call");
     let audio;
     try {
@@ -360,18 +332,18 @@ export function ConversationCallProvider({ active = false, api = null, snapshot 
     const identity = callIdentity(snapshotRef.current);
     replaceCall({
       ...identity,
+      dialing: true,
       ending: false,
       error: "",
       id: "",
+      initiator: callInitiator,
       label: "正在接通…",
-      lastTranscript: "",
-      partialTranscript: "",
       phase: "connecting",
       token,
     });
     setStartError("");
     try {
-      const result = await callApi.start();
+      const result = await callApi.start({ initiator: callInitiator });
       if (!isCurrentCall(token)) {
         const returnedCallId = cleanCallText(result?.callId);
         if (returnedCallId && typeof callApi.stop === "function") await callApi.stop({ callId: returnedCallId }).catch(() => undefined);
@@ -387,6 +359,14 @@ export function ConversationCallProvider({ active = false, api = null, snapshot 
       await startMicrophone(token, callId);
       if (!isCurrentCall(token)) return false;
       patchCall({ phase: "listening", label: "正在听你说…" });
+      try {
+        await callApi.open?.({ callId });
+      } catch (error) {
+        if (isCurrentCall(token)) patchCall({
+          dialing: false,
+          error: `无法开始通话问候：${error?.message || error}`,
+        });
+      }
       return true;
     } catch (error) {
       const current = callRef.current;
@@ -413,22 +393,13 @@ export function ConversationCallProvider({ active = false, api = null, snapshot 
       }));
       return;
     }
-    if (event.type === "call-transcript") {
-      const text = cleanCallText(event.text);
-      if (event.final) {
-        clearPartialTranscriptRender();
-        patchCall({ lastTranscript: text, partialTranscript: "" });
-      } else {
-        schedulePartialTranscriptRender(token, text);
-      }
-      return;
-    }
     if (event.type === "call-clear-audio") {
       stopPlayback();
-      patchCall({ phase: "listening", label: "正在听你说…" });
+      patchCall({ dialing: false, phase: "listening", label: "正在听你说…" });
       return;
     }
     if (event.type === "call-audio") {
+      patchCall({ dialing: false });
       void receiveAudio(event);
       return;
     }
@@ -442,15 +413,18 @@ export function ConversationCallProvider({ active = false, api = null, snapshot 
       return;
     }
     if (event.type === "call-error") {
-      patchCall({ phase: "error", error: cleanCallText(event.message) || "通话出了点问题。" });
+      patchCall({
+        dialing: false,
+        phase: "error",
+        error: cleanCallText(event.message) || "通话出了点问题。",
+      });
       return;
     }
     if (event.type === "call-ended") {
-      clearPartialTranscriptRender();
       void disposeAudio(token);
       if (isCurrentCall(token)) replaceCall(null);
     }
-  }, [clearPartialTranscriptRender, disposeAudio, isCurrentCall, patchCall, replaceCall, schedulePartialTranscriptRender, stopPlayback, receiveAudio]);
+  }, [disposeAudio, isCurrentCall, patchCall, replaceCall, stopPlayback, receiveAudio]);
 
   useEffect(() => {
     if (!active || typeof api?.conversation?.onEvent !== "function") return undefined;
@@ -467,9 +441,8 @@ export function ConversationCallProvider({ active = false, api = null, snapshot 
   useEffect(() => registerConversationCallEndHandler(end), [end]);
 
   useEffect(() => () => {
-    clearPartialTranscriptRender();
     void end();
-  }, [clearPartialTranscriptRender, end]);
+  }, [end]);
 
   const value = useMemo(() => ({
     active: Boolean(call),
@@ -477,8 +450,6 @@ export function ConversationCallProvider({ active = false, api = null, snapshot 
     call: call ? {
       ...call,
       status: callStatusLabel(call),
-      transcript: cleanCallText(call.partialTranscript) || cleanCallText(call.lastTranscript),
-      transcriptLabel: call.partialTranscript ? "你正在说" : "你说",
     } : null,
     end,
     open: start,

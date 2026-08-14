@@ -17,6 +17,10 @@ function clean(value) {
   return String(value ?? "").trim();
 }
 
+function callInitiator(value) {
+  return clean(value).toLowerCase() === "agent" ? "agent" : "user";
+}
+
 function bounded(value, maximum) {
   return String(value ?? "").slice(0, maximum);
 }
@@ -238,7 +242,7 @@ export function createRealtimeVoiceCallService({
 
   const receiveChatEvent = (event) => {
     const call = activeCall;
-    if (!callIsActive(call) || event?.kind !== "call") return;
+    if (!callIsActive(call) || !["call", "call-open"].includes(clean(event?.kind))) return;
     if (clean(event.sessionId) !== call.session.id || !sameProjectRoot(event.projectRoot, call.session.projectRoot)) return;
     const requestId = clean(event.requestId);
     const reply = call.replyStates.get(requestId);
@@ -272,6 +276,47 @@ export function createRealtimeVoiceCallService({
 
   const unsubscribeChat = chat.subscribe(receiveChatEvent);
 
+  const open = async ({ callId, senderId = "" } = {}) => {
+    const call = activeCall;
+    if (!callIsActive(call) || clean(callId) !== call.id) return { accepted: false, opened: false, reason: "inactive" };
+    if (call.ownerSenderId && clean(senderId) && call.ownerSenderId !== clean(senderId)) return { accepted: false, opened: false, reason: "owner" };
+    if (call.opening || call.opened) return { accepted: true, opened: false, reason: "opened" };
+
+    call.opening = true;
+    const generation = call.generation;
+    const requestId = `suzu-call-open-${randomUUID()}`;
+    call.requestIds.add(requestId);
+    call.replyStates.set(requestId, { fullText: "", remaining: "" });
+    emitCall(call, "call-state", { state: "thinking", label: "正在接通…" });
+    try {
+      const result = await chat.sendToSession({
+        content: "",
+        contactId: call.contactId,
+        sessionId: call.session.id,
+        projectRoot: call.session.projectRoot,
+        hasTranscript: call.session.hasTranscript,
+        kind: "call-open",
+        callDirection: call.initiator,
+        requestId,
+      });
+      if (!callIsActive(call) || generation !== call.generation) {
+        await chat.stop({ sessionId: call.session.id, projectRoot: call.session.projectRoot, requestId }).catch(() => undefined);
+        return { accepted: false, opened: false, reason: "interrupted" };
+      }
+      if (clean(result?.requestId) !== requestId) throw new RealtimeVoiceCallError("Suzu 没有建立本次通话问候。 ");
+      call.opened = true;
+      return { accepted: true, opened: true };
+    } catch (error) {
+      call.replyStates.delete(requestId);
+      call.requestIds.delete(requestId);
+      if (!callIsActive(call) || generation !== call.generation) return { accepted: false, opened: false, reason: "interrupted" };
+      emitCall(call, "call-error", { message: `无法开始通话问候：${ttsErrorMessage(error)}` });
+      return { accepted: false, opened: false, reason: "reply" };
+    } finally {
+      call.opening = false;
+    }
+  };
+
   const sendTranscript = async (call, transcript) => {
     const text = bounded(clean(transcript), MAX_TRANSCRIPT_LENGTH);
     if (!text || !callIsActive(call)) return;
@@ -293,6 +338,7 @@ export function createRealtimeVoiceCallService({
     try {
       const result = await chat.sendToSession({
         content: text,
+        contactId: call.contactId,
         sessionId: call.session.id,
         projectRoot: call.session.projectRoot,
         hasTranscript: call.session.hasTranscript,
@@ -519,7 +565,7 @@ export function createRealtimeVoiceCallService({
     return connecting;
   };
 
-  const start = async ({ senderId = "" } = {}) => {
+  const start = async ({ senderId = "", initiator = "user" } = {}) => {
     if (disposed) throw new RealtimeVoiceCallError("实时通话服务已经停止。 ");
     if (activeCall && !activeCall.closed) throw new RealtimeVoiceCallError("已有一通语音通话正在进行。 ");
     const [snapshot, session, dashScope] = await Promise.all([
@@ -564,11 +610,15 @@ export function createRealtimeVoiceCallService({
       asrUrl: realtimeAsrWebSocketUrl(dashScope?.baseUrl),
       closed: false,
       closing: false,
+      contactId: clean(contact.id),
       generation: 0,
       hasBufferedAudio: false,
       id: callId,
+      initiator: callInitiator(initiator),
       ledgerPath,
       nextAudioIndex: 0,
+      opened: false,
+      opening: false,
       ownerSenderId: clean(senderId),
       reconnectAttempts: 0,
       reconnectTimer: null,
@@ -702,5 +752,5 @@ export function createRealtimeVoiceCallService({
     unsubscribeChat?.();
   };
 
-  return { commitAudio, dispose, interrupt, pushAudio, start, stop };
+  return { commitAudio, dispose, interrupt, open, pushAudio, start, stop };
 }

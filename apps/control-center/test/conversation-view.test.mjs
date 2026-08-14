@@ -5,6 +5,7 @@ import {
   conversationMessageRows,
   dismissConversationOverlays,
   filterConversationItems,
+  isScheduledAgentReply,
   parseSuzuConversationCommand,
   conversationReactSnapshot,
   shouldSubmitConversationOnEnter,
@@ -31,6 +32,7 @@ test("conversation React snapshot keeps the current contact model and message ro
   assert.equal(view.search, null);
   assert.equal(view.sessionSettings, null);
   assert.equal(view.overlays.contactCreate, false);
+  assert.equal(view.overlays.contactRename, null);
   assert.doesNotMatch(view.messageRows[0]?.text || "", /独立 Claude 项目/u);
   assert.doesNotMatch(view.rosterEmpty, /仅本地只读|RELATIONSHIPS \/ CONVERSATION/u);
 });
@@ -129,9 +131,9 @@ test("chat bubbles never append delivery or reply-status labels", () => {
 });
 
 test("conversation overlays close together when the user clicks away or presses Escape", () => {
-  const state = { avatarCrop: { source: "data:image/png;base64,avatar" }, contactCreateOpen: true, contactContextMenu: { contactId: "contact-test" }, emojiOpen: true, mediaPreview: { url: "file:///C:/temp/image.png" }, menuOpen: true, searchOpen: false, sessionNoteOpen: true, settingsOpen: true, wechatQrOpen: true };
+  const state = { avatarCrop: { source: "data:image/png;base64,avatar" }, contactCreateOpen: true, contactContextMenu: { contactId: "contact-test" }, contactRenameOpen: true, emojiOpen: true, mediaPreview: { url: "file:///C:/temp/image.png" }, menuOpen: true, searchOpen: false, sessionNoteOpen: true, settingsOpen: true, wechatQrOpen: true };
   assert.equal(dismissConversationOverlays(state), true);
-  assert.deepEqual(state, { avatarCrop: null, contactCreateOpen: false, contactContextMenu: null, emojiOpen: false, mediaPreview: null, menuOpen: false, searchOpen: false, sessionNoteOpen: false, settingsOpen: false, wechatQrOpen: false });
+  assert.deepEqual(state, { avatarCrop: null, contactCreateOpen: false, contactContextMenu: null, contactRenameOpen: false, emojiOpen: false, mediaPreview: null, menuOpen: false, searchOpen: false, sessionNoteOpen: false, settingsOpen: false, wechatQrOpen: false });
   assert.equal(dismissConversationOverlays(state), false);
 });
 
@@ -148,6 +150,13 @@ test("Suzu reserves a namespaced stop and steer command without swallowing Claud
     action: "notice",
     message: "可用的 Suzu 命令：/suzu stop；/suzu steer 请改为……",
   });
+});
+
+test("only completed scheduled agent text replies are eligible for an outside-chat notification", () => {
+  assert.equal(isScheduledAgentReply({ kind: "schedule", type: "agent-reply", content: "你那边现在怎么样？" }), true);
+  assert.equal(isScheduledAgentReply({ kind: "schedule", type: "agent-reply", content: "  " }), false);
+  assert.equal(isScheduledAgentReply({ kind: "schedule", type: "reply", content: "完成" }), false);
+  assert.equal(isScheduledAgentReply({ kind: "message", type: "agent-reply", content: "普通聊天" }), false);
 });
 
 test("only an unmodified Enter submits the conversation composer", () => {

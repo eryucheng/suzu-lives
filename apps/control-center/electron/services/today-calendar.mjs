@@ -260,5 +260,19 @@ export function createTodayCalendarService({ contactProjectsService, settingsSer
     return snapshot();
   };
 
-  return { snapshot, saveEvent, removeEvent };
+  const removeContact = async ({ contactId } = {}) => {
+    const id = clean(contactId);
+    if (!id) throw new Error("要删除的联系人无效。 ");
+    const dataRoot = dataRootFor(settingsService);
+    const filePath = calendarFile(dataRoot);
+    if (!dataRoot || !filePath) return { removed: 0 };
+    const current = await readCalendar(filePath);
+    if (current.status === "invalid") throw new Error("纪念日数据无法读取，未覆盖原有内容。");
+    const events = current.events.filter((event) => clean(event.contactId) !== id);
+    const removed = current.events.length - events.length;
+    if (removed) await writeCalendar(filePath, dataRoot, events);
+    return { removed };
+  };
+
+  return { snapshot, saveEvent, removeContact, removeEvent };
 }

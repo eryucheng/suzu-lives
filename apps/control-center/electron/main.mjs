@@ -9,6 +9,7 @@ import { createSettingsService, registerIpcHandlers } from "./ipc/index.mjs";
 import { runProjectHookCli } from "./hooks/runtime.mjs";
 import { applyFeatureConnectionOverrides } from "./services/connection-model-overrides.mjs";
 import { createDataStorageLocationService } from "./services/data-storage-location.mjs";
+import { applyWindowControl, windowControlState } from "./services/window-controls.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const APP_ROOT = path.resolve(HERE, "..");
@@ -28,7 +29,7 @@ app.setPath("userData", dataStorageService.dataRoot);
 let mainWindow = null;
 
 function normalizeTheme(value) {
-  return value === "light" ? "light" : "dark";
+  return value === "dark" ? "dark" : "light";
 }
 
 function titleBarOverlay(theme) {
@@ -63,10 +64,16 @@ function applyWindowChromeTheme(window, theme) {
   if (!window || window.isDestroyed()) return false;
   const normalized = normalizeTheme(theme);
   window.setBackgroundColor(normalized === "light" ? "#eef2f7" : "#090b12");
-  if (process.platform !== "darwin" && typeof window.setTitleBarOverlay === "function") {
+  if (process.platform === "linux" && typeof window.setTitleBarOverlay === "function") {
     window.setTitleBarOverlay(titleBarOverlay(normalized));
   }
   return true;
+}
+
+function sendWindowControlState(window = mainWindow) {
+  const state = windowControlState(window);
+  if (state.available) window.webContents.send("window-chrome:state", state);
+  return state;
 }
 
 function isSuzuRendererUrl(value) {
@@ -107,7 +114,7 @@ function createWindow(settingsService) {
     autoHideMenuBar: true,
     title: "Suzu Lives",
     titleBarStyle: "hidden",
-    ...(process.platform !== "darwin" ? { titleBarOverlay: titleBarOverlay(startupTheme) } : {}),
+    ...(process.platform === "linux" ? { titleBarOverlay: titleBarOverlay(startupTheme) } : {}),
     webPreferences: {
       preload: path.join(HERE, "preload.cjs"),
       contextIsolation: true,
@@ -123,6 +130,8 @@ function createWindow(settingsService) {
   mainWindow.once("ready-to-show", () => mainWindow?.show());
   mainWindow.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   mainWindow.webContents.on("will-navigate", (event) => event.preventDefault());
+  mainWindow.on("maximize", () => sendWindowControlState(mainWindow));
+  mainWindow.on("unmaximize", () => sendWindowControlState(mainWindow));
   mainWindow.on("closed", () => {
     mainWindow = null;
   });
@@ -200,6 +209,14 @@ if (cliArgumentIndex !== -1) {
     ipcMain.handle("window-chrome:apply-theme", (event, theme) => {
       if (event.sender !== mainWindow?.webContents) return false;
       return applyWindowChromeTheme(mainWindow, theme);
+    });
+    ipcMain.handle("window-chrome:state", (event) => {
+      if (event.sender !== mainWindow?.webContents) return { available: false, maximized: false };
+      return windowControlState(mainWindow);
+    });
+    ipcMain.handle("window-chrome:control", (event, action) => {
+      if (event.sender !== mainWindow?.webContents) return { available: false, maximized: false };
+      return applyWindowControl(mainWindow, action);
     });
     createWindow(settingsService);
     app.on("activate", () => {

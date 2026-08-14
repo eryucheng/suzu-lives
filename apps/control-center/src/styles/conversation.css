@@ -726,11 +726,29 @@
 }
 
 .content--conversation .conversation-contact__state {
+  display: flex;
   align-self: start;
+  align-items: center;
   color: #38c98b;
   font-size: 9px;
+  gap: 5px;
   line-height: 1;
   padding-top: 4px;
+}
+
+.content--conversation .conversation-contact__unread-dot {
+  display: block;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: #ff5b68;
+  box-shadow: 0 0 0 2px #171a20;
+}
+
+.content--conversation .conversation-contact__muted-mark {
+  color: #8993a3;
+  font-size: 10px;
+  font-weight: 700;
 }
 
 .content--conversation .conversation-contact-context-menu {
@@ -765,6 +783,19 @@
 .content--conversation .conversation-contact-context-menu button:disabled {
   color: #8791a1;
   cursor: default;
+}
+
+.content--conversation .conversation-contact-context-menu button.conversation-contact-context-menu__danger {
+  margin-top: 6px;
+  border-top: 1px solid rgba(255, 255, 255, .1);
+  border-radius: 0 0 7px 7px;
+  color: #ff8b94;
+  padding-top: 13px;
+}
+
+.content--conversation .conversation-contact-context-menu button.conversation-contact-context-menu__danger:hover:not(:disabled) {
+  background: rgba(239, 91, 104, .13);
+  color: #ffb0b6;
 }
 
 .content--conversation .conversation-pane {
@@ -2485,6 +2516,14 @@
   color: #07c160;
 }
 
+:root[data-theme="light"] .content--conversation .conversation-contact__unread-dot {
+  box-shadow: 0 0 0 2px #f4f4f5;
+}
+
+:root[data-theme="light"] .content--conversation .conversation-contact__muted-mark {
+  color: #8b8e95;
+}
+
 :root[data-theme="light"] .content--conversation .conversation-contact-context-menu {
   border-color: #dfe1e5;
   background: #fff;
@@ -2502,6 +2541,16 @@
 
 :root[data-theme="light"] .content--conversation .conversation-contact-context-menu button:disabled {
   color: #9aa0a9;
+}
+
+:root[data-theme="light"] .content--conversation .conversation-contact-context-menu button.conversation-contact-context-menu__danger {
+  border-top-color: #ededee;
+  color: #d94c59;
+}
+
+:root[data-theme="light"] .content--conversation .conversation-contact-context-menu button.conversation-contact-context-menu__danger:hover:not(:disabled) {
+  background: #fff0f1;
+  color: #bf3341;
 }
 
 :root[data-theme="light"] .content--conversation .conversation-contact__avatar,

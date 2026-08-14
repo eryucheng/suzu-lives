@@ -367,6 +367,7 @@ export function createWeChatLinkService({
   const attempts = new Map();
   const deliveryChains = new Map();
   const loops = new Map();
+  const removedContactIds = new Set();
 
   const emit = (event) => {
     const payload = { ...event, timestamp: event?.timestamp || nowIso(now) };
@@ -828,6 +829,10 @@ export function createWeChatLinkService({
   };
 
   const completeAttempt = async (attempt, status) => {
+    if (removedContactIds.has(attempt.contactId)) {
+      attempts.delete(attempt.id);
+      return;
+    }
     const token = clean(status?.bot_token ?? status?.botToken);
     const accountId = clean(status?.ilink_bot_id ?? status?.ilinkBotId);
     const linkedUserId = clean(status?.ilink_user_id ?? status?.ilinkUserId);
@@ -904,6 +909,7 @@ export function createWeChatLinkService({
     await ensureLoaded();
     if (publicStore.enabled !== true) throw new WeChatLinkError("请先在“能力 → 行动”中开启“连接微信”。 ");
     const id = normalizedContactId(contactId);
+    removedContactIds.delete(id);
     const session = await scopeForContact(id);
     const oldAttempt = [...attempts.values()].find((item) => item.contactId === id);
     if (oldAttempt) oldAttempt.controller.abort();
@@ -976,6 +982,29 @@ export function createWeChatLinkService({
     else loops.get(link.id)?.abort();
     emit({ type: "status", linkId: link.id, contactId: link.contactId });
     return snapshot({ contactId: id });
+  };
+
+  const removeContact = async ({ contactId } = {}) => {
+    await ensureLoaded();
+    const id = normalizedContactId(contactId);
+    removedContactIds.add(id);
+    for (const [attemptId, attempt] of attempts) {
+      if (attempt.contactId !== id) continue;
+      attempt.controller.abort();
+      attempts.delete(attemptId);
+    }
+    const links = publicStore.links.filter((link) => link.contactId === id);
+    for (const link of links) {
+      loops.get(link.id)?.abort();
+      loops.delete(link.id);
+      deliveryChains.delete(link.id);
+      delete credentialStore.links[link.id];
+    }
+    if (!links.length) return { removed: 0 };
+    publicStore.links = publicStore.links.filter((link) => link.contactId !== id);
+    await persist();
+    for (const link of links) emit({ type: "disconnected", linkId: link.id, contactId: id });
+    return { removed: links.length };
   };
 
   const disconnect = async ({ confirmed, contactId } = {}) => {
@@ -1060,6 +1089,7 @@ export function createWeChatLinkService({
   return {
     begin,
     disconnect,
+    removeContact,
     dispose: () => {
       disposed = true;
       for (const attempt of attempts.values()) attempt.controller.abort();

@@ -115,8 +115,13 @@ function merchantTaskContent(message) {
 
 export function registerIpcHandlers({ app, dataStorageService, getMainWindow, settingsService, wechatAttachmentCli = "", cliLauncherCommand = "", claudeWorkspaceDirectories = [] }) {
   const currentCliLauncher = clean(cliLauncherCommand) || (app.isPackaged ? packagedCliCommand(app.getPath("exe")) : "");
+  const dataRoot = settingsService.response(settingsService.load()).dataRoot;
+  let removeContactAssociations = async () => undefined;
+  let wechatService = null;
   const contactProjectsService = createContactProjectsService({
     settingsService,
+    dataRoot,
+    onBeforeRemove: (contact) => removeContactAssociations(contact),
     ensureClaudeProjectSettings: ({ projectRoot, previousProjectDefaults }) => {
       if (!currentCliLauncher) return { status: "development" };
       return ensureSuzuClaudeProjectSettings({
@@ -222,7 +227,29 @@ export function registerIpcHandlers({ app, dataStorageService, getMainWindow, se
       sessionId: event.sessionId,
     }).catch(() => undefined);
   });
-  const dataRoot = settingsService.response(settingsService.load()).dataRoot;
+  const removeScheduledContactTasks = async (contact) => {
+    const contactId = clean(contact?.id);
+    const contactProjectRoot = projectScopeKey(contact?.projectRoot);
+    if (!contactId || !contactProjectRoot) return { removed: 0 };
+    const tasks = await listScheduleTasks({ dataRoot });
+    const targets = tasks.filter((task) => {
+      const target = plainObject(task?.target);
+      if (clean(target.contactId) === contactId) return true;
+      return projectScopeKey(target.projectRoot) === contactProjectRoot;
+    });
+    for (const task of targets) await removeScheduleTask({ dataRoot, id: clean(task?.id) });
+    return { removed: targets.length };
+  };
+  removeContactAssociations = async (contact) => {
+    const contactId = clean(contact?.id);
+    if (!contactId) throw new Error("要删除的联系人无效。 ");
+    await capabilitiesService.removeContact({ contactId });
+    await removeScheduledContactTasks(contact);
+    await todayCalendarService.removeContact({ contactId });
+    if (typeof wechatService?.removeContact === "function") {
+      await wechatService.removeContact({ contactId });
+    }
+  };
   iphoneFeedbackService = createIphoneFeedbackLinkService({
     chat: conversation.chat,
     settingsProvider: () => settingsService.response(settingsService.load()),
@@ -365,6 +392,7 @@ export function registerIpcHandlers({ app, dataStorageService, getMainWindow, se
       const target = await conversation.reader.resolveContactSession(contactId);
       const result = await conversation.chat.sendToSession({
         content: scheduledTaskContent(task),
+        contactId,
         sessionId: target.id,
         projectRoot: target.projectRoot,
         hasTranscript: target.hasTranscript === true,
@@ -393,6 +421,7 @@ export function registerIpcHandlers({ app, dataStorageService, getMainWindow, se
       if (result.deliveryReady !== true || !message) return;
       const deliveries = await Promise.allSettled(targets.map((target) => conversation.chat.sendToSession({
         content: merchantTaskContent(message),
+        contactId: target.contactId,
         sessionId: target.sessionId,
         projectRoot: target.projectRoot,
         hasTranscript: true,
@@ -415,7 +444,7 @@ export function registerIpcHandlers({ app, dataStorageService, getMainWindow, se
   app?.once?.("before-quit", () => iphoneFeedbackService?.dispose());
   app?.once?.("before-quit", () => memoryService.dispose());
   void iphoneFeedbackService.start().catch(() => undefined);
-  const wechatService = createWeChatLinkService({
+  wechatService = createWeChatLinkService({
     chat: conversation.chat,
     dataRoot,
     reader: conversation.reader,

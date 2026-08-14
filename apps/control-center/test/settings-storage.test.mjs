@@ -1,8 +1,21 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
 
-import { normalizeClaudeProjectDefaults, normalizeClaudeRuntimeFeatures, normalizeClaudeToolPermissions, normalizeConversationPreferences, normalizeMemoryRecallEnabled, normalizeOnboardingCompleted, normalizeOnboardingMultimodalCompleted, registerSettingsIpc } from "../electron/ipc/settings-ipc.mjs";
+import { createSettingsService, normalizeClaudeProjectDefaults, normalizeClaudeRuntimeFeatures, normalizeClaudeToolPermissions, normalizeConversationPreferences, normalizeMemoryRecallEnabled, normalizeOnboardingCompleted, normalizeOnboardingMultimodalCompleted, registerSettingsIpc } from "../electron/ipc/settings-ipc.mjs";
 import { renderManagedAgentRuntimeSettings, renderSettings } from "../src/features/settings/index.mjs";
+
+test("new installations default to the light theme while preserving an explicit dark preference", () => {
+  const userData = fs.mkdtempSync(path.join(os.tmpdir(), "suzu-settings-theme-"));
+  const app = { getPath: () => userData };
+  const settings = createSettingsService({ app });
+
+  assert.equal(settings.load().theme, "light");
+  fs.writeFileSync(path.join(userData, "settings.json"), JSON.stringify({ theme: "dark" }));
+  assert.equal(settings.load().theme, "dark");
+});
 
 test("data settings show one unified storage location and a migration action", () => {
   const html = renderSettings({
@@ -186,6 +199,38 @@ test("changing shared Claude project defaults syncs the contact projects", async
     skipWebFetchPreflight: false,
   });
   assert.deepEqual(syncCalls, [true]);
+});
+
+test("changing the owner display name syncs managed user profile titles", async () => {
+  const handlers = new Map();
+  const titleSyncCalls = [];
+  let stored = { identity: { owner: { displayName: "旧名字" } } };
+  registerSettingsIpc({
+    app: { relaunch: () => {}, exit: () => {} },
+    contactProjectsService: {
+      syncClaudeProjectSettings: async () => {},
+      syncOwnerProfileTitle: async (value) => {
+        titleSyncCalls.push(value);
+        return { status: "synced", contacts: [{ id: "contact-1" }], errors: [] };
+      },
+    },
+    dataStorageService: null,
+    dialog: { showOpenDialog: async () => ({ canceled: true }), showMessageBox: async () => ({ response: 1 }) },
+    getMainWindow: () => null,
+    ipcMain: { handle: (name, handler) => handlers.set(name, handler) },
+    shell: { showItemInFolder: () => {}, openPath: () => {} },
+    settingsService: {
+      load: () => stored,
+      safePatch: (value) => ({ identity: value.identity }),
+      save: (next) => { stored = next; return stored; },
+      response: (settings) => settings,
+    },
+  });
+
+  const result = await handlers.get("settings:update")(null, { identity: { owner: { displayName: "新名字" } } });
+
+  assert.deepEqual(titleSyncCalls, [{ previousName: "旧名字", name: "新名字" }]);
+  assert.deepEqual(result.ownerProfileTitleSync, { status: "synced", contacts: [{ id: "contact-1" }], errors: [] });
 });
 
 test("conversation time display defaults to the centered mode and migrates the old enum", () => {

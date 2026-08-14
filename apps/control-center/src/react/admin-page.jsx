@@ -222,6 +222,7 @@ function AvatarCropDialog({ crop, onClose, onSave }) {
     setError("");
     try {
       await onSave?.(croppedAvatarDataUrl(draft, imageRef.current));
+      setPending(false);
     } catch (saveError) {
       setError(clean(saveError?.message) || "无法保存该头像。");
       setPending(false);
@@ -300,6 +301,7 @@ function IdentitySettings({ actions, settings }) {
       await actions.saveIdentity({ displayName: name, gender, signature });
     } catch (saveError) {
       setError(clean(saveError?.message) || "无法保存资料。");
+    } finally {
       setPending(false);
     }
   };
@@ -331,6 +333,7 @@ function IdentitySettings({ actions, settings }) {
       await actions.saveIdentity({ avatarDataUrl: "" });
     } catch (removeError) {
       setError(clean(removeError?.message) || "无法移除头像。");
+    } finally {
       setPending(false);
     }
   };
@@ -897,6 +900,7 @@ function ApiConnectionEditor({ connection, onClose, onSave }) {
         name: dashscope ? "阿里百炼" : draft.name,
         timeoutMs: Number(draft.timeoutMs),
       });
+      setPending(false);
     } catch (saveError) {
       setError(clean(saveError?.message) || "无法保存 API。");
       setPending(false);
@@ -954,6 +958,7 @@ function ApiDeleteDialog({ connection, onClose, onConfirm }) {
     setError("");
     try {
       await onConfirm(connection.id);
+      setPending(false);
     } catch (removeError) {
       setError(clean(removeError?.message) || "无法移除 API。");
       setPending(false);

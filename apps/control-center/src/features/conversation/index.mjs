@@ -23,6 +23,7 @@ const viewState = {
   composerFocusRequest: 0,
   contactCreateOpen: false,
   contactContextMenu: null,
+  contactRenameOpen: false,
   draft: "",
   emojiOpen: false,
   error: "",
@@ -74,6 +75,12 @@ function clean(value) {
   return String(value ?? "").trim();
 }
 
+export function isScheduledAgentReply(event) {
+  return clean(event?.kind) === "schedule"
+    && clean(event?.type) === "agent-reply"
+    && Boolean(clean(event?.content));
+}
+
 function contactContextMenuPosition(point = {}) {
   const width = typeof window === "undefined" ? 0 : Number(window.innerWidth) || 0;
   const height = typeof window === "undefined" ? 0 : Number(window.innerHeight) || 0;
@@ -81,7 +88,7 @@ function contactContextMenuPosition(point = {}) {
   const y = Math.round(Number(point?.y));
   return {
     x: Math.max(12, Math.min(Number.isFinite(x) ? x : 12, width ? Math.max(12, width - 208) : Number.POSITIVE_INFINITY)),
-    y: Math.max(12, Math.min(Number.isFinite(y) ? y : 12, height ? Math.max(12, height - 62) : Number.POSITIVE_INFINITY)),
+    y: Math.max(12, Math.min(Number.isFinite(y) ? y : 12, height ? Math.max(12, height - 252) : Number.POSITIVE_INFINITY)),
   };
 }
 
@@ -634,6 +641,18 @@ function sessionNoteSnapshot() {
   return { note, contactId };
 }
 
+function contactRenameSnapshot() {
+  if (!viewState.contactRenameOpen) return null;
+  const contact = viewState.snapshot?.activeContact || null;
+  const contactId = clean(contact?.id);
+  if (!contactId) return null;
+  return {
+    contactId,
+    name: clean(contact?.name),
+    saving: viewState.sending,
+  };
+}
+
 function wechatQrSnapshot(contact) {
   const pendingQr = viewState.wechatSnapshot?.pendingQr;
   const imageDataUrl = clean(pendingQr?.imageDataUrl);
@@ -711,25 +730,34 @@ export function conversationReactSnapshot(context) {
   const peer = clean(activeContact?.name) || "未选择联系人";
   const callAvailable = ready && Boolean(clean(activeContact?.agentId));
   const preferredContactId = clean(snapshot.preferredContactId);
-  const contactRows = contacts.map((contact) => {
+  const allContactRows = contacts.map((contact) => {
     const name = clean(contact?.name) || "未命名联系人";
     const selectedContact = clean(activeContact?.id) === clean(contact?.id);
     const contactAgent = identity?.agents?.[clean(contact?.agentId)] || identity?.defaultAgent || { displayName: name, avatarDataUrl: "" };
     return {
       avatar: avatarPayload(contactAgent, name),
+      hidden: contact?.hidden === true,
       id: clean(contact?.id),
+      muted: contact?.muted === true,
       name,
+      pinned: contact?.pinned === true,
       preferred: clean(contact?.id) === preferredContactId,
       selected: selectedContact,
+      unread: contact?.unread === true,
     };
   });
+  const contactRows = allContactRows.filter((contact) => !contact.hidden);
   const contextMenuState = viewState.contactContextMenu;
   const contextMenuContact = contactRows.find((contact) => contact.id === clean(contextMenuState?.contactId)) || null;
   const contactContextMenu = contextMenuContact
     ? {
       contactId: contextMenuContact.id,
       contactName: contextMenuContact.name,
+      hidden: contextMenuContact.hidden,
+      muted: contextMenuContact.muted,
+      pinned: contextMenuContact.pinned,
       preferred: contextMenuContact.preferred,
+      unread: contextMenuContact.unread,
       x: Number(contextMenuState?.x) || 12,
       y: Number(contextMenuState?.y) || 12,
     }
@@ -761,13 +789,16 @@ export function conversationReactSnapshot(context) {
     overlays: {
       avatarCrop: avatarCropSnapshot(),
       contactCreate: viewState.contactCreateOpen,
+      contactRename: contactRenameSnapshot(),
       mediaPreview: mediaPreviewSnapshot(),
       sessionNote: sessionNoteSnapshot(),
       wechatQr: wechatQrSnapshot(activeContact),
     },
     peer,
     permissions: permissionPromptSnapshot(clean(snapshot.activeSessionId)),
-    rosterEmpty: hasContactsRoot ? "还没有联系人。点击右上角“＋”创建。" : "请先到“设置”选择 Agent 工作目录。",
+    rosterEmpty: hasContactsRoot
+      ? contacts.length ? "所有联系人都已隐藏。可在“设置 > 隐私”中恢复。" : "还没有联系人。点击右上角“＋”创建。"
+      : "请先到“设置”选择 Agent 工作目录。",
     search: conversationSearchSnapshot(),
     searchOpen: viewState.searchOpen,
     sessionSettings: sessionSettingsSnapshot(context, selected, prefs),
@@ -783,6 +814,7 @@ export function conversationReactSnapshot(context) {
 }
 
 function resetSessionSettings() {
+  viewState.contactRenameOpen = false;
   viewState.sessionNoteDirty = false;
   viewState.sessionNoteDraft = "";
   viewState.sessionNoteOpen = false;
@@ -845,11 +877,24 @@ async function load(context, force = false) {
   }
 }
 
+async function markOpenedContactRead(context) {
+  const contact = viewState.snapshot?.activeContact || null;
+  const id = clean(contact?.id);
+  if (!id || contact?.unread !== true || !context.api.conversation.updateContactPresentation) return;
+  try {
+    viewState.snapshot = await context.api.conversation.updateContactPresentation({ id, unread: false });
+    viewState.lastVersion = viewState.snapshot.version;
+    context.render();
+  } catch {
+    // Reading a conversation should remain available if its local badge cannot be saved.
+  }
+}
+
 function handleConversationEvent(context, event) {
   // The call sheet owns its own listening/thinking/speaking state.  Do not
   // leak Claude's internal turn labels into the text composer while a voice
   // turn is running; refresh the normal history after it settles instead.
-  if (event?.kind === "call") {
+  if (["call", "call-open"].includes(event?.kind)) {
     if (["turn-complete", "turn-stopped", "error"].includes(event.type)) void load(context, true);
     return;
   }
@@ -940,7 +985,7 @@ function handleConversationEvent(context, event) {
 export function startConversationPolling(context) {
   stopConversationPolling();
   viewState.shouldStickToLatest = true;
-  load(context, true);
+  void load(context, true).then(() => markOpenedContactRead(context));
   if (typeof context.api.conversation.onEvent === "function") {
     viewState.unsubscribe = context.api.conversation.onEvent((event) => handleConversationEvent(context, event));
   }
@@ -971,9 +1016,10 @@ export function stopConversationPolling() {
 
 export function dismissConversationOverlays(target = viewState) {
   const state = target && typeof target === "object" ? target : viewState;
-  const open = Boolean(state.contactCreateOpen || state.contactContextMenu || state.menuOpen || state.searchOpen || state.settingsOpen || state.emojiOpen || state.sessionNoteOpen || state.wechatQrOpen || state.mediaPreview || state.avatarCrop);
+  const open = Boolean(state.contactCreateOpen || state.contactContextMenu || state.contactRenameOpen || state.menuOpen || state.searchOpen || state.settingsOpen || state.emojiOpen || state.sessionNoteOpen || state.wechatQrOpen || state.mediaPreview || state.avatarCrop);
   state.contactCreateOpen = false;
   state.contactContextMenu = null;
+  state.contactRenameOpen = false;
   state.menuOpen = false;
   state.searchOpen = false;
   state.settingsOpen = false;
@@ -1270,6 +1316,10 @@ export function createConversationReactActions(context) {
       viewState.contactCreateOpen = false;
       context.render();
     },
+    closeContactRename: () => {
+      viewState.contactRenameOpen = false;
+      context.render();
+    },
     closeContactContextMenu: () => {
       if (!viewState.contactContextMenu) return;
       viewState.contactContextMenu = null;
@@ -1372,6 +1422,14 @@ export function createConversationReactActions(context) {
       viewState.emojiOpen = false;
       context.render();
     },
+    openContactRename: (contactId) => {
+      const id = clean(contactId);
+      if (!id || id !== clean(viewState.snapshot?.activeContact?.id) || viewState.sending) return;
+      viewState.contactRenameOpen = true;
+      viewState.contactContextMenu = null;
+      viewState.error = "";
+      context.render();
+    },
     openMediaDirectory: async (contactId) => {
       const id = clean(contactId);
       if (!id || !context.api.conversation.openMediaDirectory) return;
@@ -1421,6 +1479,54 @@ export function createConversationReactActions(context) {
       }
       renderKeepingConversationScroll(context);
     },
+    removeContact: async (contactId) => {
+      const id = clean(contactId);
+      if (!id || viewState.sending || !context.api.conversation.removeContact) return;
+      const contact = (Array.isArray(viewState.snapshot?.contacts) ? viewState.snapshot.contacts : [])
+        .find((item) => clean(item?.id) === id) || null;
+      const name = clean(contact?.name) || "这位联系人";
+      const activeContactRemoved = id === clean(viewState.snapshot?.activeContact?.id);
+      viewState.contactContextMenu = null;
+      if (!window.confirm(`删除“${name}”及其聊天记录、联系人资料和所有专属数据？包括附件、记忆、自动任务和微信连接；此操作无法恢复。`)) {
+        context.render();
+        return;
+      }
+      viewState.sending = true;
+      context.render();
+      try {
+        if (activeContactRemoved) await endActiveConversationCall();
+        viewState.snapshot = await context.api.conversation.removeContact({ id, confirmed: true });
+        viewState.lastVersion = viewState.snapshot.version;
+        if (activeContactRemoved) resetConversationForContactChange();
+        if (context.api.settings?.get) context.state.settings = await context.api.settings.get();
+        viewState.error = "";
+        viewState.notice = `已删除“${name}”。`;
+      } catch (error) {
+        viewState.error = `无法删除联系人：${error?.message || error}`;
+      } finally {
+        viewState.sending = false;
+        context.render();
+      }
+    },
+    renameContact: async (contactId, name) => {
+      const id = clean(contactId);
+      const value = clean(name);
+      if (!id || !value || id !== clean(viewState.snapshot?.activeContact?.id) || viewState.sending || !context.api.conversation.renameContact) return;
+      viewState.sending = true;
+      context.render();
+      try {
+        viewState.snapshot = await context.api.conversation.renameContact({ id, name: value });
+        viewState.lastVersion = viewState.snapshot.version;
+        viewState.contactRenameOpen = false;
+        viewState.error = "";
+        viewState.notice = "联系人备注已更新。";
+      } catch (error) {
+        viewState.error = `无法更新联系人备注：${error?.message || error}`;
+      } finally {
+        viewState.sending = false;
+        context.render();
+      }
+    },
     resizeAvatarCrop: resizeConversationAvatarCrop,
     respondPermission: async (requestId, behavior) => {
       const id = clean(requestId);
@@ -1444,9 +1550,9 @@ export function createConversationReactActions(context) {
         viewState.sessionNoteDirty = false;
         viewState.sessionNoteOpen = false;
         viewState.error = "";
-        viewState.notice = "联系人备注已保存。";
+        viewState.notice = "聊天备注已保存。";
       } catch (error) {
-        viewState.error = `无法保存联系人备注：${error?.message || error}`;
+        viewState.error = `无法保存聊天备注：${error?.message || error}`;
       }
       context.render();
     },
@@ -1466,6 +1572,40 @@ export function createConversationReactActions(context) {
         viewState.error = `无法设置首选联系人：${error?.message || error}`;
       }
       context.render();
+    },
+    updateContactPresentation: async (contactId, value = {}) => {
+      const id = clean(contactId);
+      const source = value && typeof value === "object" && !Array.isArray(value) ? value : {};
+      const patch = {};
+      for (const key of ["pinned", "unread", "muted", "hidden"]) {
+        if (typeof source[key] === "boolean") patch[key] = source[key];
+      }
+      if (!id || !Object.keys(patch).length || viewState.sending || !context.api.conversation.updateContactPresentation) return;
+      const contact = (Array.isArray(viewState.snapshot?.contacts) ? viewState.snapshot.contacts : [])
+        .find((item) => clean(item?.id) === id) || null;
+      const name = clean(contact?.name) || "这位联系人";
+      viewState.contactContextMenu = null;
+      viewState.sending = true;
+      context.render();
+      try {
+        viewState.snapshot = await context.api.conversation.updateContactPresentation({ id, ...patch });
+        viewState.lastVersion = viewState.snapshot.version;
+        viewState.error = "";
+        if (Object.hasOwn(patch, "pinned")) {
+          viewState.notice = patch.pinned ? `已将“${name}”置顶。` : `已取消“${name}”置顶。`;
+        } else if (Object.hasOwn(patch, "unread")) {
+          viewState.notice = patch.unread ? `已将“${name}”标为未读。` : `已将“${name}”标为已读。`;
+        } else if (Object.hasOwn(patch, "muted")) {
+          viewState.notice = patch.muted ? `已开启“${name}”的消息免打扰。` : `已关闭“${name}”的消息免打扰。`;
+        } else if (Object.hasOwn(patch, "hidden")) {
+          viewState.notice = patch.hidden ? `已隐藏“${name}”。可在“设置 > 隐私”中恢复。` : `已恢复“${name}”到联系人列表。`;
+        }
+      } catch (error) {
+        viewState.error = `无法更新联系人显示状态：${error?.message || error}`;
+      } finally {
+        viewState.sending = false;
+        context.render();
+      }
     },
     selectContact: async (contactId) => {
       const id = clean(contactId);

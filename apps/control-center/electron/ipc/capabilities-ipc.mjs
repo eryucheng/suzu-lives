@@ -22,8 +22,8 @@ const DEFAULT_IPHONE_BRIDGE_IMAP_HOST = "imap.163.com";
 const DEFAULT_IPHONE_BRIDGE_PASSWORD_ENV = "SUZU_IPHONE_MAIL_PASSWORD";
 const DEFAULT_IPHONE_BRIDGE_FEEDBACK_SUBJECT = "查岗";
 const DEFAULT_IPHONE_BRIDGE_FEEDBACK_PROMPT = "这是来自 iPhone 的反馈（{{subject}}，来自 {{from}}，{{receivedAt}}）：\n{{content}}\n{{attachments}}";
-const HIDDEN_CONTACT_DEFAULT_ABILITY_IDS = Object.freeze(["visual-reference-manager"]);
-const MANAGED_REGISTRATION_VERSION = 5;
+const HIDDEN_CONTACT_DEFAULT_ABILITY_IDS = Object.freeze(["visual-reference-manager", "voice-call"]);
+const MANAGED_REGISTRATION_VERSION = 6;
 const DEFAULT_PROACTIVE_CHAIN_PROMPT = "根据时间和前面聊的内容判断要不要主动联系对方，要发就正常发，不发就沉默，然后记得要设置下一次自动任务";
 const DEFAULT_PROACTIVE_FOLLOW_UP_PROMPT = "临时回访：用户在 TIME 提到 EVENT。先检查当前会话里是否已经有结果；已经有结果就只输出 NO_REPLY；还没有结果就自然地关心或询问。不要提及自动任务、回访任务或系统机制。这是一次性回访，不要设置下一次自动任务。";
 
@@ -1014,7 +1014,8 @@ export function createCapabilitiesService({
         // reinstall its Hook. The project settings sync already updates its CLI
         // permission when needed.
         if (capabilityId === TIME_AWARENESS_ID) continue;
-        if (inspectClaudeRegistration({ projectRoot: contact.projectRoot, abilityId: capabilityId }).registered !== true) continue;
+        const registration = inspectClaudeRegistration({ projectRoot: contact.projectRoot, abilityId: capabilityId });
+        if (registration.registered !== true && !HIDDEN_CONTACT_DEFAULT_ABILITY_IDS.includes(capabilityId)) continue;
         try {
           await writeClaudeRegistration({
             projectRoot: contact.projectRoot,
@@ -1379,6 +1380,42 @@ export function createCapabilitiesService({
     }
     throw new Error("这项能力目前没有可保存的设置。 ");
   };
+  const removeContact = async ({ contactId } = {}) => {
+    const id = clean(contactId);
+    if (!COMPANION_CONTACT_ID.test(id)) throw new Error("要删除的联系人无效。 ");
+    const settings = settingsService.load();
+    const dataRoot = capabilityDataRoot(settings);
+    if (!dataRoot) return { updated: 0 };
+    const candidates = [
+      TIME_AWARENESS_CONFIG_PATH,
+      ["automation", "proactive-contact", "config.json"],
+      ["automation", "traveling-merchant", "config.json"],
+      ...[...CONTACT_SCOPED_AGENT_CAPABILITY_IDS]
+        .map((abilityId) => contactScopedCapabilityConfigPath(abilityId))
+        .filter(Boolean),
+    ];
+    const configPaths = candidates.filter((segments, index, all) => (
+      all.findIndex((entry) => entry.join("/") === segments.join("/")) === index
+    ));
+    let updated = 0;
+    let iphoneBridgeUpdated = false;
+    for (const segments of configPaths) {
+      const existing = publicJson(dataRoot, segments);
+      const next = { ...existing };
+      let changed = false;
+      for (const key of ["enabledContactIds", "knownContactIds"]) {
+        if (!Array.isArray(existing[key]) || !existing[key].some((entry) => clean(entry) === id)) continue;
+        next[key] = existing[key].filter((entry) => clean(entry) !== id);
+        changed = true;
+      }
+      if (!changed) continue;
+      await writeJsonBelow(dataRoot, segments, next);
+      updated += 1;
+      if (segments.join("/") === "automation/iphone-bridge/config.json") iphoneBridgeUpdated = true;
+    }
+    if (iphoneBridgeUpdated) notifyIphoneFeedbackChange();
+    return { updated };
+  };
   const openTravelingMerchantPage = async () => {
     if (typeof openExternal !== "function") throw new Error("当前环境无法打开网页。 ");
     const settings = settingsService.load();
@@ -1392,6 +1429,7 @@ export function createCapabilitiesService({
     snapshot,
     companionTargets,
     initializeDefaultContactCapabilities,
+    removeContact,
     refreshManagedRegistrations,
     saveSettings,
     proactiveContactSettings: getProactiveContactSettings,

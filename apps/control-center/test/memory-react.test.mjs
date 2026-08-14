@@ -38,6 +38,9 @@ test("memory route is owned by a React page and scopes every action to a contact
   assert.match(page, /memory\.contacts/u);
   assert.match(page, /contactId \}/u);
   assert.match(page, /审核中心/u);
+  assert.match(page, /查看并审核/u);
+  assert.match(page, /接受并写入/u);
+  assert.match(page, /该审核项已处理，当前仅可查看审计记录。/u);
   assert.match(page, /const EMPTY_MEMORY_GRAPH/u);
   assert.match(page, /if \(!contactId \|\| !available\)[\s\S]*setGraph\(EMPTY_MEMORY_GRAPH\)/u);
   assert.match(page, /setView\("brain"\);/u);
@@ -47,6 +50,13 @@ test("memory route is owned by a React page and scopes every action to a contact
   assert.match(page, /<Switch[^>]*checked=\{recallEnabled\}/u);
   assert.match(page, /<Tabs active=\{visibleView\}[^>]*items=\{MEMORY_VIEW_TABS\}[^>]*onChange=\{selectView\}/u);
   assert.match(page, /\{ label: "记忆大脑", value: "brain" \}/u);
+  assert.match(page, /selectImportDatabase/u);
+  assert.match(page, /inspectImportDatabase/u);
+  assert.match(page, /importDatabase/u);
+  assert.match(page, /导入记忆/u);
+  assert.match(page, /导入 Suzu Memory 记忆/u);
+  assert.match(page, /请选择由 Suzu Memory 创建的/u);
+  assert.match(page, /选择 \.db 文件/u);
   assert.match(page, /if \(loading \|\| \(!ready && nextView !== "brain"\)\) return;/u);
   assert.match(page, /<div className="memory-library-actions">[\s\S]*修改[\s\S]*删除/u);
   assert.doesNotMatch(page, /editingEnabled|编辑记忆|完成编辑/u);

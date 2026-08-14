@@ -226,6 +226,12 @@ test("WeChat links persist a contact scope and relay through its fixed Claude se
   assert.equal(links.links[0].contactId, "contact-suzu");
   assert.equal(Object.hasOwn(links.links[0], "sessionId"), false);
   assert.equal(Object.hasOwn(links.links[0], "projectRoot"), false);
+  const removed = await service.removeContact({ contactId: "contact-suzu" });
+  assert.equal(removed.removed, 1);
+  const remainingLinks = JSON.parse(await fs.readFile(path.join(root, "wechat-link", "connections.json"), "utf8"));
+  const remainingCredentials = await fs.readFile(path.join(root, "wechat-link", "credentials.json"), "utf8");
+  assert.deepEqual(remainingLinks.links, []);
+  assert.doesNotMatch(remainingCredentials, /bot-token-fixture/u);
   service.dispose();
 });
 

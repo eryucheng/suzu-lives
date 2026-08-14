@@ -20,6 +20,8 @@ const CLAUDE_RESUME_META_TEXT = "Continue from where you left off.";
 const CLAUDE_SYNTHETIC_NO_RESPONSE_TEXT = "No response requested.";
 const VOICE_CALL_TURN_OPEN = "<suzu-voice-call-turn>";
 const VOICE_CALL_TURN_CLOSE = "</suzu-voice-call-turn>";
+const VOICE_CALL_OPEN_OPEN = "<suzu-voice-call-open>";
+const VOICE_CALL_OPEN_CLOSE = "</suzu-voice-call-open>";
 const SEARCH_CATEGORIES = new Set(["messages", "images", "files", "audio", "links", "date"]);
 const DATE_QUERY_PATTERN = /^\d{4}-\d{2}-\d{2}$/u;
 
@@ -221,6 +223,88 @@ function voiceCallTranscript(value) {
   }
 }
 
+function voiceCallOpening(value) {
+  const source = String(value ?? "").trim();
+  if (!source.startsWith(VOICE_CALL_OPEN_OPEN) || !source.endsWith(VOICE_CALL_OPEN_CLOSE)) return false;
+  const encoded = source.slice(VOICE_CALL_OPEN_OPEN.length, -VOICE_CALL_OPEN_CLOSE.length).trim();
+  try {
+    const payload = JSON.parse(encoded);
+    return payload?.source === "suzu-live-call" && payload?.event === "open";
+  } catch {
+    return false;
+  }
+}
+
+function recordUuid(record) {
+  return clean(record?.uuid || record?.message?.uuid);
+}
+
+function recordParentUuid(record) {
+  return clean(record?.parentUuid || record?.message?.parentUuid);
+}
+
+function isConversationContinuationUserRecord(record) {
+  const content = record?.message?.content;
+  if (isClaudeResumeMetaRecord(record) || isManagedSuzuSkillContext(content)) return true;
+  return Array.isArray(content)
+    && content.length > 0
+    && content.every((part) => part?.type === "tool_result");
+}
+
+/**
+ * Claude persists a voice turn as an ordinary user record plus its normal
+ * response chain.  The protocol marker identifies the root; following parent
+ * UUIDs keeps tool/context records in the same call turn without changing what
+ * Claude receives or stores.
+ */
+function voiceCallRecordResolver(records) {
+  const byUuid = new Map();
+  for (const record of records || []) {
+    const uuid = recordUuid(record);
+    if (uuid) byUuid.set(uuid, record);
+  }
+  const resolved = new Map();
+  const resolving = new Set();
+
+  const belongsToVoiceCall = (record) => {
+    const uuid = recordUuid(record);
+    if (uuid && resolved.has(uuid)) return resolved.get(uuid);
+    if (uuid && resolving.has(uuid)) return false;
+    if (uuid) resolving.add(uuid);
+
+    const content = record?.message?.content;
+    let result = false;
+    if (record?.type === "user" && (voiceCallTranscript(content) !== null || voiceCallOpening(content))) {
+      result = true;
+    } else if (record?.type === "user" && !isConversationContinuationUserRecord(record)) {
+      // A real typed/inbound user message starts a new normal-chat turn even
+      // when its parent is the final reply from a previous call.
+      result = false;
+    } else {
+      const parent = byUuid.get(recordParentUuid(record));
+      result = parent ? belongsToVoiceCall(parent) : false;
+    }
+
+    if (uuid) {
+      resolving.delete(uuid);
+      resolved.set(uuid, result);
+    }
+    return result;
+  };
+
+  return belongsToVoiceCall;
+}
+
+function callTranscriptBlocks(blocks, speaker) {
+  const prefix = `通话 · ${speaker}：`;
+  let labelled = false;
+  return (blocks || []).map((block) => {
+    if (labelled || block?.kind !== "text") return block;
+    labelled = true;
+    return { ...block, text: `${prefix}${block.text}` };
+  });
+}
+
 function textWithConversationProtocol(value, { media = false } = {}) {
   const transcript = voiceCallTranscript(value);
   const text = transcript === null ? String(value ?? "") : transcript;
@@ -303,9 +387,11 @@ function noReplyBlocks(blocks) {
 
 export function buildDisplayMessages(records, maxMessages = 500) {
   const messages = [];
+  const belongsToVoiceCall = voiceCallRecordResolver(records);
   for (const record of records || []) {
     const type = record?.type;
     const message = record?.message || {};
+    const voiceCall = belongsToVoiceCall(record);
     let kind = "";
     let blocks = [];
     let label = "";
@@ -316,6 +402,9 @@ export function buildDisplayMessages(records, maxMessages = 500) {
       // Claude writes the full text of an auto-loaded Skill as a synthetic
       // user record. It is execution context, not something the person sent.
       if (isManagedSuzuSkillContext(message.content)) continue;
+      // The call-open marker asks the agent to greet after the line connects.
+      // It is transport metadata rather than a sentence the person said.
+      if (voiceCallOpening(message.content)) continue;
       const taskNotice = scheduledTaskNotice(message.content);
       if (taskNotice) {
         kind = "system";
@@ -325,14 +414,16 @@ export function buildDisplayMessages(records, maxMessages = 500) {
         const hasMedia = blocks.some((block) => block.kind === "media");
         const hasInboundMedia = blocks.some((block) => block.kind === "media" && ["wechat", "iphone"].includes(block.mediaSource));
         const onlyToolResults = blocks.length > 0 && blocks.every((block) => block.kind === "tool_result");
-        kind = hasInboundMedia ? "user" : hasMedia ? "assistant" : onlyToolResults ? "system" : "user";
+        kind = voiceCall ? "system" : hasInboundMedia ? "user" : hasMedia ? "assistant" : onlyToolResults ? "system" : "user";
+        if (voiceCall && voiceCallTranscript(message.content) !== null) blocks = callTranscriptBlocks(blocks, "我");
       }
     }
     else if (type === "assistant") {
       if (isClaudeSyntheticNoResponseRecord(record)) continue;
-      kind = "assistant";
+      kind = voiceCall ? "system" : "assistant";
       blocks = textParts(message.content);
       if (noReplyBlocks(blocks)) continue;
+      if (voiceCall) blocks = callTranscriptBlocks(blocks, "对方");
     }
     else if (type === "system") { kind = "system"; blocks = [{ kind: "text", text: boundedText(record.content || (record.subtype ? `[系统: ${record.subtype}]` : "[系统消息]")) }]; }
     else if (type === "attachment" || type === "hook_additional_context") {

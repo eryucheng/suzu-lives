@@ -52,6 +52,7 @@ function ConversationRoster({ actions, contacts, hasContactsRoot, rosterEmpty })
       </div>
       {contacts.length ? contacts.map((contact, index) => (
         <button
+          aria-label={`${contact.name}${contact.unread ? "，有未读消息" : ""}${contact.muted ? "，已开启消息免打扰" : ""}`}
           aria-current={contact.selected ? "page" : undefined}
           className={`conversation-contact${contact.selected ? " active" : ""}`}
           key={`${contact.id || "contact"}-${index}`}
@@ -70,7 +71,11 @@ function ConversationRoster({ actions, contacts, hasContactsRoot, rosterEmpty })
         >
           <span className="conversation-contact__avatar"><PersonAvatar avatar={contact.avatar} fallback={contact.name} /></span>
           <span className="conversation-contact__copy"><strong>{contact.name}</strong></span>
-          <span className="conversation-contact__state" title={contact.selected ? "当前联系人" : "联系人"}>{contact.selected ? "●" : ""}</span>
+          <span className="conversation-contact__state" title={contact.unread ? "有未读消息" : contact.muted ? "已开启消息免打扰" : contact.selected ? "当前联系人" : "联系人"}>
+            {contact.unread ? <span aria-hidden="true" className="conversation-contact__unread-dot" /> : null}
+            {contact.muted ? <span aria-hidden="true" className="conversation-contact__muted-mark">免</span> : null}
+            {contact.selected ? <span aria-hidden="true" className="conversation-contact__selected-mark">●</span> : null}
+          </span>
         </button>
       )) : <div className="conversation-roster__empty">{rosterEmpty}</div>}
     </aside>
@@ -79,7 +84,11 @@ function ConversationRoster({ actions, contacts, hasContactsRoot, rosterEmpty })
 
 function ContactContextMenu({ actions, menu }) {
   if (!menu) return null;
-  const label = menu.preferred ? "已设为首选联系人" : "设为首选联系人";
+  const preferredLabel = menu.preferred ? "已设为首选联系人" : "设为首选联系人";
+  const pinnedLabel = menu.pinned ? "取消置顶" : "置顶";
+  const unreadLabel = menu.unread ? "标为已读" : "标为未读";
+  const mutedLabel = menu.muted ? "取消消息免打扰" : "消息免打扰";
+  const hiddenLabel = menu.hidden ? "取消隐藏联系人" : "隐藏联系人";
   return <div
     aria-label={`${menu.contactName}的联系人菜单`}
     className="conversation-contact-context-menu"
@@ -87,7 +96,12 @@ function ContactContextMenu({ actions, menu }) {
     role="menu"
     style={{ left: menu.x, top: menu.y }}
   >
-    <button disabled={menu.preferred} onClick={() => { void actions.setPreferredContact?.(menu.contactId); }} role="menuitem" type="button">{label}</button>
+    <button disabled={menu.preferred} onClick={() => { void actions.setPreferredContact?.(menu.contactId); }} role="menuitem" type="button">{preferredLabel}</button>
+    <button onClick={() => { void actions.updateContactPresentation?.(menu.contactId, { pinned: !menu.pinned }); }} role="menuitem" type="button">{pinnedLabel}</button>
+    <button onClick={() => { void actions.updateContactPresentation?.(menu.contactId, { unread: !menu.unread }); }} role="menuitem" type="button">{unreadLabel}</button>
+    <button onClick={() => { void actions.updateContactPresentation?.(menu.contactId, { muted: !menu.muted }); }} role="menuitem" type="button">{mutedLabel}</button>
+    <button onClick={() => { void actions.updateContactPresentation?.(menu.contactId, { hidden: !menu.hidden }); }} role="menuitem" type="button">{hiddenLabel}</button>
+    <button className="conversation-contact-context-menu__danger" onClick={() => { void actions.removeContact?.(menu.contactId); }} role="menuitem" type="button">删除联系人</button>
   </div>;
 }
 
@@ -388,7 +402,7 @@ function ConversationSessionSettings({ actions, settings }) {
   if (!settings) return null;
   return (
     <aside aria-label="当前联系人设置" className={`conversation-session-settings${settings.visible ? "" : " hidden"}`} id="conversationSettings">
-      <header><div><span>当前联系人</span><div className="conversation-session-settings__contact-name"><strong>{settings.contactName}</strong>{settings.hasSession ? <button className="conversation-session-settings__note-button" onClick={() => actions.openSessionNote(settings.contactId)} type="button">修改备注</button> : null}</div></div><button aria-label="关闭联系人设置" className="conversation-session-settings__close suzu-close-button" onClick={actions.closeSessionSettings} type="button">×</button></header>
+      <header><div><span>当前联系人</span><div className="conversation-session-settings__contact-name"><strong>{settings.contactName}</strong><button className="conversation-session-settings__note-button" onClick={() => actions.openContactRename(settings.contactId)} type="button">修改联系人备注</button>{settings.hasSession ? <button className="conversation-session-settings__note-button" onClick={() => actions.openSessionNote(settings.contactId)} type="button">聊天备注</button> : null}</div></div><button aria-label="关闭联系人设置" className="conversation-session-settings__close suzu-close-button" onClick={actions.closeSessionSettings} type="button">×</button></header>
       {settings.contactAvatar ? (
         <section className="conversation-session-settings__section"><header><div><span>CONTACT</span><h2>联系人头像</h2></div></header><div className="conversation-session-settings__avatar"><span className="conversation-contact__avatar"><PersonAvatar avatar={settings.contactAvatar} fallback={settings.contactName} /></span><div className="conversation-session-settings__avatar-copy"><strong>{settings.contactName}</strong><div className="conversation-session-settings__avatar-actions"><label className="secondary-button">选择头像<input accept="image/png,image/jpeg,image/webp" hidden onChange={(event) => { const file = event.currentTarget.files?.[0]; event.currentTarget.value = ""; void actions.uploadContactAvatar(file); }} type="file" /></label>{settings.removeContactAvatar ? <button className="text-button" onClick={() => { void actions.removeContactAvatar(); }} type="button">移除头像</button> : null}</div></div></div></section>
       ) : null}
@@ -447,6 +461,18 @@ function ContactCreateDialog({ actions, open }) {
   return <div className="conversation-contact-create-overlay" onClick={(event) => { if (event.target === event.currentTarget) actions.closeContactCreate(); }}><form aria-label="新建联系人" className="conversation-contact-create-dialog" onSubmit={(event) => { event.preventDefault(); void actions.createContact(name); }}><header><div><span>NEW CONTACT</span><h2>新建联系人</h2></div><button aria-label="关闭" className="suzu-close-button" onClick={actions.closeContactCreate} type="button">×</button></header><label><span>联系人备注</span><input autoComplete="off" maxLength={80} onChange={(event) => setName(event.currentTarget.value)} placeholder="只在 Suzu 中显示，可与其他联系人重名" ref={inputRef} required value={name} /></label><p>创建后即可开始聊天。</p><footer><button className="text-button" onClick={actions.closeContactCreate} type="button">取消</button><button className="primary-button">创建联系人</button></footer></form></div>;
 }
 
+function ContactRenameDialog({ actions, contact }) {
+  const inputRef = useRef(null);
+  const [name, setName] = useState(contact?.name || "");
+  useEffect(() => {
+    if (!contact) return;
+    setName(contact.name || "");
+    inputRef.current?.focus();
+  }, [contact?.contactId, contact?.name]);
+  if (!contact) return null;
+  return <div className="conversation-contact-create-overlay" onClick={(event) => { if (event.target === event.currentTarget && !contact.saving) actions.closeContactRename(); }}><form aria-label="修改联系人备注" className="conversation-contact-create-dialog" id="conversationContactRename" onSubmit={(event) => { event.preventDefault(); void actions.renameContact(contact.contactId, name); }}><header><div><span>CONTACT REMARK</span><h2>修改联系人备注</h2></div><button aria-label="关闭修改联系人备注" className="suzu-close-button" disabled={contact.saving} onClick={actions.closeContactRename} type="button">×</button></header><label><span>联系人备注</span><input autoComplete="off" disabled={contact.saving} maxLength={80} onChange={(event) => setName(event.currentTarget.value)} placeholder="只在 Suzu 中显示，可与其他联系人重名" ref={inputRef} required value={name} /></label><p>聊天记录和关联设置仍按联系人 ID 保持不变。</p><footer><button className="text-button" disabled={contact.saving} onClick={actions.closeContactRename} type="button">取消</button><button className="primary-button" disabled={contact.saving}>{contact.saving ? "保存中…" : "保存备注"}</button></footer></form></div>;
+}
+
 function SessionNoteDialog({ actions, note }) {
   const inputRef = useRef(null);
   const [value, setValue] = useState(note?.note || "");
@@ -455,7 +481,7 @@ function SessionNoteDialog({ actions, note }) {
     if (note) inputRef.current?.focus();
   }, [note?.note, note?.contactId]);
   if (!note) return null;
-  return <div className="conversation-contact-note-overlay" onClick={(event) => { if (event.target === event.currentTarget) actions.closeSessionNote(); }}><form aria-label="修改备注" className="conversation-contact-note-dialog" id="conversationSessionNote" onSubmit={(event) => { event.preventDefault(); void actions.saveSessionNote(note.contactId, value); }}><header><div><span>CONTACT NOTE</span><h2>修改备注</h2></div><button aria-label="关闭修改备注" className="suzu-close-button" onClick={actions.closeSessionNote} type="button">×</button></header><label><span>备注</span><textarea maxLength={2000} onChange={(event) => { const next = event.currentTarget.value; setValue(next); actions.setSessionNoteDraft(next); }} placeholder="给这位联系人添加备注" ref={inputRef} rows={5} value={value} /></label><footer><button className="text-button" onClick={actions.closeSessionNote} type="button">取消</button><button className="primary-button">保存</button></footer></form></div>;
+  return <div className="conversation-contact-note-overlay" onClick={(event) => { if (event.target === event.currentTarget) actions.closeSessionNote(); }}><form aria-label="聊天备注" className="conversation-contact-note-dialog" id="conversationSessionNote" onSubmit={(event) => { event.preventDefault(); void actions.saveSessionNote(note.contactId, value); }}><header><div><span>CHAT NOTE</span><h2>聊天备注</h2></div><button aria-label="关闭聊天备注" className="suzu-close-button" onClick={actions.closeSessionNote} type="button">×</button></header><label><span>聊天备注</span><textarea maxLength={2000} onChange={(event) => { const next = event.currentTarget.value; setValue(next); actions.setSessionNoteDraft(next); }} placeholder="给这段聊天添加备注" ref={inputRef} rows={5} value={value} /></label><footer><button className="text-button" onClick={actions.closeSessionNote} type="button">取消</button><button className="primary-button">保存</button></footer></form></div>;
 }
 
 function WechatQrDialog({ actions, qr }) {
@@ -507,15 +533,23 @@ function AvatarCropDialog({ actions, crop }) {
 
 function ConversationCallBar({ call, onEnd }) {
   if (!call) return null;
-  const transcriptLabel = call.error ? "通话提示" : (call.transcript ? call.transcriptLabel : "语音通话中");
-  const transcript = call.error || call.transcript || "直接说话即可，Suzu 会在你停顿后回答。";
-  return <section aria-label={`与${call.contactName}的语音通话`} className="conversation-call-bar"><div className="conversation-call-bar__identity"><span className="conversation-call-bar__avatar"><PersonAvatar avatar={call.avatar} fallback={call.contactName} /></span><div><strong>{call.contactName}</strong><span className={`conversation-call-bar__status is-${call.phase}`}><i aria-hidden="true" />{call.status}</span></div></div><div aria-live="polite" className={`conversation-call-bar__transcript${call.error ? " is-error" : ""}`}><span>{transcriptLabel}</span><strong title={transcript}>{transcript}</strong></div><button aria-label="挂断语音通话" className="conversation-call-bar__hangup" disabled={call.ending} onClick={() => { void onEnd(); }} type="button"><ConversationIcon name="phone" /><span>{call.ending ? "正在挂断" : "挂断"}</span></button></section>;
+  const status = call.error || call.status;
+  const statusPhase = call.error ? "error" : call.phase;
+  return <section aria-label={`与${call.contactName}的语音通话`} className="conversation-call-bar"><div className="conversation-call-bar__identity"><span className="conversation-call-bar__avatar"><PersonAvatar avatar={call.avatar} fallback={call.contactName} /></span><div><strong>{call.contactName}</strong><span aria-live="polite" className={`conversation-call-bar__status is-${statusPhase}`}><i aria-hidden="true" />{status}</span></div></div><button aria-label="挂断语音通话" className="conversation-call-bar__hangup" disabled={call.ending} onClick={() => { void onEnd(); }} type="button"><ConversationIcon name="phone" /><span>{call.ending ? "正在挂断" : "挂断"}</span></button></section>;
+}
+
+function ConversationCallDialing({ call, onEnd }) {
+  if (!call?.dialing || call.initiator === "agent") return null;
+  const status = "正在呼叫";
+  const detail = "等待对方接听";
+  return <section aria-label={`${status}${call.contactName}`} className="conversation-call-dialing" onClick={(event) => event.stopPropagation()}><div className="conversation-call-dialing__screen"><div className="conversation-call-dialing__content"><span className="conversation-call-dialing__avatar"><PersonAvatar avatar={call.avatar} fallback={call.contactName} /></span><strong>{call.contactName}</strong><span aria-live="polite" className="conversation-call-dialing__status">{status}<span aria-hidden="true" className="conversation-call-dialing__dots">…</span></span><p>{detail}</p></div><button aria-label="取消语音通话" className="conversation-call-dialing__hangup" disabled={call.ending} onClick={() => { void onEnd(); }} type="button"><ConversationIcon name="phone" /><span>{call.ending ? "正在挂断" : "挂断"}</span></button></div></section>;
 }
 
 function ConversationOverlays({ actions, overlays }) {
   const active = overlays || {};
   return <>
     <ContactCreateDialog actions={actions} open={active.contactCreate} />
+    <ContactRenameDialog actions={actions} contact={active.contactRename} />
     <SessionNoteDialog actions={actions} note={active.sessionNote} />
     <WechatQrDialog actions={actions} qr={active.wechatQr} />
     <MediaPreviewDialog actions={actions} preview={active.mediaPreview} />
@@ -523,17 +557,42 @@ function ConversationOverlays({ actions, overlays }) {
   </>;
 }
 
-export function ConversationPage({ actions, snapshot = {} }) {
+export function ConversationPage({ actions, incomingCall = null, snapshot = {} }) {
   const callControl = useConversationCall();
+  const acceptedIncomingCall = useRef("");
+  const incomingCallDialingSeen = useRef("");
   const listRef = useRef(null);
   const latestScrollRequest = useRef(0);
   const scrollTargetRequest = useRef(0);
   const contacts = Array.isArray(snapshot.contacts) ? snapshot.contacts : [];
+  const activeContactId = String(contacts.find((contact) => contact?.selected)?.id || "").trim();
   const composer = snapshot.composer || {};
   const messageRows = Array.isArray(snapshot.messageRows) ? snapshot.messageRows : [];
   const permissions = Array.isArray(snapshot.permissions) ? snapshot.permissions : [];
   const ui = snapshot.ui || {};
   const contactContextMenu = snapshot.contactContextMenu || null;
+  useEffect(() => {
+    const requestId = String(incomingCall?.requestId || "").trim();
+    const contactId = String(incomingCall?.contactId || "").trim();
+    if (!requestId || acceptedIncomingCall.current === requestId || !contactId || contactId !== activeContactId) return;
+    if (!callControl.available || callControl.active) return;
+    acceptedIncomingCall.current = requestId;
+    void Promise.resolve().then(async () => {
+      const opened = await callControl.open({ initiator: "agent" });
+      if (!opened) actions.consumeIncomingVoiceCall?.(requestId);
+    });
+  }, [actions, activeContactId, callControl.active, callControl.available, callControl.open, incomingCall?.contactId, incomingCall?.requestId]);
+  useEffect(() => {
+    const requestId = String(incomingCall?.requestId || "").trim();
+    const call = callControl.call;
+    if (!requestId) return;
+    if (call?.initiator === "agent" && call.dialing) {
+      incomingCallDialingSeen.current = requestId;
+      return;
+    }
+    if (incomingCallDialingSeen.current !== requestId) return;
+    void Promise.resolve().then(() => actions.consumeIncomingVoiceCall?.(requestId));
+  }, [actions, callControl.call, incomingCall?.requestId]);
   useEffect(() => {
     if (!contactContextMenu) return undefined;
     const close = (event) => {
@@ -601,6 +660,7 @@ export function ConversationPage({ actions, snapshot = {} }) {
           <ConversationComposer actions={actions} composer={composer} focusRequest={ui.composerFocusRequest} />
         </div>
         <ConversationSearchPanel actions={actions} focusRequest={ui.searchFocusRequest} search={snapshot.search} />
+        <ConversationCallDialing call={callControl.call} onEnd={callControl.end} />
       </section>
       <ConversationOverlays actions={actions} overlays={snapshot.overlays} />
     </section>
