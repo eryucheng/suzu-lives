@@ -4,7 +4,7 @@
   "private": true,
   "author": "儿玉诚也",
   "description": "Local desktop control center for Suzu Lives.",
-  "license": "SEE LICENSE IN ../../LICENSE.md",
+  "license": "Apache-2.0",
   "type": "module",
   "main": "electron/main.mjs",
   "scripts": {
