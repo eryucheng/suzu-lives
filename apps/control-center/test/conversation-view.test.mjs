@@ -92,6 +92,13 @@ test("local chat overlays reconcile across tool-heavy transcripts without hiding
     requestId: "turn-3", sessionId: "session-1", content: "拒绝后仍保留的回复", timestamp: repliedAt,
   }]]), "session-1");
   assert.deepEqual(visibleReply.map((item) => item.blocks[0]?.text), ["第一条", "拒绝后仍保留的回复", "下一条"]);
+
+  const callSequence = mergeConversationMessages([
+    { id: "before-call", kind: "user", timestamp: "2026-08-14T10:00:00.000Z", blocks: [{ kind: "text", text: "给我打电话" }] },
+    { id: "call-request", kind: "assistant", timestamp: "2026-08-14T10:01:00.000Z", blocks: [{ kind: "text", text: "我现在打给你。" }] },
+    { id: "call-answer", kind: "system", timestamp: "2026-08-14T10:00:30.000Z", blocks: [{ kind: "text", text: "通话 · 对方：喂，我在。" }] },
+  ], [], new Map(), "session-1");
+  assert.deepEqual(callSequence.map((item) => item.blocks[0]?.text), ["给我打电话", "我现在打给你。", "通话 · 对方：喂，我在。"]);
 });
 
 test("agent media remains visible as a chat attachment even when tool details are hidden", () => {

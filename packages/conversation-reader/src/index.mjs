@@ -383,6 +383,26 @@ function noReplyBlocks(blocks) {
   return text.length === 1 && text[0].text.trim() === "NO_REPLY";
 }
 
+function displayOrderFromTranscript(messages) {
+  let previousTimestamp = Number.NaN;
+  let newestFirst = false;
+  for (const message of messages) {
+    const timestamp = Date.parse(message.timestamp);
+    if (!Number.isFinite(timestamp)) continue;
+    if (Number.isFinite(previousTimestamp)) {
+      // A live Claude JSONL is append-only.  One late record with an older
+      // timestamp (notably a voice-call record) must stay where it was
+      // appended instead of making the whole conversation jump around.
+      if (timestamp > previousTimestamp) return messages;
+      if (timestamp < previousTimestamp) newestFirst = true;
+    }
+    previousTimestamp = timestamp;
+  }
+  // Imported/copied histories can genuinely be written newest-first.  Keep
+  // that compatibility path, but only reverse a consistently descending file.
+  return newestFirst ? [...messages].reverse() : messages;
+}
+
 export function buildDisplayMessages(records, maxMessages = 500) {
   const messages = [];
   const belongsToVoiceCall = voiceCallRecordResolver(records);
@@ -444,23 +464,7 @@ export function buildDisplayMessages(records, maxMessages = 500) {
       ...(lineNumber ? { lineNumber } : {}),
     });
   }
-  // Claude JSONL is usually chronological, but imported or copied sessions can
-  // arrive newest-first. Chat UI must always read from older messages to newer.
-  return messages
-    .map((message, sourceIndex) => ({
-      message,
-      sourceIndex,
-      timestamp: Date.parse(message.timestamp),
-    }))
-    .sort((left, right) => {
-      const leftValid = Number.isFinite(left.timestamp);
-      const rightValid = Number.isFinite(right.timestamp);
-      if (leftValid && rightValid && left.timestamp !== right.timestamp) return left.timestamp - right.timestamp;
-      if (leftValid !== rightValid) return leftValid ? -1 : 1;
-      return left.sourceIndex - right.sourceIndex;
-    })
-    .map(({ message }) => message)
-    .slice(-maxMessages);
+  return displayOrderFromTranscript(messages).slice(-maxMessages);
 }
 
 export class JsonlTail {
