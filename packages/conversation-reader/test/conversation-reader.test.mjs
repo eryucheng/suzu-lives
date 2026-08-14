@@ -252,6 +252,16 @@ test("display messages read reverse-order transcript records as a normal chat", 
   assert.deepEqual(messages.map((message) => message.blocks[0].text), ["first", "later"]);
 });
 
+test("display messages preserve append order when one live record has an older timestamp", () => {
+  const messages = buildDisplayMessages([
+    { type: "user", timestamp: "2026-08-14T10:00:00.000Z", message: { content: "先说一件事" } },
+    { type: "assistant", timestamp: "2026-08-14T10:01:00.000Z", message: { content: [{ type: "text", text: "我来打电话。" }] } },
+    { type: "assistant", timestamp: "2026-08-14T10:00:30.000Z", message: { content: [{ type: "text", text: "电话里的补充。" }] } },
+    { type: "user", timestamp: "2026-08-14T10:02:00.000Z", message: { content: "之后继续打字" } },
+  ]);
+  assert.deepEqual(messages.map((message) => message.blocks[0].text), ["先说一件事", "我来打电话。", "电话里的补充。", "之后继续打字"]);
+});
+
 test("normalizes Claude and compatibility token usage without inventing missing fields", () => {
   assert.deepEqual(normalizeUsage({ input_tokens: 1000, cache_creation_input_tokens: 200, cache_read_input_tokens: 300, output_tokens: 400 }, "claude"), { model: "claude", input: 1000, cacheCreation: 200, cacheRead: 300, output: 400, total: 1900 });
   assert.deepEqual(normalizeUsage({ promptTokens: 10, completion_tokens: 5 }), { model: "", input: 10, cacheCreation: null, cacheRead: null, output: 5, total: 15 });
