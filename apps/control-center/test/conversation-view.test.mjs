@@ -6,6 +6,7 @@ import {
   dismissConversationOverlays,
   filterConversationItems,
   isScheduledAgentReply,
+  mergeConversationMessages,
   parseSuzuConversationCommand,
   conversationReactSnapshot,
   shouldSubmitConversationOnEnter,
@@ -46,6 +47,51 @@ test("conversation display preferences filter optional records but keep user tex
   assert.equal(tokensOnly[1].blocks.length, 0);
 
   assert.deepEqual(filterConversationItems(messages), [{ kind: "user", blocks: [{ kind: "text", text: "保留的普通文本" }] }]);
+});
+
+test("local chat overlays reconcile across tool-heavy transcripts without hiding a later repeated message", () => {
+  const sentAt = "2026-08-14T10:00:00.000Z";
+  const repliedAt = "2026-08-14T10:01:00.000Z";
+  const source = [
+    { id: "stored-user", kind: "user", timestamp: sentAt, blocks: [{ kind: "text", text: "请检查这个文件" }] },
+    { id: "stored-reply", kind: "assistant", timestamp: repliedAt, blocks: [{ kind: "text", text: "我先看看。" }] },
+    ...Array.from({ length: 14 }, (_, index) => ({
+      id: `tool-${index}`,
+      kind: "system",
+      timestamp: `2026-08-14T10:0${2 + Math.floor(index / 8)}:${String((index % 8) * 7).padStart(2, "0")}.000Z`,
+      blocks: [{ kind: "text", text: `工具记录 ${index}` }],
+    })),
+  ];
+  const merged = mergeConversationMessages(source, [{
+    id: "pending-user",
+    requestId: "turn-1",
+    sessionId: "session-1",
+    content: "请检查这个文件",
+    timestamp: sentAt,
+  }], new Map([["turn-1", {
+    requestId: "turn-1",
+    sessionId: "session-1",
+    content: "我先看看。",
+    timestamp: repliedAt,
+  }]]), "session-1");
+
+  assert.equal(merged.filter((item) => item.kind === "user" && item.blocks[0]?.text === "请检查这个文件").length, 1);
+  assert.equal(merged.filter((item) => item.kind === "assistant" && item.blocks[0]?.text === "我先看看。").length, 1);
+
+  const repeated = mergeConversationMessages([
+    { id: "old", kind: "user", timestamp: "2026-08-14T09:00:00.000Z", blocks: [{ kind: "text", text: "好" }] },
+  ], [{
+    id: "new", requestId: "turn-2", sessionId: "session-1", content: "好", timestamp: "2026-08-14T10:00:00.000Z",
+  }], new Map(), "session-1");
+  assert.equal(repeated.filter((item) => item.kind === "user" && item.blocks[0]?.text === "好").length, 2);
+
+  const visibleReply = mergeConversationMessages([
+    { id: "before", kind: "user", timestamp: sentAt, blocks: [{ kind: "text", text: "第一条" }] },
+    { id: "after", kind: "user", timestamp: "2026-08-14T10:02:00.000Z", blocks: [{ kind: "text", text: "下一条" }] },
+  ], [], new Map([["turn-3", {
+    requestId: "turn-3", sessionId: "session-1", content: "拒绝后仍保留的回复", timestamp: repliedAt,
+  }]]), "session-1");
+  assert.deepEqual(visibleReply.map((item) => item.blocks[0]?.text), ["第一条", "拒绝后仍保留的回复", "下一条"]);
 });
 
 test("agent media remains visible as a chat attachment even when tool details are hidden", () => {

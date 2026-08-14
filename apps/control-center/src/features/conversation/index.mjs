@@ -64,6 +64,8 @@ const viewState = {
   wechatUnsubscribe: null,
 };
 
+const TRANSCRIPT_MATCH_GRACE_MS = 5_000;
+
 const defaults = { attachments: false, tools: false, thinking: false, system: false, tokens: false, timeDisplay: "center" };
 const CENTER_TIME_GAP_MS = 5 * 60 * 1_000;
 
@@ -115,9 +117,16 @@ function messageText(message) {
     .join("\n");
 }
 
-function messageMatches(items, kind, content) {
+function messageMatches(items, kind, content, localTimestamp) {
   const target = clean(content);
-  return (items || []).slice(-12).some((item) => item.kind === kind && messageText(item) === target);
+  if (!target) return false;
+  const localTime = Date.parse(localTimestamp);
+  return (items || []).some((item) => {
+    if (item.kind !== kind || messageText(item) !== target) return false;
+    if (!Number.isFinite(localTime)) return true;
+    const transcriptTime = Date.parse(item.timestamp);
+    return Number.isFinite(transcriptTime) && transcriptTime >= localTime - TRANSCRIPT_MATCH_GRACE_MS;
+  });
 }
 
 function conversationPreview(items) {
@@ -181,11 +190,24 @@ export function wechatTimeLabel(timestamp, now = new Date()) {
   return date.getFullYear() === current.getFullYear() ? `${monthDay} ${clock}` : `${date.getFullYear()}年${monthDay} ${clock}`;
 }
 
-function displayedMessages(items) {
+function chronologicalMessages(items) {
+  return items
+    .map((item, sourceIndex) => ({ item, sourceIndex, timestamp: Date.parse(item.timestamp) }))
+    .sort((left, right) => {
+      const leftValid = Number.isFinite(left.timestamp);
+      const rightValid = Number.isFinite(right.timestamp);
+      if (leftValid && rightValid && left.timestamp !== right.timestamp) return left.timestamp - right.timestamp;
+      if (leftValid !== rightValid) return leftValid ? -1 : 1;
+      return left.sourceIndex - right.sourceIndex;
+    })
+    .map(({ item }) => item);
+}
+
+export function mergeConversationMessages(items, pendingItems = [], liveReplyItems = new Map(), activeSessionId = "") {
   const source = Array.isArray(items) ? items : [];
-  const sessionId = clean(viewState.snapshot?.activeSessionId);
-  const pending = viewState.pending
-    .filter((item) => item.sessionId === sessionId && !messageMatches(source, "user", item.content))
+  const sessionId = clean(activeSessionId);
+  const pending = (Array.isArray(pendingItems) ? pendingItems : [])
+    .filter((item) => item.sessionId === sessionId && !messageMatches(source, "user", item.content, item.timestamp))
     .map((item) => ({
       id: item.id,
       kind: "user",
@@ -197,8 +219,11 @@ function displayedMessages(items) {
       timestamp: item.timestamp,
       blocks: [{ kind: "text", text: item.content }],
     }));
-  const liveReplies = [...viewState.liveReplies.values()]
-    .filter((item) => item.sessionId === sessionId && item.content && !messageMatches(source, "assistant", item.content))
+  const replyValues = liveReplyItems instanceof Map
+    ? [...liveReplyItems.values()]
+    : Array.isArray(liveReplyItems) ? liveReplyItems : [];
+  const liveReplies = replyValues
+    .filter((item) => item.sessionId === sessionId && item.content && !messageMatches(source, "assistant", item.content, item.timestamp))
     .map((item) => ({
       id: `reply-${item.requestId}`,
       kind: "assistant",
@@ -206,9 +231,16 @@ function displayedMessages(items) {
       timestamp: item.timestamp,
       blocks: [{ kind: "text", text: item.content }],
     }));
-  const activePending = pending.filter((item) => !item.queued);
-  const queuedPending = pending.filter((item) => item.queued);
-  return [...source, ...activePending, ...liveReplies, ...queuedPending];
+  return chronologicalMessages([...source, ...pending, ...liveReplies]);
+}
+
+function displayedMessages(items) {
+  return mergeConversationMessages(
+    items,
+    viewState.pending,
+    viewState.liveReplies,
+    clean(viewState.snapshot?.activeSessionId),
+  );
 }
 
 export function filterConversationItems(items, configuredPreferences = {}) {
@@ -940,10 +972,10 @@ function handleConversationEvent(context, event) {
     viewState.permissions.forEach((item, id) => {
       if (item.sessionId === sessionId) viewState.permissions.delete(id);
     });
-    viewState.pending = viewState.pending.filter((item) => item.requestId !== requestId);
     viewState.notice = "";
     viewState.error = `Claude Code 没有完成这次回复：${event.message || "未知错误"}`;
     context.render();
+    void load(context, true);
     return;
   }
   if (event?.type === "turn-stopped" && requestId && sessionId) {
