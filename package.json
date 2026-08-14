@@ -1,6 +1,6 @@
 {
   "name": "suzu-lives",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "author": "儿玉诚也",
   "description": "Desktop software and shared runtime for Claude-connected personal AI capabilities.",
@@ -8,7 +8,11 @@
   "scripts": {
     "start": "npm run start --workspace=suzu-lives-console",
     "test": "npm run test --workspaces --if-present",
-    "dist": "npm run dist --workspace=suzu-lives-console"
+    "dist": "npm run dist --workspace=suzu-lives-console",
+    "dist:installer": "npm run dist:installer --workspace=suzu-lives-console",
+    "generate:release-key": "node scripts/release-signing.mjs generate-key",
+    "sign:release": "node scripts/release-signing.mjs sign",
+    "verify:release": "node scripts/release-signing.mjs verify"
   },
   "workspaces": [
     "apps/*",
