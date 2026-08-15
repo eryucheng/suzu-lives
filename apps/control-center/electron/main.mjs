@@ -2,15 +2,19 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { app, BrowserWindow, ipcMain, Menu, safeStorage } from "electron";
+import electronUpdater from "electron-updater";
 
 import { runSuzuLivesCli } from "@suzu-lives/claude-integration/agent-cli";
 import { asDashScopeImageConnection, createDashScopeConnectionService, createImageVisionCredentialService, createNamedApiConnectionService, createVideoUnderstandingCredentialService } from "@suzu-lives/service-connections";
 import { createSettingsService, registerIpcHandlers } from "./ipc/index.mjs";
+import { runMemoryRecallHookWorker } from "./hooks/memory-recall.mjs";
 import { runProjectHookCli } from "./hooks/runtime.mjs";
 import { applyFeatureConnectionOverrides } from "./services/connection-model-overrides.mjs";
+import { createAppUpdateService } from "./services/app-update.mjs";
 import { createDataStorageLocationService } from "./services/data-storage-location.mjs";
 import { applyWindowControl, windowControlState } from "./services/window-controls.mjs";
 
+const { autoUpdater } = electronUpdater;
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const APP_ROOT = path.resolve(HERE, "..");
 const APP_ICON = path.join(APP_ROOT, "assets", "app-icon.png");
@@ -139,6 +143,7 @@ function createWindow(settingsService) {
 
 const hookArgumentIndex = process.argv.indexOf("--suzu-lives-hook");
 const cliArgumentIndex = process.argv.indexOf("--suzu-lives-cli");
+const memoryHookWorkerArgumentIndex = process.argv.indexOf("--suzu-lives-memory-hook-worker");
 
 async function cliConnectionResolver({ kind, dataRoot }) {
   const selected = await createNamedApiConnectionService({ dataRoot, safeStorage }).resolve(kind);
@@ -171,7 +176,14 @@ function claudeWorkspaceRoot() {
   return app.isPackaged ? APP_ROOT : path.resolve(APP_ROOT, "..", "..");
 }
 
-if (cliArgumentIndex !== -1) {
+if (memoryHookWorkerArgumentIndex !== -1) {
+  app.whenReady()
+    .then(() => runMemoryRecallHookWorker({
+      envelopePath: process.argv[memoryHookWorkerArgumentIndex + 1] || "",
+      safeStorage,
+    }))
+    .finally(() => app.quit());
+} else if (cliArgumentIndex !== -1) {
   app.whenReady()
     .then(() => runSuzuLivesCli({ args: process.argv.slice(cliArgumentIndex + 1), connectionResolver: cliConnectionResolver }))
     .finally(() => app.exit(process.exitCode || 0));
@@ -196,9 +208,11 @@ if (cliArgumentIndex !== -1) {
     app.setAppUserModelId("com.suzulives.console");
     Menu.setApplicationMenu(null);
     const settingsService = createSettingsService({ app, dataStorageService });
+    const appUpdateService = createAppUpdateService({ app, autoUpdater });
     const cliLauncherCommand = conversationAttachmentCli();
     registerIpcHandlers({
       app,
+      appUpdateService,
       getMainWindow: () => mainWindow,
       settingsService,
       dataStorageService,

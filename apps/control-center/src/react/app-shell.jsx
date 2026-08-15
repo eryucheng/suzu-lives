@@ -1,6 +1,7 @@
-import { useEffect, useLayoutEffect, useMemo, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import { Avatar, Input, SideNav, SideNavItem } from "suzu-design-system";
+import { searchSuzuSearchItems } from "../core/suzu-search.mjs";
 import { ApplicationRouter } from "./app-router.jsx";
 import { ConversationCallProvider } from "./conversation-call.jsx";
 
@@ -160,9 +161,115 @@ function WindowControls() {
   );
 }
 
+function SuzuSearchDialog({ onClose, onSelect, open }) {
+  const [query, setQuery] = useState("");
+  const [selectedIndex, setSelectedIndex] = useState(0);
+  const inputRef = useRef(null);
+  const results = useMemo(() => searchSuzuSearchItems(query), [query]);
+  const hasQuery = Boolean(query.trim());
+
+  useEffect(() => {
+    if (open) {
+      const frame = window.requestAnimationFrame(() => inputRef.current?.focus());
+      return () => window.cancelAnimationFrame(frame);
+    }
+    setQuery("");
+    setSelectedIndex(0);
+    return undefined;
+  }, [open]);
+
+  useEffect(() => {
+    setSelectedIndex(0);
+  }, [query]);
+
+  const select = (entry) => {
+    if (!entry) return;
+    onSelect?.(entry.id);
+    onClose?.();
+  };
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const onKeyDown = (event) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onClose?.();
+        return;
+      }
+      if (event.key === "ArrowDown") {
+        if (!results.length) return;
+        event.preventDefault();
+        setSelectedIndex((current) => Math.min(results.length - 1, current + 1));
+        return;
+      }
+      if (event.key === "ArrowUp") {
+        if (!results.length) return;
+        event.preventDefault();
+        setSelectedIndex((current) => Math.max(0, current - 1));
+        return;
+      }
+      if (event.key === "Enter" && !event.isComposing) {
+        const entry = results[selectedIndex];
+        if (!entry) return;
+        event.preventDefault();
+        select(entry);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [onClose, open, results, selectedIndex]);
+
+  if (!open) return null;
+
+  return (
+    <div className="suzu-search-overlay" onMouseDown={onClose}>
+      <section aria-label="Suzu 搜索" aria-modal="true" className="suzu-search-dialog" id="suzu-search-dialog" onMouseDown={(event) => event.stopPropagation()} role="dialog">
+        <header className="suzu-search-dialog__header">
+          <Input
+            aria-label="搜索功能和设置"
+            autoComplete="off"
+            className="suzu-search-dialog__input"
+            maxLength={80}
+            onChange={(event) => setQuery(event.currentTarget.value)}
+            placeholder="搜索功能和设置"
+            prefix={<ShellIcon name="search" />}
+            ref={inputRef}
+            size="lg"
+            value={query}
+          />
+          <button aria-label="关闭搜索" className="suzu-search-dialog__close" onClick={onClose} type="button">×</button>
+        </header>
+        <div aria-live="polite" className="suzu-search-dialog__body">
+          <p className="suzu-search-dialog__label">{hasQuery ? `“${query.trim()}” 的结果` : "常用功能"}</p>
+          {results.length ? (
+            <div aria-label={hasQuery ? "搜索结果" : "常用功能"} className="suzu-search-results" role="listbox">
+              {results.map((entry, index) => (
+                <button
+                  aria-selected={index === selectedIndex}
+                  className={`suzu-search-result${index === selectedIndex ? " is-active" : ""}`}
+                  key={entry.id}
+                  onClick={() => select(entry)}
+                  onMouseEnter={() => setSelectedIndex(index)}
+                  role="option"
+                  type="button"
+                >
+                  <span aria-hidden="true" className="suzu-search-result__icon"><ShellIcon name={entry.icon} /></span>
+                  <span className="suzu-search-result__copy"><strong>{entry.title}</strong><small>{entry.detail}</small></span>
+                </button>
+              ))}
+            </div>
+          ) : <div className="suzu-search-empty">没有找到匹配的功能或设置。</div>}
+        </div>
+        <footer className="suzu-search-dialog__footer"><span>仅搜索软件功能与设置</span><span><kbd>↑↓</kbd> 选择 <kbd>Enter</kbd> 打开 <kbd>Esc</kbd> 关闭</span></footer>
+      </section>
+    </div>
+  );
+}
+
 export function AppShell() {
   const [workspace, setWorkspace] = useState(() => latestWorkspace);
   const [notice, setNotice] = useState(() => latestNotice);
+  const [suzuSearchOpen, setSuzuSearchOpen] = useState(false);
 
   useLayoutEffect(() => {
     updateWorkspace = setWorkspace;
@@ -177,6 +284,16 @@ export function AppShell() {
   const navigate = (view) => workspace?.actions?.navigate?.(view);
   const conversationProps = workspace?.route?.kind === "conversation" ? workspace.route.props : null;
   const conversationUnread = workspace?.conversationUnread === true;
+
+  useEffect(() => {
+    const openSearch = (event) => {
+      if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== "k") return;
+      event.preventDefault();
+      setSuzuSearchOpen(true);
+    };
+    window.addEventListener("keydown", openSearch);
+    return () => window.removeEventListener("keydown", openSearch);
+  }, []);
 
   return (
     <div className="desktop-shell">
@@ -200,9 +317,18 @@ export function AppShell() {
             <div className="shell-topbar-edge" aria-hidden="true" />
             <div className="shell-command-slot">
               <Input
-                aria-label="问 Suzu 或搜索"
+                aria-controls="suzu-search-dialog"
+                aria-expanded={suzuSearchOpen}
+                aria-haspopup="dialog"
+                aria-label="搜索功能和设置"
                 className="shell-command"
-                placeholder="问 Suzu 或搜索"
+                onClick={() => setSuzuSearchOpen(true)}
+                onKeyDown={(event) => {
+                  if (!["Enter", " "].includes(event.key)) return;
+                  event.preventDefault();
+                  setSuzuSearchOpen(true);
+                }}
+                placeholder="搜索功能和设置"
                 prefix={<ShellIcon name="search" />}
                 readOnly
                 size="lg"
@@ -221,6 +347,7 @@ export function AppShell() {
               <ApplicationRouter workspace={workspace} />
             </ConversationCallProvider>
           </section>
+          <SuzuSearchDialog onClose={() => setSuzuSearchOpen(false)} onSelect={workspace?.actions?.openSuzuSearchItem} open={suzuSearchOpen} />
         </main>
       </div>
     </div>

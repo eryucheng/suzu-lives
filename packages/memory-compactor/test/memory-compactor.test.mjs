@@ -8,6 +8,7 @@ import {
   SESSION_COMPACTION_SCHEMA,
   chooseCompactionPlan,
   chooseTokenTailCompactionPlan,
+  importConversationHistory,
   parseJsonlText,
   parseSessionCompaction,
   reconstructLogicalContext,
@@ -201,6 +202,47 @@ test("writes a conversation checkpoint without opening or writing a long-term me
   assert.match(
     fs.readFileSync(path.join(softwareDataDirectory, "agents", "agent-test", "memory", "compactor", "work", "latest-summary.md"), "utf8"),
     /科技馆/u,
+  );
+});
+
+test("imports a separate JSONL by replacing the target session without changing the source file", async () => {
+  const root = temporaryDirectory("suzu-conversation-history-import-");
+  const sourceTranscriptPath = path.join(root, "source.jsonl");
+  const targetTranscriptPath = path.join(root, "target.jsonl");
+  const softwareDataDirectory = path.join(root, "software-data");
+  const source = sampleTranscript();
+  source[0].message.content = "我之前和你聊过第一次一起看流星雨。";
+  source[1].message.content = [{ type: "text", text: "我记得那天我们都很开心。" }];
+  writeTranscript(sourceTranscriptPath, source);
+  writeTranscript(targetTranscriptPath);
+  const originalSource = fs.readFileSync(sourceTranscriptPath, "utf8");
+  const originalTarget = fs.readFileSync(targetTranscriptPath, "utf8");
+
+  const result = await importConversationHistory({
+    sourceTranscriptPath,
+    transcriptPath: targetTranscriptPath,
+    agentId: "agent-test",
+    sessionId: "target-session",
+    softwareDataDirectory,
+    now: new Date("2026-07-30T02:00:00.000Z"),
+    targetProjectRoot: path.join(root, "target-contact"),
+  });
+
+  assert.equal(result.status, "imported");
+  assert.equal(result.mode, "replace");
+  assert.equal(fs.readFileSync(sourceTranscriptPath, "utf8"), originalSource);
+  const targetText = fs.readFileSync(targetTranscriptPath, "utf8");
+  assert.doesNotMatch(targetText, /科技馆/u);
+  assert.equal(fs.readFileSync(result.backupPath, "utf8"), originalTarget);
+  const targetEntries = parseJsonlText(targetText, targetTranscriptPath);
+  assert.equal(targetEntries.length, source.length);
+  assert.deepEqual(targetEntries.map((entry) => entry.record.uuid), source.map((entry) => entry.uuid));
+  assert.deepEqual(targetEntries.map((entry) => entry.record.parentUuid), source.map((entry) => entry.parentUuid));
+  assert.equal(targetEntries.every((entry) => entry.record.sessionId === "target-session"), true);
+  assert.equal(targetEntries.every((entry) => entry.record.cwd === path.join(root, "target-contact")), true);
+  assert.deepEqual(
+    reconstructLogicalContext(targetEntries).logical.map((entry) => entry.record.uuid),
+    source.map((entry) => entry.uuid),
   );
 });
 

@@ -5,6 +5,7 @@ import path from "node:path";
 
 import { normalizeAgentId, resolveAgentDataRoot } from "@suzu-lives/agent-registry";
 import { claudeProjectDirectoryCandidates } from "./conversation-reader.mjs";
+import { DEFAULT_CLAUDE_PERMISSION_MODE, isClaudePermissionMode, normalizeClaudePermissionMode } from "./claude-permission-mode.mjs";
 
 const CONTACT_FILE = "CLAUDE.md";
 const CONTACT_METADATA_DIRECTORY = ".suzu-lives";
@@ -25,6 +26,10 @@ export class ContactProjectsError extends Error {
 
 function clean(value) {
   return String(value ?? "").trim();
+}
+
+function unreadCount(value) {
+  return Number.isSafeInteger(value) && value >= 0 ? value : 0;
 }
 
 function samePath(left, right) {
@@ -126,6 +131,7 @@ async function contactMetadata(fsOps, projectRoot) {
     // Storage identity is created together with every contact and is required
     // when reading it back. Do not recreate a path-derived fallback here.
     if (!agentId) return null;
+    const storedUnreadCount = unreadCount(raw.unreadCount);
     return {
       id: normalizeContactId(raw.id),
       name: normalizeContactName(raw.name),
@@ -135,7 +141,10 @@ async function contactMetadata(fsOps, projectRoot) {
       hidden: raw.hidden === true,
       muted: raw.muted === true,
       pinned: raw.pinned === true,
-      unread: raw.unread === true,
+      unread: storedUnreadCount > 0,
+      unreadCount: storedUnreadCount,
+      approvalMode: normalizeClaudePermissionMode(raw.approvalMode),
+      longTermMemoryEnabled: raw.longTermMemoryEnabled !== false,
     };
   } catch {
     return null;
@@ -169,8 +178,11 @@ async function contactAt(fsOps, root, value) {
     hidden: metadata.hidden,
     muted: metadata.muted,
     pinned: metadata.pinned,
+    approvalMode: metadata.approvalMode,
+    longTermMemoryEnabled: metadata.longTermMemoryEnabled,
     sessionId: metadata.sessionId,
     unread: metadata.unread,
+    unreadCount: metadata.unreadCount,
     updatedAt: stat.mtime instanceof Date ? stat.mtime.toISOString() : "",
   };
 }
@@ -213,9 +225,11 @@ function updatedOwnerProfileTitle(content, { previousName, name } = {}) {
   return `${bom}${nextTitle}${body.slice(previousTitle.length)}`;
 }
 
-function contactMetadataText({ id, name, createdAt, sessionId = "", agentId, hidden = false, muted = false, pinned = false, unread = false } = {}) {
+function contactMetadataText({ id, name, createdAt, sessionId = "", agentId, hidden = false, muted = false, pinned = false, unreadCount: count = 0, approvalMode = DEFAULT_CLAUDE_PERMISSION_MODE, longTermMemoryEnabled = true } = {}) {
   const storageIdentity = normalizeAgentId(agentId);
   if (!storageIdentity) throw new ContactProjectsError("联系人固定存储身份无效。 ");
+  const normalizedApprovalMode = normalizeClaudePermissionMode(approvalMode);
+  const normalizedUnreadCount = unreadCount(count);
   return `${JSON.stringify({
     version: 1,
     id,
@@ -225,8 +239,10 @@ function contactMetadataText({ id, name, createdAt, sessionId = "", agentId, hid
     agentId: storageIdentity,
     ...(hidden === true ? { hidden: true } : {}),
     ...(pinned === true ? { pinned: true } : {}),
-    ...(unread === true ? { unread: true } : {}),
+    ...(normalizedUnreadCount > 0 ? { unreadCount: normalizedUnreadCount } : {}),
     ...(muted === true ? { muted: true } : {}),
+    ...(normalizedApprovalMode !== DEFAULT_CLAUDE_PERMISSION_MODE ? { approvalMode: normalizedApprovalMode } : {}),
+    ...(longTermMemoryEnabled === false ? { longTermMemoryEnabled: false } : {}),
   }, null, 2)}\n`;
 }
 
@@ -440,7 +456,9 @@ export function createContactProjectsService({
         hidden: contact.hidden,
         muted: contact.muted,
         pinned: contact.pinned,
-        unread: contact.unread,
+        unreadCount: contact.unreadCount,
+        approvalMode: contact.approvalMode,
+        longTermMemoryEnabled: contact.longTermMemoryEnabled,
       }));
     } catch (error) {
       throw new ContactProjectsError(`无法更新联系人备注：${clean(error?.message) || "未知错误"}`);
@@ -454,19 +472,35 @@ export function createContactProjectsService({
     const contact = await contactAt(fsOps, root, source.id);
     if (!contact) throw new ContactProjectsError("所选联系人不存在或不是由 Suzu 创建的 Claude 项目。 ");
     const patch = {};
-    for (const key of ["pinned", "unread", "muted", "hidden"]) {
+    if (Object.hasOwn(source, "unread")) throw new ContactProjectsError("联系人未读状态请使用 unreadCount。 ");
+    for (const key of ["pinned", "muted", "hidden"]) {
       if (!Object.hasOwn(source, key)) continue;
       if (typeof source[key] !== "boolean") throw new ContactProjectsError("联系人显示状态无效。 ");
       patch[key] = source[key];
     }
+    for (const key of ["unreadCount", "unreadIncrement"]) {
+      if (!Object.hasOwn(source, key)) continue;
+      const value = source[key];
+      const minimum = key === "unreadIncrement" ? 1 : 0;
+      if (!Number.isSafeInteger(value) || value < minimum) throw new ContactProjectsError("联系人未读数无效。 ");
+      patch[key] = value;
+    }
+    if (Object.hasOwn(patch, "unreadCount") && Object.hasOwn(patch, "unreadIncrement")) {
+      throw new ContactProjectsError("联系人未读状态不能同时指定多个值。 ");
+    }
     if (!Object.keys(patch).length) throw new ContactProjectsError("请指定要更新的联系人显示状态。 ");
+    const nextUnreadCount = Object.hasOwn(patch, "unreadCount")
+      ? patch.unreadCount
+      : Object.hasOwn(patch, "unreadIncrement")
+        ? Math.min(Number.MAX_SAFE_INTEGER, contact.unreadCount + patch.unreadIncrement)
+        : contact.unreadCount;
     const next = {
       hidden: Object.hasOwn(patch, "hidden") ? patch.hidden : contact.hidden,
       muted: Object.hasOwn(patch, "muted") ? patch.muted : contact.muted,
       pinned: Object.hasOwn(patch, "pinned") ? patch.pinned : contact.pinned,
-      unread: Object.hasOwn(patch, "unread") ? patch.unread : contact.unread,
+      unreadCount: nextUnreadCount,
     };
-    if (next.hidden === contact.hidden && next.muted === contact.muted && next.pinned === contact.pinned && next.unread === contact.unread) {
+    if (next.hidden === contact.hidden && next.muted === contact.muted && next.pinned === contact.pinned && next.unreadCount === contact.unreadCount) {
       return snapshot();
     }
     try {
@@ -477,9 +511,64 @@ export function createContactProjectsService({
         sessionId: contact.sessionId,
         agentId: contact.agentId,
         ...next,
+        approvalMode: contact.approvalMode,
+        longTermMemoryEnabled: contact.longTermMemoryEnabled,
       }));
     } catch (error) {
       throw new ContactProjectsError(`无法更新联系人显示状态：${clean(error?.message) || "未知错误"}`);
+    }
+    return snapshot();
+  };
+
+  const updateApprovalMode = async ({ id, approvalMode } = {}) => {
+    if (!isClaudePermissionMode(approvalMode)) throw new ContactProjectsError("联系人审批模式无效。 ");
+    const root = await contactsRoot();
+    const contact = await contactAt(fsOps, root, id);
+    if (!contact) throw new ContactProjectsError("所选联系人不存在或不是由 Suzu 创建的 Claude 项目。 ");
+    const nextApprovalMode = normalizeClaudePermissionMode(approvalMode);
+    if (nextApprovalMode === contact.approvalMode) return snapshot();
+    try {
+      await writeTextAtomic(fsOps, path.join(contact.projectRoot, CONTACT_METADATA_DIRECTORY, CONTACT_METADATA_FILE), contactMetadataText({
+        id: contact.id,
+        name: contact.name,
+        createdAt: contact.createdAt,
+        sessionId: contact.sessionId,
+        agentId: contact.agentId,
+        hidden: contact.hidden,
+        muted: contact.muted,
+        pinned: contact.pinned,
+        unreadCount: contact.unreadCount,
+        approvalMode: nextApprovalMode,
+        longTermMemoryEnabled: contact.longTermMemoryEnabled,
+      }));
+    } catch (error) {
+      throw new ContactProjectsError(`无法更新联系人审批模式：${clean(error?.message) || "未知错误"}`);
+    }
+    return snapshot();
+  };
+
+  const updateLongTermMemoryEnabled = async ({ id, enabled } = {}) => {
+    if (typeof enabled !== "boolean") throw new ContactProjectsError("联系人长期记忆开关无效。 ");
+    const root = await contactsRoot();
+    const contact = await contactAt(fsOps, root, id);
+    if (!contact) throw new ContactProjectsError("所选联系人不存在或不是由 Suzu 创建的 Claude 项目。 ");
+    if (enabled === contact.longTermMemoryEnabled) return snapshot();
+    try {
+      await writeTextAtomic(fsOps, path.join(contact.projectRoot, CONTACT_METADATA_DIRECTORY, CONTACT_METADATA_FILE), contactMetadataText({
+        id: contact.id,
+        name: contact.name,
+        createdAt: contact.createdAt,
+        sessionId: contact.sessionId,
+        agentId: contact.agentId,
+        hidden: contact.hidden,
+        muted: contact.muted,
+        pinned: contact.pinned,
+        unreadCount: contact.unreadCount,
+        approvalMode: contact.approvalMode,
+        longTermMemoryEnabled: enabled,
+      }));
+    } catch (error) {
+      throw new ContactProjectsError(`无法更新联系人长期记忆开关：${clean(error?.message) || "未知错误"}`);
     }
     return snapshot();
   };
@@ -574,5 +663,5 @@ export function createContactProjectsService({
     };
   };
 
-  return { create, remove, rename, select, selectRoot, setPreferred, snapshot, syncClaudeProjectSettings, syncOwnerProfileTitle, updatePresentation };
+  return { create, remove, rename, select, selectRoot, setPreferred, snapshot, syncClaudeProjectSettings, syncOwnerProfileTitle, updateApprovalMode, updateLongTermMemoryEnabled, updatePresentation };
 }

@@ -29,6 +29,7 @@ import {
   proactiveContactScopeKey,
 } from "../services/proactive-contact-maintenance.mjs";
 import { runScheduledScript, validateScheduledScriptPath } from "../services/scheduled-script.mjs";
+import { syncTravelingMerchantSchedule } from "../services/traveling-merchant-schedule.mjs";
 import { ensureSuzuClaudeProjectSettings } from "@suzu-lives/claude-integration";
 import {
   createScheduleRunner,
@@ -113,7 +114,7 @@ function merchantTaskContent(message) {
   ].join("\n");
 }
 
-export function registerIpcHandlers({ app, dataStorageService, getMainWindow, settingsService, wechatAttachmentCli = "", cliLauncherCommand = "", claudeWorkspaceDirectories = [] }) {
+export function registerIpcHandlers({ app, appUpdateService = null, dataStorageService, getMainWindow, settingsService, wechatAttachmentCli = "", cliLauncherCommand = "", claudeWorkspaceDirectories = [] }) {
   const currentCliLauncher = clean(cliLauncherCommand) || (app.isPackaged ? packagedCliCommand(app.getPath("exe")) : "");
   const dataRoot = settingsService.response(settingsService.load()).dataRoot;
   let removeContactAssociations = async () => undefined;
@@ -150,11 +151,39 @@ export function registerIpcHandlers({ app, dataStorageService, getMainWindow, se
   const projectHooksService = createProjectHooksService({
     settingsService,
     executablePath: app.getPath("exe"),
+    hookRunnerPath: path.join(app.getAppPath(), "electron", "hooks", "runner.mjs"),
     packaged: app.isPackaged,
   });
+  const syncMemoryRecallHooks = async ({ enabled = settingsService.load()?.memoryRecallEnabled !== false } = {}) => {
+    if (!app.isPackaged) return { status: "development", contacts: [], errors: [] };
+    let catalog;
+    try {
+      catalog = await contactProjectsService.snapshot();
+    } catch (error) {
+      return { status: "unavailable", contacts: [], errors: [{ message: clean(error?.message) || "无法读取联系人项目。" }] };
+    }
+    const contacts = Array.isArray(catalog?.contacts) ? catalog.contacts : [];
+    const updated = [];
+    const errors = [];
+    for (const contact of contacts) {
+      const projectRoot = clean(contact?.projectRoot);
+      if (!projectRoot) continue;
+      try {
+        const recallEnabled = enabled && contact?.longTermMemoryEnabled !== false;
+        const result = recallEnabled
+          ? await projectHooksService.installMemoryRecall({ projectRoot })
+          : await projectHooksService.uninstallMemoryRecall({ projectRoot });
+        updated.push({ id: clean(contact?.id), projectRoot, status: result?.status || "updated" });
+      } catch (error) {
+        errors.push({ id: clean(contact?.id), projectRoot, message: clean(error?.message) || "无法更新记忆召回 Hook。" });
+      }
+    }
+    return { status: errors.length ? "partial" : "ready", contacts: updated, errors };
+  };
   let iphoneFeedbackService = null;
   let conversation = null;
   let requestProactiveContactMaintenance = () => undefined;
+  let requestTravelingMerchantScheduleSync = async () => undefined;
   const capabilitiesService = createCapabilitiesService({
     contactProjectsService,
     settingsService,
@@ -165,6 +194,7 @@ export function registerIpcHandlers({ app, dataStorageService, getMainWindow, se
     projectHooksService,
     onIphoneFeedbackChange: () => iphoneFeedbackService?.restart(),
     onProactiveContactMaintenanceRequested: (request) => requestProactiveContactMaintenance(request),
+    onTravelingMerchantScheduleSyncRequested: () => requestTravelingMerchantScheduleSync(),
     resolveContactSession: (contactId) => {
       if (typeof conversation?.reader?.resolveContactSession !== "function") {
         throw new Error("当前软件无法解析联系人的会话。 ");
@@ -174,15 +204,18 @@ export function registerIpcHandlers({ app, dataStorageService, getMainWindow, se
   });
   void initialClaudeSettingsSync
     .catch(() => undefined)
+    .then(() => syncMemoryRecallHooks())
     .then(() => capabilitiesService.refreshManagedRegistrations())
     .catch(() => undefined);
   registerSettingsIpc({
     app,
+    appUpdateService,
     contactProjectsService,
     dataStorageService,
     dialog,
     getMainWindow,
     ipcMain,
+    onMemoryRecallEnabledChanged: ({ enabled }) => syncMemoryRecallHooks({ enabled }),
     shell,
     settingsService,
   });
@@ -202,13 +235,16 @@ export function registerIpcHandlers({ app, dataStorageService, getMainWindow, se
     shell,
     wechatAttachmentCli,
     claudeWorkspaceDirectories,
-    initializeContactCapabilities: (contact) => capabilitiesService.initializeDefaultContactCapabilities(contact),
+    initializeContactCapabilities: async (contact) => {
+      await capabilitiesService.initializeDefaultContactCapabilities(contact);
+      if (settingsService.load()?.memoryRecallEnabled !== false && contact?.longTermMemoryEnabled !== false) {
+        await projectHooksService.installMemoryRecall({ projectRoot: contact?.projectRoot });
+      }
+    },
+    onContactLongTermMemoryEnabledChanged: () => syncMemoryRecallHooks(),
     proactiveContactSettings: () => capabilitiesService.proactiveContactSettings(),
     isProactiveContactEnabled: ({ contactId }) => capabilitiesService.isCompanionContactEnabled({
       abilityId: "proactive-contact", contactId,
-    }),
-    isTravelingMerchantEnabled: ({ contactId }) => capabilitiesService.isCompanionContactEnabled({
-      abilityId: "traveling-merchant", contactId,
     }),
   });
   memoryService.setConversationReader(conversation.reader);
@@ -217,7 +253,12 @@ export function registerIpcHandlers({ app, dataStorageService, getMainWindow, se
     reader: conversation.reader,
     settingsService,
   });
-  registerConversationCompactorIpc({ ipcMain, compactorService: conversationCompactorService });
+  registerConversationCompactorIpc({
+    ipcMain,
+    compactorService: conversationCompactorService,
+    dialog,
+    getMainWindow,
+  });
   const unsubscribeCompactorAuto = conversation.chat.subscribe((event) => {
     if (event?.type !== "turn-complete") return;
     // Token-triggered compaction is still executed by the shared scheduler;
@@ -380,6 +421,11 @@ export function registerIpcHandlers({ app, dataStorageService, getMainWindow, se
     delayedProactiveMaintenanceChecks.set(key, timer);
   };
   requestProactiveContactMaintenance = scheduleProactiveContactChainCheck;
+  const syncEnabledTravelingMerchantSchedule = async () => {
+    const targets = await capabilitiesService.enabledCompanionSessions("traveling-merchant");
+    return syncTravelingMerchantSchedule({ dataRoot, hasEnabledContacts: targets.length > 0 });
+  };
+  requestTravelingMerchantScheduleSync = syncEnabledTravelingMerchantSchedule;
   const scheduleRunner = createScheduleRunner({
     dataRoot,
     onConversationTask: async (task) => {
@@ -438,7 +484,9 @@ export function registerIpcHandlers({ app, dataStorageService, getMainWindow, se
     delayedProactiveMaintenanceChecks.clear();
     scheduleRunner.stop();
   });
-  void scheduleRunner.start()
+  void syncEnabledTravelingMerchantSchedule()
+    .catch(() => undefined)
+    .then(() => scheduleRunner.start())
     .then(() => checkProactiveContactChains())
     .catch(() => undefined);
   app?.once?.("before-quit", () => iphoneFeedbackService?.dispose());

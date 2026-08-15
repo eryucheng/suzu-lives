@@ -23,7 +23,7 @@ const DEFAULT_IPHONE_BRIDGE_PASSWORD_ENV = "SUZU_IPHONE_MAIL_PASSWORD";
 const DEFAULT_IPHONE_BRIDGE_FEEDBACK_SUBJECT = "查岗";
 const DEFAULT_IPHONE_BRIDGE_FEEDBACK_PROMPT = "这是来自 iPhone 的反馈（{{subject}}，来自 {{from}}，{{receivedAt}}）：\n{{content}}\n{{attachments}}";
 const HIDDEN_CONTACT_DEFAULT_ABILITY_IDS = Object.freeze(["visual-reference-manager", "voice-call"]);
-const MANAGED_REGISTRATION_VERSION = 6;
+const MANAGED_REGISTRATION_VERSION = 7;
 const DEFAULT_PROACTIVE_CHAIN_PROMPT = "根据时间和前面聊的内容判断要不要主动联系对方，要发就正常发，不发就沉默，然后记得要设置下一次自动任务";
 const DEFAULT_PROACTIVE_FOLLOW_UP_PROMPT = "临时回访：用户在 TIME 提到 EVENT。先检查当前会话里是否已经有结果；已经有结果就只输出 NO_REPLY；还没有结果就自然地关心或询问。不要提及自动任务、回访任务或系统机制。这是一次性回访，不要设置下一次自动任务。";
 
@@ -652,6 +652,7 @@ export function createCapabilitiesService({
   projectHooksService = null,
   onIphoneFeedbackChange = null,
   onProactiveContactMaintenanceRequested = null,
+  onTravelingMerchantScheduleSyncRequested = null,
   resolveContactSession = null,
 } = {}) {
   if (!settingsService || typeof settingsService.load !== "function") throw new Error("能力服务需要软件设置服务。");
@@ -814,6 +815,10 @@ export function createCapabilitiesService({
     } catch {
       // A delayed local check must never make an already-saved setting fail.
     }
+  };
+  const syncTravelingMerchantSchedule = async () => {
+    if (typeof onTravelingMerchantScheduleSyncRequested !== "function") return;
+    await onTravelingMerchantScheduleSyncRequested();
   };
   const snapshot = () => {
     const settings = settingsService.load();
@@ -1008,7 +1013,15 @@ export function createCapabilitiesService({
     }
     const errors = [];
     const contacts = await allContactProjects();
+    const timeSettings = timeAwarenessSettings(publicJson(dataRoot, TIME_AWARENESS_CONFIG_PATH));
     for (const contact of contacts) {
+      if (timeSettings.enabledContactIds.includes(contact.id)) {
+        try {
+          await installTimeAwarenessForProject(contact.projectRoot);
+        } catch (error) {
+          errors.push({ id: TIME_AWARENESS_ID, contactId: contact.id, code: clean(error?.code), message: clean(error?.message) || "无法更新时间感知 Hook。" });
+        }
+      }
       for (const capabilityId of managedClaudeRegistrationAbilityIds()) {
         // This Skill does not contain a launcher, and refreshing it would also
         // reinstall its Hook. The project settings sync already updates its CLI
@@ -1354,11 +1367,13 @@ export function createCapabilitiesService({
       if (Object.hasOwn(input, "contactId") || Object.hasOwn(input, "contactEnabled")) {
         if (!Object.hasOwn(input, "contactEnabled")) throw new Error("联系人开关状态无效。 ");
         const contactId = await companionContactForInput(input);
+        const enabledContactIds = withCompanionContact(existing, contactId, boundedBoolean(input.contactEnabled, false));
         await writeJsonBelow(dataRoot, ["automation", "traveling-merchant", "config.json"], {
           ...defaults,
           ...existing,
-          enabledContactIds: withCompanionContact(existing, contactId, boundedBoolean(input.contactEnabled, false)),
+          enabledContactIds,
         });
+        await syncTravelingMerchantSchedule();
         return snapshot();
       }
       const wantedItems = normalizedLines(input.wantedItems, "关注物品", { maximum: 50, itemMaximum: 120 });
@@ -1376,6 +1391,7 @@ export function createCapabilitiesService({
         retryDelaySeconds: boundedNumber(input.retryDelaySeconds, "重试间隔", { minimum: 0, maximum: 300, fallback: 20, integer: true }),
         enabledContactIds: companionContactIds(existing),
       });
+      await syncTravelingMerchantSchedule();
       return snapshot();
     }
     throw new Error("这项能力目前没有可保存的设置。 ");
@@ -1399,6 +1415,7 @@ export function createCapabilitiesService({
     ));
     let updated = 0;
     let iphoneBridgeUpdated = false;
+    let travelingMerchantUpdated = false;
     for (const segments of configPaths) {
       const existing = publicJson(dataRoot, segments);
       const next = { ...existing };
@@ -1412,8 +1429,10 @@ export function createCapabilitiesService({
       await writeJsonBelow(dataRoot, segments, next);
       updated += 1;
       if (segments.join("/") === "automation/iphone-bridge/config.json") iphoneBridgeUpdated = true;
+      if (segments.join("/") === "automation/traveling-merchant/config.json") travelingMerchantUpdated = true;
     }
     if (iphoneBridgeUpdated) notifyIphoneFeedbackChange();
+    if (travelingMerchantUpdated) await syncTravelingMerchantSchedule();
     return { updated };
   };
   const openTravelingMerchantPage = async () => {

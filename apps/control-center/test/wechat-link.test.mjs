@@ -62,6 +62,139 @@ test("WeChat text delivery splits blank paragraphs before the iLink size limit",
   assert.equal(Array.from(chunks[1]).length, 1);
 });
 
+test("WeChat approval prompts stay separate from tool delivery and accept a scoped reply", async () => {
+  const root = await temporaryDirectory("suzu-wechat-permission-");
+  const projectRoot = path.join(root, "project");
+  await fs.mkdir(projectRoot, { recursive: true });
+  const approvalResponses = [];
+  const deliveredToClaude = [];
+  const outgoing = [];
+  const chatSubscribers = new Set();
+  let releaseConfirmation = null;
+  let releaseInitialization = null;
+  let releaseApprovalReplies = null;
+  let updatesStarted = false;
+  let updatesCount = 0;
+  const confirmation = new Promise((resolve) => { releaseConfirmation = resolve; });
+  const initialization = new Promise((resolve) => { releaseInitialization = resolve; });
+  const approvalReplies = new Promise((resolve) => { releaseApprovalReplies = resolve; });
+  let approvalPending = true;
+  const chat = {
+    sendToSession: async (value) => { deliveredToClaude.push(value); return { accepted: true }; },
+    respondPermissionForSession: (value) => {
+      if (!approvalPending) return { accepted: false, reason: "no-pending-permission" };
+      approvalPending = false;
+      approvalResponses.push(value);
+      return { accepted: true, requestId: "permission-1", behavior: value.behavior, toolName: "Bash" };
+    },
+    steer: async () => ({ accepted: true }),
+    stop: () => ({ accepted: true }),
+    subscribe: (listener) => {
+      chatSubscribers.add(listener);
+      return () => chatSubscribers.delete(listener);
+    },
+  };
+  const reader = {
+    resolveContactSession: async (contactId) => ({ contactId, id: "permission-session", projectRoot, hasTranscript: true }),
+    contactIdForSession: async ({ sessionId, projectRoot: eventProjectRoot }) => (
+      sessionId === "permission-session" && eventProjectRoot === projectRoot ? "contact-permission" : ""
+    ),
+  };
+  const fetchImpl = async (target, init = {}) => {
+    const url = new URL(String(target));
+    if (url.pathname.endsWith("/get_bot_qrcode")) {
+      return jsonResponse({ qrcode: "permission-qr", qrcode_img_content: "https://weixin.example/qr?permission" });
+    }
+    if (url.pathname.endsWith("/get_qrcode_status")) {
+      await confirmation;
+      return jsonResponse({
+        status: "confirmed",
+        bot_token: "permission-bot-token",
+        ilink_bot_id: "permission-bot",
+        ilink_user_id: "permission-owner",
+      });
+    }
+    if (url.pathname.endsWith("/getupdates")) {
+      updatesCount += 1;
+      if (updatesCount > 2) {
+        return new Promise((_resolve, reject) => {
+          if (init.signal?.aborted) { reject(new Error("aborted")); return; }
+          init.signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+        });
+      }
+      if (updatesCount === 1) {
+        updatesStarted = true;
+        await initialization;
+        return jsonResponse({
+          get_updates_buf: "permission-initialization-cursor",
+          msgs: [{
+            from_user_id: "permission-owner",
+            message_id: "permission-initialization",
+            context_token: "permission-context",
+            message_type: 1,
+            item_list: [{ type: 1, text_item: { text: "/suzu stop" } }],
+          }],
+        });
+      }
+      await approvalReplies;
+      return jsonResponse({
+        get_updates_buf: "permission-cursor",
+        msgs: [
+          {
+            from_user_id: "permission-owner",
+            message_id: "permission-allow",
+            context_token: "permission-context",
+            message_type: 1,
+            item_list: [{ type: 1, text_item: { text: "允许" } }],
+          },
+          {
+            from_user_id: "permission-owner",
+            message_id: "permission-none-left",
+            context_token: "permission-context",
+            message_type: 1,
+            item_list: [{ type: 1, text_item: { text: "拒绝" } }],
+          },
+        ],
+      });
+    }
+    if (url.pathname.endsWith("/sendmessage")) {
+      outgoing.push(JSON.parse(init.body));
+      return jsonResponse({ ret: 0 });
+    }
+    throw new Error(`Unexpected iLink route: ${url.pathname}`);
+  };
+  const service = createWeChatLinkService({ chat, dataRoot: root, fetchImpl, reader });
+
+  assert.equal((await service.snapshot()).delivery.permissions, true);
+  assert.equal((await service.snapshot()).delivery.tools, false);
+  await service.begin({ contactId: "contact-permission" });
+  releaseConfirmation();
+  await waitFor(() => updatesStarted, "微信审批测试没有开始接收消息");
+  releaseInitialization();
+  await waitFor(() => outgoing.length === 1, "微信初始化消息没有建立可回传的上下文");
+  for (const listener of chatSubscribers) listener({
+    type: "permission",
+    requestId: "permission-1",
+    sessionId: "permission-session",
+    projectRoot,
+    toolName: "Bash",
+    preview: '{"command":"git status"}',
+  });
+  await waitFor(() => outgoing.length === 2, "默认审批提示没有投递到微信");
+  assert.match(outgoing[1].msg.item_list[0].text_item.text, /工具权限：Bash/u);
+  assert.match(outgoing[1].msg.item_list[0].text_item.text, /git status/u);
+  assert.match(outgoing[1].msg.item_list[0].text_item.text, /回复“允许”或“拒绝”/u);
+
+  releaseApprovalReplies();
+  await waitFor(() => approvalResponses.length === 1, "微信“允许”没有处理对应会话的审批");
+  assert.deepEqual(approvalResponses, [{ behavior: "allow", sessionId: "permission-session", projectRoot }]);
+  await waitFor(() => outgoing.length === 4, "微信审批处理结果没有回传");
+  assert.equal(outgoing[2].msg.item_list[0].text_item.text, "已允许工具权限：Bash。");
+  assert.equal(outgoing[3].msg.item_list[0].text_item.text, "当前没有等待确认的工具请求。");
+  assert.deepEqual(deliveredToClaude, []);
+  service.dispose();
+});
+
 test("WeChat links persist a contact scope and relay through its fixed Claude session", async () => {
   const root = await temporaryDirectory("suzu-wechat-link-");
   const projectRoot = path.join(root, "project");

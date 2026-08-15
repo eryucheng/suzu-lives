@@ -4,6 +4,7 @@ import { resolveOnboardingStep, shouldShowOnboarding } from "./features/onboardi
 import { conversationReactSnapshot, createConversationReactActions, isScheduledAgentReply, startConversationPolling, stopConversationPolling } from "./features/conversation/index.mjs";
 import { loadRelationshipFiles, selectRelationshipContact } from "./features/relationship-settings/index.mjs";
 import { getAgentProfile, getIdentity } from "./core/identity.mjs";
+import { getSuzuSearchItem } from "./core/suzu-search.mjs";
 import { renderAppWorkspace, setGlobalNotice } from "./react/app-shell.jsx";
 import { endActiveConversationCall } from "./react/conversation-call-coordinator.mjs";
 
@@ -28,6 +29,8 @@ const INCOMING_CONVERSATION_NOTICE_TIMEOUT_MS = 6_000;
 let globalNoticeTimeout = null;
 let incomingConversationNoticeTimeout = null;
 let settingsContactsRequest = 0;
+let appUpdateRequest = 0;
+let systemStatusRequest = 0;
 
 document.documentElement.dataset.theme = new URLSearchParams(window.location.search).get("theme") === "dark" ? "dark" : "light";
 
@@ -93,6 +96,7 @@ function setView(view) {
   }
   render();
   if (view === "settings" && state.settingsTab === "privacy") void loadSettingsContacts();
+  if (view === "settings") void loadAppUpdateStatus();
   if (view === "capabilities") loadCapabilities(context);
   if (view === "plans") loadSchedules();
   if (view === "today") refreshTodayCalendar();
@@ -186,6 +190,42 @@ function setCapabilityPage(page, category = "", abilityId = "") {
 function setSettingsTab(tab) {
   state.settingsTab = ["general", "data", "privacy"].includes(tab) ? tab : "general";
   if (state.settingsTab === "privacy") void loadSettingsContacts();
+}
+
+function openSuzuSearchItem(value) {
+  const entry = getSuzuSearchItem(typeof value === "string" ? value : value?.id);
+  const target = entry?.target || {};
+  const view = String(target.view || "");
+  if (!view) return;
+
+  if (view === "relationships") {
+    setView("relationships");
+    if (target.relationshipPage) setRelationshipPage(target.relationshipPage);
+    return;
+  }
+  if (view === "settings") {
+    setSettingsTab(target.settingsTab);
+    setView("settings");
+    return;
+  }
+  if (view === "admin") {
+    setAdminTab(target.adminTab);
+    setView("admin");
+    return;
+  }
+  if (view === "create") {
+    setView("create");
+    if (target.createPage) setCreatePage(target.createPage);
+    return;
+  }
+  if (view === "capabilities") {
+    setView("capabilities");
+    if (target.capabilityPage) {
+      setCapabilityPage(target.capabilityPage, target.capabilityCategory, target.capabilityId);
+    }
+    return;
+  }
+  setView(view);
 }
 
 function openOnboarding() {
@@ -362,6 +402,55 @@ async function changeSettingsDataLocation() {
   }
 }
 
+function appUpdateMessage(result, fallback) {
+  return String(result?.message || "").trim() || fallback;
+}
+
+async function loadAppUpdateStatus() {
+  const request = ++appUpdateRequest;
+  if (typeof api.settings?.appUpdateStatus !== "function") return;
+  try {
+    const result = await api.settings.appUpdateStatus();
+    if (request !== appUpdateRequest || state.view !== "settings") return;
+    state.appUpdate = result;
+  } catch (error) {
+    if (request !== appUpdateRequest || state.view !== "settings") return;
+    state.appUpdate = {
+      status: "error",
+      message: `无法读取更新状态：${error?.message || error}`,
+    };
+  }
+  if (request === appUpdateRequest && state.view === "settings") render();
+}
+
+async function runAppUpdateAction(method, fallback) {
+  const action = api.settings?.[method];
+  if (typeof action !== "function") return;
+  const request = ++appUpdateRequest;
+  try {
+    const result = await action();
+    if (request !== appUpdateRequest) return;
+    state.appUpdate = result;
+    setNotice(appUpdateMessage(result, fallback));
+  } catch (error) {
+    if (request !== appUpdateRequest) return;
+    setNotice(`${fallback}：${error?.message || error}`);
+  }
+  if (request === appUpdateRequest && state.view === "settings") render();
+}
+
+function checkAppUpdate() {
+  return runAppUpdateAction("checkForUpdate", "无法检查更新");
+}
+
+function downloadAppUpdate() {
+  return runAppUpdateAction("downloadUpdate", "无法下载更新");
+}
+
+function installAppUpdate() {
+  return runAppUpdateAction("installUpdate", "无法安装更新");
+}
+
 async function removeSettingsPreviousCopy() {
   try {
     const result = await api.settings.removePreviousDataCopy();
@@ -378,6 +467,20 @@ async function openSettingsDirectory(targetPath) {
   const path = String(targetPath || "").trim();
   if (!path) return;
   await api.settings.showItemInFolder(path);
+}
+
+async function checkSystemStatus() {
+  const request = ++systemStatusRequest;
+  if (typeof api.settings?.systemStatus !== "function") return;
+  try {
+    const result = await api.settings.systemStatus();
+    if (request !== systemStatusRequest) return;
+    state.systemStatus = result;
+  } catch (error) {
+    if (request !== systemStatusRequest) return;
+    state.systemStatus = { error: `无法完成系统状态检查：${error?.message || error}` };
+  }
+  if (request === systemStatusRequest && state.view === "settings" && state.settingsTab === "data") render();
 }
 
 async function loadSettingsContacts() {
@@ -742,9 +845,9 @@ async function showIncomingConversationNotice(event) {
   const shouldMarkUnread = !conversationOpen || !contactId || contactId !== activeContactId;
   if (shouldMarkUnread) {
     state.conversationUnread = true;
-    if (contact && contact.unread !== true && typeof api.conversation?.updateContactPresentation === "function") {
+    if (contact && typeof api.conversation?.updateContactPresentation === "function") {
       try {
-        await api.conversation.updateContactPresentation({ id: contactId, unread: true });
+        await api.conversation.updateContactPresentation({ id: contactId, unreadIncrement: 1 });
       } catch {
         // Do not suppress an incoming-message signal if only its saved badge fails.
       }
@@ -788,9 +891,10 @@ async function showIncomingVoiceCall(event) {
   const identity = getIdentity(state.settings);
   const profile = identity.agents?.[String(contact.agentId || "").trim()] || identity.defaultAgent || getAgentProfile(state.settings);
   state.conversationUnread = true;
-  if (contact.unread !== true && typeof api.conversation?.updateContactPresentation === "function") {
+  const contactUnreadCount = Number.isSafeInteger(contact.unreadCount) && contact.unreadCount >= 0 ? contact.unreadCount : 0;
+  if (contactUnreadCount < 1 && typeof api.conversation?.updateContactPresentation === "function") {
     try {
-      await api.conversation.updateContactPresentation({ id: contactId, unread: true });
+      await api.conversation.updateContactPresentation({ id: contactId, unreadCount: 1 });
     } catch {
       // A visible incoming call remains useful if saving its badge fails.
     }
@@ -1055,6 +1159,20 @@ async function runConversationCompactor(value) {
   return snapshot;
 }
 
+async function selectConversationCompactorImportJsonl() {
+  return api.conversationCompactor.selectImportJsonl();
+}
+
+async function importConversationCompactorJsonl(value) {
+  const snapshot = await api.conversationCompactor.importJsonl(value);
+  state.conversationCompactorSnapshot = snapshot;
+  state.conversationCompactorLoading = false;
+  state.conversationCompactorError = "";
+  setNotice("历史 JSONL 已替换当前联系人的会话记录，并完成会话绑定。 ");
+  if (state.view === "relationships" && state.relationshipPage === "compactor") render();
+  return snapshot;
+}
+
 function currentGlobalNotice() {
   const warning = state.data?.status === "needs-project" ? "" : String(state.data?.warning || "");
   return state.globalNotice || warning;
@@ -1188,6 +1306,10 @@ function routeForCurrentView() {
         actions: {
           changeDataLocation: changeSettingsDataLocation,
           changeTheme: changeSettingsTheme,
+          checkForUpdate: checkAppUpdate,
+          checkSystemStatus,
+          downloadUpdate: downloadAppUpdate,
+          installUpdate: installAppUpdate,
           openDirectory: openSettingsDirectory,
           openOnboarding,
           removePreviousCopy: removeSettingsPreviousCopy,
@@ -1201,6 +1323,8 @@ function routeForCurrentView() {
         snapshot: {
           contacts: state.settingsContacts,
           contactsLoading: state.settingsContactsLoading,
+          appUpdate: state.appUpdate,
+          systemStatus: state.systemStatus,
           settings: state.settings,
           tab: state.settingsTab,
         },
@@ -1298,8 +1422,10 @@ function routeForCurrentView() {
       props: {
         actions: {
           returnToOverview: () => setRelationshipPage("overview"),
+          importJsonl: importConversationCompactorJsonl,
           run: runConversationCompactor,
           save: saveConversationCompactorSettings,
+          selectImportJsonl: selectConversationCompactorImportJsonl,
           selectContact: selectConversationCompactorContact,
         },
         error: state.conversationCompactorError,
@@ -1346,7 +1472,7 @@ function routeForCurrentView() {
 
 function buildWorkspace() {
   return {
-    actions: { answerIncomingVoiceCall, declineIncomingVoiceCall, navigate: setView },
+    actions: { answerIncomingVoiceCall, declineIncomingVoiceCall, navigate: setView, openSuzuSearchItem },
     activeView: state.view,
     contentClassName: contentClassName(),
     conversationUnread: state.conversationUnread,

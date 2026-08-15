@@ -20,6 +20,7 @@ const MAX_WECHAT_INBOUND_MEDIA_ITEMS = 24;
 export const DEFAULT_WECHAT_DELIVERY = Object.freeze({
   agent: true,
   attachments: false,
+  permissions: true,
   tools: false,
   thinking: false,
   system: false,
@@ -35,6 +36,23 @@ export class WeChatLinkError extends Error {
 
 function clean(value) {
   return String(value ?? "").trim();
+}
+
+function wechatPermissionDecision(value) {
+  const text = clean(value);
+  if (text === "允许") return "allow";
+  if (text === "拒绝") return "deny";
+  return "";
+}
+
+function permissionNotice(event = {}) {
+  const toolName = clean(event.toolName) || "Claude Code 工具";
+  const preview = clean(event.preview).slice(0, 1_200);
+  return [
+    `Claude Code 正在等待工具权限：${toolName}`,
+    preview ? `操作摘要：${preview}` : "",
+    "回复“允许”或“拒绝”处理。",
+  ].filter(Boolean).join("\n");
 }
 
 function plainObject(value) {
@@ -734,7 +752,24 @@ export function createWeChatLinkService({
       const session = await scopeForContact(link.contactId);
       const media = await collectInboundMedia(session, message, key);
       if (!text && !media.length) return;
-      if (command.action === "notice") {
+      const permissionDecision = media.length === 0 && publicStore.delivery.permissions === true
+        ? wechatPermissionDecision(text)
+        : "";
+      if (permissionDecision && typeof chat.respondPermissionForSession === "function") {
+        const result = chat.respondPermissionForSession({
+          behavior: permissionDecision,
+          sessionId: session.id,
+          projectRoot: session.projectRoot,
+        });
+        if (result?.accepted) {
+          const action = result.behavior === "allow" ? "已允许" : "已拒绝";
+          await commandResponse(link, `${action}工具权限：${clean(result.toolName) || "Claude Code 工具"}。`, contextToken);
+        } else if (result?.reason === "multiple-pending-permissions") {
+          await commandResponse(link, "当前有多条等待确认的工具请求，请回到桌面端分别处理。", contextToken);
+        } else {
+          await commandResponse(link, "当前没有等待确认的工具请求。", contextToken);
+        }
+      } else if (command.action === "notice") {
         await commandResponse(link, command.message, contextToken);
       } else if (command.action === "stop") {
         const result = chat.stop({ sessionId: session.id, projectRoot: session.projectRoot });
@@ -1062,8 +1097,8 @@ export function createWeChatLinkService({
           allowed = publicStore.delivery.tools === true;
           content = clean(event.content);
         } else if (event.type === "permission") {
-          allowed = publicStore.delivery.tools === true;
-          content = `Claude Code 正在等待工具权限：${clean(event.toolName) || "工具"}`;
+          allowed = publicStore.delivery.permissions === true;
+          content = permissionNotice(event);
         } else if (event.type === "thinking") {
           allowed = publicStore.delivery.thinking === true;
           content = clean(event.content);

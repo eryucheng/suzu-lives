@@ -63,7 +63,7 @@ const CLAUDE_CODE_API_PROVIDERS = Object.freeze({
   },
 });
 const CLAUDE_CODE_API_PROVIDER_IDS = new Set([...Object.keys(CLAUDE_CODE_API_PROVIDERS), "custom"]);
-const MANAGED_CLAUDE_API_ENV_KEYS = new Set([
+export const MANAGED_CLAUDE_API_ENV_KEYS = new Set([
   "ANTHROPIC_BASE_URL",
   "ANTHROPIC_AUTH_TOKEN",
   "ANTHROPIC_API_KEY",

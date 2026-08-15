@@ -172,6 +172,31 @@ test("changing Claude tool permissions syncs the contact projects", async () => 
   assert.deepEqual(syncCalls, [true]);
 });
 
+test("changing memory recall synchronizes only its project Hook registration", async () => {
+  const handlers = new Map();
+  const updates = [];
+  let stored = { memoryRecallEnabled: true };
+  registerSettingsIpc({
+    app: { relaunch: () => {}, exit: () => {} },
+    contactProjectsService: { syncClaudeProjectSettings: async () => {} },
+    dataStorageService: null,
+    dialog: { showOpenDialog: async () => ({ canceled: true }), showMessageBox: async () => ({ response: 1 }) },
+    getMainWindow: () => null,
+    ipcMain: { handle: (name, handler) => handlers.set(name, handler) },
+    onMemoryRecallEnabledChanged: async (value) => { updates.push(value); },
+    shell: { showItemInFolder: () => {}, openPath: () => {} },
+    settingsService: {
+      load: () => stored,
+      safePatch: (value) => ({ memoryRecallEnabled: normalizeMemoryRecallEnabled(value.memoryRecallEnabled) }),
+      save: (next) => { stored = next; return stored; },
+      response: (value) => value,
+    },
+  });
+
+  await handlers.get("settings:update")(null, { memoryRecallEnabled: false });
+  assert.deepEqual(updates, [{ enabled: false }]);
+});
+
 test("changing shared Claude project defaults syncs the contact projects", async () => {
   const handlers = new Map();
   const syncCalls = [];
@@ -302,4 +327,88 @@ test("old-copy cleanup IPC requires a second destructive confirmation", async ()
   const result = await handlers.get("settings:remove-previous-data-copy")();
   assert.equal(result.status, "removed");
   assert.deepEqual(calls, ["removed"]);
+});
+
+test("settings update IPC delegates the check, download, and install actions to the update service", async () => {
+  const handlers = new Map();
+  const calls = [];
+  const appUpdateService = {
+    status: () => ({ status: "ready" }),
+    checkForUpdates: () => {
+      calls.push("check");
+      return { status: "available" };
+    },
+    downloadUpdate: () => {
+      calls.push("download");
+      return { status: "downloaded" };
+    },
+    installUpdate: () => {
+      calls.push("install");
+      return { status: "installing" };
+    },
+  };
+  registerSettingsIpc({
+    app: { relaunch: () => {}, exit: () => {} },
+    appUpdateService,
+    contactProjectsService: {},
+    dataStorageService: null,
+    dialog: { showOpenDialog: async () => ({ canceled: true }), showMessageBox: async () => ({ response: 1 }) },
+    getMainWindow: () => null,
+    ipcMain: { handle: (name, handler) => handlers.set(name, handler) },
+    shell: { showItemInFolder: () => {}, openPath: () => {} },
+    settingsService: { load: () => ({}), save: (next) => next, response: () => ({}) },
+  });
+
+  assert.deepEqual(await handlers.get("settings:app-update-status")(), { status: "ready" });
+  assert.deepEqual(await handlers.get("settings:check-for-update")(), { status: "available" });
+  assert.deepEqual(await handlers.get("settings:download-update")(), { status: "downloaded" });
+  assert.deepEqual(await handlers.get("settings:install-update")(), { status: "installing" });
+  assert.deepEqual(calls, ["check", "download", "install"]);
+});
+
+test("system status IPC delegates only to the read-only status service", async () => {
+  const handlers = new Map();
+  const expected = { checkedAt: "2026-08-15T00:00:00.000Z", summary: { status: "ready" }, sections: [] };
+  let calls = 0;
+  registerSettingsIpc({
+    app: { relaunch: () => {}, exit: () => {} },
+    contactProjectsService: {},
+    dataStorageService: null,
+    dialog: { showOpenDialog: async () => ({ canceled: true }), showMessageBox: async () => ({ response: 1 }) },
+    getMainWindow: () => null,
+    ipcMain: { handle: (name, handler) => handlers.set(name, handler) },
+    shell: { showItemInFolder: () => {}, openPath: () => {} },
+    settingsService: { load: () => ({}), save: (next) => next, response: () => ({}) },
+    systemStatusService: { scan: async () => { calls += 1; return expected; } },
+  });
+
+  assert.deepEqual(await handlers.get("settings:system-status")(), expected);
+  assert.equal(calls, 1);
+});
+
+test("default system status IPC normalizes its configured data root before scanning", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "suzu-system-status-"));
+  const handlers = new Map();
+  try {
+    registerSettingsIpc({
+      app: { relaunch: () => {}, exit: () => {} },
+      contactProjectsService: {},
+      dataStorageService: { dataRoot: ` ${root} ` },
+      dialog: { showOpenDialog: async () => ({ canceled: true }), showMessageBox: async () => ({ response: 1 }) },
+      getMainWindow: () => null,
+      ipcMain: { handle: (name, handler) => handlers.set(name, handler) },
+      shell: { showItemInFolder: () => {}, openPath: () => {} },
+      settingsService: {
+        load: () => ({ contactsRoot: root }),
+        save: (next) => next,
+        response: () => ({ dataRoot: "" }),
+      },
+    });
+
+    const result = await handlers.get("settings:system-status")();
+    const dataSection = result.sections.find((section) => section.id === "data");
+    assert.equal(dataSection.items[0].path, path.resolve(root));
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });

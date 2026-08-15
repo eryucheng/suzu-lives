@@ -5,6 +5,8 @@ import os from "node:os";
 import path from "node:path";
 import readline from "node:readline";
 
+import { DEFAULT_CLAUDE_PERMISSION_MODE, normalizeClaudePermissionMode } from "./claude-permission-mode.mjs";
+
 const MAX_MESSAGE_LENGTH = 20_000;
 const MAX_EVENT_TEXT_LENGTH = 200_000;
 const MAX_PERMISSION_PREVIEW_LENGTH = 4_000;
@@ -19,6 +21,8 @@ const VOICE_CALL_TURN_OPEN = "<suzu-voice-call-turn>";
 const VOICE_CALL_TURN_CLOSE = "</suzu-voice-call-turn>";
 const VOICE_CALL_OPEN_OPEN = "<suzu-voice-call-open>";
 const VOICE_CALL_OPEN_CLOSE = "</suzu-voice-call-open>";
+const LONG_TERM_MEMORY_CONTEXT_OPEN = "<suzu-long-term-memory>";
+const LONG_TERM_MEMORY_CONTEXT_CLOSE = "</suzu-long-term-memory>";
 const CONVERSATION_ATTACHMENT_RECEIPT = "suzu-conversation-attachment";
 const VOICE_CALL_REQUEST_RECEIPT = "suzu-voice-call-request";
 const WECHAT_MEDIA_MANIFEST_OPEN = "<suzu-wechat-media>";
@@ -57,6 +61,15 @@ export class ConversationChatError extends Error {
 
 function clean(value) {
   return String(value ?? "").trim();
+}
+
+function longTermMemoryRecallSystemMessage(value) {
+  const text = String(value ?? "");
+  const start = text.indexOf(LONG_TERM_MEMORY_CONTEXT_OPEN);
+  const end = text.indexOf(LONG_TERM_MEMORY_CONTEXT_CLOSE, start + LONG_TERM_MEMORY_CONTEXT_OPEN.length);
+  if (start < 0 || end < 0) return "";
+  const recalled = clean(text.slice(start + LONG_TERM_MEMORY_CONTEXT_OPEN.length, end));
+  return recalled ? bounded(`记忆召回\n${recalled}`, MAX_EVENT_TEXT_LENGTH) : "";
 }
 
 function normalizeClaudeRuntimeFeatures(value = {}) {
@@ -120,6 +133,10 @@ function messageText(content) {
     .filter((part) => part?.type === "text" && typeof part.text === "string")
     .map((part) => part.text)
     .join("\n"), MAX_EVENT_TEXT_LENGTH);
+}
+
+function isToolPlanningAssistantMessage(value) {
+  return clean(value?.type) === "assistant" && clean(value?.message?.stop_reason) === "tool_use";
 }
 
 function serializedText(value) {
@@ -432,18 +449,14 @@ ${launcher} --file "文件的绝对路径"
 
 export function scheduleSystemPrompt(commands) {
   const conversationAdd = clean(commands?.conversationAdd);
-  const operationAdd = clean(commands?.operationAdd);
   const list = clean(commands?.list);
   const remove = clean(commands?.remove);
   const chainPrompt = clean(commands?.proactiveChainPrompt) || "根据时间和前面聊的内容判断要不要主动联系对方，要发就正常发，不发就沉默，然后记得要设置下一次自动任务";
   const followUpPrompt = clean(commands?.proactiveFollowUpPrompt) || "临时回访：用户在 TIME 提到 EVENT。先检查当前会话里是否已经有结果；已经有结果就只输出 NO_REPLY；还没有结果就自然地关心或询问。不要提及自动任务、回访任务或系统机制。这是一次性回访，不要设置下一次自动任务。";
-  if (!conversationAdd && !operationAdd) return "";
+  if (!conversationAdd) return "";
   const sections = ["## Suzu 自动任务", "任务只会在 Suzu 软件运行期间执行；关闭期间不会执行或补跑。不要使用旧的 timer 或 cron 命令。"];
   if (conversationAdd) {
     sections.push(`### 主动关心\n\n当前会话已在“主动关心”能力中启用。一次性任务会自动绑定当前 Claude 会话和项目：\n\n${conversationAdd} --delay 45m --prompt "到时间后要处理的完整任务内容" --desc "简短说明"\n\n链式主动关心触发时使用这段提示词：\n\n${chainPrompt}\n\n临时回访使用这段提示词：\n\n${followUpPrompt}`);
-  }
-  if (operationAdd) {
-    sections.push(`### 远行商人\n\n当前会话已在“远行商人”能力中启用。循环任务由 Suzu 抓取一次网页，并把命中结果投递到已开启这项能力的会话：\n\n${operationAdd} --cron "2 8,12,16,20 * * *" --exec traveling-merchant --desc "洛克王国远行商人监控"`);
   }
   if (list && remove) {
     sections.push(`### 查看与删除\n\n${list}\n${remove}`);
@@ -457,7 +470,7 @@ function isNoReply(value) {
 }
 
 /** The flags are deliberately limited to Claude Code's public stream protocol. */
-export function claudeCliArguments({ sessionId, hasTranscript = false, appendSystemPrompt = "", claudeRuntimeFeatures, claudeToolPermissions, allowedTools = [], workspaceDirectories = [] } = {}) {
+export function claudeCliArguments({ sessionId, hasTranscript = false, appendSystemPrompt = "", claudeRuntimeFeatures, claudeToolPermissions, allowedTools = [], workspaceDirectories = [], permissionMode = DEFAULT_CLAUDE_PERMISSION_MODE } = {}) {
   const id = clean(sessionId);
   if (!id) throw new ConversationChatError("缺少 Claude 会话标识。");
   const extraPrompt = clean(appendSystemPrompt);
@@ -465,6 +478,7 @@ export function claudeCliArguments({ sessionId, hasTranscript = false, appendSys
   const toolPermissions = claudeToolPermissions && typeof claudeToolPermissions === "object" && !Array.isArray(claudeToolPermissions)
     ? claudeToolPermissions
     : {};
+  const selectedPermissionMode = normalizeClaudePermissionMode(permissionMode);
   const disallowedTools = [
     toolPermissions.read === false && "Read",
     !features.glob && "Glob",
@@ -488,7 +502,7 @@ export function claudeCliArguments({ sessionId, hasTranscript = false, appendSys
     "--include-partial-messages",
     "--permission-prompt-tool", "stdio",
     "--replay-user-messages",
-    "--permission-mode", "acceptEdits",
+    "--permission-mode", selectedPermissionMode,
     ...sharedDirectories.flatMap((directory) => ["--add-dir", directory]),
     ...(permittedTools.length ? ["--allowed-tools", permittedTools.join(",")] : []),
     ...(disallowedTools.length ? ["--disallowed-tools", disallowedTools.join(",")] : []),
@@ -855,6 +869,10 @@ export function createConversationChatService({
       for (const item of auxiliaryParts(raw?.message?.content)) emitAuxiliary(turn, item.type, item.content);
       const next = messageText(raw?.message?.content);
       if (next) {
+        if (isToolPlanningAssistantMessage(raw)) {
+          emitAuxiliary(turn, "thinking", next);
+          return;
+        }
         turn.text = mergeFullText(turn.text, next);
         turn.lastAssistantText = next;
         if (turn.kind !== "schedule") {
@@ -873,6 +891,11 @@ export function createConversationChatService({
     if (type === "attachment" || type === "hook_additional_context") {
       const attachment = raw?.attachment && typeof raw.attachment === "object" ? raw.attachment : raw;
       const content = Array.isArray(attachment.content) ? attachment.content.join("\n") : attachment.content;
+      const memoryRecall = longTermMemoryRecallSystemMessage(content);
+      if (memoryRecall) {
+        emitAuxiliary(turn, "system", memoryRecall);
+        return;
+      }
       emitAuxiliary(turn, "attachment", content);
       return;
     }
@@ -892,6 +915,7 @@ export function createConversationChatService({
         requestId,
         turn,
         input: request.input && typeof request.input === "object" ? request.input : {},
+        toolName: clean(request.tool_name) || "Claude Code 工具",
       };
       turn.permissionIds.add(requestId);
       permissionRequests.set(requestId, permission);
@@ -901,7 +925,7 @@ export function createConversationChatService({
         sessionId: turn.sessionId,
         projectRoot: turn.projectRoot,
         kind: turn.kind,
-        toolName: clean(request.tool_name) || "Claude Code 工具",
+        toolName: permission.toolName,
         preview: permissionPreview(permission.input),
         timestamp: new Date().toISOString(),
       });
@@ -1067,18 +1091,18 @@ export function createConversationChatService({
       claudeRuntimeFeatures,
       claudeToolPermissions: currentSettings.claudeToolPermissions,
       allowedTools: claudeAllowedToolsForWorkspace(currentSettings.claudeToolPermissions, { suzuCliCommand }),
+      permissionMode: request.approvalMode,
       workspaceDirectories: claudeWorkspaceDirectories,
       appendSystemPrompt: [
         wechatAttachmentSystemPrompt(attachmentCommand),
         scheduleSystemPrompt(scheduleCommands),
         supportsVoiceCallTurns ? VOICE_CALL_SYSTEM_PROMPT : "",
-        memoryTurn?.systemPrompt,
       ].filter(Boolean).join("\n\n"),
     });
-    // A recall prompt belongs to exactly one logical turn. Claude Code only
-    // accepts user records on an existing stream, so keep that turn one-shot
-    // instead of silently dropping or leaking its private memory context.
-    const canReuseConversationStream = supportsVoiceCallTurns && !clean(memoryTurn?.systemPrompt);
+    // Long-term recall is injected by UserPromptSubmit alongside this user
+    // record. It no longer changes --append-system-prompt, so a recalled turn
+    // can keep using the same persistent Claude stream as every other turn.
+    const canReuseConversationStream = supportsVoiceCallTurns;
     const signature = canReuseConversationStream ? streamSignature(args) : "";
     const existingTextStream = reusableTextStreams.get(request.key);
     if (canReuseConversationStream
@@ -1087,9 +1111,9 @@ export function createConversationChatService({
       startTextStreamTurn(existingTextStream, request, memoryTurn);
       return;
     }
-    // A turn outside normal text/call, changed runtime options, or a turn-specific memory
-    // prompt needs a fresh Claude process. Retire only an idle text stream;
-    // an active stream is protected by the session queue.
+    // A turn outside normal text/call or changed runtime options needs a fresh
+    // Claude process. Retire only an idle text stream; an active stream is
+    // protected by the session queue.
     if (existingTextStream && !existingTextStream.turn) closeTextStream(existingTextStream);
     let child;
     try {
@@ -1199,12 +1223,29 @@ export function createConversationChatService({
     }
   };
 
+  const permissionModeForSession = async ({ sessionId, projectRoot } = {}) => {
+    if (typeof reader?.approvalModeForSession !== "function") return DEFAULT_CLAUDE_PERMISSION_MODE;
+    try {
+      return normalizeClaudePermissionMode(await reader.approvalModeForSession({ sessionId, projectRoot }));
+    } catch {
+      return DEFAULT_CLAUDE_PERMISSION_MODE;
+    }
+  };
+
   const resolveSession = async ({ sessionId, projectRoot, hasTranscript } = {}) => {
     const id = clean(sessionId);
     const root = clean(projectRoot);
-    if (!id && !root) return reader.ensureActiveSession();
+    if (!id && !root) {
+      const session = await reader.ensureActiveSession();
+      return { ...session, approvalMode: normalizeClaudePermissionMode(session?.approvalMode) };
+    }
     if (!id || !root) throw new ConversationChatError("指定 Claude 会话时必须同时提供会话标识和工作目录。");
-    return { id, projectRoot: root, hasTranscript: hasTranscript === true };
+    return {
+      id,
+      projectRoot: root,
+      hasTranscript: hasTranscript === true,
+      approvalMode: await permissionModeForSession({ sessionId: id, projectRoot: root }),
+    };
   };
 
   const enqueue = async ({ content, contactId = "", kind = "message", callDirection = "", media: suppliedMedia = [], mediaSource = "wechat", requestId: suppliedRequestId = "", session: requestedSession = null } = {}) => {
@@ -1241,6 +1282,7 @@ export function createConversationChatService({
       contactId: resolvedContactId,
       hasTranscript: Boolean(session.hasTranscript) || knownTranscripts.has(turnKey(session.id, session.projectRoot)),
       kind,
+      approvalMode: session.approvalMode,
       key: turnKey(session.id, session.projectRoot),
       memoryOccurredAt: new Date().toISOString(),
       memoryText: kind === "call"
@@ -1369,7 +1411,9 @@ export function createConversationChatService({
     const id = clean(requestId);
     const permission = permissionRequests.get(id);
     if (!permission || permission.turn.finished) throw new ConversationChatError("这条 Claude Code 权限请求已经失效。");
+    if (!["allow", "deny"].includes(behavior)) throw new ConversationChatError("权限选择无效。");
     const allow = behavior === "allow";
+    const toolName = clean(permission?.toolName) || "Claude Code 工具";
     writeJson(permission.turn.child, {
       type: "control_response",
       response: {
@@ -1382,7 +1426,27 @@ export function createConversationChatService({
     });
     permissionRequests.delete(id);
     permission.turn.permissionIds.delete(id);
-    return { accepted: true, requestId: id, behavior: allow ? "allow" : "deny" };
+    const result = { accepted: true, requestId: id, behavior: allow ? "allow" : "deny", toolName };
+    emit({
+      type: "permission-resolved",
+      requestId: id,
+      sessionId: permission.turn.sessionId,
+      projectRoot: permission.turn.projectRoot,
+      behavior: result.behavior,
+      toolName,
+      timestamp: new Date().toISOString(),
+    });
+    return result;
+  };
+
+  const respondPermissionForSession = ({ sessionId, projectRoot, behavior } = {}) => {
+    const key = turnKey(sessionId, projectRoot);
+    const pending = [...permissionRequests.values()].filter((permission) => (
+      permission.turn.key === key && !permission.turn.finished
+    ));
+    if (!pending.length) return { accepted: false, reason: "no-pending-permission" };
+    if (pending.length > 1) return { accepted: false, reason: "multiple-pending-permissions" };
+    return respondPermission({ requestId: pending[0].requestId, behavior });
   };
 
   const dispose = () => {
@@ -1408,6 +1472,7 @@ export function createConversationChatService({
   return {
     dispose,
     respondPermission,
+    respondPermissionForSession,
     send,
     sendToSession,
     setEventSink: (callback) => { eventSink = typeof callback === "function" ? callback : () => {}; },

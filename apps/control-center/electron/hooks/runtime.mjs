@@ -159,13 +159,26 @@ export async function runProjectHook({ args = [], input = "", now = new Date() }
   }
 }
 
+function writeHookOutput(stdout, value) {
+  return new Promise((resolve, reject) => {
+    try {
+      stdout.write(value, (error) => {
+        if (error) reject(error);
+        else resolve();
+      });
+    } catch (error) {
+      reject(error);
+    }
+  });
+}
+
 export async function runProjectHookCli({ args = process.argv.slice(3), stdin = process.stdin, stdout = process.stdout } = {}) {
   let input = "";
   try {
     for await (const chunk of stdin) input += chunk;
     const result = await runProjectHook({ args, input });
-    if (result.forwardedOutput) stdout.write(result.forwardedOutput);
-    else if (Object.keys(result).length) stdout.write(`${JSON.stringify(result)}\n`);
+    if (result.forwardedOutput) await writeHookOutput(stdout, result.forwardedOutput);
+    else if (Object.keys(result).length) await writeHookOutput(stdout, `${JSON.stringify(result)}\n`);
   } catch {
     // Command hooks must fail open and keep stdout clean on every error path.
   }

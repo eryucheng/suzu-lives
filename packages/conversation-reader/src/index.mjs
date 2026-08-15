@@ -22,6 +22,8 @@ const VOICE_CALL_TURN_OPEN = "<suzu-voice-call-turn>";
 const VOICE_CALL_TURN_CLOSE = "</suzu-voice-call-turn>";
 const VOICE_CALL_OPEN_OPEN = "<suzu-voice-call-open>";
 const VOICE_CALL_OPEN_CLOSE = "</suzu-voice-call-open>";
+const LONG_TERM_MEMORY_CONTEXT_OPEN = "<suzu-long-term-memory>";
+const LONG_TERM_MEMORY_CONTEXT_CLOSE = "</suzu-long-term-memory>";
 const SEARCH_CATEGORIES = new Set(["messages", "images", "files", "audio", "links", "date"]);
 const DATE_QUERY_PATTERN = /^\d{4}-\d{2}-\d{2}$/u;
 
@@ -67,6 +69,15 @@ export function normalizeUsage(usage, model = "") {
 
 function clean(value) {
   return String(value ?? "").trim();
+}
+
+function longTermMemoryRecallSystemMessage(value) {
+  const text = String(value ?? "");
+  const start = text.indexOf(LONG_TERM_MEMORY_CONTEXT_OPEN);
+  const end = text.indexOf(LONG_TERM_MEMORY_CONTEXT_CLOSE, start + LONG_TERM_MEMORY_CONTEXT_OPEN.length);
+  if (start < 0 || end < 0) return "";
+  const recalled = clean(text.slice(start + LONG_TERM_MEMORY_CONTEXT_OPEN.length, end));
+  return recalled ? `记忆召回\n${boundedText(recalled)}` : "";
 }
 
 function normalizedSearchText(value) {
@@ -329,6 +340,17 @@ function textParts(content) {
   });
 }
 
+// Claude writes the text it generates immediately before a tool call as an
+// assistant record with stop_reason=tool_use.  It is execution reasoning, not
+// a person-facing reply, even though the block itself is encoded as text.
+function toolPlanningBlocks(blocks) {
+  return (blocks || []).map((block) => {
+    if (block?.kind !== "text") return block;
+    const text = boundedText(block.text);
+    return { kind: "thinking", text, preview: text.slice(0, 80) };
+  });
+}
+
 function isManagedSuzuSkillContext(content) {
   const values = typeof content === "string"
     ? [content]
@@ -354,7 +376,7 @@ function isClaudeResumeMetaRecord(record) {
     && hasExactTextContent(message.content, CLAUDE_RESUME_META_TEXT);
 }
 
-function isClaudeSyntheticNoResponseRecord(record) {
+export function isClaudeSyntheticNoResponseRecord(record) {
   const message = record?.message || {};
   const parentUuid = clean(record?.parentUuid || message?.parentUuid);
   const model = clean(message?.model || record?.model);
@@ -385,6 +407,26 @@ function noReplyBlocks(blocks) {
   return text.length === 1 && text[0].text.trim() === "NO_REPLY";
 }
 
+function displayOrderFromTranscript(messages) {
+  let previousTimestamp = Number.NaN;
+  let newestFirst = false;
+  for (const message of messages) {
+    const timestamp = Date.parse(message.timestamp);
+    if (!Number.isFinite(timestamp)) continue;
+    if (Number.isFinite(previousTimestamp)) {
+      // A live Claude JSONL is append-only.  One late record with an older
+      // timestamp (notably a voice-call record) must stay where it was
+      // appended instead of making the whole conversation jump around.
+      if (timestamp > previousTimestamp) return messages;
+      if (timestamp < previousTimestamp) newestFirst = true;
+    }
+    previousTimestamp = timestamp;
+  }
+  // Imported/copied histories can genuinely be written newest-first.  Keep
+  // that compatibility path, but only reverse a consistently descending file.
+  return newestFirst ? [...messages].reverse() : messages;
+}
+
 export function buildDisplayMessages(records, maxMessages = 500) {
   const messages = [];
   const belongsToVoiceCall = voiceCallRecordResolver(records);
@@ -395,7 +437,15 @@ export function buildDisplayMessages(records, maxMessages = 500) {
     let kind = "";
     let blocks = [];
     let label = "";
-    if (type === "user") {
+    // A compaction summary is deliberately stored as a Claude `user` record
+    // so it can be injected back into the resumed context. It is not a message
+    // authored by the local user, so preserve its contents but render it with
+    // the existing centered system-message treatment.
+    if (type === "user" && record?.isCompactSummary === true) {
+      kind = "system";
+      blocks = textParts(message.content);
+    }
+    else if (type === "user") {
       // Claude Code may append an internal `isMeta` resume marker. It is not
       // person-authored chat content and has a paired synthetic assistant row.
       if (isClaudeResumeMetaRecord(record)) continue;
@@ -423,6 +473,7 @@ export function buildDisplayMessages(records, maxMessages = 500) {
       kind = voiceCall ? "system" : "assistant";
       blocks = textParts(message.content);
       if (noReplyBlocks(blocks)) continue;
+      if (message.stop_reason === "tool_use") blocks = toolPlanningBlocks(blocks);
       if (voiceCall) blocks = callTranscriptBlocks(blocks, "对方");
     }
     else if (type === "system") { kind = "system"; blocks = [{ kind: "text", text: boundedText(record.content || (record.subtype ? `[系统: ${record.subtype}]` : "[系统消息]")) }]; }
@@ -430,9 +481,15 @@ export function buildDisplayMessages(records, maxMessages = 500) {
       const attachment = record.attachment || record;
       const content = Array.isArray(attachment.content) ? attachment.content.join("\n") : attachment.content;
       if (!content) continue;
-      kind = "attachment";
-      label = attachment.hookName ? `上下文注入 · ${attachment.hookName}` : attachment.type || "上下文注入";
-      blocks = [{ kind: "text", text: boundedText(content) }];
+      const memoryRecall = longTermMemoryRecallSystemMessage(content);
+      if (memoryRecall) {
+        kind = "system";
+        blocks = [{ kind: "text", text: memoryRecall }];
+      } else {
+        kind = "attachment";
+        label = attachment.hookName ? `上下文注入 · ${attachment.hookName}` : attachment.type || "上下文注入";
+        blocks = [{ kind: "text", text: boundedText(content) }];
+      }
     } else continue;
     if (!blocks.length) continue;
     const lineNumber = normalizedLineNumber(record?.__suzuConversationLine);
@@ -446,23 +503,7 @@ export function buildDisplayMessages(records, maxMessages = 500) {
       ...(lineNumber ? { lineNumber } : {}),
     });
   }
-  // Claude JSONL is usually chronological, but imported or copied sessions can
-  // arrive newest-first. Chat UI must always read from older messages to newer.
-  return messages
-    .map((message, sourceIndex) => ({
-      message,
-      sourceIndex,
-      timestamp: Date.parse(message.timestamp),
-    }))
-    .sort((left, right) => {
-      const leftValid = Number.isFinite(left.timestamp);
-      const rightValid = Number.isFinite(right.timestamp);
-      if (leftValid && rightValid && left.timestamp !== right.timestamp) return left.timestamp - right.timestamp;
-      if (leftValid !== rightValid) return leftValid ? -1 : 1;
-      return left.sourceIndex - right.sourceIndex;
-    })
-    .map(({ message }) => message)
-    .slice(-maxMessages);
+  return displayOrderFromTranscript(messages).slice(-maxMessages);
 }
 
 export class JsonlTail {

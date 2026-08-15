@@ -1,20 +1,24 @@
-name: Package Windows test build
+name: Build Suzu Dev Update
 
-run-name: Package Windows test build from ${{ github.ref_name }} (${{ github.sha }})
+run-name: Suzu Dev Update from ${{ github.ref_name }} (${{ github.sha }})
 
 on:
+  push:
+    branches:
+      - test
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: package-windows-${{ github.ref }}
+  group: suzu-dev-update-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
   package:
-    name: Build Windows x64 ZIP
+    if: github.repository == 'eryucheng/suzu-lives-private'
+    name: Build Windows x64 NSIS installer
     runs-on: windows-latest
     timeout-minutes: 45
 
@@ -37,18 +41,31 @@ jobs:
       - name: Run tests before packaging
         run: npm test
 
-      - name: Build React renderer
-        working-directory: apps/control-center
-        run: npx --no-install vite build
+      - name: Package Windows x64 NSIS installer
+        run: npm run dist:installer
 
-      - name: Package Windows x64 ZIP
-        run: npm run dist
+      - name: Verify the dev installer
+        shell: pwsh
+        run: |
+          $distRoot = Join-Path $PWD "apps/control-center/dist"
+          $resourcesRoot = Join-Path $distRoot "win-unpacked/resources"
+          $packageType = Join-Path $resourcesRoot "package-type"
+          if (-not (Test-Path -LiteralPath $packageType -PathType Leaf)) {
+            throw "测试安装包缺少 package-type 标识。"
+          }
+          if ((Get-Content -Raw -LiteralPath $packageType).Trim() -ne "nsis") {
+            throw "测试安装包不是 NSIS 安装版。"
+          }
+          $installer = @(Get-ChildItem -LiteralPath $distRoot -File -Filter "Suzu-Lives-Console-*-win-x64.exe")
+          if ($installer.Count -ne 1) {
+            throw "预期恰好一个 Windows x64 测试安装程序，实际找到 $($installer.Count) 个。"
+          }
 
-      - name: Upload test package
+      - name: Upload dev installer
         uses: actions/upload-artifact@v7
         with:
-          path: apps/control-center/dist/Suzu-Lives-Console-*-win-x64.zip
+          name: suzu-lives-dev-installer
+          path: apps/control-center/dist/Suzu-Lives-Console-*-win-x64.exe
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 30
           compression-level: 0
-          archive: false

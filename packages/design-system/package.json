@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "description": "Internal React visual components used by Suzu Lives.",
-  "license": "SEE LICENSE IN ../../LICENSE.md",
+  "license": "Apache-2.0",
   "main": "./dist/suzu-design-system.umd.cjs",
   "module": "./dist/suzu-design-system.js",
   "exports": {

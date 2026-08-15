@@ -16,6 +16,124 @@ const BRAIN_AWAKENING_NODE_DURATION = 360;
 const BRAIN_AWAKENING_EDGE_START = 620;
 const BRAIN_AWAKENING_EDGE_STAGGER = 440;
 const BRAIN_AWAKENING_EDGE_DURATION = 440;
+
+const MEMORY_BRAIN_PALETTES = Object.freeze({
+  dark: Object.freeze({
+    brainWire: "170, 211, 247",
+    brainWireShadow: "122, 189, 245",
+    evidenceAura: "232, 251, 255",
+    evidenceCore: "222, 247, 255",
+    evidenceCoreSelected: "250, 255, 255",
+    evidenceGlow: "157, 220, 255",
+    evidenceGlowSelected: "173, 240, 255",
+    evidenceComposite: "lighter",
+    glowAlpha: 1,
+    glowBlur: 1,
+    nodeAmbientAlpha: 1,
+    nodes: Object.freeze({
+      major: Object.freeze({
+        agent: "177, 151, 255",
+        entity: "151, 207, 255",
+        episode: "87, 239, 210",
+        relationship: "255, 142, 180",
+        topic: "177, 151, 255",
+        user: "105, 218, 242",
+      }),
+      minor: Object.freeze({
+        event: "220, 246, 255",
+        intent: "99, 226, 220",
+        knowledge: "151, 207, 255",
+        legacy: "161, 176, 210",
+        reflection: "205, 185, 255",
+      }),
+      state: Object.freeze({
+        affective_association: "255, 151, 198",
+        belief: "245, 204, 139",
+        capability: "118, 192, 255",
+        condition: "108, 205, 255",
+        disposition: "155, 213, 188",
+        goal: "89, 225, 218",
+        habit: "139, 219, 190",
+        identity: "194, 169, 255",
+        preference: "255, 190, 117",
+        relationship: "255, 142, 180",
+        self_concept: "205, 167, 255",
+        value: "255, 212, 128",
+      }),
+    }),
+    pulse: "248, 253, 255",
+    pulseShadow: "232, 248, 255",
+    relation: "220, 246, 255",
+    relationAlpha: 1,
+    selected: "232, 255, 249",
+    selectedRing: "187, 255, 241",
+    stateFallback: "255, 199, 128",
+    wireAlpha: 1,
+  }),
+  light: Object.freeze({
+    brainWire: "84, 113, 151",
+    brainWireShadow: "69, 108, 150",
+    evidenceAura: "38, 112, 153",
+    evidenceCore: "30, 105, 148",
+    evidenceCoreSelected: "10, 75, 112",
+    evidenceGlow: "50, 132, 171",
+    evidenceGlowSelected: "24, 113, 151",
+    evidenceComposite: "source-over",
+    glowAlpha: 0.72,
+    glowBlur: 0.74,
+    nodeAmbientAlpha: 0.78,
+    nodes: Object.freeze({
+      major: Object.freeze({
+        agent: "112, 85, 185",
+        entity: "59, 111, 174",
+        episode: "12, 128, 112",
+        relationship: "190, 65, 116",
+        topic: "91, 75, 179",
+        user: "27, 119, 163",
+      }),
+      minor: Object.freeze({
+        event: "67, 98, 133",
+        intent: "20, 130, 123",
+        knowledge: "52, 107, 171",
+        legacy: "84, 101, 135",
+        reflection: "104, 77, 177",
+      }),
+      state: Object.freeze({
+        affective_association: "193, 69, 117",
+        belief: "164, 108, 35",
+        capability: "60, 105, 172",
+        condition: "47, 119, 171",
+        disposition: "51, 123, 104",
+        goal: "19, 129, 119",
+        habit: "38, 128, 102",
+        identity: "108, 76, 176",
+        preference: "178, 105, 27",
+        relationship: "190, 65, 116",
+        self_concept: "120, 80, 176",
+        value: "174, 112, 25",
+      }),
+    }),
+    pulse: "33, 116, 142",
+    pulseShadow: "65, 142, 168",
+    relation: "65, 98, 135",
+    relationAlpha: 1.35,
+    selected: "6, 101, 99",
+    selectedRing: "0, 135, 125",
+    stateFallback: "182, 110, 28",
+    wireAlpha: 1.16,
+  }),
+});
+
+export function memoryBrainPalette(theme) {
+  return theme === "light" ? MEMORY_BRAIN_PALETTES.light : MEMORY_BRAIN_PALETTES.dark;
+}
+
+function currentMemoryBrainTheme() {
+  return typeof document !== "undefined" && document.documentElement?.dataset?.theme === "light"
+    ? "light"
+    : "dark";
+}
+
 function clamp(value, minimum, maximum) {
   return Math.min(maximum, Math.max(minimum, Number(value)));
 }
@@ -155,45 +273,19 @@ function buildBrainWireframe() {
   return polylines;
 }
 
-function relationColor(_edge, alpha) {
+function relationColor(_edge, alpha, palette) {
   // 语义颜色只归节点所有；边复用普通 event 节点的默认色，不另起一套色值。
-  return `rgba(220, 246, 255, ${alpha})`;
+  return `rgba(${palette.relation}, ${alpha})`;
 }
 
-function nodePalette(node) {
+function nodePalette(node, palette) {
   if (node.visualTier === "major") {
-    return ({
-      episode: "87, 239, 210",
-      topic: "177, 151, 255",
-      user: "105, 218, 242",
-      agent: "177, 151, 255",
-      relationship: "255, 142, 180",
-      entity: "151, 207, 255",
-    }[node.visualFamily] || "177, 151, 255");
+    return palette.nodes.major[node.visualFamily] || palette.nodes.major.topic;
   }
   if (node.visualTier === "state") {
-    return ({
-      preference: "255, 190, 117",
-      belief: "245, 204, 139",
-      relationship: "255, 142, 180",
-      affective_association: "255, 151, 198",
-      goal: "89, 225, 218",
-      condition: "108, 205, 255",
-      capability: "118, 192, 255",
-      identity: "194, 169, 255",
-      self_concept: "205, 167, 255",
-      value: "255, 212, 128",
-      habit: "139, 219, 190",
-      disposition: "155, 213, 188",
-    }[node.stateFamily] || "255, 199, 128");
+    return palette.nodes.state[node.stateFamily] || palette.stateFallback;
   }
-  return ({
-    reflection: "205, 185, 255",
-    legacy: "161, 176, 210",
-    knowledge: "151, 207, 255",
-    intent: "99, 226, 220",
-    event: "220, 246, 255",
-  }[node.visualFamily] || "220, 246, 255");
+  return palette.nodes.minor[node.visualFamily] || palette.nodes.minor.event;
 }
 
 function nodeBaseRadius(node) {
@@ -547,20 +639,20 @@ export function createMemoryBrainView(canvas, graph, {
     };
   }
 
-  function drawBrain() {
+  function drawBrain(palette) {
     context.save();
     for (const polyline of wireframe) {
       const keyContour = polyline.strength >= 0.58;
       context.lineWidth = keyContour ? 1.08 : 0.72;
-      context.shadowColor = keyContour ? "rgba(122, 189, 245, .28)" : "transparent";
+      context.shadowColor = keyContour ? `rgba(${palette.brainWireShadow}, ${0.28 * palette.glowAlpha})` : "transparent";
       context.shadowBlur = keyContour ? 3.5 : 0;
       for (let index = 1; index < polyline.points.length; index += 1) {
         const left = project(polyline.points[index - 1]);
         const right = project(polyline.points[index]);
         if (!left.visible || !right.visible) continue;
         const depth = clamp(((left.z + right.z) * 0.5 + 1.2) / 2.4, 0, 1);
-        const alpha = (0.054 + depth * 0.17) * polyline.strength;
-        context.strokeStyle = `rgba(170, 211, 247, ${alpha})`;
+        const alpha = (0.054 + depth * 0.17) * polyline.strength * palette.wireAlpha;
+        context.strokeStyle = `rgba(${palette.brainWire}, ${alpha})`;
         context.beginPath();
         context.moveTo(left.x, left.y);
         context.lineTo(right.x, right.y);
@@ -638,7 +730,7 @@ export function createMemoryBrainView(canvas, graph, {
     }
   }
 
-  function drawSignalTail(projected, activity) {
+  function drawSignalTail(projected, activity, palette) {
     if (activity.strength <= 0) return;
     const headProgress = activity.direction < 0 ? 1 - activity.progress : activity.progress;
     const tailLength = activity.tailLength || 0.1;
@@ -647,8 +739,8 @@ export function createMemoryBrainView(canvas, graph, {
       : Math.max(0, headProgress - tailLength);
     const segmentCount = 18;
     const strokePulse = (widthMultiplier, alphaMultiplier, shadowBlur = 0) => {
-      context.shadowColor = shadowBlur ? "rgba(232, 248, 255, .8)" : "transparent";
-      context.shadowBlur = shadowBlur;
+      context.shadowColor = shadowBlur ? `rgba(${palette.pulseShadow}, ${0.8 * palette.glowAlpha})` : "transparent";
+      context.shadowBlur = shadowBlur * palette.glowBlur;
       for (let segment = 1; segment <= segmentCount; segment += 1) {
         const from = (segment - 1) / segmentCount;
         const to = segment / segmentCount;
@@ -660,7 +752,7 @@ export function createMemoryBrainView(canvas, graph, {
         const start = quadraticPoint(projected.start, projected.control, projected.end, startProgress);
         const end = quadraticPoint(projected.start, projected.control, projected.end, endProgress);
         context.lineWidth = 0.42 + activity.strength * envelope * widthMultiplier;
-        context.strokeStyle = `rgba(248, 253, 255, ${activity.strength * envelope * alphaMultiplier})`;
+        context.strokeStyle = `rgba(${palette.pulse}, ${activity.strength * envelope * alphaMultiplier})`;
         context.beginPath();
         context.moveTo(start.x, start.y);
         context.lineTo(end.x, end.y);
@@ -696,7 +788,7 @@ export function createMemoryBrainView(canvas, graph, {
     };
   }
 
-  function drawConnections(awakeningAge) {
+  function drawConnections(awakeningAge, palette) {
     context.save();
     // 纤维重叠不能彼此相加烧成白色，否则汇聚的大神经元会被线盖住。
     context.globalCompositeOperation = "source-over";
@@ -728,23 +820,23 @@ export function createMemoryBrainView(canvas, graph, {
       // 聚焦某个节点时，直接关联线只改变可见范围，不改变静态纤维的深浅。
       // 它们和全景的结构线共用底色，脉冲仍在其上单独绘制。
       const stableRelation = direct || structural;
-      const alpha = (stableRelation ? 0.17 : 0.075 + ambientStrength * 0.2) * reveal;
+      const alpha = (stableRelation ? 0.17 : 0.075 + ambientStrength * 0.2) * reveal * palette.relationAlpha;
       context.lineWidth = stableRelation ? 0.8 : 0.62 + ambientStrength * 0.22;
-      context.strokeStyle = relationColor(edge, alpha);
+      context.strokeStyle = relationColor(edge, alpha, palette);
       if (ambient) {
-        context.shadowColor = relationColor(edge, 0.55);
-        context.shadowBlur = 6 + ambientStrength * 5;
+        context.shadowColor = relationColor(edge, 0.55 * palette.glowAlpha, palette);
+        context.shadowBlur = (6 + ambientStrength * 5) * palette.glowBlur;
       }
       strokeConnectionPath(projected, reveal);
       context.stroke();
       context.shadowBlur = 0;
       // 全景环境线和选中节点的直接关联线都复用同一条脉冲尾迹。
-      if (reveal >= 0.985 && ambientStrength > 0 && (ambient || direct)) drawSignalTail(projected, ambientActivity);
+      if (reveal >= 0.985 && ambientStrength > 0 && (ambient || direct)) drawSignalTail(projected, ambientActivity, palette);
     }
     context.restore();
   }
 
-  function drawNodes(time, awakeningAge) {
+  function drawNodes(time, awakeningAge, palette) {
     const projectedNodes = nodes.map((node) => ({
       node,
       projected: project(node.position),
@@ -778,10 +870,10 @@ export function createMemoryBrainView(canvas, graph, {
             ? 0.58
             : 0.48
       ) + depth * 0.3;
-      let color = nodePalette(node);
+      let color = nodePalette(node, palette);
       if (selected) {
         alpha = 1;
-        color = "232, 255, 249";
+        color = palette.selected;
       } else if (direct) {
         alpha = ambient ? Math.min(1, 0.96 + ambientStrength * 0.04) : 0.96;
       } else if (selectedId) {
@@ -794,9 +886,9 @@ export function createMemoryBrainView(canvas, graph, {
       }
       alpha *= reveal;
       if (ambient) {
-        context.fillStyle = `rgba(${color}, ${(0.025 + ambientStrength * 0.045) * reveal})`;
-        context.shadowColor = `rgba(${color}, ${0.7 * reveal})`;
-        context.shadowBlur = (13 + ambientStrength * 9) * (0.35 + reveal * 0.65);
+        context.fillStyle = `rgba(${color}, ${(0.025 + ambientStrength * 0.045) * reveal * palette.nodeAmbientAlpha})`;
+        context.shadowColor = `rgba(${color}, ${0.7 * reveal * palette.glowAlpha})`;
+        context.shadowBlur = (13 + ambientStrength * 9) * (0.35 + reveal * 0.65) * palette.glowBlur;
         context.beginPath();
         context.arc(projected.x, projected.y, Math.max(2.8 * reveal, radius + 2.7 * reveal), 0, TAU);
         context.fill();
@@ -819,13 +911,13 @@ export function createMemoryBrainView(canvas, graph, {
         context.stroke();
       }
       context.fillStyle = `rgba(${color}, ${alpha})`;
-      context.shadowColor = `rgba(${color}, ${(selected || direct ? 0.95 : node.visualTier === "minor" ? 0.58 : node.visualTier === "major" ? 0.54 : 0.4) * reveal})`;
-      context.shadowBlur = (selected ? 25 : direct ? 16 : ambient ? 13 : node.visualTier === "minor" ? 5 : node.visualTier === "major" ? 9 : 7) * (0.35 + reveal * 0.65);
+      context.shadowColor = `rgba(${color}, ${(selected || direct ? 0.95 : node.visualTier === "minor" ? 0.58 : node.visualTier === "major" ? 0.54 : 0.4) * reveal * palette.glowAlpha})`;
+      context.shadowBlur = (selected ? 25 : direct ? 16 : ambient ? 13 : node.visualTier === "minor" ? 5 : node.visualTier === "major" ? 9 : 7) * (0.35 + reveal * 0.65) * palette.glowBlur;
       context.beginPath();
       context.arc(projected.x, projected.y, Math.max(node.visualTier === "minor" ? 0.58 : 1, radius), 0, TAU);
       context.fill();
       if (selected) {
-        context.strokeStyle = `rgba(187, 255, 241, ${0.82 * reveal})`;
+        context.strokeStyle = `rgba(${palette.selectedRing}, ${0.82 * reveal})`;
         context.lineWidth = 1;
         context.beginPath();
         context.arc(projected.x, projected.y, radius + 8 * reveal + Math.sin(time * 0.003) * 2, 0, TAU);
@@ -845,10 +937,10 @@ export function createMemoryBrainView(canvas, graph, {
     context.restore();
   }
 
-  function drawEvidenceStars(time) {
+  function drawEvidenceStars(time, palette) {
     if (!selectedId || !evidenceStars.length) return;
     context.save();
-    context.globalCompositeOperation = "lighter";
+    context.globalCompositeOperation = palette.evidenceComposite;
     for (const evidence of evidenceStars) {
       const projected = project(evidence.position);
       if (!projected.visible) continue;
@@ -856,16 +948,18 @@ export function createMemoryBrainView(canvas, graph, {
       const twinkle = evidenceTwinkle(evidence.id, time);
       const radius = Math.max(1.15, evidence.radius * clamp(projected.scale / 150, 0.76, 1.34));
       const glowRadius = selected ? radius + 7.5 : radius + 3.5;
-      context.fillStyle = `rgba(232, 251, 255, ${selected ? 0.25 : 0.035 + twinkle * 0.055})`;
-      context.shadowColor = selected ? "rgba(173, 240, 255, .98)" : "rgba(157, 220, 255, .82)";
-      context.shadowBlur = selected ? 17 : 4 + twinkle * 4;
+      context.fillStyle = `rgba(${palette.evidenceAura}, ${selected ? 0.25 : 0.035 + twinkle * 0.055})`;
+      context.shadowColor = selected
+        ? `rgba(${palette.evidenceGlowSelected}, ${0.98 * palette.glowAlpha})`
+        : `rgba(${palette.evidenceGlow}, ${0.82 * palette.glowAlpha})`;
+      context.shadowBlur = (selected ? 17 : 4 + twinkle * 4) * palette.glowBlur;
       context.beginPath();
       context.arc(projected.x, projected.y, glowRadius, 0, TAU);
       context.fill();
       context.shadowBlur = 0;
       context.fillStyle = selected
-        ? "rgba(250, 255, 255, 1)"
-        : `rgba(222, 247, 255, ${0.38 + twinkle * 0.58})`;
+        ? `rgba(${palette.evidenceCoreSelected}, 1)`
+        : `rgba(${palette.evidenceCore}, ${0.38 + twinkle * 0.58})`;
       context.beginPath();
       context.moveTo(projected.x, projected.y - radius * 2.7);
       context.lineTo(projected.x + radius * 0.78, projected.y - radius * 0.78);
@@ -1018,10 +1112,11 @@ export function createMemoryBrainView(canvas, graph, {
     rotationY += (targetRotationY - rotationY) * 0.085;
     zoom += (targetZoom - zoom) * 0.085;
     context.clearRect(0, 0, width, height);
-    drawBrain();
-    drawConnections(age);
-    drawNodes(time, age);
-    drawEvidenceStars(time);
+    const palette = memoryBrainPalette(currentMemoryBrainTheme());
+    drawBrain(palette);
+    drawConnections(age, palette);
+    drawNodes(time, age, palette);
+    drawEvidenceStars(time, palette);
   }
   frame = requestAnimationFrame(render);
 
