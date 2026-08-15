@@ -1291,9 +1291,42 @@
 
 [data-theme="light"] .memory-brain-stage {
   background:
-    radial-gradient(circle at 50% 46%, rgba(20, 157, 148, .12), transparent 24%),
-    radial-gradient(circle at 50% 54%, rgba(98, 94, 214, .13), transparent 48%),
-    linear-gradient(180deg, rgba(235, 242, 252, .55), rgba(211, 224, 241, .82));
+    radial-gradient(circle at 50% 46%, rgba(21, 125, 119, .11), transparent 24%),
+    radial-gradient(circle at 50% 54%, rgba(91, 75, 179, .12), transparent 48%),
+    linear-gradient(180deg, #f0f5fb, #d8e3f0);
+}
+
+[data-theme="light"] .memory-brain-stage::before {
+  background:
+    repeating-radial-gradient(circle at 50% 51%, rgba(72, 104, 148, .16) 0 1px, transparent 1px 56px),
+    radial-gradient(circle at 50% 50%, transparent 36%, rgba(71, 91, 124, .12) 100%);
+  opacity: .92;
+}
+
+[data-theme="light"] .memory-brain-stage::after {
+  border-color: rgba(71, 100, 141, .18);
+}
+
+[data-theme="light"] .memory-brain-hint span {
+  border-color: rgba(79, 108, 148, .22);
+  background: rgba(247, 250, 255, .84);
+  box-shadow: 0 4px 12px rgba(52, 77, 109, .08);
+  color: #435977;
+}
+
+[data-theme="light"] .memory-brain-hint .brain-legend-minor::before {
+  background: rgb(67, 98, 133);
+  box-shadow: 0 0 8px rgba(67, 98, 133, .42);
+}
+
+[data-theme="light"] .memory-brain-hint .brain-legend-major::before {
+  background: rgb(91, 75, 179);
+  box-shadow: 0 0 0 3px rgba(91, 75, 179, .12), 0 0 12px rgba(91, 75, 179, .46);
+}
+
+[data-theme="light"] .memory-brain-hint .brain-legend-state::before {
+  background: rgb(178, 105, 27);
+  box-shadow: 0 0 0 2px rgba(178, 105, 27, .1), 0 0 9px rgba(178, 105, 27, .42);
 }
 
 [data-theme="light"] .memory-brain-detail {
