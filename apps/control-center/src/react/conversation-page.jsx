@@ -402,7 +402,7 @@ function ConversationSessionSettings({ actions, settings }) {
   if (!settings) return null;
   return (
     <aside aria-label="当前联系人设置" className={`conversation-session-settings${settings.visible ? "" : " hidden"}`} id="conversationSettings">
-      <header><div><span>当前联系人</span><div className="conversation-session-settings__contact-name"><strong>{settings.contactName}</strong><button className="conversation-session-settings__note-button" onClick={() => actions.openContactRename(settings.contactId)} type="button">修改联系人备注</button>{settings.hasSession ? <button className="conversation-session-settings__note-button" onClick={() => actions.openSessionNote(settings.contactId)} type="button">聊天备注</button> : null}</div></div><button aria-label="关闭联系人设置" className="conversation-session-settings__close suzu-close-button" onClick={actions.closeSessionSettings} type="button">×</button></header>
+      <header><div><span>当前联系人</span><div className="conversation-session-settings__contact-name"><strong>{settings.contactName}</strong><button className="conversation-session-settings__note-button" onClick={() => actions.openContactRename(settings.contactId)} type="button">修改联系人备注</button></div></div><button aria-label="关闭联系人设置" className="conversation-session-settings__close suzu-close-button" onClick={actions.closeSessionSettings} type="button">×</button></header>
       {settings.contactAvatar ? (
         <section className="conversation-session-settings__section"><header><div><span>CONTACT</span><h2>联系人头像</h2></div></header><div className="conversation-session-settings__avatar"><span className="conversation-contact__avatar"><PersonAvatar avatar={settings.contactAvatar} fallback={settings.contactName} /></span><div className="conversation-session-settings__avatar-copy"><strong>{settings.contactName}</strong><div className="conversation-session-settings__avatar-actions"><label className="secondary-button">选择头像<input accept="image/png,image/jpeg,image/webp" hidden onChange={(event) => { const file = event.currentTarget.files?.[0]; event.currentTarget.value = ""; void actions.uploadContactAvatar(file); }} type="file" /></label>{settings.removeContactAvatar ? <button className="text-button" onClick={() => { void actions.removeContactAvatar(); }} type="button">移除头像</button> : null}</div></div></div></section>
       ) : null}
@@ -412,7 +412,7 @@ function ConversationSessionSettings({ actions, settings }) {
           <section className="conversation-session-settings__section"><header><div><span>LOCAL MEDIA</span><h2>本地附件</h2><p>Agent 交付给这位联系人的图片和文件保存在 Suzu 本地缓存中。</p></div></header><div className="conversation-session-settings__actions"><button className="secondary-button" onClick={() => { void actions.openMediaDirectory(settings.contactId); }} type="button">打开文件目录</button></div></section>
           {settings.wechat ? <section className="conversation-session-settings__section conversation-session-settings__wechat"><header><div><span>WECHAT</span><h2>微信连接</h2><p>二维码会在中间弹出。扫码后，请向这个微信机器人发一条文字消息，确认它已进入当前联系人的固定对话；回复默认投递 Agent 的说话内容。</p></div><span className="conversation-session-settings__status">{settings.wechat.status}</span></header><WechatSettingsControls actions={actions} contactId={settings.contactId} control={settings.wechat.control} />{settings.wechat.pendingQrError ? <p className="conversation-session-settings__error">{settings.wechat.pendingQrError}</p> : null}{settings.wechat.connectionError ? <p className="conversation-session-settings__error">{settings.wechat.connectionError}</p> : null}{settings.wechat.hint ? <p className="conversation-session-settings__hint">指令和普通消息与这里一致：/suzu stop、/suzu steer …、以及 Claude Code 自己的 / 指令。</p> : null}</section> : null}
         </>
-      ) : <section className="conversation-session-settings__section"><header><div><span>CONTACT SETTINGS</span><h2>联系人设置</h2><p>当前联系人还没有聊天记录。发送第一条消息后，这里会显示备注、本地附件和微信连接。</p></div></header></section>}
+      ) : <section className="conversation-session-settings__section"><header><div><span>CONTACT SETTINGS</span><h2>联系人设置</h2><p>当前联系人还没有聊天记录。发送第一条消息后，这里会显示本地附件和微信连接。</p></div></header></section>}
     </aside>
   );
 }
@@ -471,17 +471,6 @@ function ContactRenameDialog({ actions, contact }) {
   }, [contact?.contactId, contact?.name]);
   if (!contact) return null;
   return <div className="conversation-contact-create-overlay" onClick={(event) => { if (event.target === event.currentTarget && !contact.saving) actions.closeContactRename(); }}><form aria-label="修改联系人备注" className="conversation-contact-create-dialog" id="conversationContactRename" onSubmit={(event) => { event.preventDefault(); void actions.renameContact(contact.contactId, name); }}><header><div><span>CONTACT REMARK</span><h2>修改联系人备注</h2></div><button aria-label="关闭修改联系人备注" className="suzu-close-button" disabled={contact.saving} onClick={actions.closeContactRename} type="button">×</button></header><label><span>联系人备注</span><input autoComplete="off" disabled={contact.saving} maxLength={80} onChange={(event) => setName(event.currentTarget.value)} placeholder="只在 Suzu 中显示，可与其他联系人重名" ref={inputRef} required value={name} /></label><p>聊天记录和关联设置仍按联系人 ID 保持不变。</p><footer><button className="text-button" disabled={contact.saving} onClick={actions.closeContactRename} type="button">取消</button><button className="primary-button" disabled={contact.saving}>{contact.saving ? "保存中…" : "保存备注"}</button></footer></form></div>;
-}
-
-function SessionNoteDialog({ actions, note }) {
-  const inputRef = useRef(null);
-  const [value, setValue] = useState(note?.note || "");
-  useEffect(() => {
-    setValue(note?.note || "");
-    if (note) inputRef.current?.focus();
-  }, [note?.note, note?.contactId]);
-  if (!note) return null;
-  return <div className="conversation-contact-note-overlay" onClick={(event) => { if (event.target === event.currentTarget) actions.closeSessionNote(); }}><form aria-label="聊天备注" className="conversation-contact-note-dialog" id="conversationSessionNote" onSubmit={(event) => { event.preventDefault(); void actions.saveSessionNote(note.contactId, value); }}><header><div><span>CHAT NOTE</span><h2>聊天备注</h2></div><button aria-label="关闭聊天备注" className="suzu-close-button" onClick={actions.closeSessionNote} type="button">×</button></header><label><span>聊天备注</span><textarea maxLength={2000} onChange={(event) => { const next = event.currentTarget.value; setValue(next); actions.setSessionNoteDraft(next); }} placeholder="给这段聊天添加备注" ref={inputRef} rows={5} value={value} /></label><footer><button className="text-button" onClick={actions.closeSessionNote} type="button">取消</button><button className="primary-button">保存</button></footer></form></div>;
 }
 
 function WechatQrDialog({ actions, qr }) {
@@ -550,7 +539,6 @@ function ConversationOverlays({ actions, overlays }) {
   return <>
     <ContactCreateDialog actions={actions} open={active.contactCreate} />
     <ContactRenameDialog actions={actions} contact={active.contactRename} />
-    <SessionNoteDialog actions={actions} note={active.sessionNote} />
     <WechatQrDialog actions={actions} qr={active.wechatQr} />
     <MediaPreviewDialog actions={actions} preview={active.mediaPreview} />
     <AvatarCropDialog actions={actions} crop={active.avatarCrop} />
@@ -639,7 +627,7 @@ export function ConversationPage({ actions, incomingCall = null, snapshot = {} }
     event.preventDefault();
   };
   const dismissOnWorkspaceClick = (event) => {
-    const interactive = event.target.closest?.(".conversation-pane__actions, .conversation-menu, .conversation-session-settings, .conversation-search-panel, .conversation-composer, .conversation-roster, .conversation-contact-context-menu, .conversation-permissions, .conversation-media__preview, .conversation-contact-create-dialog, .conversation-contact-note-dialog, .conversation-wechat-qr-dialog, .conversation-media-preview-dialog, .conversation-avatar-crop-dialog");
+    const interactive = event.target.closest?.(".conversation-pane__actions, .conversation-menu, .conversation-session-settings, .conversation-search-panel, .conversation-composer, .conversation-roster, .conversation-contact-context-menu, .conversation-permissions, .conversation-media__preview, .conversation-contact-create-dialog, .conversation-wechat-qr-dialog, .conversation-media-preview-dialog, .conversation-avatar-crop-dialog");
     if (!interactive) actions.dismissOverlays();
   };
   return (

@@ -93,7 +93,8 @@ test("embedded long-term memory starts in a new contact database and archives a 
     occurredAt: "2026-08-10T10:00:00.000Z",
   });
   assert.ok(turn);
-  assert.equal(turn.systemPrompt, "");
+  assert.equal(Object.hasOwn(turn, "systemPrompt"), false);
+  assert.equal(Object.hasOwn(turn, "prepared"), false);
   await runtime.completeTurn(turn, {
     assistantText: "好，我记住了。",
     occurredAt: "2026-08-10T10:01:00.000Z",
@@ -142,6 +143,78 @@ test("embedded long-term memory starts in a new contact database and archives a 
     "好，我记住了。",
     "我周五要去看展。",
   ].sort());
+  runtime.dispose();
+});
+
+test("memory import stages the source before initializing a conflicting target identity", async () => {
+  const dataRoot = await fs.mkdtemp(path.join(os.tmpdir(), "suzu-memory-import-stage-"));
+  const contact = {
+    id: "contact-suzu",
+    name: "Suzu",
+    agentId: "agent-target",
+    projectRoot: path.join(dataRoot, "contact-suzu"),
+    sessionId: "suzu-session",
+  };
+  await fs.mkdir(contact.projectRoot, { recursive: true });
+  const targetDatabasePath = path.join(
+    resolveAgentDataRoot({ dataRoot, agentId: contact.agentId }),
+    "memory",
+    "sessions",
+    contact.sessionId,
+    "suzu-memory.db",
+  );
+  const oldTarget = createSuzuMemoryService({
+    dataRoot,
+    agentId: contact.agentId,
+    databasePath: targetDatabasePath,
+    defaults: { companionId: contact.agentId, memoryOwner: "旧联系人" },
+  });
+  oldTarget.initialize();
+  oldTarget.withRepository((repository) => repository.upsertEntity({
+    agentId: contact.agentId,
+    kind: "agent",
+    canonicalName: "Suzu",
+  }));
+
+  const source = createSuzuMemoryService({
+    dataRoot: await fs.mkdtemp(path.join(os.tmpdir(), "suzu-memory-import-source-")),
+    agentId: "agent-source",
+    defaults: { companionId: "agent-source", memoryOwner: "旧来源" },
+  });
+  source.initialize();
+
+  const runtime = createLongTermMemoryService({
+    conversationReader: {
+      resolveContactSession: async () => ({
+        contactId: contact.id,
+        id: contact.sessionId,
+        projectRoot: contact.projectRoot,
+        hasTranscript: true,
+      }),
+    },
+    settingsService: {
+      load: () => ({ projectRoot: contact.projectRoot, identity: { owner: { displayName: "小林" } } }),
+      response: () => ({ dataRoot, projectRoot: contact.projectRoot }),
+    },
+    contactProjectsService: {
+      snapshot: async () => ({ contacts: [contact], activeContact: contact }),
+    },
+    connectionsService: { resolveNamedApiConnection: async () => null },
+  });
+
+  const inspection = await runtime.inspectMemoryImport({
+    contactId: contact.id,
+    sourcePath: source.paths.databasePath,
+  });
+  assert.deepEqual(inspection.agentIds, ["agent-source"]);
+
+  const imported = await runtime.importMemoryDatabase({
+    contactId: contact.id,
+    sourcePath: source.paths.databasePath,
+  });
+  assert.equal(imported.status, "imported");
+  assert.equal(imported.targetAgentId, contact.agentId);
+  assert.deepEqual(imported.imported.agentIds, [contact.agentId]);
   runtime.dispose();
 });
 

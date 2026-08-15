@@ -184,9 +184,9 @@ test("chat bubbles never append delivery or reply-status labels", () => {
 });
 
 test("conversation overlays close together when the user clicks away or presses Escape", () => {
-  const state = { avatarCrop: { source: "data:image/png;base64,avatar" }, contactCreateOpen: true, contactContextMenu: { contactId: "contact-test" }, contactRenameOpen: true, emojiOpen: true, mediaPreview: { url: "file:///C:/temp/image.png" }, menuOpen: true, searchOpen: false, sessionNoteOpen: true, settingsOpen: true, wechatQrOpen: true };
+  const state = { avatarCrop: { source: "data:image/png;base64,avatar" }, contactCreateOpen: true, contactContextMenu: { contactId: "contact-test" }, contactRenameOpen: true, emojiOpen: true, mediaPreview: { url: "file:///C:/temp/image.png" }, menuOpen: true, searchOpen: false, settingsOpen: true, wechatQrOpen: true };
   assert.equal(dismissConversationOverlays(state), true);
-  assert.deepEqual(state, { avatarCrop: null, contactCreateOpen: false, contactContextMenu: null, contactRenameOpen: false, emojiOpen: false, mediaPreview: null, menuOpen: false, searchOpen: false, sessionNoteOpen: false, settingsOpen: false, wechatQrOpen: false });
+  assert.deepEqual(state, { avatarCrop: null, contactCreateOpen: false, contactContextMenu: null, contactRenameOpen: false, emojiOpen: false, mediaPreview: null, menuOpen: false, searchOpen: false, settingsOpen: false, wechatQrOpen: false });
   assert.equal(dismissConversationOverlays(state), false);
 });
 

@@ -246,7 +246,7 @@ export function createSettingsService({ app, dataStorageService = null }) {
   return { load, response, save, safePatch, usageLedgerPath };
 }
 
-export function registerSettingsIpc({ app, appUpdateService = null, contactProjectsService = null, dataStorageService, dialog, getMainWindow, ipcMain, shell, settingsService }) {
+export function registerSettingsIpc({ app, appUpdateService = null, contactProjectsService = null, dataStorageService, dialog, getMainWindow, ipcMain, onMemoryRecallEnabledChanged = null, shell, settingsService }) {
   const contacts = contactProjectsService || createContactProjectsService({ settingsService });
   const updateService = appUpdateService || {
     status: () => ({ status: "unavailable", mode: "manual", version: "未知", message: "当前版本没有启用更新服务。" }),
@@ -285,6 +285,13 @@ export function registerSettingsIpc({ app, appUpdateService = null, contactProje
     }
     if (Object.hasOwn(patch, "claudeToolPermissions") || Object.hasOwn(patch, "claudeProjectDefaults")) {
       await contacts.syncClaudeProjectSettings({ previousProjectDefaults: current.claudeProjectDefaults });
+    }
+    if (Object.hasOwn(patch, "memoryRecallEnabled")
+      && current.memoryRecallEnabled !== settings.memoryRecallEnabled
+      && typeof onMemoryRecallEnabledChanged === "function") {
+      // The setting is already durable. A project with an invalid user-owned
+      // Hook file must not make this global switch look like it failed.
+      await Promise.resolve(onMemoryRecallEnabledChanged({ enabled: settings.memoryRecallEnabled })).catch(() => undefined);
     }
     return {
       ...settingsService.response(settings),

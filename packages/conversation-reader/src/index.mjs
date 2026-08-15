@@ -22,6 +22,8 @@ const VOICE_CALL_TURN_OPEN = "<suzu-voice-call-turn>";
 const VOICE_CALL_TURN_CLOSE = "</suzu-voice-call-turn>";
 const VOICE_CALL_OPEN_OPEN = "<suzu-voice-call-open>";
 const VOICE_CALL_OPEN_CLOSE = "</suzu-voice-call-open>";
+const LONG_TERM_MEMORY_CONTEXT_OPEN = "<suzu-long-term-memory>";
+const LONG_TERM_MEMORY_CONTEXT_CLOSE = "</suzu-long-term-memory>";
 const SEARCH_CATEGORIES = new Set(["messages", "images", "files", "audio", "links", "date"]);
 const DATE_QUERY_PATTERN = /^\d{4}-\d{2}-\d{2}$/u;
 
@@ -67,6 +69,15 @@ export function normalizeUsage(usage, model = "") {
 
 function clean(value) {
   return String(value ?? "").trim();
+}
+
+function longTermMemoryRecallSystemMessage(value) {
+  const text = String(value ?? "");
+  const start = text.indexOf(LONG_TERM_MEMORY_CONTEXT_OPEN);
+  const end = text.indexOf(LONG_TERM_MEMORY_CONTEXT_CLOSE, start + LONG_TERM_MEMORY_CONTEXT_OPEN.length);
+  if (start < 0 || end < 0) return "";
+  const recalled = clean(text.slice(start + LONG_TERM_MEMORY_CONTEXT_OPEN.length, end));
+  return recalled ? `记忆召回\n${boundedText(recalled)}` : "";
 }
 
 function normalizedSearchText(value) {
@@ -450,9 +461,15 @@ export function buildDisplayMessages(records, maxMessages = 500) {
       const attachment = record.attachment || record;
       const content = Array.isArray(attachment.content) ? attachment.content.join("\n") : attachment.content;
       if (!content) continue;
-      kind = "attachment";
-      label = attachment.hookName ? `上下文注入 · ${attachment.hookName}` : attachment.type || "上下文注入";
-      blocks = [{ kind: "text", text: boundedText(content) }];
+      const memoryRecall = longTermMemoryRecallSystemMessage(content);
+      if (memoryRecall) {
+        kind = "system";
+        blocks = [{ kind: "text", text: memoryRecall }];
+      } else {
+        kind = "attachment";
+        label = attachment.hookName ? `上下文注入 · ${attachment.hookName}` : attachment.type || "上下文注入";
+        blocks = [{ kind: "text", text: boundedText(content) }];
+      }
     } else continue;
     if (!blocks.length) continue;
     const lineNumber = normalizedLineNumber(record?.__suzuConversationLine);

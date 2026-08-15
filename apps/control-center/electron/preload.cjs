@@ -56,8 +56,6 @@ contextBridge.exposeInMainWorld("suzuConsole", {
     snapshot: () => ipcRenderer.invoke("conversation:snapshot"),
     search: (query) => ipcRenderer.invoke("conversation:search", query),
     focus: (value) => ipcRenderer.invoke("conversation:focus", value),
-    sessionSettingsSnapshot: (value) => ipcRenderer.invoke("conversation:session-settings-snapshot", value),
-    saveSessionSettings: (value) => ipcRenderer.invoke("conversation:save-session-settings", value),
     openMediaDirectory: (value) => ipcRenderer.invoke("conversation:open-media-directory", value),
     create: () => ipcRenderer.invoke("conversation:create"),
     createContact: (value) => ipcRenderer.invoke("conversation:create-contact", value),

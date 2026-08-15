@@ -46,10 +46,6 @@ const viewState = {
   searchLoading: false,
   searchOpen: false,
   searchQuery: "",
-  sessionNoteDraft: "",
-  sessionNoteDirty: false,
-  sessionNoteOpen: false,
-  sessionSettings: null,
   sending: false,
   settingsOpen: false,
   settingsLoading: false,
@@ -684,15 +680,6 @@ function sessionSettingsSnapshot(context, selected, prefs) {
   };
 }
 
-function sessionNoteSnapshot() {
-  if (!viewState.sessionNoteOpen) return null;
-  const contactId = clean(viewState.snapshot?.activeContact?.id);
-  if (!contactId) return null;
-  const saved = viewState.sessionSettings?.contactId === contactId ? viewState.sessionSettings : {};
-  const note = viewState.sessionNoteDirty ? viewState.sessionNoteDraft : clean(saved.note);
-  return { note, contactId };
-}
-
 function contactRenameSnapshot() {
   if (!viewState.contactRenameOpen) return null;
   const contact = viewState.snapshot?.activeContact || null;
@@ -843,7 +830,6 @@ export function conversationReactSnapshot(context) {
       contactCreate: viewState.contactCreateOpen,
       contactRename: contactRenameSnapshot(),
       mediaPreview: mediaPreviewSnapshot(),
-      sessionNote: sessionNoteSnapshot(),
       wechatQr: wechatQrSnapshot(activeContact),
     },
     peer,
@@ -867,10 +853,6 @@ export function conversationReactSnapshot(context) {
 
 function resetSessionSettings() {
   viewState.contactRenameOpen = false;
-  viewState.sessionNoteDirty = false;
-  viewState.sessionNoteDraft = "";
-  viewState.sessionNoteOpen = false;
-  viewState.sessionSettings = null;
   viewState.mediaPreview = null;
   viewState.avatarCrop = null;
   viewState.wechatSnapshot = null;
@@ -879,21 +861,16 @@ function resetSessionSettings() {
 
 async function refreshCurrentSessionSettings(context) {
   const contactId = clean(viewState.snapshot?.activeContact?.id);
-  if (!contactId || !context.api.conversation.sessionSettingsSnapshot) {
+  if (!contactId) {
     resetSessionSettings();
     return;
   }
-  const previousContactId = clean(viewState.sessionSettings?.contactId);
-  if (previousContactId && previousContactId !== contactId) resetSessionSettings();
   viewState.settingsLoading = true;
   try {
-    const [sessionSettings, wechatSnapshot] = await Promise.all([
-      context.api.conversation.sessionSettingsSnapshot({ contactId }),
-      context.api.wechat?.snapshot ? context.api.wechat.snapshot({ contactId }) : Promise.resolve(null),
-    ]);
+    const wechatSnapshot = context.api.wechat?.snapshot
+      ? await context.api.wechat.snapshot({ contactId })
+      : null;
     if (clean(viewState.snapshot?.activeContact?.id) !== contactId) return;
-    viewState.sessionSettings = sessionSettings;
-    if (!viewState.sessionNoteDirty) viewState.sessionNoteDraft = clean(sessionSettings?.note);
     viewState.wechatSnapshot = wechatSnapshot;
   } catch (error) {
     if (clean(viewState.snapshot?.activeContact?.id) === contactId) {
@@ -1095,7 +1072,7 @@ export function stopConversationPolling() {
 
 export function dismissConversationOverlays(target = viewState) {
   const state = target && typeof target === "object" ? target : viewState;
-  const open = Boolean(state.contactCreateOpen || state.contactContextMenu || state.contactRenameOpen || state.menuOpen || state.searchOpen || state.settingsOpen || state.emojiOpen || state.sessionNoteOpen || state.wechatQrOpen || state.mediaPreview || state.avatarCrop);
+  const open = Boolean(state.contactCreateOpen || state.contactContextMenu || state.contactRenameOpen || state.menuOpen || state.searchOpen || state.settingsOpen || state.emojiOpen || state.wechatQrOpen || state.mediaPreview || state.avatarCrop);
   state.contactCreateOpen = false;
   state.contactContextMenu = null;
   state.contactRenameOpen = false;
@@ -1103,7 +1080,6 @@ export function dismissConversationOverlays(target = viewState) {
   state.searchOpen = false;
   state.settingsOpen = false;
   state.emojiOpen = false;
-  state.sessionNoteOpen = false;
   state.wechatQrOpen = false;
   state.mediaPreview = null;
   state.avatarCrop = null;
@@ -1415,12 +1391,6 @@ export function createConversationReactActions(context) {
       viewState.searchLoading = false;
       renderKeepingConversationScroll(context);
     },
-    closeSessionNote: () => {
-      viewState.sessionNoteOpen = false;
-      viewState.sessionNoteDraft = "";
-      viewState.sessionNoteDirty = false;
-      context.render();
-    },
     closeSessionSettings: () => {
       viewState.settingsOpen = false;
       context.render();
@@ -1521,15 +1491,6 @@ export function createConversationReactActions(context) {
       }
     },
     openMediaPreview: (item) => void openConversationMediaPreviewForItem(context, item),
-    openSessionNote: (contactId) => {
-      const id = clean(contactId);
-      if (!id) return;
-      const saved = viewState.sessionSettings?.contactId === id ? viewState.sessionSettings : {};
-      viewState.sessionNoteDraft = clean(saved.note);
-      viewState.sessionNoteDirty = false;
-      viewState.sessionNoteOpen = true;
-      context.render();
-    },
     openSessionSettings: async () => {
       viewState.menuOpen = false;
       viewState.searchOpen = false;
@@ -1621,21 +1582,6 @@ export function createConversationReactActions(context) {
       context.render();
     },
     runSearch: (query) => void runConversationSearchForQuery(context, viewState.searchCategory, query),
-    saveSessionNote: async (contactId, note) => {
-      const id = clean(contactId);
-      if (!id || !context.api.conversation.saveSessionSettings) return;
-      try {
-        viewState.sessionSettings = await context.api.conversation.saveSessionSettings({ contactId: id, note: String(note || "") });
-        viewState.sessionNoteDraft = clean(viewState.sessionSettings.note);
-        viewState.sessionNoteDirty = false;
-        viewState.sessionNoteOpen = false;
-        viewState.error = "";
-        viewState.notice = "聊天备注已保存。";
-      } catch (error) {
-        viewState.error = `无法保存聊天备注：${error?.message || error}`;
-      }
-      context.render();
-    },
     setPreferredContact: async (contactId) => {
       const id = clean(contactId);
       if (!id || !context.api.conversation.setPreferredContact) return;
@@ -1758,10 +1704,6 @@ export function createConversationReactActions(context) {
       if (submitDate && viewState.searchCategory === "date" && viewState.searchQuery) {
         void runConversationSearchForQuery(context, "date", viewState.searchQuery);
       }
-    },
-    setSessionNoteDraft: (value) => {
-      viewState.sessionNoteDraft = String(value ?? "");
-      viewState.sessionNoteDirty = true;
     },
     setTimeDisplay: async (value) => {
       try {

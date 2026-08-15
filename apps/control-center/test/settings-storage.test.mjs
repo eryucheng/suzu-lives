@@ -172,6 +172,31 @@ test("changing Claude tool permissions syncs the contact projects", async () => 
   assert.deepEqual(syncCalls, [true]);
 });
 
+test("changing memory recall synchronizes only its project Hook registration", async () => {
+  const handlers = new Map();
+  const updates = [];
+  let stored = { memoryRecallEnabled: true };
+  registerSettingsIpc({
+    app: { relaunch: () => {}, exit: () => {} },
+    contactProjectsService: { syncClaudeProjectSettings: async () => {} },
+    dataStorageService: null,
+    dialog: { showOpenDialog: async () => ({ canceled: true }), showMessageBox: async () => ({ response: 1 }) },
+    getMainWindow: () => null,
+    ipcMain: { handle: (name, handler) => handlers.set(name, handler) },
+    onMemoryRecallEnabledChanged: async (value) => { updates.push(value); },
+    shell: { showItemInFolder: () => {}, openPath: () => {} },
+    settingsService: {
+      load: () => stored,
+      safePatch: (value) => ({ memoryRecallEnabled: normalizeMemoryRecallEnabled(value.memoryRecallEnabled) }),
+      save: (next) => { stored = next; return stored; },
+      response: (value) => value,
+    },
+  });
+
+  await handlers.get("settings:update")(null, { memoryRecallEnabled: false });
+  assert.deepEqual(updates, [{ enabled: false }]);
+});
+
 test("changing shared Claude project defaults syncs the contact projects", async () => {
   const handlers = new Map();
   const syncCalls = [];

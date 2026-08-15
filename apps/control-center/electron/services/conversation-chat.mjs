@@ -19,6 +19,8 @@ const VOICE_CALL_TURN_OPEN = "<suzu-voice-call-turn>";
 const VOICE_CALL_TURN_CLOSE = "</suzu-voice-call-turn>";
 const VOICE_CALL_OPEN_OPEN = "<suzu-voice-call-open>";
 const VOICE_CALL_OPEN_CLOSE = "</suzu-voice-call-open>";
+const LONG_TERM_MEMORY_CONTEXT_OPEN = "<suzu-long-term-memory>";
+const LONG_TERM_MEMORY_CONTEXT_CLOSE = "</suzu-long-term-memory>";
 const CONVERSATION_ATTACHMENT_RECEIPT = "suzu-conversation-attachment";
 const VOICE_CALL_REQUEST_RECEIPT = "suzu-voice-call-request";
 const WECHAT_MEDIA_MANIFEST_OPEN = "<suzu-wechat-media>";
@@ -57,6 +59,15 @@ export class ConversationChatError extends Error {
 
 function clean(value) {
   return String(value ?? "").trim();
+}
+
+function longTermMemoryRecallSystemMessage(value) {
+  const text = String(value ?? "");
+  const start = text.indexOf(LONG_TERM_MEMORY_CONTEXT_OPEN);
+  const end = text.indexOf(LONG_TERM_MEMORY_CONTEXT_CLOSE, start + LONG_TERM_MEMORY_CONTEXT_OPEN.length);
+  if (start < 0 || end < 0) return "";
+  const recalled = clean(text.slice(start + LONG_TERM_MEMORY_CONTEXT_OPEN.length, end));
+  return recalled ? bounded(`记忆召回\n${recalled}`, MAX_EVENT_TEXT_LENGTH) : "";
 }
 
 function normalizeClaudeRuntimeFeatures(value = {}) {
@@ -873,6 +884,11 @@ export function createConversationChatService({
     if (type === "attachment" || type === "hook_additional_context") {
       const attachment = raw?.attachment && typeof raw.attachment === "object" ? raw.attachment : raw;
       const content = Array.isArray(attachment.content) ? attachment.content.join("\n") : attachment.content;
+      const memoryRecall = longTermMemoryRecallSystemMessage(content);
+      if (memoryRecall) {
+        emitAuxiliary(turn, "system", memoryRecall);
+        return;
+      }
       emitAuxiliary(turn, "attachment", content);
       return;
     }
@@ -1072,13 +1088,12 @@ export function createConversationChatService({
         wechatAttachmentSystemPrompt(attachmentCommand),
         scheduleSystemPrompt(scheduleCommands),
         supportsVoiceCallTurns ? VOICE_CALL_SYSTEM_PROMPT : "",
-        memoryTurn?.systemPrompt,
       ].filter(Boolean).join("\n\n"),
     });
-    // A recall prompt belongs to exactly one logical turn. Claude Code only
-    // accepts user records on an existing stream, so keep that turn one-shot
-    // instead of silently dropping or leaking its private memory context.
-    const canReuseConversationStream = supportsVoiceCallTurns && !clean(memoryTurn?.systemPrompt);
+    // Long-term recall is injected by UserPromptSubmit alongside this user
+    // record. It no longer changes --append-system-prompt, so a recalled turn
+    // can keep using the same persistent Claude stream as every other turn.
+    const canReuseConversationStream = supportsVoiceCallTurns;
     const signature = canReuseConversationStream ? streamSignature(args) : "";
     const existingTextStream = reusableTextStreams.get(request.key);
     if (canReuseConversationStream
@@ -1087,9 +1102,9 @@ export function createConversationChatService({
       startTextStreamTurn(existingTextStream, request, memoryTurn);
       return;
     }
-    // A turn outside normal text/call, changed runtime options, or a turn-specific memory
-    // prompt needs a fresh Claude process. Retire only an idle text stream;
-    // an active stream is protected by the session queue.
+    // A turn outside normal text/call or changed runtime options needs a fresh
+    // Claude process. Retire only an idle text stream; an active stream is
+    // protected by the session queue.
     if (existingTextStream && !existingTextStream.turn) closeTextStream(existingTextStream);
     let child;
     try {

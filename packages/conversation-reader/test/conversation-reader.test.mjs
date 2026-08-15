@@ -41,6 +41,24 @@ test("managed Skill context injected by Claude never becomes a user chat bubble"
   assert.deepEqual(messages.map((message) => message.blocks[0].text), ["还好，你能发语音给我听吗"]);
 });
 
+test("long-term memory UserPromptSubmit context renders as a system message", () => {
+  const messages = buildDisplayMessages([
+    {
+      type: "hook_additional_context",
+      attachment: {
+        hookName: "suzu-memory-recall",
+        content: "内部说明\n<suzu-long-term-memory>只有 Claude 可见的回忆</suzu-long-term-memory>",
+      },
+    },
+    {
+      type: "hook_additional_context",
+      attachment: { hookName: "other-hook", content: "需要保留的第三方上下文" },
+    },
+  ]);
+  assert.deepEqual(messages.map((message) => message.kind), ["system", "attachment"]);
+  assert.deepEqual(messages.map((message) => message.blocks[0].text), ["记忆召回\n只有 Claude 可见的回忆", "需要保留的第三方上下文"]);
+});
+
 test("Claude internal resume records stay out of chat without hiding real matching text", () => {
   const messages = buildDisplayMessages([
     { type: "user", uuid: "real-user", message: { content: "Continue from where you left off." } },

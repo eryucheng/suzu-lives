@@ -11,7 +11,7 @@ async function temporaryDirectory(prefix) {
   return fs.mkdtemp(path.join(os.tmpdir(), prefix));
 }
 
-test("contact notes are local and stay isolated even when Claude session ids match", async () => {
+test("contact media stays isolated even when Claude session ids match", async () => {
   const root = await temporaryDirectory("suzu-session-settings-");
   const firstProject = path.join(root, "first-project");
   const secondProject = path.join(root, "second-project");
@@ -21,7 +21,6 @@ test("contact notes are local and stay isolated even when Claude session ids mat
   };
   const service = createConversationSessionSettingsService({
     dataRoot: root,
-    now: () => new Date("2026-08-04T12:00:00.000Z"),
     reader: {
       resolveContactSession: async (contactId) => ({
         contactId,
@@ -32,15 +31,12 @@ test("contact notes are local and stay isolated even when Claude session ids mat
     },
   });
 
-  const first = await service.save({ contactId: "contact-first", note: "第一条联系人的备注" });
-  assert.equal(first.note, "第一条联系人的备注");
-  assert.equal((await service.snapshot({ contactId: "contact-second" })).note, "");
-  await service.save({ contactId: "contact-second", note: "第二条联系人的备注" });
-  assert.equal((await service.snapshot({ contactId: "contact-first" })).note, "第一条联系人的备注");
-
-  const media = await service.mediaDirectory({ contactId: "contact-first" });
-  assert.equal(media.contactId, "contact-first");
-  assert.equal(media.directory, path.join(root, "agents", stableAgentId(firstProject), "conversations", "same-session-id", "attachments"));
-  assert.equal((await fs.stat(media.directory)).isDirectory(), true);
-  assert.equal((await fs.stat(path.join(root, "agents", stableAgentId(firstProject), "conversations", "same-session-id", "session.json"))).isFile(), true);
+  const first = await service.mediaDirectory({ contactId: "contact-first" });
+  const second = await service.mediaDirectory({ contactId: "contact-second" });
+  assert.equal(first.contactId, "contact-first");
+  assert.equal(first.directory, path.join(root, "agents", stableAgentId(firstProject), "conversations", "same-session-id", "attachments"));
+  assert.equal(second.directory, path.join(root, "agents", stableAgentId(secondProject), "conversations", "same-session-id", "attachments"));
+  assert.equal((await fs.stat(first.directory)).isDirectory(), true);
+  assert.equal((await fs.stat(second.directory)).isDirectory(), true);
+  await assert.rejects(fs.stat(path.join(root, "agents", stableAgentId(firstProject), "conversations", "same-session-id", "session.json")), { code: "ENOENT" });
 });

@@ -23,7 +23,7 @@ const DEFAULT_IPHONE_BRIDGE_PASSWORD_ENV = "SUZU_IPHONE_MAIL_PASSWORD";
 const DEFAULT_IPHONE_BRIDGE_FEEDBACK_SUBJECT = "查岗";
 const DEFAULT_IPHONE_BRIDGE_FEEDBACK_PROMPT = "这是来自 iPhone 的反馈（{{subject}}，来自 {{from}}，{{receivedAt}}）：\n{{content}}\n{{attachments}}";
 const HIDDEN_CONTACT_DEFAULT_ABILITY_IDS = Object.freeze(["visual-reference-manager", "voice-call"]);
-const MANAGED_REGISTRATION_VERSION = 6;
+const MANAGED_REGISTRATION_VERSION = 7;
 const DEFAULT_PROACTIVE_CHAIN_PROMPT = "根据时间和前面聊的内容判断要不要主动联系对方，要发就正常发，不发就沉默，然后记得要设置下一次自动任务";
 const DEFAULT_PROACTIVE_FOLLOW_UP_PROMPT = "临时回访：用户在 TIME 提到 EVENT。先检查当前会话里是否已经有结果；已经有结果就只输出 NO_REPLY；还没有结果就自然地关心或询问。不要提及自动任务、回访任务或系统机制。这是一次性回访，不要设置下一次自动任务。";
 
@@ -1008,7 +1008,15 @@ export function createCapabilitiesService({
     }
     const errors = [];
     const contacts = await allContactProjects();
+    const timeSettings = timeAwarenessSettings(publicJson(dataRoot, TIME_AWARENESS_CONFIG_PATH));
     for (const contact of contacts) {
+      if (timeSettings.enabledContactIds.includes(contact.id)) {
+        try {
+          await installTimeAwarenessForProject(contact.projectRoot);
+        } catch (error) {
+          errors.push({ id: TIME_AWARENESS_ID, contactId: contact.id, code: clean(error?.code), message: clean(error?.message) || "无法更新时间感知 Hook。" });
+        }
+      }
       for (const capabilityId of managedClaudeRegistrationAbilityIds()) {
         // This Skill does not contain a launcher, and refreshing it would also
         // reinstall its Hook. The project settings sync already updates its CLI

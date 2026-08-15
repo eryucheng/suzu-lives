@@ -11,15 +11,12 @@ function plainObject(value) {
   return value && typeof value === "object" && !Array.isArray(value) ? value : {};
 }
 
-function contactSettingsValue(value, { includeNote = false } = {}) {
+function contactSettingsValue(value) {
   const source = plainObject(value);
   if (Object.hasOwn(source, "sessionId") || Object.hasOwn(source, "projectRoot")) {
     throw new Error("联系人设置只接受 contactId。 ");
   }
-  return {
-    contactId: clean(source.contactId),
-    ...(includeNote ? { note: source.note } : {}),
-  };
+  return { contactId: clean(source.contactId) };
 }
 
 function contactPresentationValue(value) {
@@ -141,14 +138,6 @@ export function registerConversationIpc({
   });
   ipcMain.handle("conversation:search", (_event, query) => reader.search(query));
   ipcMain.handle("conversation:focus", (_event, value) => reader.focus(value));
-  ipcMain.handle("conversation:session-settings-snapshot", async (event, value) => {
-    sender = event.sender;
-    return sessionSettings.snapshot(contactSettingsValue(value));
-  });
-  ipcMain.handle("conversation:save-session-settings", async (event, value) => {
-    sender = event.sender;
-    return sessionSettings.save(contactSettingsValue(value, { includeNote: true }));
-  });
   ipcMain.handle("conversation:open-media-directory", async (event, value) => {
     sender = event.sender;
     if (typeof shell?.openPath !== "function") throw new Error("当前环境无法打开本地文件夹。 ");

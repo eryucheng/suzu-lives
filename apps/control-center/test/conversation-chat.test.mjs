@@ -243,7 +243,7 @@ test("chat starts the local Claude CLI and forwards its stream", async () => {
   assert.match(callRequest?.requestId || "", /^suzu-.*:voice-call$/u);
 });
 
-test("chat uses the embedded memory lifecycle without handing recall back to Claude Hooks", async () => {
+test("chat keeps the memory archive lifecycle while UserPromptSubmit owns recall", async () => {
   const root = await temporaryDirectory("suzu-embedded-memory-");
   const projectRoot = path.join(root, "project");
   const homeDirectory = path.join(root, "home");
@@ -256,7 +256,7 @@ test("chat uses the embedded memory lifecycle without handing recall back to Cla
   const memoryRuntime = {
     prepareTurn: async (value) => {
       calls.push({ type: "prepare", value });
-      return { systemPrompt: "<suzu-long-term-memory>旧日片段</suzu-long-term-memory>" };
+      return { archiveTurn: "memory-turn-1" };
     },
     completeTurn: async (turn, value) => { calls.push({ type: "complete", turn, value }); },
     abortTurn: async (turn) => { calls.push({ type: "abort", turn }); },
@@ -276,17 +276,51 @@ test("chat uses the embedded memory lifecycle without handing recall back to Cla
   await service.send({ content: "记得我们上次聊的事情吗？" });
   assert.equal(calls[0]?.type, "prepare");
   assert.equal(calls[0]?.value.userText, "记得我们上次聊的事情吗？");
-  const promptIndex = spawned[0].args.indexOf("--append-system-prompt");
-  assert.match(spawned[0].args[promptIndex + 1], /旧日片段/u);
+  assert.equal(spawned[0].args.some((value) => String(value).includes("suzu-long-term-memory")), false);
 
   spawned[0].child.emitJson({ type: "result", result: "我记得。" });
   spawned[0].child.close();
   await flush();
   await flush();
   const completed = calls.find((item) => item.type === "complete");
-  assert.equal(completed?.turn?.systemPrompt, "<suzu-long-term-memory>旧日片段</suzu-long-term-memory>");
+  assert.equal(completed?.turn?.archiveTurn, "memory-turn-1");
   assert.equal(completed?.value?.assistantText, "我记得。");
   assert.equal(calls.some((item) => item.type === "abort"), false);
+});
+
+test("live chat renders long-term-memory Hook context as a system message", async () => {
+  const root = await temporaryDirectory("suzu-memory-hook-context-");
+  const projectRoot = path.join(root, "project");
+  const homeDirectory = path.join(root, "home");
+  const commandPath = path.join(homeDirectory, ".local", "bin", "claude.exe");
+  await fs.mkdir(projectRoot, { recursive: true });
+  await fs.mkdir(path.dirname(commandPath), { recursive: true });
+  await fs.writeFile(commandPath, "fixture");
+  const events = [];
+  const spawned = [];
+  const service = createConversationChatService({
+    homeDirectory,
+    onEvent: (event) => events.push(event),
+    reader: { ensureActiveSession: async () => ({ id: "memory-context-session", projectRoot, hasTranscript: false }) },
+    settingsService: { load: () => ({ projectRoot }) },
+    spawnImpl: () => {
+      const child = new FakeChild();
+      spawned.push(child);
+      return child;
+    },
+  });
+
+  await service.send({ content: "还记得我们上次去的地方吗？" });
+  spawned[0].emitJson({
+    type: "hook_additional_context",
+    attachment: { content: "内部说明\n<suzu-long-term-memory>私有回忆</suzu-long-term-memory>" },
+  });
+  await flush();
+  assert.equal(events.some((event) => event.type === "attachment" && /私有回忆/u.test(event.content || "")), false);
+  assert.equal(events.some((event) => event.type === "system" && event.content === "记忆召回\n私有回忆"), true);
+  spawned[0].emitJson({ type: "result", result: "记得。" });
+  spawned[0].close();
+  service.dispose();
 });
 
 test("iPhone feedback is archived by embedded memory without treating scheduled prompts as user memory", async () => {
@@ -304,7 +338,7 @@ test("iPhone feedback is archived by embedded memory without treating scheduled 
     memoryRuntime: {
       prepareTurn: async (value) => {
         prepared.push(value);
-        return { systemPrompt: "<suzu-long-term-memory>反馈上下文</suzu-long-term-memory>" };
+        return { archiveTurn: "iphone-feedback" };
       },
       completeTurn: async () => undefined,
       abortTurn: async () => undefined,
@@ -606,7 +640,7 @@ test("call opening stays hidden from Claude's user transcript while the existing
     memoryRuntime: {
       prepareTurn: async (value) => {
         prepared.push(value);
-        return { systemPrompt: "" };
+        return { archiveTurn: value.turnId };
       },
       completeTurn: async (turn, value) => { completed.push({ turn, value }); },
       abortTurn: async () => undefined,
@@ -654,7 +688,7 @@ test("call opening stays hidden from Claude's user transcript while the existing
   service.dispose();
 });
 
-test("a turn-specific memory recall starts fresh instead of reusing stale stream context", async () => {
+test("a recalled turn stays on the existing Claude stream", async () => {
   const root = await temporaryDirectory("suzu-chat-memory-stream-");
   const projectRoot = path.join(root, "project");
   const homeDirectory = path.join(root, "home");
@@ -669,7 +703,7 @@ test("a turn-specific memory recall starts fresh instead of reusing stale stream
     reader: { ensureActiveSession: async () => ({ id: "memory-stream-session", projectRoot, hasTranscript: true }) },
     homeDirectory,
     memoryRuntime: {
-      prepareTurn: async () => ({ systemPrompt: includeRecall ? "<suzu-long-term-memory>本轮召回</suzu-long-term-memory>" : "" }),
+      prepareTurn: async () => ({ legacyRecall: includeRecall ? "<suzu-long-term-memory>本轮召回</suzu-long-term-memory>" : "" }),
       completeTurn: async () => undefined,
       abortTurn: async () => undefined,
     },
@@ -687,11 +721,11 @@ test("a turn-specific memory recall starts fresh instead of reusing stale stream
 
   includeRecall = true;
   await service.send({ content: "需要按本轮召回的第二句" });
-  assert.equal(spawned.length, 2);
-  assert.equal(spawned[0].child.stdin.writableEnded, true);
-  const promptIndex = spawned[1].args.indexOf("--append-system-prompt");
-  assert.match(spawned[1].args[promptIndex + 1], /本轮召回/u);
-  spawned[1].child.close();
+  assert.equal(spawned.length, 1);
+  assert.equal(spawned[0].child.stdin.writableEnded, false);
+  assert.equal(spawned[0].args.some((value) => String(value).includes("本轮召回")), false);
+  assert.match(spawned[0].child.input, /需要按本轮召回的第二句/u);
+  spawned[0].child.close();
   service.dispose();
 });
 

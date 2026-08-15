@@ -1428,7 +1428,6 @@
   color: #fff;
 }
 
-.content--conversation .conversation-session-settings__note,
 .content--conversation .conversation-session-settings__section {
   display: grid;
   gap: 11px;
@@ -1436,12 +1435,6 @@
   padding: 16px 18px;
 }
 
-.content--conversation .conversation-session-settings__note label {
-  display: grid;
-  gap: 7px;
-}
-
-.content--conversation .conversation-session-settings__note label > span,
 .content--conversation .conversation-session-settings__section h2 {
   margin: 0;
   color: #e7ebf1;
@@ -1449,26 +1442,6 @@
   font-weight: 650;
 }
 
-.content--conversation .conversation-session-settings__note input {
-  box-sizing: border-box;
-  width: 100%;
-  height: 38px;
-  border: 1px solid rgba(255, 255, 255, .12);
-  border-radius: 8px;
-  outline: 0;
-  background: #11141a;
-  color: #edf1f5;
-  font: inherit;
-  font-size: 12px;
-  line-height: 1.2;
-  padding: 0 10px;
-}
-
-.content--conversation .conversation-session-settings__note input:focus {
-  border-color: rgba(91, 214, 154, .65);
-}
-
-.content--conversation .conversation-session-settings__note > div,
 .content--conversation .conversation-session-settings__actions,
 .content--conversation .conversation-session-settings__connection-actions {
   display: flex;
@@ -1516,7 +1489,6 @@
   line-height: 1;
 }
 
-.content--conversation .conversation-session-settings__note small,
 .content--conversation .conversation-session-settings__hint,
 .content--conversation .conversation-session-settings__section > header p {
   margin: 0;
@@ -1637,8 +1609,7 @@
   padding: 24px;
 }
 
-.content--conversation .conversation-contact-create-overlay,
-.content--conversation .conversation-contact-note-overlay {
+.content--conversation .conversation-contact-create-overlay {
   position: fixed;
   z-index: 50;
   inset: 0;
@@ -1775,8 +1746,7 @@
   text-align: right;
 }
 
-.content--conversation .conversation-contact-create-dialog,
-.content--conversation .conversation-contact-note-dialog {
+.content--conversation .conversation-contact-create-dialog {
   display: grid;
   width: min(410px, calc(100vw - 32px));
   gap: 16px;
@@ -1789,32 +1759,27 @@
 }
 
 .content--conversation .conversation-contact-create-dialog > header,
-.content--conversation .conversation-contact-create-dialog footer,
-.content--conversation .conversation-contact-note-dialog > header,
-.content--conversation .conversation-contact-note-dialog footer {
+.content--conversation .conversation-contact-create-dialog footer {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
 }
 
-.content--conversation .conversation-contact-create-dialog > header span,
-.content--conversation .conversation-contact-note-dialog > header span {
+.content--conversation .conversation-contact-create-dialog > header span {
   display: block;
   color: #8f9aab;
   font-size: 10px;
   letter-spacing: .7px;
 }
 
-.content--conversation .conversation-contact-create-dialog h2,
-.content--conversation .conversation-contact-note-dialog h2 {
+.content--conversation .conversation-contact-create-dialog h2 {
   margin: 4px 0 0;
   color: #f3f5f8;
   font-size: 17px;
 }
 
-.content--conversation .conversation-contact-create-dialog > header button,
-.content--conversation .conversation-contact-note-dialog > header button {
+.content--conversation .conversation-contact-create-dialog > header button {
   display: grid;
   width: 30px;
   height: 30px;
@@ -1828,27 +1793,23 @@
   font: 23px/1 sans-serif;
 }
 
-.content--conversation .conversation-contact-create-dialog > header button:hover,
-.content--conversation .conversation-contact-note-dialog > header button:hover {
+.content--conversation .conversation-contact-create-dialog > header button:hover {
   background: rgba(255, 255, 255, .15);
   color: #fff;
 }
 
-.content--conversation .conversation-contact-create-dialog label,
-.content--conversation .conversation-contact-note-dialog label {
+.content--conversation .conversation-contact-create-dialog label {
   display: grid;
   gap: 8px;
 }
 
-.content--conversation .conversation-contact-create-dialog label > span,
-.content--conversation .conversation-contact-note-dialog label > span {
+.content--conversation .conversation-contact-create-dialog label > span {
   color: #cbd2dd;
   font-size: 12px;
   font-weight: 650;
 }
 
-.content--conversation .conversation-contact-create-dialog input,
-.content--conversation .conversation-contact-note-dialog textarea {
+.content--conversation .conversation-contact-create-dialog input {
   width: 100%;
   box-sizing: border-box;
   border: 1px solid rgba(255, 255, 255, .16);
@@ -1860,14 +1821,7 @@
   padding: 11px 12px;
 }
 
-.content--conversation .conversation-contact-note-dialog textarea {
-  min-height: 128px;
-  line-height: 1.5;
-  resize: vertical;
-}
-
-.content--conversation .conversation-contact-create-dialog input:focus,
-.content--conversation .conversation-contact-note-dialog textarea:focus {
+.content--conversation .conversation-contact-create-dialog input:focus {
   border-color: rgba(91, 214, 154, .75);
 }
 
@@ -2782,20 +2736,17 @@
 }
 
 :root[data-theme="light"] .content--conversation .conversation-session-settings > header,
-:root[data-theme="light"] .content--conversation .conversation-session-settings__note,
 :root[data-theme="light"] .content--conversation .conversation-session-settings__section {
   border-bottom-color: #ededed;
 }
 
 :root[data-theme="light"] .content--conversation .conversation-session-settings > header strong,
-:root[data-theme="light"] .content--conversation .conversation-session-settings__note label > span,
 :root[data-theme="light"] .content--conversation .conversation-session-settings__section h2 {
   color: #25272d;
 }
 
 :root[data-theme="light"] .content--conversation .conversation-session-settings > header span,
 :root[data-theme="light"] .content--conversation .conversation-session-settings__section > header span:first-child,
-:root[data-theme="light"] .content--conversation .conversation-session-settings__note small,
 :root[data-theme="light"] .content--conversation .conversation-session-settings__hint,
 :root[data-theme="light"] .content--conversation .conversation-session-settings__section > header p {
   color: #858991;
@@ -2822,12 +2773,6 @@
   color: #1d744a;
 }
 
-:root[data-theme="light"] .content--conversation .conversation-session-settings__note input {
-  border-color: #dedfe2;
-  background: #fafafa;
-  color: #25272d;
-}
-
 :root[data-theme="light"] .content--conversation .conversation-session-settings__checks label:not(.conversation-settings__time-display),
 :root[data-theme="light"] .content--conversation .conversation-session-settings .conversation-settings__time-display,
 :root[data-theme="light"] .content--conversation .conversation-session-settings__switch {
@@ -2848,8 +2793,7 @@
   background: rgba(231, 234, 241, .62);
 }
 
-:root[data-theme="light"] .content--conversation .conversation-contact-create-overlay,
-:root[data-theme="light"] .content--conversation .conversation-contact-note-overlay {
+:root[data-theme="light"] .content--conversation .conversation-contact-create-overlay {
   background: rgba(231, 234, 241, .62);
 }
 
@@ -2864,8 +2808,7 @@
   color: #32353c;
 }
 
-:root[data-theme="light"] .content--conversation .conversation-contact-create-dialog,
-:root[data-theme="light"] .content--conversation .conversation-contact-note-dialog {
+:root[data-theme="light"] .content--conversation .conversation-contact-create-dialog {
   border-color: #e0e2e6;
   background: #fff;
   box-shadow: 0 28px 72px rgba(0, 0, 0, .18);
@@ -2879,8 +2822,7 @@
   color: #32353c;
 }
 
-:root[data-theme="light"] .content--conversation .conversation-contact-create-dialog h2,
-:root[data-theme="light"] .content--conversation .conversation-contact-note-dialog h2 {
+:root[data-theme="light"] .content--conversation .conversation-contact-create-dialog h2 {
   color: #25272d;
 }
 
@@ -2889,7 +2831,6 @@
 }
 
 :root[data-theme="light"] .content--conversation .conversation-contact-create-dialog > header span,
-:root[data-theme="light"] .content--conversation .conversation-contact-note-dialog > header span,
 :root[data-theme="light"] .content--conversation .conversation-contact-create-dialog > p {
   color: #7a808a;
 }
@@ -2900,14 +2841,12 @@
   color: #7a808a;
 }
 
-:root[data-theme="light"] .content--conversation .conversation-contact-create-dialog > header button,
-:root[data-theme="light"] .content--conversation .conversation-contact-note-dialog > header button {
+:root[data-theme="light"] .content--conversation .conversation-contact-create-dialog > header button {
   background: #f0f1f2;
   color: #646a73;
 }
 
-:root[data-theme="light"] .content--conversation .conversation-contact-create-dialog > header button:hover,
-:root[data-theme="light"] .content--conversation .conversation-contact-note-dialog > header button:hover {
+:root[data-theme="light"] .content--conversation .conversation-contact-create-dialog > header button:hover {
   background: #e3e4e6;
   color: #25272d;
 }
@@ -2935,13 +2874,11 @@
   color: #4e535c;
 }
 
-:root[data-theme="light"] .content--conversation .conversation-contact-create-dialog label > span,
-:root[data-theme="light"] .content--conversation .conversation-contact-note-dialog label > span {
+:root[data-theme="light"] .content--conversation .conversation-contact-create-dialog label > span {
   color: #4e535c;
 }
 
-:root[data-theme="light"] .content--conversation .conversation-contact-create-dialog input,
-:root[data-theme="light"] .content--conversation .conversation-contact-note-dialog textarea {
+:root[data-theme="light"] .content--conversation .conversation-contact-create-dialog input {
   border-color: #dedfe2;
   background: #fafafa;
   color: #25272d;
