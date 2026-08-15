@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
   [switch]$DownloadOnly
 )
@@ -15,20 +15,28 @@ $InstallerPattern = "Suzu-Lives-Console-*-win-x64.exe"
 function Invoke-GitHubCli {
   param(
     [Parameter(Mandatory)]
-    [string[]]$Arguments,
+    [string[]]$CliArguments,
     [Parameter(Mandatory)]
-    [string]$FailureMessage
+    [string]$FailureMessage,
+    [int]$MaxAttempts = 1
   )
 
-  $rawOutput = & gh @Arguments 2>&1
-  $output = ($rawOutput | Out-String).Trim()
-  if ($LASTEXITCODE -ne 0) {
+  for ($attempt = 1; $attempt -le $MaxAttempts; $attempt += 1) {
+    $rawOutput = & gh @CliArguments 2>&1
+    $output = ($rawOutput | Out-String).Trim()
+    if ($LASTEXITCODE -eq 0) {
+      return $output
+    }
+    if ($attempt -lt $MaxAttempts) {
+      Write-Host "下载暂时失败，正在重试（$attempt/$MaxAttempts）..."
+      Start-Sleep -Seconds 2
+      continue
+    }
     if ($output) {
       throw "$FailureMessage`n$output"
     }
     throw $FailureMessage
   }
-  return $output
 }
 
 function Remove-UpdateTemporaryDirectory {
@@ -56,9 +64,9 @@ try {
     throw "未找到 GitHub CLI（gh）。请先安装 GitHub CLI，并运行 gh auth login 登录你的 GitHub 账号。"
   }
 
-  Invoke-GitHubCli -Arguments @("auth", "status", "--hostname", "github.com") -FailureMessage "GitHub CLI 尚未登录。请先运行 gh auth login 登录有私有仓库访问权的 GitHub 账号。" | Out-Null
+  Invoke-GitHubCli -CliArguments @("auth", "status", "--hostname", "github.com") -FailureMessage "GitHub CLI 尚未登录。请先运行 gh auth login 登录有私有仓库访问权的 GitHub 账号。" | Out-Null
 
-  $runsJson = Invoke-GitHubCli -Arguments @(
+  $runsJson = Invoke-GitHubCli -CliArguments @(
     "run", "list",
     "--repo", $Repository,
     "--workflow", $Workflow,
@@ -78,12 +86,12 @@ try {
 
   $shortSha = ([string]$run.headSha).Substring(0, [Math]::Min(7, ([string]$run.headSha).Length))
   Write-Host "正在下载 test 分支的最新成功安装包（$shortSha）..."
-  Invoke-GitHubCli -Arguments @(
+  Invoke-GitHubCli -CliArguments @(
     "run", "download", [string]$run.databaseId,
     "--repo", $Repository,
     "--name", $ArtifactName,
     "--dir", $temporaryDirectory
-  ) -FailureMessage "下载测试安装包失败。" | Out-Null
+  ) -FailureMessage "下载测试安装包失败。" -MaxAttempts 3 | Out-Null
 
   $installers = @(
     Get-ChildItem -LiteralPath $temporaryDirectory -Recurse -File |
