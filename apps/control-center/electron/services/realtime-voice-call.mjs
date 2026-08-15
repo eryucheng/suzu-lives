@@ -12,6 +12,11 @@ const ASR_INPUT_ENERGY_THRESHOLD = 0.025;
 const MAX_QUEUED_AUDIO_BYTES = 256 * 1024;
 const CONNECT_TIMEOUT_MS = 15_000;
 const DEFAULT_RECONNECT_DELAYS_MS = Object.freeze([500, 1_200, 2_500]);
+// CosyVoice accepts at most three submissions per second.  Leave a small
+// margin so the next clause can be prepared during playback without causing
+// a burst at the provider boundary.
+const COSYVOICE_TTS_MIN_REQUEST_INTERVAL_MS = 350;
+const TTS_RATE_LIMIT_RETRY_DELAYS_MS = Object.freeze([900, 1_800]);
 
 function clean(value) {
   return String(value ?? "").trim();
@@ -61,6 +66,42 @@ function audioMime(format) {
 function ttsErrorMessage(error) {
   const message = clean(error?.message || error);
   return message || "语音合成暂时不可用。";
+}
+
+function isCosyVoiceRuntime(runtime) {
+  return clean(runtime?.tts?.provider).toLowerCase() === "cosyvoice";
+}
+
+function isTtsRateLimited(error) {
+  const detail = `${clean(error?.code)} ${clean(error?.message || error)}`.toLowerCase();
+  return detail.includes("throttling.ratequota") || detail.includes("rate limit") || /\b429\b/u.test(detail);
+}
+
+function ttsFailureSystemMessage(error) {
+  return isTtsRateLimited(error)
+    ? "通话系统：语音服务繁忙，已跳过这一句语音。"
+    : "通话系统：这句语音暂时无法合成，已跳过。";
+}
+
+function waitForCallTts(delayMs, signal) {
+  const delay = Math.max(0, Number(delayMs) || 0);
+  if (signal?.aborted) return Promise.resolve(false);
+  if (!delay) return Promise.resolve(true);
+  return new Promise((resolve) => {
+    let timer = null;
+    let settled = false;
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      signal?.removeEventListener?.("abort", onAbort);
+      resolve(value);
+    };
+    const onAbort = () => finish(false);
+    timer = setTimeout(() => finish(true), delay);
+    signal?.addEventListener?.("abort", onAbort, { once: true });
+    if (signal?.aborted) onAbort();
+  });
 }
 
 /**
@@ -123,11 +164,13 @@ export function createRealtimeVoiceCallService({
   appendLedger = appendUsageEvent,
   fetchImpl = globalThis.fetch,
   ledgerPathProvider = null,
+  now = () => Date.now(),
   onEvent = () => {},
   reader,
   resolveVoiceRuntime = resolveDirectVoiceRuntime,
   reconnectDelaysMs = DEFAULT_RECONNECT_DELAYS_MS,
   settingsService,
+  sleep = waitForCallTts,
   synthesizeVoice = synthesizeDirectVoiceAudio,
   webSocketFactory = (url, options) => new WebSocket(url, options),
 } = {}) {
@@ -150,6 +193,14 @@ export function createRealtimeVoiceCallService({
   const reconnectDelays = (Array.isArray(reconnectDelaysMs) ? reconnectDelaysMs : DEFAULT_RECONNECT_DELAYS_MS)
     .map((value) => Math.max(0, Number(value) || 0))
     .filter((value) => Number.isFinite(value));
+  const timeNow = typeof now === "function" ? now : () => Date.now();
+  const pause = typeof sleep === "function" ? sleep : waitForCallTts;
+  let nextCosyVoiceTtsStartAt = 0;
+
+  const currentTime = () => {
+    const value = Number(timeNow());
+    return Number.isFinite(value) ? value : Date.now();
+  };
 
   const emitCall = (call, type, payload = {}) => {
     try {
@@ -171,6 +222,7 @@ export function createRealtimeVoiceCallService({
   const clearReplyAudio = (call) => {
     call.generation += 1;
     call.nextAudioIndex = 0;
+    call.ttsQueue.length = 0;
     for (const controller of call.ttsControllers.values()) controller.abort();
     call.ttsControllers.clear();
     call.replyStates.clear();
@@ -201,6 +253,95 @@ export function createRealtimeVoiceCallService({
     if (announce) emitCall(call, "call-state", { state: "listening", label: "正在听你说…" });
   };
 
+  const canSpeakQueuedJob = (call, job) => (
+    callIsActive(call)
+    && job.generation === call.generation
+    && !job.controller.signal.aborted
+  );
+
+  const reserveTtsRequest = async (call, job) => {
+    if (!canSpeakQueuedJob(call, job) || !isCosyVoiceRuntime(call.voiceRuntime)) return canSpeakQueuedJob(call, job);
+    const delay = Math.max(0, nextCosyVoiceTtsStartAt - currentTime());
+    if (delay > 0) {
+      const completed = await pause(delay, job.controller.signal);
+      if (completed === false || !canSpeakQueuedJob(call, job)) return false;
+    }
+    const startedAt = currentTime();
+    nextCosyVoiceTtsStartAt = Math.max(startedAt, nextCosyVoiceTtsStartAt) + COSYVOICE_TTS_MIN_REQUEST_INTERVAL_MS;
+    return canSpeakQueuedJob(call, job);
+  };
+
+  const synthesizeQueuedSpeech = async (call, job) => {
+    let retry = 0;
+    while (canSpeakQueuedJob(call, job)) {
+      const reserved = await reserveTtsRequest(call, job);
+      if (!reserved) return null;
+      try {
+        return await synthesizeVoice({
+          text: job.spoken,
+          runtime: call.voiceRuntime,
+          fetchImpl,
+          ledgerPath: call.ledgerPath,
+          agentId: call.agentId,
+          feature: "realtime-voice-call-tts",
+          abortSignal: job.controller.signal,
+        });
+      } catch (error) {
+        if (!isTtsRateLimited(error) || retry >= TTS_RATE_LIMIT_RETRY_DELAYS_MS.length) throw error;
+        const delay = TTS_RATE_LIMIT_RETRY_DELAYS_MS[retry++];
+        const completed = await pause(delay, job.controller.signal);
+        if (completed === false || !canSpeakQueuedJob(call, job)) return null;
+      }
+    }
+    return null;
+  };
+
+  const drainSpeechQueue = async (call) => {
+    if (call.ttsDraining) return;
+    call.ttsDraining = true;
+    try {
+      while (call.ttsQueue.length) {
+        const job = call.ttsQueue.shift();
+        if (!job || !canSpeakQueuedJob(call, job)) {
+          if (job) call.ttsControllers.delete(job.key);
+          continue;
+        }
+        try {
+          const result = await synthesizeQueuedSpeech(call, job);
+          if (!result || !canSpeakQueuedJob(call, job)) continue;
+          const audio = Buffer.from(result.audio || []);
+          if (!audio.length) throw new RealtimeVoiceCallError("语音合成返回了空音频。");
+          emitCall(call, "call-audio", {
+            index: job.index,
+            requestId: job.requestId,
+            text: job.spoken,
+            mimeType: audioMime(result.format),
+            audioBase64: audio.toString("base64"),
+          });
+          emitCall(call, "call-state", { state: "speaking", label: "正在说话…" });
+        } catch (error) {
+          if (!canSpeakQueuedJob(call, job) || error?.code === "tts_aborted") continue;
+          // A skipped clause should not turn the whole call bar into an error.
+          // The chat page renders this with its existing hidden-by-default
+          // system-message treatment instead.
+          emitCall(call, "call-system-message", {
+            index: job.index,
+            message: ttsFailureSystemMessage(error),
+            requestId: job.requestId,
+          });
+          // Keep later clauses playable if this one provider request failed.
+          // The renderer preserves order, so it needs an explicit gap marker.
+          emitCall(call, "call-audio-skip", { index: job.index, requestId: job.requestId });
+        } finally {
+          call.ttsControllers.delete(job.key);
+        }
+      }
+    } finally {
+      call.ttsDraining = false;
+      if (callIsActive(call) && call.ttsQueue.length) void drainSpeechQueue(call);
+    }
+  };
+
   const queueSpeech = (call, requestId, text) => {
     const spoken = clean(text);
     if (!spoken || !callIsActive(call)) return;
@@ -209,35 +350,15 @@ export function createRealtimeVoiceCallService({
     const key = `${generation}:${index}`;
     const controller = new AbortController();
     call.ttsControllers.set(key, controller);
-    void synthesizeVoice({
-      text: spoken,
-      runtime: call.voiceRuntime,
-      fetchImpl,
-      ledgerPath: call.ledgerPath,
-      agentId: call.agentId,
-      feature: "realtime-voice-call-tts",
-      abortSignal: controller.signal,
-    }).then((result) => {
-      if (!callIsActive(call) || generation !== call.generation || controller.signal.aborted) return;
-      const audio = Buffer.from(result.audio || []);
-      if (!audio.length) throw new RealtimeVoiceCallError("语音合成返回了空音频。");
-      emitCall(call, "call-audio", {
-        index,
-        requestId,
-        text: spoken,
-        mimeType: audioMime(result.format),
-        audioBase64: audio.toString("base64"),
-      });
-      emitCall(call, "call-state", { state: "speaking", label: "正在说话…" });
-    }).catch((error) => {
-      if (!callIsActive(call) || generation !== call.generation || controller.signal.aborted || error?.code === "tts_aborted") return;
-      emitCall(call, "call-error", { message: `无法合成这句语音：${ttsErrorMessage(error)}` });
-      // Keep later clauses playable if this one provider request failed.  The
-      // renderer preserves order, so it needs an explicit gap marker here.
-      emitCall(call, "call-audio-skip", { index, requestId });
-    }).finally(() => {
-      call.ttsControllers.delete(key);
+    call.ttsQueue.push({
+      controller,
+      generation,
+      index,
+      key,
+      requestId,
+      spoken,
     });
+    void drainSpeechQueue(call);
   };
 
   const receiveChatEvent = (event) => {
@@ -632,6 +753,8 @@ export function createRealtimeVoiceCallService({
       socket: null,
       started: false,
       ttsControllers: new Map(),
+      ttsDraining: false,
+      ttsQueue: [],
       voiceRuntime,
     };
     activeCall = call;

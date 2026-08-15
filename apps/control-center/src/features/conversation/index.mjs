@@ -20,6 +20,7 @@ export { parseSuzuConversationCommand } from "../../../shared/conversation-comma
 const viewState = {
   avatarCrop: null,
   busySessions: new Set(),
+  transientSystemMessages: [],
   composerFocusRequest: 0,
   contactCreateOpen: false,
   contactContextMenu: null,
@@ -213,7 +214,7 @@ function insertLiveReplyAtTimestamp(items, reply) {
     : [...items.slice(0, index), reply, ...items.slice(index)];
 }
 
-export function mergeConversationMessages(items, pendingItems = [], liveReplyItems = new Map(), activeSessionId = "") {
+export function mergeConversationMessages(items, pendingItems = [], liveReplyItems = new Map(), activeSessionId = "", transientSystemMessages = []) {
   const source = Array.isArray(items) ? items : [];
   const sessionId = clean(activeSessionId);
   const pending = (Array.isArray(pendingItems) ? pendingItems : [])
@@ -241,7 +242,9 @@ export function mergeConversationMessages(items, pendingItems = [], liveReplyIte
       timestamp: item.timestamp,
       blocks: [{ kind: "text", text: item.content }],
     }));
-  const appended = [...source, ...pending];
+  const localSystemMessages = (Array.isArray(transientSystemMessages) ? transientSystemMessages : [])
+    .filter((item) => item?.kind === "system" && clean(item.sessionId) === sessionId && messageText(item));
+  const appended = [...source, ...pending, ...localSystemMessages];
   // Source rows are already in the transcript's append order.  Preserve that
   // order for special turns such as calls; only place a local unfinished reply
   // back between normal chronological rows so a later message can push it up.
@@ -256,6 +259,7 @@ function displayedMessages(items) {
     viewState.pending,
     viewState.liveReplies,
     clean(viewState.snapshot?.activeSessionId),
+    viewState.transientSystemMessages,
   );
 }
 
@@ -939,6 +943,32 @@ async function markOpenedContactRead(context) {
 }
 
 function handleConversationEvent(context, event) {
+  if (event?.type === "call-system-message") {
+    const activeSessionId = clean(viewState.snapshot?.activeSessionId);
+    const activeProjectRoot = clean(viewState.snapshot?.projectRoot);
+    const sessionId = clean(event?.sessionId);
+    const message = clean(event?.message);
+    if (!sessionId || sessionId !== activeSessionId || !message) return;
+    if (activeProjectRoot && clean(event?.projectRoot) && !sameProjectRoot(activeProjectRoot, event.projectRoot)) return;
+    const id = [
+      "call-system",
+      clean(event?.callId) || "call",
+      clean(event?.requestId) || "request",
+      Number.isSafeInteger(Number(event?.index)) ? Number(event.index) : "message",
+    ].join("-");
+    if (viewState.transientSystemMessages.some((item) => item.id === id)) return;
+    viewState.transientSystemMessages.push({
+      blocks: [{ kind: "text", text: message }],
+      id,
+      kind: "system",
+      sessionId,
+      timestamp: clean(event?.timestamp) || new Date().toISOString(),
+    });
+    if (!viewState.shouldStickToLatest) viewState.unread = true;
+    scheduleScrollToLatest();
+    context.render();
+    return;
+  }
   // The call sheet owns its own listening/thinking/speaking state.  Do not
   // leak Claude's internal turn labels into the text composer while a voice
   // turn is running; refresh the normal history after it settles instead.
@@ -1032,6 +1062,7 @@ function handleConversationEvent(context, event) {
 
 export function startConversationPolling(context) {
   stopConversationPolling();
+  viewState.transientSystemMessages.length = 0;
   viewState.shouldStickToLatest = true;
   void load(context, true).then(() => markOpenedContactRead(context));
   if (typeof context.api.conversation.onEvent === "function") {
@@ -1340,6 +1371,7 @@ async function openConversationMediaPreviewForItem(context, value = {}) {
 function resetConversationForContactChange() {
   resetSessionSettings();
   viewState.contactContextMenu = null;
+  viewState.transientSystemMessages.length = 0;
   viewState.pending = [];
   viewState.liveReplies.clear();
   viewState.permissions.clear();
