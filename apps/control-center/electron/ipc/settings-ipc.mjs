@@ -7,6 +7,7 @@ import {
 } from "@suzu-lives/agent-registry";
 import { sanitizePriceRevisions } from "@suzu-lives/cost-ledger";
 import { createContactProjectsService } from "../services/contact-projects.mjs";
+import { createSystemStatusService } from "../services/system-status.mjs";
 
 const DEFAULT_SETTINGS = Object.freeze({
   contactsRoot: "",
@@ -246,8 +247,12 @@ export function createSettingsService({ app, dataStorageService = null }) {
   return { load, response, save, safePatch, usageLedgerPath };
 }
 
-export function registerSettingsIpc({ app, appUpdateService = null, contactProjectsService = null, dataStorageService, dialog, getMainWindow, ipcMain, onMemoryRecallEnabledChanged = null, shell, settingsService }) {
+export function registerSettingsIpc({ app, appUpdateService = null, contactProjectsService = null, dataStorageService, dialog, getMainWindow, ipcMain, onMemoryRecallEnabledChanged = null, shell, settingsService, systemStatusService = null }) {
   const contacts = contactProjectsService || createContactProjectsService({ settingsService });
+  const systemStatus = systemStatusService || createSystemStatusService({
+    dataRoot: () => clean(dataStorageService?.dataRoot) || clean(settingsService.response?.(settingsService.load?.())?.dataRoot),
+    settingsService,
+  });
   const updateService = appUpdateService || {
     status: () => ({ status: "unavailable", mode: "manual", version: "未知", message: "当前版本没有启用更新服务。" }),
     checkForUpdates: () => ({ status: "unavailable", mode: "manual", version: "未知", message: "当前版本没有启用更新服务。" }),
@@ -259,6 +264,7 @@ export function registerSettingsIpc({ app, appUpdateService = null, contactProje
   ipcMain.handle("settings:check-for-update", () => updateService.checkForUpdates());
   ipcMain.handle("settings:download-update", () => updateService.downloadUpdate());
   ipcMain.handle("settings:install-update", () => updateService.installUpdate());
+  ipcMain.handle("settings:system-status", () => systemStatus.scan());
   ipcMain.handle("settings:select-project", async () => {
     const current = settingsService.load();
     const result = await dialog.showOpenDialog(getMainWindow(), {

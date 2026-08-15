@@ -24,3 +24,15 @@ test("React settings keeps software updates in the existing settings action chai
   assert.match(app, /runAppUpdateAction\("downloadUpdate"/u);
   assert.match(app, /runAppUpdateAction\("installUpdate"/u);
 });
+
+test("React data settings exposes the read-only system status check", () => {
+  const page = readFileSync(resolve(ROOT, "src", "react", "settings-page.jsx"), "utf8");
+  const app = readFileSync(resolve(ROOT, "src", "app.mjs"), "utf8");
+
+  assert.match(page, /系统状态检查/u);
+  assert.match(page, /检查系统状态/u);
+  assert.match(page, /外部\/自定义/u);
+  assert.match(page, /onCheckSystemStatus/u);
+  assert.match(app, /api\.settings\?\.systemStatus/u);
+  assert.match(app, /checkSystemStatus/u);
+});

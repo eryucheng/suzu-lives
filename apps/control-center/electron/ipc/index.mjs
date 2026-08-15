@@ -29,6 +29,7 @@ import {
   proactiveContactScopeKey,
 } from "../services/proactive-contact-maintenance.mjs";
 import { runScheduledScript, validateScheduledScriptPath } from "../services/scheduled-script.mjs";
+import { syncTravelingMerchantSchedule } from "../services/traveling-merchant-schedule.mjs";
 import { ensureSuzuClaudeProjectSettings } from "@suzu-lives/claude-integration";
 import {
   createScheduleRunner,
@@ -181,6 +182,7 @@ export function registerIpcHandlers({ app, appUpdateService = null, dataStorageS
   let iphoneFeedbackService = null;
   let conversation = null;
   let requestProactiveContactMaintenance = () => undefined;
+  let requestTravelingMerchantScheduleSync = async () => undefined;
   const capabilitiesService = createCapabilitiesService({
     contactProjectsService,
     settingsService,
@@ -191,6 +193,7 @@ export function registerIpcHandlers({ app, appUpdateService = null, dataStorageS
     projectHooksService,
     onIphoneFeedbackChange: () => iphoneFeedbackService?.restart(),
     onProactiveContactMaintenanceRequested: (request) => requestProactiveContactMaintenance(request),
+    onTravelingMerchantScheduleSyncRequested: () => requestTravelingMerchantScheduleSync(),
     resolveContactSession: (contactId) => {
       if (typeof conversation?.reader?.resolveContactSession !== "function") {
         throw new Error("当前软件无法解析联系人的会话。 ");
@@ -240,9 +243,6 @@ export function registerIpcHandlers({ app, appUpdateService = null, dataStorageS
     proactiveContactSettings: () => capabilitiesService.proactiveContactSettings(),
     isProactiveContactEnabled: ({ contactId }) => capabilitiesService.isCompanionContactEnabled({
       abilityId: "proactive-contact", contactId,
-    }),
-    isTravelingMerchantEnabled: ({ contactId }) => capabilitiesService.isCompanionContactEnabled({
-      abilityId: "traveling-merchant", contactId,
     }),
   });
   memoryService.setConversationReader(conversation.reader);
@@ -419,6 +419,11 @@ export function registerIpcHandlers({ app, appUpdateService = null, dataStorageS
     delayedProactiveMaintenanceChecks.set(key, timer);
   };
   requestProactiveContactMaintenance = scheduleProactiveContactChainCheck;
+  const syncEnabledTravelingMerchantSchedule = async () => {
+    const targets = await capabilitiesService.enabledCompanionSessions("traveling-merchant");
+    return syncTravelingMerchantSchedule({ dataRoot, hasEnabledContacts: targets.length > 0 });
+  };
+  requestTravelingMerchantScheduleSync = syncEnabledTravelingMerchantSchedule;
   const scheduleRunner = createScheduleRunner({
     dataRoot,
     onConversationTask: async (task) => {
@@ -477,7 +482,9 @@ export function registerIpcHandlers({ app, appUpdateService = null, dataStorageS
     delayedProactiveMaintenanceChecks.clear();
     scheduleRunner.stop();
   });
-  void scheduleRunner.start()
+  void syncEnabledTravelingMerchantSchedule()
+    .catch(() => undefined)
+    .then(() => scheduleRunner.start())
     .then(() => checkProactiveContactChains())
     .catch(() => undefined);
   app?.once?.("before-quit", () => iphoneFeedbackService?.dispose());

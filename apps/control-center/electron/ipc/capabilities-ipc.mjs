@@ -652,6 +652,7 @@ export function createCapabilitiesService({
   projectHooksService = null,
   onIphoneFeedbackChange = null,
   onProactiveContactMaintenanceRequested = null,
+  onTravelingMerchantScheduleSyncRequested = null,
   resolveContactSession = null,
 } = {}) {
   if (!settingsService || typeof settingsService.load !== "function") throw new Error("能力服务需要软件设置服务。");
@@ -814,6 +815,10 @@ export function createCapabilitiesService({
     } catch {
       // A delayed local check must never make an already-saved setting fail.
     }
+  };
+  const syncTravelingMerchantSchedule = async () => {
+    if (typeof onTravelingMerchantScheduleSyncRequested !== "function") return;
+    await onTravelingMerchantScheduleSyncRequested();
   };
   const snapshot = () => {
     const settings = settingsService.load();
@@ -1362,11 +1367,13 @@ export function createCapabilitiesService({
       if (Object.hasOwn(input, "contactId") || Object.hasOwn(input, "contactEnabled")) {
         if (!Object.hasOwn(input, "contactEnabled")) throw new Error("联系人开关状态无效。 ");
         const contactId = await companionContactForInput(input);
+        const enabledContactIds = withCompanionContact(existing, contactId, boundedBoolean(input.contactEnabled, false));
         await writeJsonBelow(dataRoot, ["automation", "traveling-merchant", "config.json"], {
           ...defaults,
           ...existing,
-          enabledContactIds: withCompanionContact(existing, contactId, boundedBoolean(input.contactEnabled, false)),
+          enabledContactIds,
         });
+        await syncTravelingMerchantSchedule();
         return snapshot();
       }
       const wantedItems = normalizedLines(input.wantedItems, "关注物品", { maximum: 50, itemMaximum: 120 });
@@ -1384,6 +1391,7 @@ export function createCapabilitiesService({
         retryDelaySeconds: boundedNumber(input.retryDelaySeconds, "重试间隔", { minimum: 0, maximum: 300, fallback: 20, integer: true }),
         enabledContactIds: companionContactIds(existing),
       });
+      await syncTravelingMerchantSchedule();
       return snapshot();
     }
     throw new Error("这项能力目前没有可保存的设置。 ");
@@ -1407,6 +1415,7 @@ export function createCapabilitiesService({
     ));
     let updated = 0;
     let iphoneBridgeUpdated = false;
+    let travelingMerchantUpdated = false;
     for (const segments of configPaths) {
       const existing = publicJson(dataRoot, segments);
       const next = { ...existing };
@@ -1420,8 +1429,10 @@ export function createCapabilitiesService({
       await writeJsonBelow(dataRoot, segments, next);
       updated += 1;
       if (segments.join("/") === "automation/iphone-bridge/config.json") iphoneBridgeUpdated = true;
+      if (segments.join("/") === "automation/traveling-merchant/config.json") travelingMerchantUpdated = true;
     }
     if (iphoneBridgeUpdated) notifyIphoneFeedbackChange();
+    if (travelingMerchantUpdated) await syncTravelingMerchantSchedule();
     return { updated };
   };
   const openTravelingMerchantPage = async () => {

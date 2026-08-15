@@ -29,6 +29,7 @@ let globalNoticeTimeout = null;
 let incomingConversationNoticeTimeout = null;
 let settingsContactsRequest = 0;
 let appUpdateRequest = 0;
+let systemStatusRequest = 0;
 
 document.documentElement.dataset.theme = new URLSearchParams(window.location.search).get("theme") === "dark" ? "dark" : "light";
 
@@ -429,6 +430,20 @@ async function openSettingsDirectory(targetPath) {
   const path = String(targetPath || "").trim();
   if (!path) return;
   await api.settings.showItemInFolder(path);
+}
+
+async function checkSystemStatus() {
+  const request = ++systemStatusRequest;
+  if (typeof api.settings?.systemStatus !== "function") return;
+  try {
+    const result = await api.settings.systemStatus();
+    if (request !== systemStatusRequest) return;
+    state.systemStatus = result;
+  } catch (error) {
+    if (request !== systemStatusRequest) return;
+    state.systemStatus = { error: `无法完成系统状态检查：${error?.message || error}` };
+  }
+  if (request === systemStatusRequest && state.view === "settings" && state.settingsTab === "data") render();
 }
 
 async function loadSettingsContacts() {
@@ -1254,6 +1269,7 @@ function routeForCurrentView() {
           changeDataLocation: changeSettingsDataLocation,
           changeTheme: changeSettingsTheme,
           checkForUpdate: checkAppUpdate,
+          checkSystemStatus,
           downloadUpdate: downloadAppUpdate,
           installUpdate: installAppUpdate,
           openDirectory: openSettingsDirectory,
@@ -1270,6 +1286,7 @@ function routeForCurrentView() {
           contacts: state.settingsContacts,
           contactsLoading: state.settingsContactsLoading,
           appUpdate: state.appUpdate,
+          systemStatus: state.systemStatus,
           settings: state.settings,
           tab: state.settingsTab,
         },

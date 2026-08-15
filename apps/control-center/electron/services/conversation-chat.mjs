@@ -443,18 +443,14 @@ ${launcher} --file "文件的绝对路径"
 
 export function scheduleSystemPrompt(commands) {
   const conversationAdd = clean(commands?.conversationAdd);
-  const operationAdd = clean(commands?.operationAdd);
   const list = clean(commands?.list);
   const remove = clean(commands?.remove);
   const chainPrompt = clean(commands?.proactiveChainPrompt) || "根据时间和前面聊的内容判断要不要主动联系对方，要发就正常发，不发就沉默，然后记得要设置下一次自动任务";
   const followUpPrompt = clean(commands?.proactiveFollowUpPrompt) || "临时回访：用户在 TIME 提到 EVENT。先检查当前会话里是否已经有结果；已经有结果就只输出 NO_REPLY；还没有结果就自然地关心或询问。不要提及自动任务、回访任务或系统机制。这是一次性回访，不要设置下一次自动任务。";
-  if (!conversationAdd && !operationAdd) return "";
+  if (!conversationAdd) return "";
   const sections = ["## Suzu 自动任务", "任务只会在 Suzu 软件运行期间执行；关闭期间不会执行或补跑。不要使用旧的 timer 或 cron 命令。"];
   if (conversationAdd) {
     sections.push(`### 主动关心\n\n当前会话已在“主动关心”能力中启用。一次性任务会自动绑定当前 Claude 会话和项目：\n\n${conversationAdd} --delay 45m --prompt "到时间后要处理的完整任务内容" --desc "简短说明"\n\n链式主动关心触发时使用这段提示词：\n\n${chainPrompt}\n\n临时回访使用这段提示词：\n\n${followUpPrompt}`);
-  }
-  if (operationAdd) {
-    sections.push(`### 远行商人\n\n当前会话已在“远行商人”能力中启用。循环任务由 Suzu 抓取一次网页，并把命中结果投递到已开启这项能力的会话：\n\n${operationAdd} --cron "2 8,12,16,20 * * *" --exec traveling-merchant --desc "洛克王国远行商人监控"`);
   }
   if (list && remove) {
     sections.push(`### 查看与删除\n\n${list}\n${remove}`);

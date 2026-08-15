@@ -65,7 +65,6 @@ export function registerConversationIpc({
   initializeContactCapabilities = null,
   proactiveContactSettings = () => ({}),
   isProactiveContactEnabled = () => false,
-  isTravelingMerchantEnabled = () => false,
 }) {
   const reader = createConversationReader({ contactProjectsService, onContactCreated: initializeContactCapabilities, settingsService });
   const sessionSettings = createConversationSessionSettingsService({
@@ -92,12 +91,10 @@ export function registerConversationIpc({
     const contactId = await reader.contactIdForSession({ sessionId, projectRoot });
     const contactArgument = quotedArgument(contactId);
     const proactiveEnabled = await Promise.resolve(isProactiveContactEnabled({ contactId })) === true;
-    const merchantEnabled = await Promise.resolve(isTravelingMerchantEnabled({ contactId })) === true;
     return {
       conversationAdd: proactiveEnabled && contactArgument
         ? `${invocation} schedule add --data-root ${rootArgument} --contact-id ${contactArgument}`
         : "",
-      operationAdd: merchantEnabled ? `${invocation} schedule add --data-root ${rootArgument}` : "",
       list: `${invocation} schedule list --data-root ${rootArgument}`,
       remove: `${invocation} schedule remove <任务ID> --data-root ${rootArgument}`,
       proactiveChainPrompt: clean(proactive.chainPrompt),

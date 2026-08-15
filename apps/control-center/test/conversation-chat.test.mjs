@@ -101,7 +101,7 @@ test("Claude runtime feature settings remove only disabled built-in tools and ba
   assert.equal(restricted[restricted.indexOf("--disallowed-tools") + 1], "Read,Glob,Grep,Edit,Write,Bash,WebFetch,WebSearch,Agent,TodoWrite,AskUserQuestion");
 });
 
-test("schedule prompt keeps the two companion capabilities independently scoped", () => {
+test("schedule prompt keeps Agent scheduling scoped to proactive contact", () => {
   const proactiveOnly = scheduleSystemPrompt({
     conversationAdd: "suzu-lives schedule add --contact-id contact-suzu",
     list: "suzu-lives schedule list",
@@ -118,7 +118,7 @@ test("schedule prompt keeps the two companion capabilities independently scoped"
     list: "suzu-lives schedule list",
     remove: "suzu-lives schedule remove <任务ID>",
   });
-  assert.match(merchantOnly, /远行商人/u);
+  assert.equal(merchantOnly, "");
 });
 
 test("chat starts the local Claude CLI and forwards its stream", async () => {
@@ -137,7 +137,6 @@ test("chat starts the local Claude CLI and forwards its stream", async () => {
     agentAttachmentCommand: () => '"Suzu Lives Console.exe" --suzu-lives-cli conversation-attachment',
     agentScheduleCommand: () => ({
       conversationAdd: '"Suzu Lives Console.exe" --suzu-lives-cli schedule add --data-root "D:\\\\suzu" --contact-id "contact-suzu"',
-      operationAdd: '"Suzu Lives Console.exe" --suzu-lives-cli schedule add --data-root "D:\\\\suzu"',
       list: '"Suzu Lives Console.exe" --suzu-lives-cli schedule list --data-root "D:\\\\suzu"',
       remove: '"Suzu Lives Console.exe" --suzu-lives-cli schedule remove',
     }),

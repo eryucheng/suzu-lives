@@ -365,3 +365,23 @@ test("settings update IPC delegates the check, download, and install actions to 
   assert.deepEqual(await handlers.get("settings:install-update")(), { status: "installing" });
   assert.deepEqual(calls, ["check", "download", "install"]);
 });
+
+test("system status IPC delegates only to the read-only status service", async () => {
+  const handlers = new Map();
+  const expected = { checkedAt: "2026-08-15T00:00:00.000Z", summary: { status: "ready" }, sections: [] };
+  let calls = 0;
+  registerSettingsIpc({
+    app: { relaunch: () => {}, exit: () => {} },
+    contactProjectsService: {},
+    dataStorageService: null,
+    dialog: { showOpenDialog: async () => ({ canceled: true }), showMessageBox: async () => ({ response: 1 }) },
+    getMainWindow: () => null,
+    ipcMain: { handle: (name, handler) => handlers.set(name, handler) },
+    shell: { showItemInFolder: () => {}, openPath: () => {} },
+    settingsService: { load: () => ({}), save: (next) => next, response: () => ({}) },
+    systemStatusService: { scan: async () => { calls += 1; return expected; } },
+  });
+
+  assert.deepEqual(await handlers.get("settings:system-status")(), expected);
+  assert.equal(calls, 1);
+});
