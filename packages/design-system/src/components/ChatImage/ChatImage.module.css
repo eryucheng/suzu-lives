@@ -1,0 +1,175 @@
+/* ChatImage —— 聊天图片（缩略预览 + 全屏预览弹窗，移植自 Suzu .conversation-media-preview-dialog） */
+
+/* 缩略图外层：可点击放大的按钮，无边框无卡片 */
+.preview {
+  display: block;
+  width: max-content;
+  margin: 0;
+  border: 0;
+  padding: 0;
+  line-height: 0;
+  overflow: hidden;
+  background: transparent;
+  cursor: zoom-in;
+  border-radius: 12px;
+}
+
+/* 缩略图：固定 160×120（与 ChatBubble MediaOnly story 一致），cover 裁切 */
+.image {
+  display: block;
+  width: 160px;
+  height: 120px;
+  object-fit: cover;
+  border-radius: 12px;
+  transition: box-shadow 0.15s ease;
+}
+
+.preview:hover .image {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
+/* ---- 全屏预览弹窗 ---- */
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: grid;
+  place-items: center;
+  background: rgb(5 7 12 / 0.82);
+  backdrop-filter: blur(6px);
+  cursor: zoom-out;
+}
+
+.dialog {
+  width: min(92vw, 1120px);
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--panel);
+  color: var(--text);
+  box-shadow: 0 24px 70px rgb(0 0 0 / 0.55);
+  cursor: default;
+}
+
+/* 头部：名称 + 当前/总数 + 关闭 */
+.dialogHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 52px;
+  padding: 10px 14px;
+}
+
+.dialogTitle {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.dialogTitle strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+  font-size: var(--font-size-md);
+  font-weight: 600;
+}
+
+.dialogTitle span {
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
+.close {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 18px;
+  line-height: 1;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.close:hover {
+  background: color-mix(in srgb, var(--text) 10%, transparent);
+  color: var(--text);
+}
+
+/* 中部：左右小箭头 + 图片 */
+.stage {
+  display: grid;
+  min-height: 0;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  background: rgba(0, 0, 0, 0.16);
+  padding: 12px;
+}
+
+.dialogImg {
+  justify-self: center;
+  width: auto;
+  max-width: min(76vw, 970px);
+  max-height: calc(min(88vh, 850px) - 108px);
+  object-fit: contain;
+  border-radius: 4px;
+}
+
+.nav {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: color-mix(in srgb, #fff 6%, transparent);
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+  transition: border-color 0.15s ease, color 0.15s ease, background-color 0.15s ease;
+}
+
+.nav:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--success) 52%, transparent);
+  color: var(--success);
+  background: color-mix(in srgb, var(--success) 8%, transparent);
+}
+
+.nav:disabled {
+  cursor: default;
+  opacity: 0.35;
+}
+
+/* 底部：跳转到图片所在位置 */
+.dialogFoot {
+  display: flex;
+  justify-content: flex-end;
+  border-top: 1px solid var(--border);
+  padding: 8px 13px;
+}
+
+.jump {
+  border: 0;
+  background: transparent;
+  color: color-mix(in srgb, var(--success) 72%, #fff);
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 11px;
+  padding: 4px 6px;
+  border-radius: 6px;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.jump:hover {
+  background: color-mix(in srgb, var(--success) 10%, transparent);
+  color: var(--success);
+}

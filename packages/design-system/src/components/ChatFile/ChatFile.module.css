@@ -1,0 +1,61 @@
+/* ChatFile —— 文件消息卡片（移植自 Suzu-Lives .conversation-media） */
+
+.file {
+  display: flex;
+  width: min(280px, 64vw);
+  min-width: 0;
+  min-height: 76px;
+  align-items: center;
+  box-sizing: border-box;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--panel-soft) 86%, transparent);
+  cursor: pointer;
+}
+
+.fileRow {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 10px;
+  padding: 10px;
+}
+
+.fileIcon {
+  display: grid;
+  flex: 0 0 auto;
+  width: 34px;
+  height: 40px;
+  place-items: center;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  color: var(--accent);
+}
+
+.copy {
+  display: grid;
+  flex: 1;
+  min-width: 0;
+  gap: 3px;
+}
+
+.kind {
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
+.name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+  font-size: var(--font-size-sm);
+  font-weight: 650;
+}
+
+.size {
+  color: var(--text-muted);
+  font-size: 10px;
+}

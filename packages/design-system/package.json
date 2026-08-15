@@ -1,0 +1,31 @@
+{
+  "name": "suzu-design-system",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Internal React visual components used by Suzu Lives.",
+  "license": "SEE LICENSE IN ../../LICENSE.md",
+  "main": "./dist/suzu-design-system.umd.cjs",
+  "module": "./dist/suzu-design-system.js",
+  "exports": {
+    ".": {
+      "import": "./dist/suzu-design-system.js",
+      "require": "./dist/suzu-design-system.umd.cjs"
+    },
+    "./style.css": "./dist/suzu-design-system.css"
+  },
+  "sideEffects": [
+    "**/*.css"
+  ],
+  "scripts": {
+    "build": "vite build"
+  },
+  "peerDependencies": {
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "files": [
+    "dist",
+    "src"
+  ]
+}

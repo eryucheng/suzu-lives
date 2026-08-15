@@ -33,8 +33,10 @@ test("iPhone paths keep config, state and inbox in software data", () => {
   assert.ok(paths.runtimeRoot.startsWith(dataRoot));
   assert.ok(paths.statePath.startsWith(paths.runtimeRoot));
   assert.ok(paths.inboxPath.startsWith(paths.runtimeRoot));
-  assert.equal(paths.sendScriptPath.includes("suzu-lives-private"), false);
-  assert.equal(paths.receiveScriptPath.includes("suzu-lives-private"), false);
+  assert.equal(path.basename(path.dirname(paths.sendScriptPath)), "python");
+  assert.equal(path.dirname(paths.receiveScriptPath), path.dirname(paths.sendScriptPath));
+  assert.equal(path.basename(paths.sendScriptPath), "send_to_iphone.py");
+  assert.equal(path.basename(paths.receiveScriptPath), "receive_from_iphone.py");
 });
 
 test("runtime rejects a software config replaced by a symbolic link", async (t) => {

@@ -46,7 +46,7 @@
     "qrcode": "1.5.4",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
-    "suzu-design-system": "github:eryucheng/design-system#main",
+    "suzu-design-system": "0.1.0",
     "ws": "8.18.3"
   },
   "build": {

@@ -1,0 +1,56 @@
+/* Empty —— 空状态（移植自 Suzu-Lives .empty-panel） */
+
+.panel {
+  display: grid;
+  max-width: 850px;
+  min-height: 260px;
+  padding: 35px;
+  place-content: center;
+  margin: 0 auto;
+  text-align: center;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-xl);
+  background: color-mix(in srgb, var(--panel-soft) 55%, transparent);
+}
+
+.symbol {
+  display: grid;
+  width: 48px;
+  height: 48px;
+  place-items: center;
+  margin: 0 auto 16px;
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+  border-radius: 15px;
+  background: color-mix(in srgb, var(--accent) 9%, transparent);
+  color: var(--accent);
+}
+
+.symbol svg {
+  display: block;
+  width: 22px;
+  height: 22px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+}
+
+.title {
+  margin: 0;
+  color: var(--text);
+  font-size: var(--font-size-xl);
+  font-weight: 650;
+}
+
+.description {
+  max-width: 470px;
+  margin: 10px auto 0;
+  color: var(--text-muted);
+  font-size: var(--font-size-sm);
+  line-height: 1.7;
+}
+
+.action {
+  display: inline-flex;
+  justify-self: center;
+  margin-top: 19px;
+}

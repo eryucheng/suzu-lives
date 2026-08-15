@@ -1,0 +1,51 @@
+/* Banner —— 通知条（移植自 Suzu-Lives .notice / .today-calendar-note） */
+
+.banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 10px 13px;
+  font-size: var(--font-size-sm);
+  line-height: 1.6;
+}
+
+.icon {
+  flex: 0 0 auto;
+  display: inline-flex;
+  margin-top: 1px;
+  line-height: 1;
+}
+
+.body {
+  min-width: 0;
+  flex: 1;
+}
+
+/* ---- 色调：低透明度底色 + 同色系文字 / 描边 ---- */
+.tone-warning {
+  border-color: color-mix(in srgb, var(--warning) 30%, transparent);
+  background: color-mix(in srgb, var(--warning) 8%, transparent);
+  color: var(--warning);
+}
+.tone-info {
+  border-color: color-mix(in srgb, var(--info) 26%, transparent);
+  background: color-mix(in srgb, var(--info) 7%, transparent);
+  color: var(--info);
+}
+.tone-danger {
+  border-color: color-mix(in srgb, var(--danger) 28%, transparent);
+  background: color-mix(in srgb, var(--danger) 8%, transparent);
+  color: var(--danger);
+}
+.tone-success {
+  border-color: color-mix(in srgb, var(--success) 28%, transparent);
+  background: color-mix(in srgb, var(--success) 8%, transparent);
+  color: var(--success);
+}
+.tone-neutral {
+  border-color: var(--border);
+  background: color-mix(in srgb, var(--panel-soft) 60%, transparent);
+  color: var(--text-secondary);
+}
