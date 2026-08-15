@@ -164,6 +164,10 @@ function approvalMode(value) {
   return CLAUDE_APPROVAL_MODES.has(mode) ? mode : "acceptEdits";
 }
 
+function longTermMemoryEnabled(value) {
+  return value !== false;
+}
+
 export function shouldShowCenteredTimeDivider(previousTimestamp, timestamp) {
   const current = dateFromTimestamp(timestamp);
   if (!current) return false;
@@ -672,6 +676,7 @@ function sessionSettingsSnapshot(context, selected, prefs) {
       tokens: "显示 Token 用量",
     }).map(([key, label]) => ({ checked: Boolean(prefs[key]), key, label })),
     approvalMode: approvalMode(contact?.approvalMode),
+    longTermMemoryEnabled: longTermMemoryEnabled(contact?.longTermMemoryEnabled),
     removeContactAvatar: Boolean(agent.avatarDataUrl),
     sessionId,
     timeDisplay: timeDisplay(prefs),
@@ -1692,6 +1697,22 @@ export function createConversationReactActions(context) {
         viewState.error = "";
       } catch (error) {
         viewState.error = `无法更新联系人审批模式：${error?.message || error}`;
+      } finally {
+        viewState.sending = false;
+        context.render();
+      }
+    },
+    setLongTermMemoryEnabled: async (enabled) => {
+      const contactId = clean(viewState.snapshot?.activeContact?.id);
+      if (!contactId || viewState.sending || !context.api.conversation.updateContactLongTermMemoryEnabled) return;
+      viewState.sending = true;
+      context.render();
+      try {
+        viewState.snapshot = await context.api.conversation.updateContactLongTermMemoryEnabled({ id: contactId, enabled: Boolean(enabled) });
+        viewState.lastVersion = viewState.snapshot.version;
+        viewState.error = "";
+      } catch (error) {
+        viewState.error = `无法更新联系人长期记忆：${error?.message || error}`;
       } finally {
         viewState.sending = false;
         context.render();

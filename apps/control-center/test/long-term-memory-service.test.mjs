@@ -146,6 +146,56 @@ test("embedded long-term memory starts in a new contact database and archives a 
   runtime.dispose();
 });
 
+test("a contact with long-term memory disabled neither archives nor recalls automatic chat memory", async () => {
+  const dataRoot = await fs.mkdtemp(path.join(os.tmpdir(), "suzu-disabled-memory-"));
+  const projectRoot = path.join(dataRoot, "contact-project");
+  await fs.mkdir(projectRoot, { recursive: true });
+  const contact = {
+    id: "contact-disabled",
+    name: "不记录",
+    agentId: "agent-disabled",
+    longTermMemoryEnabled: false,
+    projectRoot,
+    sessionId: "disabled-session",
+  };
+  const settings = { projectRoot };
+  const runtime = createLongTermMemoryService({
+    settingsService: {
+      load: () => settings,
+      response: () => ({ ...settings, dataRoot }),
+    },
+    contactProjectsService: {
+      snapshot: async () => ({ status: "ready", contacts: [contact], activeContact: contact }),
+    },
+    connectionsService: { resolveNamedApiConnection: async () => null },
+  });
+
+  const prepared = await runtime.prepareTurn({
+    sessionId: contact.sessionId,
+    turnId: "disabled-turn",
+    projectRoot,
+    userText: "这一轮不要进入长期记忆。",
+  });
+  const recalled = await runtime.recallForUserPrompt({
+    sessionId: contact.sessionId,
+    turnId: "disabled-hook",
+    projectRoot,
+    userText: "也不要召回旧记忆。",
+  });
+  const databasePath = path.join(
+    resolveAgentDataRoot({ dataRoot, agentId: contact.agentId }),
+    "memory",
+    "sessions",
+    contact.sessionId,
+    "suzu-memory.db",
+  );
+
+  assert.equal(prepared, null);
+  assert.equal(recalled, null);
+  assert.equal(await exists(databasePath), false);
+  runtime.dispose();
+});
+
 test("memory import stages the source before initializing a conflicting target identity", async () => {
   const dataRoot = await fs.mkdtemp(path.join(os.tmpdir(), "suzu-memory-import-stage-"));
   const contact = {

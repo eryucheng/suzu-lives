@@ -27,6 +27,15 @@ function contactApprovalModeValue(value) {
   return { id: clean(source.id), approvalMode: clean(source.approvalMode) };
 }
 
+function contactLongTermMemoryValue(value) {
+  const source = plainObject(value);
+  if (Object.hasOwn(source, "sessionId") || Object.hasOwn(source, "projectRoot")) {
+    throw new Error("联系人长期记忆设置只接受 contactId。 ");
+  }
+  if (typeof source.enabled !== "boolean") throw new Error("联系人长期记忆开关无效。 ");
+  return { id: clean(source.id), enabled: source.enabled };
+}
+
 function contactPresentationValue(value) {
   const source = plainObject(value);
   if (Object.hasOwn(source, "sessionId") || Object.hasOwn(source, "projectRoot")) {
@@ -71,6 +80,7 @@ export function registerConversationIpc({
   wechatAttachmentCli = "",
   claudeWorkspaceDirectories = [],
   initializeContactCapabilities = null,
+  onContactLongTermMemoryEnabledChanged = null,
   proactiveContactSettings = () => ({}),
   isProactiveContactEnabled = () => false,
 }) {
@@ -178,6 +188,18 @@ export function registerConversationIpc({
   ipcMain.handle("conversation:update-contact-approval-mode", async (event, value) => {
     sender = event.sender;
     return reader.updateContactApprovalMode(contactApprovalModeValue(value));
+  });
+  ipcMain.handle("conversation:update-contact-long-term-memory", async (event, value) => {
+    sender = event.sender;
+    const next = contactLongTermMemoryValue(value);
+    const snapshot = await reader.updateContactLongTermMemoryEnabled(next);
+    try {
+      await onContactLongTermMemoryEnabledChanged?.(next);
+    } catch {
+      // The stored preference and runtime gate are already active even if the
+      // optional project Hook sync cannot finish right now.
+    }
+    return snapshot;
   });
   ipcMain.handle("conversation:remove-contact", async (event, value) => {
     sender = event.sender;

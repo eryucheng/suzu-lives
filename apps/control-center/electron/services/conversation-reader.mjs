@@ -134,6 +134,7 @@ function publicContact(contact) {
     pinned: contact.pinned === true,
     unread: contact.unread === true,
     approvalMode: normalizeClaudePermissionMode(contact.approvalMode),
+    longTermMemoryEnabled: contact.longTermMemoryEnabled !== false,
     ...(clean(contact.updatedAt) ? { updatedAt: clean(contact.updatedAt) } : {}),
   };
 }
@@ -315,6 +316,7 @@ export function createConversationReader({
       contact?.unread === true,
       contact?.muted === true,
       normalizeClaudePermissionMode(contact?.approvalMode),
+      contact?.longTermMemoryEnabled !== false,
     ]));
     if (!currentCatalog.projectRoot) {
       return {
@@ -677,5 +679,11 @@ export function createConversationReader({
     return snapshot();
   };
 
-  return { approvalModeForSession, compactorSnapshot, contactIdForSession, context, create, createContact, ensureActiveSession, focus, removeContact, renameContact, resolveCompactorSession, resolveCompactorSessionForRuntime, resolveContactSession, search, selectContact, setPreferredContact, snapshot, updateContactApprovalMode, updateContactPresentation };
+  const updateContactLongTermMemoryEnabled = async (value = {}) => {
+    if (!contactProjectsService?.updateLongTermMemoryEnabled) throw new ConversationReaderError("当前版本未接入联系人长期记忆服务。 ");
+    await contactProjectsService.updateLongTermMemoryEnabled(value);
+    return snapshot();
+  };
+
+  return { approvalModeForSession, compactorSnapshot, contactIdForSession, context, create, createContact, ensureActiveSession, focus, removeContact, renameContact, resolveCompactorSession, resolveCompactorSessionForRuntime, resolveContactSession, search, selectContact, setPreferredContact, snapshot, updateContactApprovalMode, updateContactLongTermMemoryEnabled, updateContactPresentation };
 }

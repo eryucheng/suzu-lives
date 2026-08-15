@@ -72,6 +72,7 @@ test("Electron preload exposes the memory bridge", async () => {
   assert.equal(typeof bridge?.conversation?.renameContact, "function");
   assert.equal(typeof bridge?.conversation?.updateContactPresentation, "function");
   assert.equal(typeof bridge?.conversation?.updateContactApprovalMode, "function");
+  assert.equal(typeof bridge?.conversation?.updateContactLongTermMemoryEnabled, "function");
   assert.equal(typeof bridge?.conversation?.removeContact, "function");
   assert.equal(typeof bridge?.conversationCompactor?.snapshot, "function");
   assert.equal(typeof bridge?.conversationCompactor?.save, "function");
@@ -125,6 +126,9 @@ test("Electron preload exposes the memory bridge", async () => {
   await bridge.conversation.updateContactApprovalMode({ id: "contact-suzu", approvalMode: "plan" });
   assert.equal(calls.at(-1).channel, "conversation:update-contact-approval-mode");
   assert.deepEqual(JSON.parse(JSON.stringify(calls.at(-1).args[0])), { id: "contact-suzu", approvalMode: "plan" });
+  await bridge.conversation.updateContactLongTermMemoryEnabled({ id: "contact-suzu", enabled: false });
+  assert.equal(calls.at(-1).channel, "conversation:update-contact-long-term-memory");
+  assert.deepEqual(JSON.parse(JSON.stringify(calls.at(-1).args[0])), { id: "contact-suzu", enabled: false });
   await bridge.conversation.removeContact({ id: "contact-suzu", confirmed: true });
   assert.equal(calls.at(-1).channel, "conversation:remove-contact");
   assert.deepEqual(JSON.parse(JSON.stringify(calls.at(-1).args[0])), { id: "contact-suzu", confirmed: true });

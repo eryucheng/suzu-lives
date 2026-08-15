@@ -35,7 +35,9 @@ test("contacts are normal Claude projects directly below the selected contacts r
   assert.equal(metadata.id, created.activeContact.id);
   assert.equal(metadata.name, "小苏");
   assert.equal(created.activeContact.approvalMode, "acceptEdits");
+  assert.equal(created.activeContact.longTermMemoryEnabled, true);
   assert.equal(Object.hasOwn(metadata, "approvalMode"), false);
+  assert.equal(Object.hasOwn(metadata, "longTermMemoryEnabled"), false);
   assert.ok(Number.isFinite(Date.parse(metadata.createdAt)));
   assert.match(metadata.sessionId, /^[0-9a-f-]{36}$/u);
   assert.equal(created.activeContact.sessionId, metadata.sessionId);
@@ -109,6 +111,32 @@ test("each contact persists its own Claude approval mode without changing its id
 
   await service.updateApprovalMode({ id: contact.id, approvalMode: "acceptEdits" });
   assert.equal(Object.hasOwn(JSON.parse(await fs.readFile(metadataPath, "utf8")), "approvalMode"), false);
+});
+
+test("each contact can independently stop automatic long-term memory without deleting its existing data", async () => {
+  const contactsRoot = await temporaryDirectory("suzu-contact-long-term-memory-");
+  let settings = { contactsRoot, projectRoot: "", preferredContactId: "" };
+  const service = createContactProjectsService({
+    settingsService: { load: () => settings, save: (next) => { settings = next; return settings; } },
+  });
+  const created = await service.create({ name: "小苏" });
+  const contact = created.activeContact;
+  const metadataPath = path.join(contact.projectRoot, ".suzu-lives", "contact.json");
+
+  const disabled = await service.updateLongTermMemoryEnabled({ id: contact.id, enabled: false });
+  assert.equal(disabled.activeContact?.longTermMemoryEnabled, false);
+  assert.equal(JSON.parse(await fs.readFile(metadataPath, "utf8")).longTermMemoryEnabled, false);
+
+  await service.rename({ id: contact.id, name: "新备注" });
+  await service.updatePresentation({ id: contact.id, muted: true });
+  const preserved = JSON.parse(await fs.readFile(metadataPath, "utf8"));
+  assert.equal(preserved.longTermMemoryEnabled, false);
+  assert.equal(preserved.muted, true);
+
+  const enabled = await service.updateLongTermMemoryEnabled({ id: contact.id, enabled: true });
+  assert.equal(enabled.activeContact?.longTermMemoryEnabled, true);
+  assert.equal(Object.hasOwn(JSON.parse(await fs.readFile(metadataPath, "utf8")), "longTermMemoryEnabled"), false);
+  await assert.rejects(service.updateLongTermMemoryEnabled({ id: contact.id, enabled: "yes" }), /长期记忆开关无效/u);
 });
 
 test("contact presentation state is persisted by ID and deletion removes only the confirmed contact-owned data", async () => {

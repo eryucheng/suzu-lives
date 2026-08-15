@@ -169,7 +169,8 @@ export function registerIpcHandlers({ app, appUpdateService = null, dataStorageS
       const projectRoot = clean(contact?.projectRoot);
       if (!projectRoot) continue;
       try {
-        const result = enabled
+        const recallEnabled = enabled && contact?.longTermMemoryEnabled !== false;
+        const result = recallEnabled
           ? await projectHooksService.installMemoryRecall({ projectRoot })
           : await projectHooksService.uninstallMemoryRecall({ projectRoot });
         updated.push({ id: clean(contact?.id), projectRoot, status: result?.status || "updated" });
@@ -236,10 +237,11 @@ export function registerIpcHandlers({ app, appUpdateService = null, dataStorageS
     claudeWorkspaceDirectories,
     initializeContactCapabilities: async (contact) => {
       await capabilitiesService.initializeDefaultContactCapabilities(contact);
-      if (settingsService.load()?.memoryRecallEnabled !== false) {
+      if (settingsService.load()?.memoryRecallEnabled !== false && contact?.longTermMemoryEnabled !== false) {
         await projectHooksService.installMemoryRecall({ projectRoot: contact?.projectRoot });
       }
     },
+    onContactLongTermMemoryEnabledChanged: () => syncMemoryRecallHooks(),
     proactiveContactSettings: () => capabilitiesService.proactiveContactSettings(),
     isProactiveContactEnabled: ({ contactId }) => capabilitiesService.isCompanionContactEnabled({
       abilityId: "proactive-contact", contactId,
