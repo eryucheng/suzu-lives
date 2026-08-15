@@ -28,6 +28,8 @@ git push origin test
 
 私有 `main` 是完整能力的稳定基线，但不承载本机或 test 专用开发规则。
 
+`docs/private/**` 是私有 `test` 专用资料；其中 `docs/private/memory/**` 仅供开发查阅。推进私有 `main` 时，不得挑选、合并或复制这些文件。
+
 ## 4. 整理并同步公开版本
 
 从私有稳定版本整理开源版本后，再同步到公开仓库 `eryucheng/suzu-lives` 的 `main`。不得直接整体公开私有仓库；必须移除不公开的能力、内部配置、私有凭据和 test 专用文件。
