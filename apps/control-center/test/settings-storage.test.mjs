@@ -385,3 +385,30 @@ test("system status IPC delegates only to the read-only status service", async (
   assert.deepEqual(await handlers.get("settings:system-status")(), expected);
   assert.equal(calls, 1);
 });
+
+test("default system status IPC normalizes its configured data root before scanning", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "suzu-system-status-"));
+  const handlers = new Map();
+  try {
+    registerSettingsIpc({
+      app: { relaunch: () => {}, exit: () => {} },
+      contactProjectsService: {},
+      dataStorageService: { dataRoot: ` ${root} ` },
+      dialog: { showOpenDialog: async () => ({ canceled: true }), showMessageBox: async () => ({ response: 1 }) },
+      getMainWindow: () => null,
+      ipcMain: { handle: (name, handler) => handlers.set(name, handler) },
+      shell: { showItemInFolder: () => {}, openPath: () => {} },
+      settingsService: {
+        load: () => ({ contactsRoot: root }),
+        save: (next) => next,
+        response: () => ({ dataRoot: "" }),
+      },
+    });
+
+    const result = await handlers.get("settings:system-status")();
+    const dataSection = result.sections.find((section) => section.id === "data");
+    assert.equal(dataSection.items[0].path, path.resolve(root));
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});

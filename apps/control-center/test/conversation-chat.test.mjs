@@ -68,6 +68,12 @@ test("Claude Code stream arguments create or resume only the selected native ses
     "--session-id", "new-session",
   ]);
   assert.deepEqual(claudeCliArguments({ sessionId: "saved-session", hasTranscript: true }).slice(-2), ["--resume", "saved-session"]);
+  const manual = claudeCliArguments({ sessionId: "manual-session", permissionMode: "default" });
+  const planned = claudeCliArguments({ sessionId: "plan-session", permissionMode: "plan" });
+  const bypassed = claudeCliArguments({ sessionId: "bypass-session", permissionMode: "bypassPermissions" });
+  assert.equal(manual[manual.indexOf("--permission-mode") + 1], "default");
+  assert.equal(planned[planned.indexOf("--permission-mode") + 1], "plan");
+  assert.equal(bypassed[bypassed.indexOf("--permission-mode") + 1], "bypassPermissions");
   assert.deepEqual(claudeAllowedTools({ read: true, webFetch: false, webSearch: true }), ["Read", "WebSearch"]);
   const allowed = claudeCliArguments({ sessionId: "allowed-tools", allowedTools: claudeAllowedToolsForWorkspace({ read: true, webFetch: true, webSearch: false }, { suzuCliCommand: "suzu-lives" }), workspaceDirectories: ["D:/Suzu/workspace"] });
   assert.match(allowed[allowed.indexOf("--allowed-tools") + 1], /^Read,WebFetch,/u);
@@ -146,7 +152,7 @@ test("chat starts the local Claude CLI and forwards its stream", async () => {
       contactIdForSession: async ({ sessionId, projectRoot: sessionProjectRoot }) => (
         sessionId === "session-1" && sessionProjectRoot === projectRoot ? "contact-suzu" : ""
       ),
-      ensureActiveSession: async () => ({ id: "session-1", projectRoot, hasTranscript: false }),
+      ensureActiveSession: async () => ({ id: "session-1", projectRoot, hasTranscript: false, approvalMode: "plan" }),
     },
     homeDirectory,
     suzuCliCommand: '"Suzu Lives Console.exe" --suzu-lives-cli',
@@ -168,7 +174,7 @@ test("chat starts the local Claude CLI and forwards its stream", async () => {
   assert.ok(spawned[0].args.includes("--session-id"));
   assert.match(spawned[0].args[spawned[0].args.indexOf("--allowed-tools") + 1], /^Read,WebFetch,WebSearch,/u);
   assert.ok(spawned[0].args[spawned[0].args.indexOf("--allowed-tools") + 1].includes('Bash("Suzu Lives Console.exe" --suzu-lives-cli *)'));
-  assert.equal(spawned[0].args[spawned[0].args.indexOf("--permission-mode") + 1], "acceptEdits");
+  assert.equal(spawned[0].args[spawned[0].args.indexOf("--permission-mode") + 1], "plan");
   assert.equal(spawned[0].args[spawned[0].args.indexOf("--add-dir") + 1], workspaceDirectory);
   assert.ok(spawned[0].args.includes("--disallowed-tools"));
   assert.equal(spawned[0].args[spawned[0].args.indexOf("--disallowed-tools") + 1], "Agent,TodoWrite,AskUserQuestion");
@@ -739,11 +745,14 @@ test("copied Claude session ids remain isolated by project root", async () => {
   const spawned = [];
   const service = createConversationChatService({
     settingsService: { load: () => ({ projectRoot: projectA }) },
-    reader: { ensureActiveSession: async () => ({ id: "unused", projectRoot: projectA, hasTranscript: false }) },
+    reader: {
+      approvalModeForSession: async ({ projectRoot: requestedProjectRoot }) => requestedProjectRoot === projectA ? "plan" : "bypassPermissions",
+      ensureActiveSession: async () => ({ id: "unused", projectRoot: projectA, hasTranscript: false }),
+    },
     homeDirectory,
-    spawnImpl: (_command, _args, options) => {
+    spawnImpl: (_command, args, options) => {
       const child = new FakeChild();
-      spawned.push({ child, options });
+      spawned.push({ args, child, options });
       return child;
     },
   });
@@ -753,6 +762,8 @@ test("copied Claude session ids remain isolated by project root", async () => {
   assert.equal(spawned.length, 2);
   assert.equal(spawned[0].options.cwd, projectA);
   assert.equal(spawned[1].options.cwd, projectB);
+  assert.equal(spawned[0].args[spawned[0].args.indexOf("--permission-mode") + 1], "plan");
+  assert.equal(spawned[1].args[spawned[1].args.indexOf("--permission-mode") + 1], "bypassPermissions");
 
   const stopped = service.stop({ sessionId: "copied-session", projectRoot: projectA });
   assert.equal(stopped.stopped, true);
@@ -919,8 +930,14 @@ test("tool permission is returned only to the Claude process that requested it",
   await flush();
   assert.equal(events.find((event) => event.type === "permission")?.toolName, "Read");
 
-  const response = service.respondPermission({ requestId: "permission-1", behavior: "allow" });
+  assert.deepEqual(
+    service.respondPermissionForSession({ sessionId: "another-session", projectRoot, behavior: "allow" }),
+    { accepted: false, reason: "no-pending-permission" },
+  );
+  const response = service.respondPermissionForSession({ sessionId: "session-2", projectRoot, behavior: "allow" });
   assert.equal(response.accepted, true);
+  assert.equal(response.toolName, "Read");
+  assert.equal(events.find((event) => event.type === "permission-resolved")?.requestId, "permission-1");
   await flush();
   const messages = child.input.trim().split("\n").map((line) => JSON.parse(line));
   assert.deepEqual(messages[1], {

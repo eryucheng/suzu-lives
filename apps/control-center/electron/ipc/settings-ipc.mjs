@@ -43,6 +43,10 @@ const DEFAULT_SETTINGS = Object.freeze({
 const MAX_AVATAR_DATA_URL_LENGTH = 2_800_000;
 const AVATAR_DATA_URL_PATTERN = /^data:image\/(?:png|jpeg|webp);base64,[a-z0-9+/]+={0,2}$/iu;
 
+function clean(value) {
+  return String(value ?? "").trim();
+}
+
 function normalizeProfile(value, fallbackName) {
   const displayName = String(value?.displayName || fallbackName).trim().slice(0, 60) || fallbackName;
   const avatarDataUrl = String(value?.avatarDataUrl || "");

@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { buildDisplayMessages, JsonlTail, readTranscriptWindow, searchTranscript } from "@suzu-lives/conversation-reader";
+import { DEFAULT_CLAUDE_PERMISSION_MODE, normalizeClaudePermissionMode } from "./claude-permission-mode.mjs";
 
 const MAX_MESSAGES = 500;
 const MAX_RECORDS = 2500;
@@ -132,6 +133,7 @@ function publicContact(contact) {
     muted: contact.muted === true,
     pinned: contact.pinned === true,
     unread: contact.unread === true,
+    approvalMode: normalizeClaudePermissionMode(contact.approvalMode),
     ...(clean(contact.updatedAt) ? { updatedAt: clean(contact.updatedAt) } : {}),
   };
 }
@@ -312,6 +314,7 @@ export function createConversationReader({
       contact?.pinned === true,
       contact?.unread === true,
       contact?.muted === true,
+      normalizeClaudePermissionMode(contact?.approvalMode),
     ]));
     if (!currentCatalog.projectRoot) {
       return {
@@ -570,6 +573,7 @@ export function createConversationReader({
       id: session.id,
       projectRoot: currentCatalog.projectRoot,
       hasTranscript: Boolean(session.filePath),
+      approvalMode: normalizeClaudePermissionMode(currentCatalog.activeContact?.approvalMode),
     };
   };
 
@@ -596,6 +600,7 @@ export function createConversationReader({
       id: sessionId,
       projectRoot: location.projectRoot,
       hasTranscript: Boolean(session?.filePath),
+      approvalMode: normalizeClaudePermissionMode(contact.approvalMode),
     };
   };
 
@@ -613,6 +618,21 @@ export function createConversationReader({
       )) || null
       : null;
     return clean(contact?.id);
+  };
+
+  const approvalModeForSession = async ({ sessionId, projectRoot } = {}) => {
+    if (!contactProjectsService?.snapshot) return DEFAULT_CLAUDE_PERMISSION_MODE;
+    const nativeSessionId = clean(sessionId);
+    const scope = projectScopeKey(projectRoot);
+    if (!isSessionId(nativeSessionId) || !scope) return DEFAULT_CLAUDE_PERMISSION_MODE;
+    const contacts = await contactProjectsService.snapshot();
+    const contact = Array.isArray(contacts?.contacts)
+      ? contacts.contacts.find((item) => (
+        clean(item?.sessionId) === nativeSessionId
+        && projectScopeKey(item?.projectRoot) === scope
+      )) || null
+      : null;
+    return normalizeClaudePermissionMode(contact?.approvalMode);
   };
 
   const search = async (query) => {
@@ -651,5 +671,11 @@ export function createConversationReader({
     };
   };
 
-  return { compactorSnapshot, contactIdForSession, context, create, createContact, ensureActiveSession, focus, removeContact, renameContact, resolveCompactorSession, resolveCompactorSessionForRuntime, resolveContactSession, search, selectContact, setPreferredContact, snapshot, updateContactPresentation };
+  const updateContactApprovalMode = async (value = {}) => {
+    if (!contactProjectsService?.updateApprovalMode) throw new ConversationReaderError("当前版本未接入联系人审批模式服务。 ");
+    await contactProjectsService.updateApprovalMode(value);
+    return snapshot();
+  };
+
+  return { approvalModeForSession, compactorSnapshot, contactIdForSession, context, create, createContact, ensureActiveSession, focus, removeContact, renameContact, resolveCompactorSession, resolveCompactorSessionForRuntime, resolveContactSession, search, selectContact, setPreferredContact, snapshot, updateContactApprovalMode, updateContactPresentation };
 }

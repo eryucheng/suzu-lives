@@ -34,6 +34,8 @@ test("contacts are normal Claude projects directly below the selected contacts r
   assert.equal(metadata.version, 1);
   assert.equal(metadata.id, created.activeContact.id);
   assert.equal(metadata.name, "小苏");
+  assert.equal(created.activeContact.approvalMode, "acceptEdits");
+  assert.equal(Object.hasOwn(metadata, "approvalMode"), false);
   assert.ok(Number.isFinite(Date.parse(metadata.createdAt)));
   assert.match(metadata.sessionId, /^[0-9a-f-]{36}$/u);
   assert.equal(created.activeContact.sessionId, metadata.sessionId);
@@ -79,6 +81,34 @@ test("renaming a contact only updates its contact metadata while preserving stab
 
   await assert.rejects(service.rename({ id: original.id, name: " " }), /填写联系人备注/u);
   assert.equal(JSON.parse(await fs.readFile(metadataPath, "utf8")).name, "新备注");
+});
+
+test("each contact persists its own Claude approval mode without changing its identity or presentation", async () => {
+  const contactsRoot = await temporaryDirectory("suzu-contact-approval-mode-");
+  let settings = { contactsRoot, projectRoot: "", preferredContactId: "" };
+  const service = createContactProjectsService({
+    settingsService: { load: () => settings, save: (next) => { settings = next; return settings; } },
+  });
+  const created = await service.create({ name: "小苏" });
+  const contact = created.activeContact;
+  const metadataPath = path.join(contact.projectRoot, ".suzu-lives", "contact.json");
+
+  const planned = await service.updateApprovalMode({ id: contact.id, approvalMode: "plan" });
+  assert.equal(planned.activeContact?.approvalMode, "plan");
+  assert.equal(JSON.parse(await fs.readFile(metadataPath, "utf8")).approvalMode, "plan");
+
+  await service.rename({ id: contact.id, name: "新备注" });
+  await service.updatePresentation({ id: contact.id, pinned: true });
+  const preserved = JSON.parse(await fs.readFile(metadataPath, "utf8"));
+  assert.equal(preserved.approvalMode, "plan");
+  assert.equal(preserved.pinned, true);
+
+  const bypassed = await service.updateApprovalMode({ id: contact.id, approvalMode: "bypassPermissions" });
+  assert.equal(bypassed.activeContact?.approvalMode, "bypassPermissions");
+  await assert.rejects(service.updateApprovalMode({ id: contact.id, approvalMode: "everything" }), /审批模式无效/u);
+
+  await service.updateApprovalMode({ id: contact.id, approvalMode: "acceptEdits" });
+  assert.equal(Object.hasOwn(JSON.parse(await fs.readFile(metadataPath, "utf8")), "approvalMode"), false);
 });
 
 test("contact presentation state is persisted by ID and deletion removes only the confirmed contact-owned data", async () => {

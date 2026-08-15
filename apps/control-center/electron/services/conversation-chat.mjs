@@ -5,6 +5,8 @@ import os from "node:os";
 import path from "node:path";
 import readline from "node:readline";
 
+import { DEFAULT_CLAUDE_PERMISSION_MODE, normalizeClaudePermissionMode } from "./claude-permission-mode.mjs";
+
 const MAX_MESSAGE_LENGTH = 20_000;
 const MAX_EVENT_TEXT_LENGTH = 200_000;
 const MAX_PERMISSION_PREVIEW_LENGTH = 4_000;
@@ -464,7 +466,7 @@ function isNoReply(value) {
 }
 
 /** The flags are deliberately limited to Claude Code's public stream protocol. */
-export function claudeCliArguments({ sessionId, hasTranscript = false, appendSystemPrompt = "", claudeRuntimeFeatures, claudeToolPermissions, allowedTools = [], workspaceDirectories = [] } = {}) {
+export function claudeCliArguments({ sessionId, hasTranscript = false, appendSystemPrompt = "", claudeRuntimeFeatures, claudeToolPermissions, allowedTools = [], workspaceDirectories = [], permissionMode = DEFAULT_CLAUDE_PERMISSION_MODE } = {}) {
   const id = clean(sessionId);
   if (!id) throw new ConversationChatError("缺少 Claude 会话标识。");
   const extraPrompt = clean(appendSystemPrompt);
@@ -472,6 +474,7 @@ export function claudeCliArguments({ sessionId, hasTranscript = false, appendSys
   const toolPermissions = claudeToolPermissions && typeof claudeToolPermissions === "object" && !Array.isArray(claudeToolPermissions)
     ? claudeToolPermissions
     : {};
+  const selectedPermissionMode = normalizeClaudePermissionMode(permissionMode);
   const disallowedTools = [
     toolPermissions.read === false && "Read",
     !features.glob && "Glob",
@@ -495,7 +498,7 @@ export function claudeCliArguments({ sessionId, hasTranscript = false, appendSys
     "--include-partial-messages",
     "--permission-prompt-tool", "stdio",
     "--replay-user-messages",
-    "--permission-mode", "acceptEdits",
+    "--permission-mode", selectedPermissionMode,
     ...sharedDirectories.flatMap((directory) => ["--add-dir", directory]),
     ...(permittedTools.length ? ["--allowed-tools", permittedTools.join(",")] : []),
     ...(disallowedTools.length ? ["--disallowed-tools", disallowedTools.join(",")] : []),
@@ -904,6 +907,7 @@ export function createConversationChatService({
         requestId,
         turn,
         input: request.input && typeof request.input === "object" ? request.input : {},
+        toolName: clean(request.tool_name) || "Claude Code 工具",
       };
       turn.permissionIds.add(requestId);
       permissionRequests.set(requestId, permission);
@@ -913,7 +917,7 @@ export function createConversationChatService({
         sessionId: turn.sessionId,
         projectRoot: turn.projectRoot,
         kind: turn.kind,
-        toolName: clean(request.tool_name) || "Claude Code 工具",
+        toolName: permission.toolName,
         preview: permissionPreview(permission.input),
         timestamp: new Date().toISOString(),
       });
@@ -1079,6 +1083,7 @@ export function createConversationChatService({
       claudeRuntimeFeatures,
       claudeToolPermissions: currentSettings.claudeToolPermissions,
       allowedTools: claudeAllowedToolsForWorkspace(currentSettings.claudeToolPermissions, { suzuCliCommand }),
+      permissionMode: request.approvalMode,
       workspaceDirectories: claudeWorkspaceDirectories,
       appendSystemPrompt: [
         wechatAttachmentSystemPrompt(attachmentCommand),
@@ -1210,12 +1215,29 @@ export function createConversationChatService({
     }
   };
 
+  const permissionModeForSession = async ({ sessionId, projectRoot } = {}) => {
+    if (typeof reader?.approvalModeForSession !== "function") return DEFAULT_CLAUDE_PERMISSION_MODE;
+    try {
+      return normalizeClaudePermissionMode(await reader.approvalModeForSession({ sessionId, projectRoot }));
+    } catch {
+      return DEFAULT_CLAUDE_PERMISSION_MODE;
+    }
+  };
+
   const resolveSession = async ({ sessionId, projectRoot, hasTranscript } = {}) => {
     const id = clean(sessionId);
     const root = clean(projectRoot);
-    if (!id && !root) return reader.ensureActiveSession();
+    if (!id && !root) {
+      const session = await reader.ensureActiveSession();
+      return { ...session, approvalMode: normalizeClaudePermissionMode(session?.approvalMode) };
+    }
     if (!id || !root) throw new ConversationChatError("指定 Claude 会话时必须同时提供会话标识和工作目录。");
-    return { id, projectRoot: root, hasTranscript: hasTranscript === true };
+    return {
+      id,
+      projectRoot: root,
+      hasTranscript: hasTranscript === true,
+      approvalMode: await permissionModeForSession({ sessionId: id, projectRoot: root }),
+    };
   };
 
   const enqueue = async ({ content, contactId = "", kind = "message", callDirection = "", media: suppliedMedia = [], mediaSource = "wechat", requestId: suppliedRequestId = "", session: requestedSession = null } = {}) => {
@@ -1252,6 +1274,7 @@ export function createConversationChatService({
       contactId: resolvedContactId,
       hasTranscript: Boolean(session.hasTranscript) || knownTranscripts.has(turnKey(session.id, session.projectRoot)),
       kind,
+      approvalMode: session.approvalMode,
       key: turnKey(session.id, session.projectRoot),
       memoryOccurredAt: new Date().toISOString(),
       memoryText: kind === "call"
@@ -1380,7 +1403,9 @@ export function createConversationChatService({
     const id = clean(requestId);
     const permission = permissionRequests.get(id);
     if (!permission || permission.turn.finished) throw new ConversationChatError("这条 Claude Code 权限请求已经失效。");
+    if (!["allow", "deny"].includes(behavior)) throw new ConversationChatError("权限选择无效。");
     const allow = behavior === "allow";
+    const toolName = clean(permission?.toolName) || "Claude Code 工具";
     writeJson(permission.turn.child, {
       type: "control_response",
       response: {
@@ -1393,7 +1418,27 @@ export function createConversationChatService({
     });
     permissionRequests.delete(id);
     permission.turn.permissionIds.delete(id);
-    return { accepted: true, requestId: id, behavior: allow ? "allow" : "deny" };
+    const result = { accepted: true, requestId: id, behavior: allow ? "allow" : "deny", toolName };
+    emit({
+      type: "permission-resolved",
+      requestId: id,
+      sessionId: permission.turn.sessionId,
+      projectRoot: permission.turn.projectRoot,
+      behavior: result.behavior,
+      toolName,
+      timestamp: new Date().toISOString(),
+    });
+    return result;
+  };
+
+  const respondPermissionForSession = ({ sessionId, projectRoot, behavior } = {}) => {
+    const key = turnKey(sessionId, projectRoot);
+    const pending = [...permissionRequests.values()].filter((permission) => (
+      permission.turn.key === key && !permission.turn.finished
+    ));
+    if (!pending.length) return { accepted: false, reason: "no-pending-permission" };
+    if (pending.length > 1) return { accepted: false, reason: "multiple-pending-permissions" };
+    return respondPermission({ requestId: pending[0].requestId, behavior });
   };
 
   const dispose = () => {
@@ -1419,6 +1464,7 @@ export function createConversationChatService({
   return {
     dispose,
     respondPermission,
+    respondPermissionForSession,
     send,
     sendToSession,
     setEventSink: (callback) => { eventSink = typeof callback === "function" ? callback : () => {}; },

@@ -64,6 +64,7 @@ const viewState = {
 const TRANSCRIPT_MATCH_GRACE_MS = 5_000;
 
 const defaults = { attachments: false, tools: false, thinking: false, system: false, tokens: false, timeDisplay: "center" };
+const CLAUDE_APPROVAL_MODES = new Set(["default", "acceptEdits", "plan", "bypassPermissions"]);
 const CENTER_TIME_GAP_MS = 5 * 60 * 1_000;
 
 function preferences(settings) {
@@ -156,6 +157,11 @@ function timeOfDay(date) {
 
 function timeDisplay(prefs) {
   return prefs?.timeDisplay === "bubble" ? "bubble" : "center";
+}
+
+function approvalMode(value) {
+  const mode = clean(value);
+  return CLAUDE_APPROVAL_MODES.has(mode) ? mode : "acceptEdits";
 }
 
 export function shouldShowCenteredTimeDivider(previousTimestamp, timestamp) {
@@ -665,6 +671,7 @@ function sessionSettingsSnapshot(context, selected, prefs) {
       system: "显示系统消息",
       tokens: "显示 Token 用量",
     }).map(([key, label]) => ({ checked: Boolean(prefs[key]), key, label })),
+    approvalMode: approvalMode(contact?.approvalMode),
     removeContactAvatar: Boolean(agent.avatarDataUrl),
     sessionId,
     timeDisplay: timeDisplay(prefs),
@@ -977,6 +984,11 @@ function handleConversationEvent(context, event) {
       toolName: clean(event.toolName),
       preview: String(event.preview || ""),
     });
+    context.render();
+    return;
+  }
+  if (event?.type === "permission-resolved" && requestId) {
+    viewState.permissions.delete(requestId);
     context.render();
     return;
   }
@@ -1668,6 +1680,23 @@ export function createConversationReactActions(context) {
       void runConversationSearchForQuery(context, next, viewState.searchQuery);
     },
     setAvatarCropZoom: zoomConversationAvatarCrop,
+    setApprovalMode: async (value) => {
+      const contactId = clean(viewState.snapshot?.activeContact?.id);
+      const mode = approvalMode(value);
+      if (!contactId || viewState.sending || !context.api.conversation.updateContactApprovalMode) return;
+      viewState.sending = true;
+      context.render();
+      try {
+        viewState.snapshot = await context.api.conversation.updateContactApprovalMode({ id: contactId, approvalMode: mode });
+        viewState.lastVersion = viewState.snapshot.version;
+        viewState.error = "";
+      } catch (error) {
+        viewState.error = `无法更新联系人审批模式：${error?.message || error}`;
+      } finally {
+        viewState.sending = false;
+        context.render();
+      }
+    },
     setDisplayPreference: async (key, checked) => {
       const preference = clean(key);
       if (!Object.hasOwn(defaults, preference)) return;

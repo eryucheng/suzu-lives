@@ -5,6 +5,7 @@ import path from "node:path";
 
 import { normalizeAgentId, resolveAgentDataRoot } from "@suzu-lives/agent-registry";
 import { claudeProjectDirectoryCandidates } from "./conversation-reader.mjs";
+import { DEFAULT_CLAUDE_PERMISSION_MODE, isClaudePermissionMode, normalizeClaudePermissionMode } from "./claude-permission-mode.mjs";
 
 const CONTACT_FILE = "CLAUDE.md";
 const CONTACT_METADATA_DIRECTORY = ".suzu-lives";
@@ -136,6 +137,7 @@ async function contactMetadata(fsOps, projectRoot) {
       muted: raw.muted === true,
       pinned: raw.pinned === true,
       unread: raw.unread === true,
+      approvalMode: normalizeClaudePermissionMode(raw.approvalMode),
     };
   } catch {
     return null;
@@ -169,6 +171,7 @@ async function contactAt(fsOps, root, value) {
     hidden: metadata.hidden,
     muted: metadata.muted,
     pinned: metadata.pinned,
+    approvalMode: metadata.approvalMode,
     sessionId: metadata.sessionId,
     unread: metadata.unread,
     updatedAt: stat.mtime instanceof Date ? stat.mtime.toISOString() : "",
@@ -213,9 +216,10 @@ function updatedOwnerProfileTitle(content, { previousName, name } = {}) {
   return `${bom}${nextTitle}${body.slice(previousTitle.length)}`;
 }
 
-function contactMetadataText({ id, name, createdAt, sessionId = "", agentId, hidden = false, muted = false, pinned = false, unread = false } = {}) {
+function contactMetadataText({ id, name, createdAt, sessionId = "", agentId, hidden = false, muted = false, pinned = false, unread = false, approvalMode = DEFAULT_CLAUDE_PERMISSION_MODE } = {}) {
   const storageIdentity = normalizeAgentId(agentId);
   if (!storageIdentity) throw new ContactProjectsError("联系人固定存储身份无效。 ");
+  const normalizedApprovalMode = normalizeClaudePermissionMode(approvalMode);
   return `${JSON.stringify({
     version: 1,
     id,
@@ -227,6 +231,7 @@ function contactMetadataText({ id, name, createdAt, sessionId = "", agentId, hid
     ...(pinned === true ? { pinned: true } : {}),
     ...(unread === true ? { unread: true } : {}),
     ...(muted === true ? { muted: true } : {}),
+    ...(normalizedApprovalMode !== DEFAULT_CLAUDE_PERMISSION_MODE ? { approvalMode: normalizedApprovalMode } : {}),
   }, null, 2)}\n`;
 }
 
@@ -441,6 +446,7 @@ export function createContactProjectsService({
         muted: contact.muted,
         pinned: contact.pinned,
         unread: contact.unread,
+        approvalMode: contact.approvalMode,
       }));
     } catch (error) {
       throw new ContactProjectsError(`无法更新联系人备注：${clean(error?.message) || "未知错误"}`);
@@ -477,9 +483,36 @@ export function createContactProjectsService({
         sessionId: contact.sessionId,
         agentId: contact.agentId,
         ...next,
+        approvalMode: contact.approvalMode,
       }));
     } catch (error) {
       throw new ContactProjectsError(`无法更新联系人显示状态：${clean(error?.message) || "未知错误"}`);
+    }
+    return snapshot();
+  };
+
+  const updateApprovalMode = async ({ id, approvalMode } = {}) => {
+    if (!isClaudePermissionMode(approvalMode)) throw new ContactProjectsError("联系人审批模式无效。 ");
+    const root = await contactsRoot();
+    const contact = await contactAt(fsOps, root, id);
+    if (!contact) throw new ContactProjectsError("所选联系人不存在或不是由 Suzu 创建的 Claude 项目。 ");
+    const nextApprovalMode = normalizeClaudePermissionMode(approvalMode);
+    if (nextApprovalMode === contact.approvalMode) return snapshot();
+    try {
+      await writeTextAtomic(fsOps, path.join(contact.projectRoot, CONTACT_METADATA_DIRECTORY, CONTACT_METADATA_FILE), contactMetadataText({
+        id: contact.id,
+        name: contact.name,
+        createdAt: contact.createdAt,
+        sessionId: contact.sessionId,
+        agentId: contact.agentId,
+        hidden: contact.hidden,
+        muted: contact.muted,
+        pinned: contact.pinned,
+        unread: contact.unread,
+        approvalMode: nextApprovalMode,
+      }));
+    } catch (error) {
+      throw new ContactProjectsError(`无法更新联系人审批模式：${clean(error?.message) || "未知错误"}`);
     }
     return snapshot();
   };
@@ -574,5 +607,5 @@ export function createContactProjectsService({
     };
   };
 
-  return { create, remove, rename, select, selectRoot, setPreferred, snapshot, syncClaudeProjectSettings, syncOwnerProfileTitle, updatePresentation };
+  return { create, remove, rename, select, selectRoot, setPreferred, snapshot, syncClaudeProjectSettings, syncOwnerProfileTitle, updateApprovalMode, updatePresentation };
 }

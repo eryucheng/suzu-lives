@@ -365,7 +365,7 @@ function isClaudeResumeMetaRecord(record) {
     && hasExactTextContent(message.content, CLAUDE_RESUME_META_TEXT);
 }
 
-function isClaudeSyntheticNoResponseRecord(record) {
+export function isClaudeSyntheticNoResponseRecord(record) {
   const message = record?.message || {};
   const parentUuid = clean(record?.parentUuid || message?.parentUuid);
   const model = clean(message?.model || record?.model);

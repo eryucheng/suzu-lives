@@ -231,7 +231,13 @@ test("reader resolves a contact's single scheduled conversation without changing
   });
 
   const resolved = await reader.resolveContactSession(first.activeContact.id);
-  assert.deepEqual(resolved, { contactId: first.activeContact.id, id: sessionId, projectRoot: firstProjectRoot, hasTranscript: true });
+  assert.deepEqual(resolved, {
+    approvalMode: "acceptEdits",
+    contactId: first.activeContact.id,
+    id: sessionId,
+    projectRoot: firstProjectRoot,
+    hasTranscript: true,
+  });
   assert.equal(settings.projectRoot, second.activeContact.projectRoot);
 
   const fresh = await reader.resolveContactSession(second.activeContact.id);

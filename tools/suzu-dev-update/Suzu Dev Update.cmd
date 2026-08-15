@@ -2,7 +2,7 @@
 setlocal EnableExtensions
 
 if not exist "%~dp0suzu-dev-update.ps1" (
-  echo 缺少 suzu-dev-update.ps1。请保留整个 suzu-dev-update 文件夹后再运行。
+  echo Missing suzu-dev-update.ps1. Keep both files in the same folder.
   echo.
   pause
   exit /b 1

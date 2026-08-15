@@ -80,6 +80,52 @@ test("scans DeepSeek transcript usage and groups one conversation", async () => 
   assert.ok(Math.abs(result.summary.all.amountCny - 9.025) < 0.000001);
 });
 
+test("ignores Claude synthetic no-response records in transcript cost rows", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "suzu-console-synthetic-"));
+  const projectRoot = path.join(root, "contact-project");
+  const homeDirectory = path.join(root, "home");
+  writeClaudeSession({ projectRoot, homeDirectory, records: [
+    {
+      type: "user",
+      uuid: "u1",
+      timestamp: "2026-08-15T12:00:00.000Z",
+      message: { role: "user", content: "这条真实回复要保留" },
+    },
+    {
+      type: "assistant",
+      uuid: "synthetic-no-response",
+      parentUuid: "resume-meta",
+      timestamp: "2026-08-15T12:00:01.000Z",
+      message: {
+        role: "assistant",
+        model: "<synthetic>",
+        content: [{ type: "text", text: "No response requested." }],
+        usage: {},
+      },
+    },
+    {
+      type: "assistant",
+      uuid: "a1",
+      timestamp: "2026-08-15T12:00:02.000Z",
+      message: {
+        role: "assistant",
+        id: "msg-1",
+        model: "deepseek-v4-pro",
+        content: [{ type: "text", text: "真实回复" }],
+        usage: { input_tokens: 10, output_tokens: 5 },
+      },
+    },
+  ] });
+
+  const result = await scanCostLedger({}, {
+    contactScopes: [contactScope({ projectRoot })],
+    homeDirectory,
+  });
+  assert.equal(result.events.length, 1);
+  assert.equal(result.events[0].model, "deepseek-v4-pro");
+  assert.equal(result.summary.all.requestCount, 1);
+});
+
 test("applies a software price revision from its effective time", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "suzu-console-price-"));
   const projectRoot = path.join(root, "contact-project");
