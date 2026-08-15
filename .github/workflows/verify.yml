@@ -39,17 +39,6 @@ jobs:
           cache: npm
           cache-dependency-path: package-lock.json
 
-      - name: Configure private design-system access
-        shell: pwsh
-        env:
-          DESIGN_SYSTEM_READ_TOKEN: ${{ secrets.SUZU_DESIGN_SYSTEM_READ_TOKEN }}
-        run: |
-          if ([string]::IsNullOrWhiteSpace($env:DESIGN_SYSTEM_READ_TOKEN)) {
-            throw "Missing SUZU_DESIGN_SYSTEM_READ_TOKEN. Add a read-only token for eryucheng/design-system before running this workflow."
-          }
-          $repositoryUrl = "https://x-access-token:$env:DESIGN_SYSTEM_READ_TOKEN@github.com/eryucheng/design-system.git"
-          git config --global "url.$repositoryUrl.insteadOf" "ssh://git@github.com/eryucheng/design-system.git"
-
       - name: Install locked dependencies
         run: npm ci
 
