@@ -10,6 +10,7 @@ import {
   readUsageEvents,
   resolveCatalogModel,
 } from "@suzu-lives/cost-ledger";
+import { isClaudeSyntheticNoResponseRecord } from "@suzu-lives/conversation-reader";
 
 import { locateClaudeProjectDirectory } from "./conversation-reader.mjs";
 
@@ -211,6 +212,7 @@ async function scanTranscript(transcriptPath, customRevisions, contact) {
         timestamp: clean(record.timestamp),
       };
     }
+    if (isClaudeSyntheticNoResponseRecord(record)) continue;
     const usage = record?.message?.usage;
     if (record?.type !== "assistant" || !usage) continue;
     const identity = clean(record.uuid || record.message?.id);

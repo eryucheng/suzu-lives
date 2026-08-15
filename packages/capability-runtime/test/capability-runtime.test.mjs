@@ -48,31 +48,31 @@ test("software-issued credential is short-lived, opaque to its raw scope, and ac
 
 test("credential verification rejects forged, expired, replayed, and intent-mismatched invocations", () => {
   const root = temporaryDirectory("suzu-capability-auth-reject-");
-  const scope = { resourceId: "fixture", action: "run", optionsDigest: "fixture" };
-  const issued = issueCapabilityAuthorization({ dataRoot: root, abilityId: "fixture-capability", action: "fixture:run", scope, ttlMs: 10, now: () => 100 });
+  const scope = { cameraIndex: 2, operation: "capture", optionsDigest: "fixture" };
+  const issued = issueCapabilityAuthorization({ dataRoot: root, abilityId: "computer-camera", action: "capture", scope, ttlMs: 10, now: () => 100 });
   const forged = issued.credential.replace(/.$/u, (last) => last === "A" ? "B" : "A");
   assert.throws(
-    () => consumeCapabilityAuthorization({ dataRoot: root, credential: forged, abilityId: "fixture-capability", action: "fixture:run", scope, now: () => 101 }),
+    () => consumeCapabilityAuthorization({ dataRoot: root, credential: forged, abilityId: "computer-camera", action: "capture", scope, now: () => 101 }),
     (error) => error instanceof CapabilityExecutionError && error.code === "AUTHORIZATION_FORGED",
   );
   assert.throws(
-    () => consumeCapabilityAuthorization({ dataRoot: root, credential: issued.credential, abilityId: "fixture-capability", action: "fixture:observe", scope, now: () => 101 }),
+    () => consumeCapabilityAuthorization({ dataRoot: root, credential: issued.credential, abilityId: "computer-camera", action: "observe", scope, now: () => 101 }),
     (error) => error instanceof CapabilityExecutionError && error.code === "AUTHORIZATION_MISMATCH",
   );
   assert.throws(
-    () => consumeCapabilityAuthorization({ dataRoot: root, credential: issued.credential, abilityId: "web-browser", action: "site:status", scope, now: () => 101 }),
+    () => consumeCapabilityAuthorization({ dataRoot: root, credential: issued.credential, abilityId: "image-generation", action: "capture", scope, now: () => 101 }),
     (error) => error instanceof CapabilityExecutionError && error.code === "AUTHORIZATION_MISMATCH",
   );
   assert.throws(
-    () => consumeCapabilityAuthorization({ dataRoot: root, credential: issued.credential, abilityId: "fixture-capability", action: "fixture:run", scope: { ...scope, optionsDigest: "different" }, now: () => 101 }),
+    () => consumeCapabilityAuthorization({ dataRoot: root, credential: issued.credential, abilityId: "computer-camera", action: "capture", scope: { ...scope, optionsDigest: "different" }, now: () => 101 }),
     (error) => error instanceof CapabilityExecutionError && error.code === "AUTHORIZATION_MISMATCH",
   );
   assert.throws(
-    () => consumeCapabilityAuthorization({ dataRoot: root, credential: issued.credential, abilityId: "fixture-capability", action: "fixture:run", scope, now: () => 110 }),
+    () => consumeCapabilityAuthorization({ dataRoot: root, credential: issued.credential, abilityId: "computer-camera", action: "capture", scope, now: () => 110 }),
     (error) => error instanceof CapabilityExecutionError && error.code === "AUTHORIZATION_EXPIRED",
   );
   assert.throws(
-    () => assertVerifiedCapabilityAuthorization({ authorization: { abilityId: "fixture-capability" }, abilityId: "fixture-capability", action: "fixture:run", scope }),
+    () => assertVerifiedCapabilityAuthorization({ authorization: { abilityId: "computer-camera" }, abilityId: "computer-camera", action: "capture", scope }),
     (error) => error instanceof CapabilityExecutionError && error.code === "AUTHORIZATION_CREDENTIAL_REQUIRED",
   );
 });

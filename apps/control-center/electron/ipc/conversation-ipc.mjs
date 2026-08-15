@@ -11,15 +11,29 @@ function plainObject(value) {
   return value && typeof value === "object" && !Array.isArray(value) ? value : {};
 }
 
-function contactSettingsValue(value, { includeNote = false } = {}) {
+function contactSettingsValue(value) {
   const source = plainObject(value);
   if (Object.hasOwn(source, "sessionId") || Object.hasOwn(source, "projectRoot")) {
     throw new Error("联系人设置只接受 contactId。 ");
   }
-  return {
-    contactId: clean(source.contactId),
-    ...(includeNote ? { note: source.note } : {}),
-  };
+  return { contactId: clean(source.contactId) };
+}
+
+function contactApprovalModeValue(value) {
+  const source = plainObject(value);
+  if (Object.hasOwn(source, "sessionId") || Object.hasOwn(source, "projectRoot")) {
+    throw new Error("联系人审批模式只接受 contactId。 ");
+  }
+  return { id: clean(source.id), approvalMode: clean(source.approvalMode) };
+}
+
+function contactLongTermMemoryValue(value) {
+  const source = plainObject(value);
+  if (Object.hasOwn(source, "sessionId") || Object.hasOwn(source, "projectRoot")) {
+    throw new Error("联系人长期记忆设置只接受 contactId。 ");
+  }
+  if (typeof source.enabled !== "boolean") throw new Error("联系人长期记忆开关无效。 ");
+  return { id: clean(source.id), enabled: source.enabled };
 }
 
 function contactPresentationValue(value) {
@@ -28,10 +42,20 @@ function contactPresentationValue(value) {
     throw new Error("联系人显示状态只接受 contactId。 ");
   }
   const result = { id: clean(source.id) };
-  for (const key of ["pinned", "unread", "muted", "hidden"]) {
+  if (Object.hasOwn(source, "unread")) throw new Error("联系人未读状态请使用 unreadCount。 ");
+  for (const key of ["pinned", "muted", "hidden"]) {
     if (!Object.hasOwn(source, key)) continue;
     if (typeof source[key] !== "boolean") throw new Error("联系人显示状态无效。 ");
     result[key] = source[key];
+  }
+  for (const key of ["unreadCount", "unreadIncrement"]) {
+    if (!Object.hasOwn(source, key)) continue;
+    const minimum = key === "unreadIncrement" ? 1 : 0;
+    if (!Number.isSafeInteger(source[key]) || source[key] < minimum) throw new Error("联系人未读数无效。 ");
+    result[key] = source[key];
+  }
+  if (Object.hasOwn(result, "unreadCount") && Object.hasOwn(result, "unreadIncrement")) {
+    throw new Error("联系人未读状态不能同时指定多个值。 ");
   }
   if (!result.id || Object.keys(result).length === 1) throw new Error("请指定联系人及其显示状态。 ");
   return result;
@@ -66,6 +90,7 @@ export function registerConversationIpc({
   wechatAttachmentCli = "",
   claudeWorkspaceDirectories = [],
   initializeContactCapabilities = null,
+  onContactLongTermMemoryEnabledChanged = null,
   proactiveContactSettings = () => ({}),
   isProactiveContactEnabled = () => false,
 }) {
@@ -138,14 +163,6 @@ export function registerConversationIpc({
   });
   ipcMain.handle("conversation:search", (_event, query) => reader.search(query));
   ipcMain.handle("conversation:focus", (_event, value) => reader.focus(value));
-  ipcMain.handle("conversation:session-settings-snapshot", async (event, value) => {
-    sender = event.sender;
-    return sessionSettings.snapshot(contactSettingsValue(value));
-  });
-  ipcMain.handle("conversation:save-session-settings", async (event, value) => {
-    sender = event.sender;
-    return sessionSettings.save(contactSettingsValue(value, { includeNote: true }));
-  });
   ipcMain.handle("conversation:open-media-directory", async (event, value) => {
     sender = event.sender;
     if (typeof shell?.openPath !== "function") throw new Error("当前环境无法打开本地文件夹。 ");
@@ -177,6 +194,22 @@ export function registerConversationIpc({
   ipcMain.handle("conversation:update-contact-presentation", async (event, value) => {
     sender = event.sender;
     return reader.updateContactPresentation(contactPresentationValue(value));
+  });
+  ipcMain.handle("conversation:update-contact-approval-mode", async (event, value) => {
+    sender = event.sender;
+    return reader.updateContactApprovalMode(contactApprovalModeValue(value));
+  });
+  ipcMain.handle("conversation:update-contact-long-term-memory", async (event, value) => {
+    sender = event.sender;
+    const next = contactLongTermMemoryValue(value);
+    const snapshot = await reader.updateContactLongTermMemoryEnabled(next);
+    try {
+      await onContactLongTermMemoryEnabledChanged?.(next);
+    } catch {
+      // The stored preference and runtime gate are already active even if the
+      // optional project Hook sync cannot finish right now.
+    }
+    return snapshot;
   });
   ipcMain.handle("conversation:remove-contact", async (event, value) => {
     sender = event.sender;

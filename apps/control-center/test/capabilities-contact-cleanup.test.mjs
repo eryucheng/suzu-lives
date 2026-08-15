@@ -81,3 +81,33 @@ test("voice-call registration is added for existing and newly created contacts",
   const newSkill = await fs.readFile(path.join(newProject, ".claude", "skills", "voice-call", "SKILL.md"), "utf8");
   assert.match(newSkill, /capability voice-call request/u);
 });
+
+test("registration refresh replaces the old time Hook for enabled contacts", async () => {
+  const root = await temporaryDirectory("suzu-capability-time-hook-refresh-");
+  const dataRoot = path.join(root, "software-data");
+  const contactProject = path.join(root, "time-contact");
+  const contactId = "contact-time";
+  await Promise.all([fs.mkdir(dataRoot, { recursive: true }), fs.mkdir(contactProject)]);
+  await writeConfig(dataRoot, ["capabilities", "time-awareness", "config.json"], {
+    enabledContactIds: [contactId],
+  });
+  const installedProjects = [];
+  const service = createCapabilitiesService({
+    contactProjectsService: {
+      snapshot: async () => ({ contacts: [{ id: contactId, projectRoot: contactProject }] }),
+    },
+    launcherCommand: "suzu-lives",
+    projectHooksService: {
+      installTimeAwareness: async ({ projectRoot }) => { installedProjects.push(projectRoot); },
+      uninstallTimeAwareness: async () => undefined,
+    },
+    settingsService: {
+      load: () => ({ dataRoot, projectRoot: contactProject }),
+      response: () => ({ dataRoot }),
+    },
+  });
+
+  const refreshed = await service.refreshManagedRegistrations();
+  assert.equal(refreshed.errors.length, 0);
+  assert.deepEqual(installedProjects, [contactProject]);
+});

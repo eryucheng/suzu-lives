@@ -34,7 +34,20 @@ function runValue(value) {
   };
 }
 
-export function registerConversationCompactorIpc({ ipcMain, compactorService } = {}) {
+function importValue(value) {
+  const source = plainObject(value);
+  return {
+    ...contactScope(source),
+    sourcePath: clean(source.sourcePath),
+  };
+}
+
+export function registerConversationCompactorIpc({
+  ipcMain,
+  compactorService,
+  dialog,
+  getMainWindow = () => null,
+} = {}) {
   if (!ipcMain?.handle || !compactorService) {
     throw new Error("记忆压缩器 IPC 需要 ipcMain 和压缩服务。 ");
   }
@@ -42,4 +55,19 @@ export function registerConversationCompactorIpc({ ipcMain, compactorService } =
   ipcMain.handle("conversation-compactor:save", (_event, value) => compactorService.save(settingsValue(value)));
   ipcMain.handle("conversation-compactor:check", (_event, value) => compactorService.check(runValue(value)));
   ipcMain.handle("conversation-compactor:run", (_event, value) => compactorService.run(runValue(value)));
+  ipcMain.handle("conversation-compactor:select-import-jsonl", async () => {
+    if (!dialog?.showOpenDialog) throw new Error("当前环境无法选择会话 JSONL 文件。 ");
+    const result = await dialog.showOpenDialog(getMainWindow(), {
+      title: "选择要导入的 Claude 会话 JSONL",
+      properties: ["openFile"],
+      filters: [{ name: "Claude 会话 JSONL", extensions: ["jsonl"] }],
+    });
+    return {
+      canceled: result.canceled === true,
+      sourcePath: clean(result.filePaths?.[0]),
+    };
+  });
+  ipcMain.handle("conversation-compactor:import-jsonl", (_event, value) => (
+    compactorService.importHistory(importValue(value))
+  ));
 }

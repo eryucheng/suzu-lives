@@ -6,9 +6,9 @@
 }
 
 #content.content--settings > #settingsReactRoot {
-  display:flex;
+  display:block;
   min-height:0;
-  flex:1;
+  flex:0 0 auto;
 }
 
 .settings-react-page {
@@ -171,6 +171,107 @@
   font-size:var(--font-size-xs);
 }
 
+.settings-system-status-card {
+  display:grid;
+  gap:clamp(14px,1.6cqw,20px);
+}
+
+.settings-system-status-card__summary {
+  color:var(--text-muted);
+  font-size:var(--font-size-xs);
+}
+
+.settings-system-status-results {
+  display:grid;
+  gap:8px;
+}
+
+.settings-system-status-section {
+  border-top:1px solid var(--border);
+  padding-top:8px;
+}
+
+.settings-system-status-section > summary {
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:var(--space-md);
+  cursor:pointer;
+  list-style:none;
+  padding:8px 0;
+}
+
+.settings-system-status-section > summary::-webkit-details-marker { display:none; }
+
+.settings-system-status-section > summary > span {
+  display:grid;
+  min-width:0;
+  gap:3px;
+}
+
+.settings-system-status-section summary strong { color:var(--text); }
+
+.settings-system-status-section summary small,
+.settings-system-status-section summary em {
+  color:var(--text-muted);
+  font-size:var(--font-size-xs);
+  font-style:normal;
+}
+
+.settings-system-status-list {
+  display:grid;
+  gap:6px;
+  padding:4px 0 8px;
+}
+
+.settings-system-status-item {
+  display:grid;
+  min-width:0;
+  gap:6px;
+  border:1px solid var(--border);
+  border-radius:12px;
+  padding:11px 12px;
+}
+
+.settings-system-status-item.is-warning { border-color:color-mix(in srgb, var(--warning) 38%, var(--border)); }
+.settings-system-status-item.is-error { border-color:color-mix(in srgb, var(--danger) 45%, var(--border)); }
+.settings-system-status-item.is-notice { border-color:color-mix(in srgb, var(--accent2) 26%, var(--border)); }
+
+.settings-system-status-item__head {
+  display:flex;
+  align-items:flex-start;
+  justify-content:space-between;
+  gap:var(--space-md);
+}
+
+.settings-system-status-item__head > div {
+  display:grid;
+  min-width:0;
+  gap:2px;
+}
+
+.settings-system-status-item strong { color:var(--text); font-size:var(--font-size-sm); }
+.settings-system-status-item__head span { color:var(--text-muted); font-size:var(--font-size-xs); }
+.settings-system-status-item p { max-width:none; font-size:var(--font-size-xs); }
+
+.settings-system-status-item code {
+  overflow:hidden;
+  color:var(--text-muted);
+  font:var(--font-size-xs) Consolas,"Microsoft YaHei UI",monospace;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+
+.settings-system-status-item__metadata {
+  display:grid;
+  gap:2px;
+  margin:0;
+  padding-left:16px;
+  color:var(--text-muted);
+  font-size:var(--font-size-xs);
+  line-height:1.5;
+}
+
 @container (max-width:760px) {
   .settings-card__layout { grid-template-columns:minmax(0,1fr); }
   .settings-card__actions { justify-content:flex-start; }
@@ -178,6 +279,7 @@
   .settings-directory-card__path { width:100%; }
   .settings-privacy-contact { align-items:stretch; flex-direction:column; }
   .settings-privacy-contact > .settings-action-button { align-self:flex-start; }
+  .settings-system-status-item__head { align-items:stretch; flex-direction:column; }
 }
 
 @media (max-width:1100px) {

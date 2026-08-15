@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Button, GlassPanel, PageHeader, Status, Tabs } from "suzu-design-system";
 
+import { sortSystemStatusSections } from "./system-status-order.mjs";
 import "./settings-page.css";
 
 const SETTINGS_TABS = [
@@ -128,7 +129,104 @@ function GeneralSettings({ appUpdate, onCheckForUpdate, onDownloadUpdate, onInst
   );
 }
 
-function DataSettings({ onChangeDataLocation, onOpenDirectory, onRemovePreviousCopy, onSelectWorkspace, pending, settings }) {
+function systemStatusPresentation(snapshot) {
+  if (cleanText(snapshot?.error)) return { label: "检查失败", tone: "danger", detail: cleanText(snapshot.error) };
+  const summary = snapshot?.summary || null;
+  if (!summary) return { label: "尚未检查", tone: "muted", detail: "检查会读取 Suzu 数据、联系人项目和本机 Claude 配置；不会修改或执行任何文件。" };
+  if (summary.status === "error") return { label: "发现异常", tone: "danger", detail: `发现 ${summary.errors} 项异常和 ${summary.warnings} 项需要确认的内容。` };
+  if (summary.status === "warning") return { label: "需要确认", tone: "warning", detail: `发现 ${summary.warnings} 项需要确认的内容。` };
+  return { label: "状态正常", tone: "success", detail: "没有发现受管文件的读取或结构异常。" };
+}
+
+function systemStatusState(item) {
+  const state = cleanText(item?.state);
+  if (state === "error") return { label: "异常", tone: "danger" };
+  if (state === "warning") return { label: "需确认", tone: "warning" };
+  if (state === "notice") return { label: "外部项", tone: "info" };
+  if (state === "missing") return { label: "未创建", tone: "muted" };
+  return { label: "正常", tone: "success" };
+}
+
+function systemStatusOwnership(item) {
+  return {
+    managed: "Suzu 管理",
+    shared: "共同使用",
+    runtime: "运行时数据",
+    external: "外部/自定义",
+  }[cleanText(item?.ownership)] || "未分类";
+}
+
+function formatCheckedAt(value) {
+  const date = new Date(value);
+  return Number.isFinite(date.getTime()) ? date.toLocaleString("zh-CN", { hour12: false }) : "";
+}
+
+function SystemStatusMetadata({ metadata }) {
+  const env = metadata?.env || null;
+  const hooks = metadata?.hooks || null;
+  const mcp = metadata?.mcpServers || null;
+  const entries = [];
+  if (env?.managedKeys?.length) entries.push(`Suzu 使用的环境键：${env.managedKeys.join("、")}`);
+  if (env?.customKeys?.length) entries.push(`外部环境键：${env.customKeys.join("、")}`);
+  if (hooks?.events?.length) entries.push(`Hook 事件：${hooks.events.join("、")}`);
+  if (mcp?.shown?.length) entries.push(`MCP：${mcp.shown.join("、")}${mcp.truncated ? "等" : ""}`);
+  return entries.length ? <ul className="settings-system-status-item__metadata">{entries.map((entry) => <li key={entry}>{entry}</li>)}</ul> : null;
+}
+
+function SystemStatusItem({ item }) {
+  const state = systemStatusState(item);
+  return (
+    <article className={`settings-system-status-item is-${cleanText(item?.state) || "ok"}`}>
+      <div className="settings-system-status-item__head">
+        <div><strong>{cleanText(item?.title) || "未命名项目"}</strong><span>{systemStatusOwnership(item)} · {cleanText(item?.type) || "未知类型"}</span></div>
+        <Status label={state.label} tone={state.tone} />
+      </div>
+      {cleanText(item?.detail) ? <p>{cleanText(item.detail)}</p> : null}
+      {cleanText(item?.path) ? <code title={item.path}>{item.path}</code> : null}
+      <SystemStatusMetadata metadata={item?.metadata} />
+    </article>
+  );
+}
+
+function SystemStatusCheck({ onCheck, pending, snapshot }) {
+  const presentation = systemStatusPresentation(snapshot);
+  const summary = snapshot?.summary || null;
+  const sections = sortSystemStatusSections(snapshot?.sections);
+  const hasResults = sections.length > 0;
+  const [resultsOpen, setResultsOpen] = useState(true);
+  const check = async () => {
+    await onCheck?.();
+    setResultsOpen(true);
+  };
+  return (
+    <SettingCard className="settings-system-status-card">
+      <div className="settings-card__layout">
+        <div className="settings-card__copy">
+          <div className="settings-card__meta"><span className="settings-card__eyebrow">SYSTEM CHECK</span><Status label={presentation.label} tone={presentation.tone} /></div>
+          <h2>系统状态检查</h2>
+          <p>{presentation.detail}</p>
+          {summary ? <span className="settings-system-status-card__summary">已检查 {summary.total} 项 · Suzu 管理 {summary.managed} 项 · 外部/自定义 {summary.external} 项{formatCheckedAt(snapshot?.checkedAt) ? ` · ${formatCheckedAt(snapshot.checkedAt)}` : ""}</span> : null}
+        </div>
+        <div className="settings-card__actions">
+          {hasResults ? <Button aria-controls="settings-system-status-results" aria-expanded={resultsOpen} className="settings-action-button" disabled={pending} onClick={() => setResultsOpen((open) => !open)} size="md" variant="secondary">{resultsOpen ? "收起检查结果" : "查看检查结果"}</Button> : null}
+          <Button className="settings-action-button" disabled={pending} onClick={check} size="md" variant="secondary">{pending ? "正在检查…" : "检查系统状态"}</Button>
+        </div>
+      </div>
+      {hasResults ? <div className="settings-system-status-results" hidden={!resultsOpen} id="settings-system-status-results">{sections.map((section) => {
+        const items = Array.isArray(section?.items) ? section.items : [];
+        const attention = items.some((entry) => ["error", "warning", "notice"].includes(cleanText(entry?.state)));
+        return (
+          <details className="settings-system-status-section" key={cleanText(section?.id) || cleanText(section?.title)} open={attention}>
+            <summary><span><strong>{cleanText(section?.title) || "未命名范围"}</strong><small>{cleanText(section?.detail)}</small></span><em>{items.length} 项</em></summary>
+            <div className="settings-system-status-list">{items.map((entry) => <SystemStatusItem item={entry} key={cleanText(entry?.id) || `${entry?.path}:${entry?.title}`} />)}</div>
+          </details>
+        );
+      })}</div> : null}
+    </SettingCard>
+  );
+}
+
+function DataSettings({ onChangeDataLocation, onCheckSystemStatus, onOpenDirectory, onRemovePreviousCopy, onSelectWorkspace, pending, settings, systemStatus }) {
   const storage = settings.dataStorage || {};
   const workspacePath = cleanText(settings.contactsRoot);
   const currentDataPath = cleanText(storage.dataRoot || settings.dataRoot);
@@ -160,6 +258,11 @@ function DataSettings({ onChangeDataLocation, onOpenDirectory, onRemovePreviousC
         pending={pending === "data-location"}
         title="数据存储位置"
         value={storageValue}
+      />
+      <SystemStatusCheck
+        onCheck={() => onCheckSystemStatus?.()}
+        pending={pending === "system-status"}
+        snapshot={systemStatus}
       />
       {previousDataPath ? (
         <SettingCard className="settings-followup-card">
@@ -244,11 +347,13 @@ export function SettingsPage({ actions = {}, snapshot = {} }) {
         {tab === "data" ? (
           <DataSettings
             onChangeDataLocation={() => run("data-location", actions.changeDataLocation)}
+            onCheckSystemStatus={() => run("system-status", actions.checkSystemStatus)}
             onOpenDirectory={(path) => run("open-directory", () => actions.openDirectory?.(path))}
             onRemovePreviousCopy={() => run("old-copy", actions.removePreviousCopy)}
             onSelectWorkspace={() => run("workspace", actions.selectWorkspace)}
             pending={pending}
             settings={settings}
+            systemStatus={snapshot.systemStatus}
           />
         ) : tab === "privacy" ? (
           <PrivacySettings

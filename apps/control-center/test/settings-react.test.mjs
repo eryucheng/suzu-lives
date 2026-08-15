@@ -24,3 +24,27 @@ test("React settings keeps software updates in the existing settings action chai
   assert.match(app, /runAppUpdateAction\("downloadUpdate"/u);
   assert.match(app, /runAppUpdateAction\("installUpdate"/u);
 });
+
+test("React data settings exposes the read-only system status check", () => {
+  const page = readFileSync(resolve(ROOT, "src", "react", "settings-page.jsx"), "utf8");
+  const app = readFileSync(resolve(ROOT, "src", "app.mjs"), "utf8");
+
+  assert.match(page, /系统状态检查/u);
+  assert.match(page, /检查系统状态/u);
+  assert.match(page, /外部\/自定义/u);
+  assert.match(page, /onCheckSystemStatus/u);
+  assert.match(page, /sortSystemStatusSections\(snapshot\?\.sections\)/u);
+  assert.match(app, /api\.settings\?\.systemStatus/u);
+  assert.match(app, /checkSystemStatus/u);
+});
+
+test("system status results can be collapsed without shrinking the settings tabs", () => {
+  const page = readFileSync(resolve(ROOT, "src", "react", "settings-page.jsx"), "utf8");
+  const styles = readFileSync(resolve(ROOT, "src", "react", "settings-page.css"), "utf8");
+
+  assert.match(page, /const \[resultsOpen, setResultsOpen\] = useState\(true\)/u);
+  assert.match(page, /收起检查结果/u);
+  assert.match(page, /查看检查结果/u);
+  assert.match(page, /hidden=\{!resultsOpen\}/u);
+  assert.match(styles, /#content\.content--settings > #settingsReactRoot\s*\{[\s\S]*?display:block;[\s\S]*?flex:0 0 auto;/u);
+});

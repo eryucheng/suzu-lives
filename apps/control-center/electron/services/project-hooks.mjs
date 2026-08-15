@@ -5,6 +5,8 @@ export class ProjectHooksError extends Error {}
 
 const HOOK_MARKER = "--suzu-lives-hook";
 const TIME_AWARENESS_HOOK = { event: "UserPromptSubmit", role: "time-awareness", timeout: 5 };
+const MEMORY_RECALL_HOOK = { event: "UserPromptSubmit", role: "memory-recall", timeout: 15 };
+const POWERSHELL_COMMAND = "powershell.exe";
 
 function clean(value) { return String(value ?? "").trim(); }
 function inside(root, target) { const relative = path.relative(root, target); return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative)); }
@@ -71,18 +73,39 @@ function assertHooksContainer(value) {
 }
 
 function managedHook(value, role) {
-  return object(value)
-    && value.type === "command"
-    && Array.isArray(value.args)
-    && value.args[0] === HOOK_MARKER
-    && value.args[1] === role;
+  if (!object(value) || value.type !== "command" || !Array.isArray(value.args)) return false;
+  if (value.args[0] === HOOK_MARKER && value.args[1] === role) return true;
+  const commandIndex = value.args.indexOf("-Command");
+  const script = commandIndex === -1 ? "" : value.args[commandIndex + 1];
+  return value.command === POWERSHELL_COMMAND
+    && typeof script === "string"
+    && script.includes(`suzu-lives:project-hook:${role}`);
 }
 
-function hookDefinition({ command, dataRoot, role, timeout }) {
+function powerShellLiteral(value, label) {
+  const source = clean(value);
+  if (!source || /[\r\n\0]/u.test(source)) throw new ProjectHooksError(`${label} 无效。`);
+  return `'${source.replace(/'/gu, "''")}'`;
+}
+
+function hookDefinition({ command, hookRunner, dataRoot, role, timeout }) {
+  const script = [
+    `$null = ${powerShellLiteral(`suzu-lives:project-hook:${role}`, "Hook 标识")};`,
+    "$env:ELECTRON_RUN_AS_NODE = '1';",
+    "&",
+    powerShellLiteral(command, "Suzu Lives 启动入口"),
+    powerShellLiteral(hookRunner, "Hook 运行器"),
+    powerShellLiteral(HOOK_MARKER, "Hook 标识"),
+    powerShellLiteral(role, "Hook 角色"),
+    powerShellLiteral("--project-root", "Hook 参数"),
+    "$env:CLAUDE_PROJECT_DIR",
+    powerShellLiteral("--data-root", "Hook 参数"),
+    powerShellLiteral(dataRoot, "软件数据目录"),
+  ].join(" ");
   return {
     type: "command",
-    command,
-    args: [HOOK_MARKER, role, "--project-root", "${CLAUDE_PROJECT_DIR}", "--data-root", dataRoot],
+    command: POWERSHELL_COMMAND,
+    args: ["-NoProfile", "-NonInteractive", "-Command", script],
     timeout,
   };
 }
@@ -118,7 +141,23 @@ function removeEvent(entries, role) {
   return removeMatchingHooks(entries, (hook) => managedHook(hook, role));
 }
 
-export async function inspectTimeAwarenessHook({ projectRoot: selectedProjectRoot, fsOps = fs } = {}) {
+function legacyMemoryHook(value) {
+  return managedHook(value, "user-prompt") || managedHook(value, "assistant-stop");
+}
+
+function removeLegacyMemoryHooks(hooks) {
+  const next = { ...hooks };
+  for (const event of ["UserPromptSubmit", "Stop"]) {
+    const entries = next[event];
+    if (!Array.isArray(entries)) continue;
+    const retained = removeMatchingHooks(entries, legacyMemoryHook);
+    if (retained.length) next[event] = retained;
+    else delete next[event];
+  }
+  return next;
+}
+
+async function inspectManagedHook({ projectRoot: selectedProjectRoot, hook, fsOps = fs } = {}) {
   const root = await projectRoot(selectedProjectRoot, fsOps);
   const claudeDirectory = path.join(root, ".claude");
   const settingsPath = path.join(claudeDirectory, "settings.json");
@@ -128,36 +167,37 @@ export async function inspectTimeAwarenessHook({ projectRoot: selectedProjectRoo
   const stored = await readSettings(fsOps, root, settingsPath);
   if (!stored.exists || stored.value.hooks === undefined) return { installed: false, settingsPath };
   assertHooksContainer(stored.value.hooks);
-  const entries = stored.value.hooks[TIME_AWARENESS_HOOK.event] || [];
+  const entries = stored.value.hooks[hook.event] || [];
   const installed = entries.some((entry) => object(entry)
     && Array.isArray(entry.hooks)
-    && entry.hooks.some((hook) => managedHook(hook, TIME_AWARENESS_HOOK.role)));
+    && entry.hooks.some((entryHook) => managedHook(entryHook, hook.role)));
   return { installed, settingsPath };
 }
 
-export async function installTimeAwarenessHook({ projectRoot: selectedProjectRoot, command, dataRoot, fsOps = fs } = {}) {
-  const executable = clean(command); const rootData = clean(dataRoot);
-  if (!path.isAbsolute(executable) || !rootData || !path.isAbsolute(rootData)) throw new ProjectHooksError("无法定位打包后的 Suzu Lives Hook 启动入口或软件数据目录。");
+async function installManagedHook({ projectRoot: selectedProjectRoot, command, hookRunner, dataRoot, hook, removeLegacyMemory = false, fsOps = fs } = {}) {
+  const executable = clean(command); const runner = clean(hookRunner); const rootData = clean(dataRoot);
+  if (!path.isAbsolute(executable) || !path.isAbsolute(runner) || !rootData || !path.isAbsolute(rootData)) throw new ProjectHooksError("无法定位打包后的 Suzu Lives Hook 启动入口、运行器或软件数据目录。");
   const root = await projectRoot(selectedProjectRoot, fsOps);
   const claudeDirectory = path.join(root, ".claude");
   await safeDirectory(fsOps, root, claudeDirectory, { create: true });
   const settingsPath = path.join(claudeDirectory, "settings.json");
   const stored = await readSettings(fsOps, root, settingsPath);
   const settings = structuredClone(stored.value);
-  const hooks = settings.hooks === undefined ? {} : settings.hooks;
+  let hooks = settings.hooks === undefined ? {} : settings.hooks;
   assertHooksContainer(hooks);
-  const existing = hooks[TIME_AWARENESS_HOOK.event] || [];
-  hooks[TIME_AWARENESS_HOOK.event] = updateEvent(
+  const existing = hooks[hook.event] || [];
+  hooks[hook.event] = updateEvent(
     existing,
-    hookDefinition({ command: executable, dataRoot: rootData, role: TIME_AWARENESS_HOOK.role, timeout: TIME_AWARENESS_HOOK.timeout }),
-    TIME_AWARENESS_HOOK.role,
+    hookDefinition({ command: executable, hookRunner: runner, dataRoot: rootData, role: hook.role, timeout: hook.timeout }),
+    hook.role,
   );
+  if (removeLegacyMemory) hooks = removeLegacyMemoryHooks(hooks);
   settings.hooks = hooks;
   await writeSettingsAtomic(fsOps, root, settingsPath, settings);
-  return { status: "installed", settingsPath, events: [TIME_AWARENESS_HOOK.event] };
+  return { status: "installed", settingsPath, events: [hook.event] };
 }
 
-export async function uninstallTimeAwarenessHook({ projectRoot: selectedProjectRoot, fsOps = fs } = {}) {
+async function uninstallManagedHook({ projectRoot: selectedProjectRoot, hook, removeLegacyMemory = false, fsOps = fs } = {}) {
   const root = await projectRoot(selectedProjectRoot, fsOps);
   const claudeDirectory = path.join(root, ".claude");
   const settingsPath = path.join(claudeDirectory, "settings.json");
@@ -168,17 +208,47 @@ export async function uninstallTimeAwarenessHook({ projectRoot: selectedProjectR
   if (!stored.exists || stored.value.hooks === undefined) return { status: "not-installed", settingsPath };
   const settings = structuredClone(stored.value);
   assertHooksContainer(settings.hooks);
-  const entries = settings.hooks[TIME_AWARENESS_HOOK.event] || [];
-  const next = removeEvent(entries, TIME_AWARENESS_HOOK.role);
-  if (JSON.stringify(next) === JSON.stringify(entries)) return { status: "not-installed", settingsPath };
-  if (next.length) settings.hooks[TIME_AWARENESS_HOOK.event] = next;
-  else delete settings.hooks[TIME_AWARENESS_HOOK.event];
+  const entries = settings.hooks[hook.event] || [];
+  const next = removeEvent(entries, hook.role);
+  let changed = JSON.stringify(next) !== JSON.stringify(entries);
+  if (next.length) settings.hooks[hook.event] = next;
+  else delete settings.hooks[hook.event];
+  if (removeLegacyMemory) {
+    const cleaned = removeLegacyMemoryHooks(settings.hooks);
+    changed = changed || JSON.stringify(cleaned) !== JSON.stringify(settings.hooks);
+    settings.hooks = cleaned;
+  }
+  if (!changed) return { status: "not-installed", settingsPath };
   if (!Object.keys(settings.hooks).length) delete settings.hooks;
   await writeSettingsAtomic(fsOps, root, settingsPath, settings);
   return { status: "uninstalled", settingsPath };
 }
 
-export function createProjectHooksService({ settingsService, executablePath, packaged = false, fsOps = fs } = {}) {
+export function inspectTimeAwarenessHook(options = {}) {
+  return inspectManagedHook({ ...options, hook: TIME_AWARENESS_HOOK });
+}
+
+export function inspectMemoryRecallHook(options = {}) {
+  return inspectManagedHook({ ...options, hook: MEMORY_RECALL_HOOK });
+}
+
+export function installTimeAwarenessHook(options = {}) {
+  return installManagedHook({ ...options, hook: TIME_AWARENESS_HOOK });
+}
+
+export function installMemoryRecallHook(options = {}) {
+  return installManagedHook({ ...options, hook: MEMORY_RECALL_HOOK, removeLegacyMemory: true });
+}
+
+export function uninstallTimeAwarenessHook(options = {}) {
+  return uninstallManagedHook({ ...options, hook: TIME_AWARENESS_HOOK });
+}
+
+export function uninstallMemoryRecallHook(options = {}) {
+  return uninstallManagedHook({ ...options, hook: MEMORY_RECALL_HOOK, removeLegacyMemory: true });
+}
+
+export function createProjectHooksService({ settingsService, executablePath, hookRunnerPath, packaged = false, fsOps = fs } = {}) {
   if (!settingsService?.load || !settingsService?.response) throw new ProjectHooksError("项目 Hook 服务需要软件设置服务。");
   const context = ({ projectRoot: requestedProjectRoot = "" } = {}) => {
     const settings = settingsService.load();
@@ -190,8 +260,15 @@ export function createProjectHooksService({ settingsService, executablePath, pac
     installTimeAwareness: (options = {}) => {
       if (!packaged) throw new ProjectHooksError("开发环境不会写入项目 Hook；请使用打包后的 Suzu Lives 安装。 ");
       const current = context(options);
-      return installTimeAwarenessHook({ projectRoot: current.projectRoot, command: executablePath, dataRoot: current.dataRoot, fsOps });
+      return installTimeAwarenessHook({ projectRoot: current.projectRoot, command: executablePath, hookRunner: hookRunnerPath, dataRoot: current.dataRoot, fsOps });
     },
     uninstallTimeAwareness: (options = {}) => uninstallTimeAwarenessHook({ projectRoot: context(options).projectRoot, fsOps }),
+    inspectMemoryRecall: (options = {}) => inspectMemoryRecallHook({ projectRoot: context(options).projectRoot, fsOps }),
+    installMemoryRecall: (options = {}) => {
+      if (!packaged) throw new ProjectHooksError("开发环境不会写入项目 Hook；请使用打包后的 Suzu Lives 安装。 ");
+      const current = context(options);
+      return installMemoryRecallHook({ projectRoot: current.projectRoot, command: executablePath, hookRunner: hookRunnerPath, dataRoot: current.dataRoot, fsOps });
+    },
+    uninstallMemoryRecall: (options = {}) => uninstallMemoryRecallHook({ projectRoot: context(options).projectRoot, fsOps }),
   };
 }

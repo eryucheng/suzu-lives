@@ -23,6 +23,33 @@ function isLegacyProactivePrompt(text) {
   return asksForDecision || chainsNextTimer;
 }
 
+function nestedText(value) {
+  if (typeof value === "string") return value;
+  if (Array.isArray(value)) return value.map(nestedText).filter(Boolean).join("\n");
+  if (!value || typeof value !== "object") return "";
+  if (typeof value.text === "string") return value.text;
+  return nestedText(value.content);
+}
+
+function parseJsonObject(value) {
+  const text = String(value || "").trim();
+  if (!text) return null;
+  try {
+    const parsed = JSON.parse(text);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
+  } catch {
+    const start = text.indexOf("{");
+    const end = text.lastIndexOf("}");
+    if (start < 0 || end <= start) return null;
+    try {
+      const parsed = JSON.parse(text.slice(start, end + 1));
+      return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
+    } catch {
+      return null;
+    }
+  }
+}
+
 export function cleanConversationText(value) {
   return String(value || "")
     .replace(/<system-reminder>[\s\S]*?<\/system-reminder>/giu, "")
@@ -106,6 +133,11 @@ function makeMessage(entry, role, speaker, text, sourceKind, ordinal) {
     text,
     sourceKind,
   };
+}
+
+function boundedText(value, maximum = 1800) {
+  const text = cleanConversationText(value);
+  return text.length <= maximum ? text : `${text.slice(0, maximum).trimEnd()}……`;
 }
 
 export function standardizeCompactedPrefix({

@@ -20,6 +20,7 @@ export { parseSuzuConversationCommand } from "../../../shared/conversation-comma
 const viewState = {
   avatarCrop: null,
   busySessions: new Set(),
+  transientSystemMessages: [],
   composerFocusRequest: 0,
   contactCreateOpen: false,
   contactContextMenu: null,
@@ -45,10 +46,6 @@ const viewState = {
   searchLoading: false,
   searchOpen: false,
   searchQuery: "",
-  sessionNoteDraft: "",
-  sessionNoteDirty: false,
-  sessionNoteOpen: false,
-  sessionSettings: null,
   sending: false,
   settingsOpen: false,
   settingsLoading: false,
@@ -67,6 +64,7 @@ const viewState = {
 const TRANSCRIPT_MATCH_GRACE_MS = 5_000;
 
 const defaults = { attachments: false, tools: false, thinking: false, system: false, tokens: false, timeDisplay: "center" };
+const CLAUDE_APPROVAL_MODES = new Set(["default", "acceptEdits", "plan", "bypassPermissions"]);
 const CENTER_TIME_GAP_MS = 5 * 60 * 1_000;
 
 function preferences(settings) {
@@ -75,6 +73,10 @@ function preferences(settings) {
 
 function clean(value) {
   return String(value ?? "").trim();
+}
+
+function unreadCount(contact) {
+  return Number.isSafeInteger(contact?.unreadCount) && contact.unreadCount >= 0 ? contact.unreadCount : 0;
 }
 
 export function isScheduledAgentReply(event) {
@@ -161,6 +163,15 @@ function timeDisplay(prefs) {
   return prefs?.timeDisplay === "bubble" ? "bubble" : "center";
 }
 
+function approvalMode(value) {
+  const mode = clean(value);
+  return CLAUDE_APPROVAL_MODES.has(mode) ? mode : "acceptEdits";
+}
+
+function longTermMemoryEnabled(value) {
+  return value !== false;
+}
+
 export function shouldShowCenteredTimeDivider(previousTimestamp, timestamp) {
   const current = dateFromTimestamp(timestamp);
   if (!current) return false;
@@ -213,7 +224,7 @@ function insertLiveReplyAtTimestamp(items, reply) {
     : [...items.slice(0, index), reply, ...items.slice(index)];
 }
 
-export function mergeConversationMessages(items, pendingItems = [], liveReplyItems = new Map(), activeSessionId = "") {
+export function mergeConversationMessages(items, pendingItems = [], liveReplyItems = new Map(), activeSessionId = "", transientSystemMessages = []) {
   const source = Array.isArray(items) ? items : [];
   const sessionId = clean(activeSessionId);
   const pending = (Array.isArray(pendingItems) ? pendingItems : [])
@@ -241,7 +252,9 @@ export function mergeConversationMessages(items, pendingItems = [], liveReplyIte
       timestamp: item.timestamp,
       blocks: [{ kind: "text", text: item.content }],
     }));
-  const appended = [...source, ...pending];
+  const localSystemMessages = (Array.isArray(transientSystemMessages) ? transientSystemMessages : [])
+    .filter((item) => item?.kind === "system" && clean(item.sessionId) === sessionId && messageText(item));
+  const appended = [...source, ...pending, ...localSystemMessages];
   // Source rows are already in the transcript's append order.  Preserve that
   // order for special turns such as calls; only place a local unfinished reply
   // back between normal chronological rows so a later message can push it up.
@@ -256,6 +269,7 @@ function displayedMessages(items) {
     viewState.pending,
     viewState.liveReplies,
     clean(viewState.snapshot?.activeSessionId),
+    viewState.transientSystemMessages,
   );
 }
 
@@ -665,6 +679,8 @@ function sessionSettingsSnapshot(context, selected, prefs) {
       system: "显示系统消息",
       tokens: "显示 Token 用量",
     }).map(([key, label]) => ({ checked: Boolean(prefs[key]), key, label })),
+    approvalMode: approvalMode(contact?.approvalMode),
+    longTermMemoryEnabled: longTermMemoryEnabled(contact?.longTermMemoryEnabled),
     removeContactAvatar: Boolean(agent.avatarDataUrl),
     sessionId,
     timeDisplay: timeDisplay(prefs),
@@ -678,15 +694,6 @@ function sessionSettingsSnapshot(context, selected, prefs) {
       status: connectionLabel,
     } : null,
   };
-}
-
-function sessionNoteSnapshot() {
-  if (!viewState.sessionNoteOpen) return null;
-  const contactId = clean(viewState.snapshot?.activeContact?.id);
-  if (!contactId) return null;
-  const saved = viewState.sessionSettings?.contactId === contactId ? viewState.sessionSettings : {};
-  const note = viewState.sessionNoteDirty ? viewState.sessionNoteDraft : clean(saved.note);
-  return { note, contactId };
 }
 
 function contactRenameSnapshot() {
@@ -782,6 +789,7 @@ export function conversationReactSnapshot(context) {
     const name = clean(contact?.name) || "未命名联系人";
     const selectedContact = clean(activeContact?.id) === clean(contact?.id);
     const contactAgent = identity?.agents?.[clean(contact?.agentId)] || identity?.defaultAgent || { displayName: name, avatarDataUrl: "" };
+    const contactUnreadCount = unreadCount(contact);
     return {
       avatar: avatarPayload(contactAgent, name),
       hidden: contact?.hidden === true,
@@ -791,7 +799,8 @@ export function conversationReactSnapshot(context) {
       pinned: contact?.pinned === true,
       preferred: clean(contact?.id) === preferredContactId,
       selected: selectedContact,
-      unread: contact?.unread === true,
+      unread: contactUnreadCount > 0,
+      unreadCount: contactUnreadCount,
     };
   });
   const contactRows = allContactRows.filter((contact) => !contact.hidden);
@@ -839,7 +848,6 @@ export function conversationReactSnapshot(context) {
       contactCreate: viewState.contactCreateOpen,
       contactRename: contactRenameSnapshot(),
       mediaPreview: mediaPreviewSnapshot(),
-      sessionNote: sessionNoteSnapshot(),
       wechatQr: wechatQrSnapshot(activeContact),
     },
     peer,
@@ -863,10 +871,6 @@ export function conversationReactSnapshot(context) {
 
 function resetSessionSettings() {
   viewState.contactRenameOpen = false;
-  viewState.sessionNoteDirty = false;
-  viewState.sessionNoteDraft = "";
-  viewState.sessionNoteOpen = false;
-  viewState.sessionSettings = null;
   viewState.mediaPreview = null;
   viewState.avatarCrop = null;
   viewState.wechatSnapshot = null;
@@ -875,21 +879,16 @@ function resetSessionSettings() {
 
 async function refreshCurrentSessionSettings(context) {
   const contactId = clean(viewState.snapshot?.activeContact?.id);
-  if (!contactId || !context.api.conversation.sessionSettingsSnapshot) {
+  if (!contactId) {
     resetSessionSettings();
     return;
   }
-  const previousContactId = clean(viewState.sessionSettings?.contactId);
-  if (previousContactId && previousContactId !== contactId) resetSessionSettings();
   viewState.settingsLoading = true;
   try {
-    const [sessionSettings, wechatSnapshot] = await Promise.all([
-      context.api.conversation.sessionSettingsSnapshot({ contactId }),
-      context.api.wechat?.snapshot ? context.api.wechat.snapshot({ contactId }) : Promise.resolve(null),
-    ]);
+    const wechatSnapshot = context.api.wechat?.snapshot
+      ? await context.api.wechat.snapshot({ contactId })
+      : null;
     if (clean(viewState.snapshot?.activeContact?.id) !== contactId) return;
-    viewState.sessionSettings = sessionSettings;
-    if (!viewState.sessionNoteDirty) viewState.sessionNoteDraft = clean(sessionSettings?.note);
     viewState.wechatSnapshot = wechatSnapshot;
   } catch (error) {
     if (clean(viewState.snapshot?.activeContact?.id) === contactId) {
@@ -928,9 +927,9 @@ async function load(context, force = false) {
 async function markOpenedContactRead(context) {
   const contact = viewState.snapshot?.activeContact || null;
   const id = clean(contact?.id);
-  if (!id || contact?.unread !== true || !context.api.conversation.updateContactPresentation) return;
+  if (!id || unreadCount(contact) < 1 || !context.api.conversation.updateContactPresentation) return;
   try {
-    viewState.snapshot = await context.api.conversation.updateContactPresentation({ id, unread: false });
+    viewState.snapshot = await context.api.conversation.updateContactPresentation({ id, unreadCount: 0 });
     viewState.lastVersion = viewState.snapshot.version;
     context.render();
   } catch {
@@ -939,6 +938,32 @@ async function markOpenedContactRead(context) {
 }
 
 function handleConversationEvent(context, event) {
+  if (event?.type === "call-system-message") {
+    const activeSessionId = clean(viewState.snapshot?.activeSessionId);
+    const activeProjectRoot = clean(viewState.snapshot?.projectRoot);
+    const sessionId = clean(event?.sessionId);
+    const message = clean(event?.message);
+    if (!sessionId || sessionId !== activeSessionId || !message) return;
+    if (activeProjectRoot && clean(event?.projectRoot) && !sameProjectRoot(activeProjectRoot, event.projectRoot)) return;
+    const id = [
+      "call-system",
+      clean(event?.callId) || "call",
+      clean(event?.requestId) || "request",
+      Number.isSafeInteger(Number(event?.index)) ? Number(event.index) : "message",
+    ].join("-");
+    if (viewState.transientSystemMessages.some((item) => item.id === id)) return;
+    viewState.transientSystemMessages.push({
+      blocks: [{ kind: "text", text: message }],
+      id,
+      kind: "system",
+      sessionId,
+      timestamp: clean(event?.timestamp) || new Date().toISOString(),
+    });
+    if (!viewState.shouldStickToLatest) viewState.unread = true;
+    scheduleScrollToLatest();
+    context.render();
+    return;
+  }
   // The call sheet owns its own listening/thinking/speaking state.  Do not
   // leak Claude's internal turn labels into the text composer while a voice
   // turn is running; refresh the normal history after it settles instead.
@@ -970,6 +995,11 @@ function handleConversationEvent(context, event) {
       toolName: clean(event.toolName),
       preview: String(event.preview || ""),
     });
+    context.render();
+    return;
+  }
+  if (event?.type === "permission-resolved" && requestId) {
+    viewState.permissions.delete(requestId);
     context.render();
     return;
   }
@@ -1032,6 +1062,7 @@ function handleConversationEvent(context, event) {
 
 export function startConversationPolling(context) {
   stopConversationPolling();
+  viewState.transientSystemMessages.length = 0;
   viewState.shouldStickToLatest = true;
   void load(context, true).then(() => markOpenedContactRead(context));
   if (typeof context.api.conversation.onEvent === "function") {
@@ -1064,7 +1095,7 @@ export function stopConversationPolling() {
 
 export function dismissConversationOverlays(target = viewState) {
   const state = target && typeof target === "object" ? target : viewState;
-  const open = Boolean(state.contactCreateOpen || state.contactContextMenu || state.contactRenameOpen || state.menuOpen || state.searchOpen || state.settingsOpen || state.emojiOpen || state.sessionNoteOpen || state.wechatQrOpen || state.mediaPreview || state.avatarCrop);
+  const open = Boolean(state.contactCreateOpen || state.contactContextMenu || state.contactRenameOpen || state.menuOpen || state.searchOpen || state.settingsOpen || state.emojiOpen || state.wechatQrOpen || state.mediaPreview || state.avatarCrop);
   state.contactCreateOpen = false;
   state.contactContextMenu = null;
   state.contactRenameOpen = false;
@@ -1072,7 +1103,6 @@ export function dismissConversationOverlays(target = viewState) {
   state.searchOpen = false;
   state.settingsOpen = false;
   state.emojiOpen = false;
-  state.sessionNoteOpen = false;
   state.wechatQrOpen = false;
   state.mediaPreview = null;
   state.avatarCrop = null;
@@ -1340,6 +1370,7 @@ async function openConversationMediaPreviewForItem(context, value = {}) {
 function resetConversationForContactChange() {
   resetSessionSettings();
   viewState.contactContextMenu = null;
+  viewState.transientSystemMessages.length = 0;
   viewState.pending = [];
   viewState.liveReplies.clear();
   viewState.permissions.clear();
@@ -1382,12 +1413,6 @@ export function createConversationReactActions(context) {
       viewState.searchError = "";
       viewState.searchLoading = false;
       renderKeepingConversationScroll(context);
-    },
-    closeSessionNote: () => {
-      viewState.sessionNoteOpen = false;
-      viewState.sessionNoteDraft = "";
-      viewState.sessionNoteDirty = false;
-      context.render();
     },
     closeSessionSettings: () => {
       viewState.settingsOpen = false;
@@ -1489,15 +1514,6 @@ export function createConversationReactActions(context) {
       }
     },
     openMediaPreview: (item) => void openConversationMediaPreviewForItem(context, item),
-    openSessionNote: (contactId) => {
-      const id = clean(contactId);
-      if (!id) return;
-      const saved = viewState.sessionSettings?.contactId === id ? viewState.sessionSettings : {};
-      viewState.sessionNoteDraft = clean(saved.note);
-      viewState.sessionNoteDirty = false;
-      viewState.sessionNoteOpen = true;
-      context.render();
-    },
     openSessionSettings: async () => {
       viewState.menuOpen = false;
       viewState.searchOpen = false;
@@ -1589,21 +1605,6 @@ export function createConversationReactActions(context) {
       context.render();
     },
     runSearch: (query) => void runConversationSearchForQuery(context, viewState.searchCategory, query),
-    saveSessionNote: async (contactId, note) => {
-      const id = clean(contactId);
-      if (!id || !context.api.conversation.saveSessionSettings) return;
-      try {
-        viewState.sessionSettings = await context.api.conversation.saveSessionSettings({ contactId: id, note: String(note || "") });
-        viewState.sessionNoteDraft = clean(viewState.sessionSettings.note);
-        viewState.sessionNoteDirty = false;
-        viewState.sessionNoteOpen = false;
-        viewState.error = "";
-        viewState.notice = "聊天备注已保存。";
-      } catch (error) {
-        viewState.error = `无法保存聊天备注：${error?.message || error}`;
-      }
-      context.render();
-    },
     setPreferredContact: async (contactId) => {
       const id = clean(contactId);
       if (!id || !context.api.conversation.setPreferredContact) return;
@@ -1625,9 +1626,10 @@ export function createConversationReactActions(context) {
       const id = clean(contactId);
       const source = value && typeof value === "object" && !Array.isArray(value) ? value : {};
       const patch = {};
-      for (const key of ["pinned", "unread", "muted", "hidden"]) {
+      for (const key of ["pinned", "muted", "hidden"]) {
         if (typeof source[key] === "boolean") patch[key] = source[key];
       }
+      if (Number.isSafeInteger(source.unreadCount) && source.unreadCount >= 0) patch.unreadCount = source.unreadCount;
       if (!id || !Object.keys(patch).length || viewState.sending || !context.api.conversation.updateContactPresentation) return;
       const contact = (Array.isArray(viewState.snapshot?.contacts) ? viewState.snapshot.contacts : [])
         .find((item) => clean(item?.id) === id) || null;
@@ -1641,8 +1643,8 @@ export function createConversationReactActions(context) {
         viewState.error = "";
         if (Object.hasOwn(patch, "pinned")) {
           viewState.notice = patch.pinned ? `已将“${name}”置顶。` : `已取消“${name}”置顶。`;
-        } else if (Object.hasOwn(patch, "unread")) {
-          viewState.notice = patch.unread ? `已将“${name}”标为未读。` : `已将“${name}”标为已读。`;
+        } else if (Object.hasOwn(patch, "unreadCount")) {
+          viewState.notice = patch.unreadCount > 0 ? `已将“${name}”标为未读。` : `已将“${name}”标为已读。`;
         } else if (Object.hasOwn(patch, "muted")) {
           viewState.notice = patch.muted ? `已开启“${name}”的消息免打扰。` : `已关闭“${name}”的消息免打扰。`;
         } else if (Object.hasOwn(patch, "hidden")) {
@@ -1690,6 +1692,39 @@ export function createConversationReactActions(context) {
       void runConversationSearchForQuery(context, next, viewState.searchQuery);
     },
     setAvatarCropZoom: zoomConversationAvatarCrop,
+    setApprovalMode: async (value) => {
+      const contactId = clean(viewState.snapshot?.activeContact?.id);
+      const mode = approvalMode(value);
+      if (!contactId || viewState.sending || !context.api.conversation.updateContactApprovalMode) return;
+      viewState.sending = true;
+      context.render();
+      try {
+        viewState.snapshot = await context.api.conversation.updateContactApprovalMode({ id: contactId, approvalMode: mode });
+        viewState.lastVersion = viewState.snapshot.version;
+        viewState.error = "";
+      } catch (error) {
+        viewState.error = `无法更新联系人审批模式：${error?.message || error}`;
+      } finally {
+        viewState.sending = false;
+        context.render();
+      }
+    },
+    setLongTermMemoryEnabled: async (enabled) => {
+      const contactId = clean(viewState.snapshot?.activeContact?.id);
+      if (!contactId || viewState.sending || !context.api.conversation.updateContactLongTermMemoryEnabled) return;
+      viewState.sending = true;
+      context.render();
+      try {
+        viewState.snapshot = await context.api.conversation.updateContactLongTermMemoryEnabled({ id: contactId, enabled: Boolean(enabled) });
+        viewState.lastVersion = viewState.snapshot.version;
+        viewState.error = "";
+      } catch (error) {
+        viewState.error = `无法更新联系人长期记忆：${error?.message || error}`;
+      } finally {
+        viewState.sending = false;
+        context.render();
+      }
+    },
     setDisplayPreference: async (key, checked) => {
       const preference = clean(key);
       if (!Object.hasOwn(defaults, preference)) return;
@@ -1726,10 +1761,6 @@ export function createConversationReactActions(context) {
       if (submitDate && viewState.searchCategory === "date" && viewState.searchQuery) {
         void runConversationSearchForQuery(context, "date", viewState.searchQuery);
       }
-    },
-    setSessionNoteDraft: (value) => {
-      viewState.sessionNoteDraft = String(value ?? "");
-      viewState.sessionNoteDirty = true;
     },
     setTimeDisplay: async (value) => {
       try {

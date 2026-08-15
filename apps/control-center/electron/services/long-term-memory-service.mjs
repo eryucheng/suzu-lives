@@ -286,6 +286,15 @@ export function createLongTermMemoryService({
     return contacts.find((contact) => clean(contact?.projectRoot) && samePath(contact.projectRoot, selectedRoot)) || null;
   };
 
+  const automaticMemoryEnabledForProject = async (projectRoot = "") => {
+    try {
+      const contact = await contactForProject(projectRoot);
+      return Boolean(contact) && contact.longTermMemoryEnabled !== false;
+    } catch {
+      return false;
+    }
+  };
+
   const contactConversationScope = async ({ contactId = "", optional = false } = {}) => {
     const contactsSnapshot = await contactProjectsService.snapshot();
     const contactRows = Array.isArray(contactsSnapshot?.contacts) ? contactsSnapshot.contacts : [];
@@ -332,7 +341,7 @@ export function createLongTermMemoryService({
     return { activeContact, contacts, selectedContact, projectRoot, selectedSession };
   };
 
-  const entryForProject = async (projectRoot = "", { optional = false, sessionId = "" } = {}) => {
+  const entryForProject = async (projectRoot = "", { optional = false, sessionId = "", initialize = true, automatic = false } = {}) => {
     const normalizedSessionId = clean(sessionId);
     if (!isSessionId(normalizedSessionId)) {
       if (optional) return null;
@@ -343,6 +352,7 @@ export function createLongTermMemoryService({
       if (optional) return null;
       throw new Error("请先选择一位联系人。");
     }
+    if (automatic && contact.longTermMemoryEnabled === false) return null;
     const settings = settingsService.load() || {};
     const dataRoot = clean(settingsService.response(settings).dataRoot);
     if (!dataRoot) throw new Error("软件数据目录不可用。");
@@ -390,7 +400,7 @@ export function createLongTermMemoryService({
       },
       providers: providerRuntime.providers,
     });
-    const info = memory.initialize();
+    const info = initialize ? memory.initialize() : null;
     return {
       adapter: createChatHostMemoryAdapter({
         hostId: HOST_ID,
@@ -418,15 +428,21 @@ export function createLongTermMemoryService({
     }
   };
 
-  const drainMaintenance = async (entry, sessionId = "", { rebuildWhenIdle = false } = {}) => {
+  const drainMaintenance = async (entry, sessionId = "", { rebuildWhenIdle = false, automatic = false } = {}) => {
     if (!entry?.adapter || !entry?.memory || !clean(entry?.contact?.agentId)) {
       return { status: "skipped", reason: "memory-entry-unavailable", passes: 0 };
+    }
+    if (automatic && !await automaticMemoryEnabledForProject(entry.contact.projectRoot)) {
+      return { status: "skipped", reason: "long-term-memory-disabled", passes: 0 };
     }
     const scopedSessionId = clean(sessionId) || clean(entry.sessionId);
     let previous = "";
     let passes = 0;
     let graphRebuilt = false;
     while (true) {
+      if (automatic && !await automaticMemoryEnabledForProject(entry.contact.projectRoot)) {
+        return { status: "skipped", reason: "long-term-memory-disabled", passes, graphRebuilt };
+      }
       const before = entry.memory.maintenanceStatus({ limit: 500 });
       if (!maintenanceHasRunnableWork(before)) {
         if (rebuildWhenIdle) graphRebuilt = rebuildAssociationGraph(entry);
@@ -484,7 +500,7 @@ export function createLongTermMemoryService({
       const contactId = clean(contact?.id);
       const agentId = clean(contact?.agentId);
       const projectRoot = clean(contact?.projectRoot);
-      if (!contactId || !agentId || !projectRoot) continue;
+      if (!contactId || !agentId || !projectRoot || contact.longTermMemoryEnabled === false) continue;
       let resolved;
       try {
         resolved = await reader.resolveContactSession(contactId);
@@ -519,7 +535,7 @@ export function createLongTermMemoryService({
           failedMaintenanceTasks: Number(maintenanceRecovery?.tasks?.failed || 0),
           recoveredConsolidations: Number(maintenanceRecovery?.consolidations?.requeued || 0),
           failedConsolidations: Number(maintenanceRecovery?.consolidations?.failed || 0),
-          result: await queueMaintenance(entry, sessionId, { rebuildWhenIdle: true }),
+          result: await queueMaintenance(entry, sessionId, { automatic: true, rebuildWhenIdle: true }),
         });
       } catch {
         // Startup recovery is opportunistic; one unavailable contact must not
@@ -529,9 +545,12 @@ export function createLongTermMemoryService({
     return resumed;
   };
 
-  const activeEntry = async ({ contactId = "" } = {}) => {
+  const activeEntry = async ({ contactId = "", initialize = true } = {}) => {
     const scope = await contactConversationScope({ contactId });
-    const entry = await entryForProject(scope.projectRoot, { sessionId: scope.selectedSession.id });
+    const entry = await entryForProject(scope.projectRoot, {
+      sessionId: scope.selectedSession.id,
+      initialize,
+    });
     return { ...entry, scope };
   };
 
@@ -554,23 +573,14 @@ export function createLongTermMemoryService({
       if (!text || !isSessionId(normalizedSessionId) || !clean(turnId)) return null;
       try {
         const entry = await entryForProject(projectRoot, {
+          automatic: true,
           optional: true,
           sessionId: normalizedSessionId,
         });
         if (!entry) return null;
-        const prepared = await entry.adapter.beforeReply({
-          sessionId: normalizedSessionId,
-          turnId: clean(turnId),
-          userOccurredAt: occurredAt,
-          userText: text,
-          recall: { enabled: settingsService.load()?.memoryRecallEnabled !== false },
-          metadata: { source: "suzu-lives-conversation" },
-        });
         return {
           entry,
-          prepared,
           sessionId: normalizedSessionId,
-          systemPrompt: memoryPrompt(prepared?.memoryContext?.content),
           turnId: clean(turnId),
           userMessage: {
             id: clean(turnId),
@@ -581,6 +591,59 @@ export function createLongTermMemoryService({
       } catch {
         // Long-term memory is additive.  A local database or provider failure
         // must never prevent the actual Claude turn from starting.
+        return null;
+      }
+    },
+
+    /**
+     * UserPromptSubmit runs immediately before Claude handles a user message.
+     * Keep retrieval there so its per-turn context belongs to that message,
+     * instead of changing the CLI's stable system prompt and restarting the
+     * persistent Claude stream.
+     */
+    async recallForUserPrompt({ sessionId, turnId, projectRoot, userText, occurredAt = new Date() } = {}) {
+      const text = clean(userText);
+      const normalizedSessionId = clean(sessionId);
+      if (!text || !isSessionId(normalizedSessionId) || !clean(turnId)) return null;
+      try {
+        const entry = await entryForProject(projectRoot, {
+          automatic: true,
+          optional: true,
+          sessionId: normalizedSessionId,
+        });
+        if (!entry) return null;
+        const prepared = await entry.adapter.beforeReply({
+          sessionId: normalizedSessionId,
+          turnId: clean(turnId),
+          userOccurredAt: occurredAt,
+          userText: text,
+          recall: { enabled: true },
+          metadata: { source: "suzu-lives-user-prompt-hook" },
+        });
+        return {
+          additionalContext: memoryPrompt(prepared?.memoryContext?.content),
+          memoryContext: prepared?.memoryContext || null,
+          prepared,
+        };
+      } catch {
+        // A missing database or embedding provider must never block Claude's
+        // actual user turn. Command Hooks deliberately fail open.
+        return null;
+      }
+    },
+
+    async clearUserPromptRecall({ sessionId, projectRoot } = {}) {
+      const normalizedSessionId = clean(sessionId);
+      if (!isSessionId(normalizedSessionId)) return null;
+      try {
+        const entry = await entryForProject(projectRoot, {
+          automatic: true,
+          optional: true,
+          sessionId: normalizedSessionId,
+        });
+        if (!entry) return null;
+        return await entry.adapter.abortReply({ sessionId: normalizedSessionId });
+      } catch {
         return null;
       }
     },
@@ -597,11 +660,10 @@ export function createLongTermMemoryService({
             occurredAt,
             text,
           },
-          retrievalTraceId: clean(turn.prepared?.memoryContext?.traceId),
           metadata: { source: "suzu-lives-conversation" },
           recordedAt: occurredAt,
         });
-        queueMaintenance(turn.entry, turn.sessionId);
+        queueMaintenance(turn.entry, turn.sessionId, { automatic: true });
         return result;
       } catch {
         await turn.entry.adapter.abortReply({ sessionId: turn.sessionId }).catch(() => undefined);
@@ -795,7 +857,10 @@ export function createLongTermMemoryService({
     },
 
     async inspectMemoryImport({ sourcePath, contactId } = {}) {
-      const entry = await activeEntry({ contactId: clean(contactId) });
+      // Import inspection is deliberately source-only. Constructing an entry
+      // must not initialize or alter the target database before the selected
+      // file has been copied into its staged target location.
+      const entry = await activeEntry({ contactId: clean(contactId), initialize: false });
       return entry.memory.inspectDatabaseImport(clean(sourcePath));
     },
 
@@ -809,7 +874,11 @@ export function createLongTermMemoryService({
     },
 
     async importMemoryDatabase({ sourcePath, contactId } = {}) {
-      const entry = await activeEntry({ contactId: clean(contactId) });
+      // importDatabaseAsAgent snapshots the selected source into a staging
+      // file beside the target, rewrites that staged copy, validates it, and
+      // only then replaces the target atomically. Do not initialize the old
+      // target before that safety boundary.
+      const entry = await activeEntry({ contactId: clean(contactId), initialize: false });
       const scopeKey = `${entry.contact.agentId}:${clean(entry.sessionId)}`;
       // Let an already queued local maintenance pass finish before the target
       // database is swapped. New maintenance is queued against the imported

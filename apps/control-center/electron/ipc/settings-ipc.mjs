@@ -7,6 +7,7 @@ import {
 } from "@suzu-lives/agent-registry";
 import { sanitizePriceRevisions } from "@suzu-lives/cost-ledger";
 import { createContactProjectsService } from "../services/contact-projects.mjs";
+import { createSystemStatusService } from "../services/system-status.mjs";
 
 const DEFAULT_SETTINGS = Object.freeze({
   contactsRoot: "",
@@ -41,6 +42,10 @@ const DEFAULT_SETTINGS = Object.freeze({
 
 const MAX_AVATAR_DATA_URL_LENGTH = 2_800_000;
 const AVATAR_DATA_URL_PATTERN = /^data:image\/(?:png|jpeg|webp);base64,[a-z0-9+/]+={0,2}$/iu;
+
+function clean(value) {
+  return String(value ?? "").trim();
+}
 
 function normalizeProfile(value, fallbackName) {
   const displayName = String(value?.displayName || fallbackName).trim().slice(0, 60) || fallbackName;
@@ -246,8 +251,12 @@ export function createSettingsService({ app, dataStorageService = null }) {
   return { load, response, save, safePatch, usageLedgerPath };
 }
 
-export function registerSettingsIpc({ app, appUpdateService = null, contactProjectsService = null, dataStorageService, dialog, getMainWindow, ipcMain, shell, settingsService }) {
+export function registerSettingsIpc({ app, appUpdateService = null, contactProjectsService = null, dataStorageService, dialog, getMainWindow, ipcMain, onMemoryRecallEnabledChanged = null, shell, settingsService, systemStatusService = null }) {
   const contacts = contactProjectsService || createContactProjectsService({ settingsService });
+  const systemStatus = systemStatusService || createSystemStatusService({
+    dataRoot: () => clean(dataStorageService?.dataRoot) || clean(settingsService.response?.(settingsService.load?.())?.dataRoot),
+    settingsService,
+  });
   const updateService = appUpdateService || {
     status: () => ({ status: "unavailable", mode: "manual", version: "未知", message: "当前版本没有启用更新服务。" }),
     checkForUpdates: () => ({ status: "unavailable", mode: "manual", version: "未知", message: "当前版本没有启用更新服务。" }),
@@ -259,6 +268,7 @@ export function registerSettingsIpc({ app, appUpdateService = null, contactProje
   ipcMain.handle("settings:check-for-update", () => updateService.checkForUpdates());
   ipcMain.handle("settings:download-update", () => updateService.downloadUpdate());
   ipcMain.handle("settings:install-update", () => updateService.installUpdate());
+  ipcMain.handle("settings:system-status", () => systemStatus.scan());
   ipcMain.handle("settings:select-project", async () => {
     const current = settingsService.load();
     const result = await dialog.showOpenDialog(getMainWindow(), {
@@ -285,6 +295,13 @@ export function registerSettingsIpc({ app, appUpdateService = null, contactProje
     }
     if (Object.hasOwn(patch, "claudeToolPermissions") || Object.hasOwn(patch, "claudeProjectDefaults")) {
       await contacts.syncClaudeProjectSettings({ previousProjectDefaults: current.claudeProjectDefaults });
+    }
+    if (Object.hasOwn(patch, "memoryRecallEnabled")
+      && current.memoryRecallEnabled !== settings.memoryRecallEnabled
+      && typeof onMemoryRecallEnabledChanged === "function") {
+      // The setting is already durable. A project with an invalid user-owned
+      // Hook file must not make this global switch look like it failed.
+      await Promise.resolve(onMemoryRecallEnabledChanged({ enabled: settings.memoryRecallEnabled })).catch(() => undefined);
     }
     return {
       ...settingsService.response(settings),

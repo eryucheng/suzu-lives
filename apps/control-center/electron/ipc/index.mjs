@@ -127,8 +127,35 @@ export function registerIpcHandlers({ app, appUpdateService = null, dataStorageS
   const projectHooksService = createProjectHooksService({
     settingsService,
     executablePath: app.getPath("exe"),
+    hookRunnerPath: path.join(app.getAppPath(), "electron", "hooks", "runner.mjs"),
     packaged: app.isPackaged,
   });
+  const syncMemoryRecallHooks = async ({ enabled = settingsService.load()?.memoryRecallEnabled !== false } = {}) => {
+    if (!app.isPackaged) return { status: "development", contacts: [], errors: [] };
+    let catalog;
+    try {
+      catalog = await contactProjectsService.snapshot();
+    } catch (error) {
+      return { status: "unavailable", contacts: [], errors: [{ message: clean(error?.message) || "无法读取联系人项目。" }] };
+    }
+    const contacts = Array.isArray(catalog?.contacts) ? catalog.contacts : [];
+    const updated = [];
+    const errors = [];
+    for (const contact of contacts) {
+      const projectRoot = clean(contact?.projectRoot);
+      if (!projectRoot) continue;
+      try {
+        const recallEnabled = enabled && contact?.longTermMemoryEnabled !== false;
+        const result = recallEnabled
+          ? await projectHooksService.installMemoryRecall({ projectRoot })
+          : await projectHooksService.uninstallMemoryRecall({ projectRoot });
+        updated.push({ id: clean(contact?.id), projectRoot, status: result?.status || "updated" });
+      } catch (error) {
+        errors.push({ id: clean(contact?.id), projectRoot, message: clean(error?.message) || "无法更新记忆召回 Hook。" });
+      }
+    }
+    return { status: errors.length ? "partial" : "ready", contacts: updated, errors };
+  };
   let iphoneFeedbackService = null;
   let conversation = null;
   let requestProactiveContactMaintenance = () => undefined;
@@ -138,6 +165,7 @@ export function registerIpcHandlers({ app, appUpdateService = null, dataStorageS
     packaged: app.isPackaged,
     executablePath: app.getPath("exe"),
     launcherCommand: currentCliLauncher,
+    openExternal: (url) => shell.openExternal(url),
     projectHooksService,
     onIphoneFeedbackChange: () => iphoneFeedbackService?.restart(),
     onProactiveContactMaintenanceRequested: (request) => requestProactiveContactMaintenance(request),
@@ -150,6 +178,7 @@ export function registerIpcHandlers({ app, appUpdateService = null, dataStorageS
   });
   void initialClaudeSettingsSync
     .catch(() => undefined)
+    .then(() => syncMemoryRecallHooks())
     .then(() => capabilitiesService.refreshManagedRegistrations())
     .catch(() => undefined);
   registerSettingsIpc({
@@ -160,6 +189,7 @@ export function registerIpcHandlers({ app, appUpdateService = null, dataStorageS
     dialog,
     getMainWindow,
     ipcMain,
+    onMemoryRecallEnabledChanged: ({ enabled }) => syncMemoryRecallHooks({ enabled }),
     shell,
     settingsService,
   });
@@ -179,7 +209,13 @@ export function registerIpcHandlers({ app, appUpdateService = null, dataStorageS
     shell,
     wechatAttachmentCli,
     claudeWorkspaceDirectories,
-    initializeContactCapabilities: (contact) => capabilitiesService.initializeDefaultContactCapabilities(contact),
+    initializeContactCapabilities: async (contact) => {
+      await capabilitiesService.initializeDefaultContactCapabilities(contact);
+      if (settingsService.load()?.memoryRecallEnabled !== false && contact?.longTermMemoryEnabled !== false) {
+        await projectHooksService.installMemoryRecall({ projectRoot: contact?.projectRoot });
+      }
+    },
+    onContactLongTermMemoryEnabledChanged: () => syncMemoryRecallHooks(),
     proactiveContactSettings: () => capabilitiesService.proactiveContactSettings(),
     isProactiveContactEnabled: ({ contactId }) => capabilitiesService.isCompanionContactEnabled({
       abilityId: "proactive-contact", contactId,
@@ -191,7 +227,12 @@ export function registerIpcHandlers({ app, appUpdateService = null, dataStorageS
     reader: conversation.reader,
     settingsService,
   });
-  registerConversationCompactorIpc({ ipcMain, compactorService: conversationCompactorService });
+  registerConversationCompactorIpc({
+    ipcMain,
+    compactorService: conversationCompactorService,
+    dialog,
+    getMainWindow,
+  });
   const unsubscribeCompactorAuto = conversation.chat.subscribe((event) => {
     if (event?.type !== "turn-complete") return;
     // Token-triggered compaction is still executed by the shared scheduler;

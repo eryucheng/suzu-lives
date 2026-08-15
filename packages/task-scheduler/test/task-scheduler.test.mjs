@@ -48,7 +48,7 @@ test("cron expressions match in local time", () => {
   assert.equal(cronMatches("*/15 9-17 * * 1-5", new Date(2026, 7, 5, 9, 15)), true);
 });
 
-test("schedule CLI creates a delayed contact task with parameters", async () => {
+test("schedule CLI creates and removes delay tasks with parameters", async () => {
   const root = await temporaryDirectory("suzu-schedule-cli-");
   const now = new Date("2026-08-05T10:00:00+08:00");
   const created = await runScheduleCli([

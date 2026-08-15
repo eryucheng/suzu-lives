@@ -68,6 +68,12 @@ test("Claude Code stream arguments create or resume only the selected native ses
     "--session-id", "new-session",
   ]);
   assert.deepEqual(claudeCliArguments({ sessionId: "saved-session", hasTranscript: true }).slice(-2), ["--resume", "saved-session"]);
+  const manual = claudeCliArguments({ sessionId: "manual-session", permissionMode: "default" });
+  const planned = claudeCliArguments({ sessionId: "plan-session", permissionMode: "plan" });
+  const bypassed = claudeCliArguments({ sessionId: "bypass-session", permissionMode: "bypassPermissions" });
+  assert.equal(manual[manual.indexOf("--permission-mode") + 1], "default");
+  assert.equal(planned[planned.indexOf("--permission-mode") + 1], "plan");
+  assert.equal(bypassed[bypassed.indexOf("--permission-mode") + 1], "bypassPermissions");
   assert.deepEqual(claudeAllowedTools({ read: true, webFetch: false, webSearch: true }), ["Read", "WebSearch"]);
   const allowed = claudeCliArguments({ sessionId: "allowed-tools", allowedTools: claudeAllowedToolsForWorkspace({ read: true, webFetch: true, webSearch: false }, { suzuCliCommand: "suzu-lives" }), workspaceDirectories: ["D:/Suzu/workspace"] });
   assert.match(allowed[allowed.indexOf("--allowed-tools") + 1], /^Read,WebFetch,/u);
@@ -101,7 +107,7 @@ test("Claude runtime feature settings remove only disabled built-in tools and ba
   assert.equal(restricted[restricted.indexOf("--disallowed-tools") + 1], "Read,Glob,Grep,Edit,Write,Bash,WebFetch,WebSearch,Agent,TodoWrite,AskUserQuestion");
 });
 
-test("schedule prompt keeps the two companion capabilities independently scoped", () => {
+test("schedule prompt keeps Agent scheduling scoped to proactive contact", () => {
   const proactiveOnly = scheduleSystemPrompt({
     conversationAdd: "suzu-lives schedule add --contact-id contact-suzu",
     list: "suzu-lives schedule list",
@@ -111,6 +117,13 @@ test("schedule prompt keeps the two companion capabilities independently scoped"
   });
   assert.match(proactiveOnly, /用我的链式提示/u);
   assert.match(proactiveOnly, /用我的回访提示/u);
+
+  const merchantOnly = scheduleSystemPrompt({
+    operationAdd: "suzu-lives schedule add",
+    list: "suzu-lives schedule list",
+    remove: "suzu-lives schedule remove <任务ID>",
+  });
+  assert.equal(merchantOnly, "");
 });
 
 test("chat starts the local Claude CLI and forwards its stream", async () => {
@@ -138,7 +151,7 @@ test("chat starts the local Claude CLI and forwards its stream", async () => {
       contactIdForSession: async ({ sessionId, projectRoot: sessionProjectRoot }) => (
         sessionId === "session-1" && sessionProjectRoot === projectRoot ? "contact-suzu" : ""
       ),
-      ensureActiveSession: async () => ({ id: "session-1", projectRoot, hasTranscript: false }),
+      ensureActiveSession: async () => ({ id: "session-1", projectRoot, hasTranscript: false, approvalMode: "plan" }),
     },
     homeDirectory,
     suzuCliCommand: '"Suzu Lives Console.exe" --suzu-lives-cli',
@@ -160,7 +173,7 @@ test("chat starts the local Claude CLI and forwards its stream", async () => {
   assert.ok(spawned[0].args.includes("--session-id"));
   assert.match(spawned[0].args[spawned[0].args.indexOf("--allowed-tools") + 1], /^Read,WebFetch,WebSearch,/u);
   assert.ok(spawned[0].args[spawned[0].args.indexOf("--allowed-tools") + 1].includes('Bash("Suzu Lives Console.exe" --suzu-lives-cli *)'));
-  assert.equal(spawned[0].args[spawned[0].args.indexOf("--permission-mode") + 1], "acceptEdits");
+  assert.equal(spawned[0].args[spawned[0].args.indexOf("--permission-mode") + 1], "plan");
   assert.equal(spawned[0].args[spawned[0].args.indexOf("--add-dir") + 1], workspaceDirectory);
   assert.ok(spawned[0].args.includes("--disallowed-tools"));
   assert.equal(spawned[0].args[spawned[0].args.indexOf("--disallowed-tools") + 1], "Agent,TodoWrite,AskUserQuestion");
@@ -178,9 +191,12 @@ test("chat starts the local Claude CLI and forwards its stream", async () => {
   });
 
   spawned[0].child.emitJson({ type: "system", subtype: "init", slash_commands: ["/compact", { name: "/goal" }] });
-  spawned[0].child.emitJson({ type: "assistant", message: { content: [
+  spawned[0].child.emitJson({ type: "assistant", message: { stop_reason: "tool_use", content: [
     { type: "thinking", thinking: "先检查当前项目。" },
+    { type: "text", text: "先核对当前状态。" },
     { type: "tool_use", name: "Read", input: { file_path: "CLAUDE.md" } },
+  ] } });
+  spawned[0].child.emitJson({ type: "assistant", message: { stop_reason: "end_turn", content: [
     { type: "text", text: "我在。" },
   ] } });
   spawned[0].child.emitJson({ type: "user", message: { content: [{
@@ -210,10 +226,13 @@ test("chat starts the local Claude CLI and forwards its stream", async () => {
   await flush();
   assert.equal(events.find((event) => event.type === "reply-stream")?.content, "我在。");
   assert.deepEqual(events.filter((event) => event.type === "agent-reply").map((event) => event.content), ["我在。"]);
+  assert.equal(events.some((event) => event.type === "reply-stream" && event.content.includes("先核对当前状态。")), false);
+  assert.equal(events.some((event) => event.type === "agent-reply" && event.content.includes("先核对当前状态。")), false);
   assert.equal(events.find((event) => event.type === "reply")?.done, true);
   assert.equal(events.find((event) => event.type === "turn-complete")?.sessionId, "session-1");
   assert.equal(events.find((event) => event.type === "reply")?.projectRoot, projectRoot);
   assert.match(events.find((event) => event.type === "thinking")?.content || "", /先检查/u);
+  assert.match(events.filter((event) => event.type === "thinking").map((event) => event.content).join("\n"), /先核对当前状态/u);
   assert.match(events.find((event) => event.type === "tool")?.content || "", /Read/u);
   assert.match(events.find((event) => event.type === "usage")?.content || "", /合计 5/u);
   assert.deepEqual(events.find((event) => event.type === "slash-commands")?.commands, ["/compact", "/goal"]);
@@ -234,7 +253,7 @@ test("chat starts the local Claude CLI and forwards its stream", async () => {
   assert.match(callRequest?.requestId || "", /^suzu-.*:voice-call$/u);
 });
 
-test("chat uses the embedded memory lifecycle without handing recall back to Claude Hooks", async () => {
+test("chat keeps the memory archive lifecycle while UserPromptSubmit owns recall", async () => {
   const root = await temporaryDirectory("suzu-embedded-memory-");
   const projectRoot = path.join(root, "project");
   const homeDirectory = path.join(root, "home");
@@ -247,7 +266,7 @@ test("chat uses the embedded memory lifecycle without handing recall back to Cla
   const memoryRuntime = {
     prepareTurn: async (value) => {
       calls.push({ type: "prepare", value });
-      return { systemPrompt: "<suzu-long-term-memory>旧日片段</suzu-long-term-memory>" };
+      return { archiveTurn: "memory-turn-1" };
     },
     completeTurn: async (turn, value) => { calls.push({ type: "complete", turn, value }); },
     abortTurn: async (turn) => { calls.push({ type: "abort", turn }); },
@@ -267,17 +286,51 @@ test("chat uses the embedded memory lifecycle without handing recall back to Cla
   await service.send({ content: "记得我们上次聊的事情吗？" });
   assert.equal(calls[0]?.type, "prepare");
   assert.equal(calls[0]?.value.userText, "记得我们上次聊的事情吗？");
-  const promptIndex = spawned[0].args.indexOf("--append-system-prompt");
-  assert.match(spawned[0].args[promptIndex + 1], /旧日片段/u);
+  assert.equal(spawned[0].args.some((value) => String(value).includes("suzu-long-term-memory")), false);
 
   spawned[0].child.emitJson({ type: "result", result: "我记得。" });
   spawned[0].child.close();
   await flush();
   await flush();
   const completed = calls.find((item) => item.type === "complete");
-  assert.equal(completed?.turn?.systemPrompt, "<suzu-long-term-memory>旧日片段</suzu-long-term-memory>");
+  assert.equal(completed?.turn?.archiveTurn, "memory-turn-1");
   assert.equal(completed?.value?.assistantText, "我记得。");
   assert.equal(calls.some((item) => item.type === "abort"), false);
+});
+
+test("live chat renders long-term-memory Hook context as a system message", async () => {
+  const root = await temporaryDirectory("suzu-memory-hook-context-");
+  const projectRoot = path.join(root, "project");
+  const homeDirectory = path.join(root, "home");
+  const commandPath = path.join(homeDirectory, ".local", "bin", "claude.exe");
+  await fs.mkdir(projectRoot, { recursive: true });
+  await fs.mkdir(path.dirname(commandPath), { recursive: true });
+  await fs.writeFile(commandPath, "fixture");
+  const events = [];
+  const spawned = [];
+  const service = createConversationChatService({
+    homeDirectory,
+    onEvent: (event) => events.push(event),
+    reader: { ensureActiveSession: async () => ({ id: "memory-context-session", projectRoot, hasTranscript: false }) },
+    settingsService: { load: () => ({ projectRoot }) },
+    spawnImpl: () => {
+      const child = new FakeChild();
+      spawned.push(child);
+      return child;
+    },
+  });
+
+  await service.send({ content: "还记得我们上次去的地方吗？" });
+  spawned[0].emitJson({
+    type: "hook_additional_context",
+    attachment: { content: "内部说明\n<suzu-long-term-memory>私有回忆</suzu-long-term-memory>" },
+  });
+  await flush();
+  assert.equal(events.some((event) => event.type === "attachment" && /私有回忆/u.test(event.content || "")), false);
+  assert.equal(events.some((event) => event.type === "system" && event.content === "记忆召回\n私有回忆"), true);
+  spawned[0].emitJson({ type: "result", result: "记得。" });
+  spawned[0].close();
+  service.dispose();
 });
 
 test("iPhone feedback is archived by embedded memory without treating scheduled prompts as user memory", async () => {
@@ -295,7 +348,7 @@ test("iPhone feedback is archived by embedded memory without treating scheduled 
     memoryRuntime: {
       prepareTurn: async (value) => {
         prepared.push(value);
-        return { systemPrompt: "<suzu-long-term-memory>反馈上下文</suzu-long-term-memory>" };
+        return { archiveTurn: "iphone-feedback" };
       },
       completeTurn: async () => undefined,
       abortTurn: async () => undefined,
@@ -597,7 +650,7 @@ test("call opening stays hidden from Claude's user transcript while the existing
     memoryRuntime: {
       prepareTurn: async (value) => {
         prepared.push(value);
-        return { systemPrompt: "" };
+        return { archiveTurn: value.turnId };
       },
       completeTurn: async (turn, value) => { completed.push({ turn, value }); },
       abortTurn: async () => undefined,
@@ -645,7 +698,7 @@ test("call opening stays hidden from Claude's user transcript while the existing
   service.dispose();
 });
 
-test("a turn-specific memory recall starts fresh instead of reusing stale stream context", async () => {
+test("a recalled turn stays on the existing Claude stream", async () => {
   const root = await temporaryDirectory("suzu-chat-memory-stream-");
   const projectRoot = path.join(root, "project");
   const homeDirectory = path.join(root, "home");
@@ -660,7 +713,7 @@ test("a turn-specific memory recall starts fresh instead of reusing stale stream
     reader: { ensureActiveSession: async () => ({ id: "memory-stream-session", projectRoot, hasTranscript: true }) },
     homeDirectory,
     memoryRuntime: {
-      prepareTurn: async () => ({ systemPrompt: includeRecall ? "<suzu-long-term-memory>本轮召回</suzu-long-term-memory>" : "" }),
+      prepareTurn: async () => ({ legacyRecall: includeRecall ? "<suzu-long-term-memory>本轮召回</suzu-long-term-memory>" : "" }),
       completeTurn: async () => undefined,
       abortTurn: async () => undefined,
     },
@@ -678,11 +731,11 @@ test("a turn-specific memory recall starts fresh instead of reusing stale stream
 
   includeRecall = true;
   await service.send({ content: "需要按本轮召回的第二句" });
-  assert.equal(spawned.length, 2);
-  assert.equal(spawned[0].child.stdin.writableEnded, true);
-  const promptIndex = spawned[1].args.indexOf("--append-system-prompt");
-  assert.match(spawned[1].args[promptIndex + 1], /本轮召回/u);
-  spawned[1].child.close();
+  assert.equal(spawned.length, 1);
+  assert.equal(spawned[0].child.stdin.writableEnded, false);
+  assert.equal(spawned[0].args.some((value) => String(value).includes("本轮召回")), false);
+  assert.match(spawned[0].child.input, /需要按本轮召回的第二句/u);
+  spawned[0].child.close();
   service.dispose();
 });
 
@@ -697,11 +750,14 @@ test("copied Claude session ids remain isolated by project root", async () => {
   const spawned = [];
   const service = createConversationChatService({
     settingsService: { load: () => ({ projectRoot: projectA }) },
-    reader: { ensureActiveSession: async () => ({ id: "unused", projectRoot: projectA, hasTranscript: false }) },
+    reader: {
+      approvalModeForSession: async ({ projectRoot: requestedProjectRoot }) => requestedProjectRoot === projectA ? "plan" : "bypassPermissions",
+      ensureActiveSession: async () => ({ id: "unused", projectRoot: projectA, hasTranscript: false }),
+    },
     homeDirectory,
-    spawnImpl: (_command, _args, options) => {
+    spawnImpl: (_command, args, options) => {
       const child = new FakeChild();
-      spawned.push({ child, options });
+      spawned.push({ args, child, options });
       return child;
     },
   });
@@ -711,6 +767,8 @@ test("copied Claude session ids remain isolated by project root", async () => {
   assert.equal(spawned.length, 2);
   assert.equal(spawned[0].options.cwd, projectA);
   assert.equal(spawned[1].options.cwd, projectB);
+  assert.equal(spawned[0].args[spawned[0].args.indexOf("--permission-mode") + 1], "plan");
+  assert.equal(spawned[1].args[spawned[1].args.indexOf("--permission-mode") + 1], "bypassPermissions");
 
   const stopped = service.stop({ sessionId: "copied-session", projectRoot: projectA });
   assert.equal(stopped.stopped, true);
@@ -877,8 +935,14 @@ test("tool permission is returned only to the Claude process that requested it",
   await flush();
   assert.equal(events.find((event) => event.type === "permission")?.toolName, "Read");
 
-  const response = service.respondPermission({ requestId: "permission-1", behavior: "allow" });
+  assert.deepEqual(
+    service.respondPermissionForSession({ sessionId: "another-session", projectRoot, behavior: "allow" }),
+    { accepted: false, reason: "no-pending-permission" },
+  );
+  const response = service.respondPermissionForSession({ sessionId: "session-2", projectRoot, behavior: "allow" });
   assert.equal(response.accepted, true);
+  assert.equal(response.toolName, "Read");
+  assert.equal(events.find((event) => event.type === "permission-resolved")?.requestId, "permission-1");
   await flush();
   const messages = child.input.trim().split("\n").map((line) => JSON.parse(line));
   assert.deepEqual(messages[1], {

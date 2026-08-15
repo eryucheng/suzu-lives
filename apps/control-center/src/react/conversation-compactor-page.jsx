@@ -56,16 +56,22 @@ function settingsDraft(settings = {}) {
 function runStatus(lastRun) {
   if (!lastRun) return { label: "尚未压缩", tone: "muted" };
   if (lastRun.status === "written") return { label: "已完成压缩", tone: "success" };
+  if (lastRun.status === "imported") return { label: "已导入历史", tone: "success" };
   if (lastRun.status === "dry-run") return { label: "已检查", tone: "warning" };
   if (lastRun.status === "skipped") return { label: "未达到压缩条件", tone: "muted" };
   return { label: "已有记录", tone: "muted" };
 }
 
 function runDescription(lastRun) {
-  if (!lastRun) return "还没有这位联系人的压缩记录。";
+  if (!lastRun) return "还没有这位联系人的压缩或导入记录。";
   if (lastRun.status === "written") {
     const when = dateLabel(lastRun.writtenAt);
     return `${when ? `${when} 已` : "已"}压缩 ${lastRun.messagesCompacted || 0} 条较早消息。`;
+  }
+  if (lastRun.status === "imported") {
+    const when = dateLabel(lastRun.writtenAt);
+    const source = lastRun.sourceFileName ? `「${lastRun.sourceFileName}」` : "历史 JSONL";
+    return `${when ? `${when} 已` : "已"}导入 ${source}，并完整替换当前会话。`;
   }
   if (lastRun.reason) return lastRun.reason;
   if (lastRun.status === "dry-run") return "已完成检查，尚未写入摘要。";
@@ -147,6 +153,18 @@ function CompactorWorkspace({ actions, snapshot }) {
     ...contactScope,
     retainTokens: draft.manual.retainTokens,
   }));
+  const importHistory = () => invoke("import", async () => {
+    if (typeof actions.selectImportJsonl !== "function" || typeof actions.importJsonl !== "function") {
+      throw new Error("当前环境无法导入历史 JSONL。 ");
+    }
+    const selected = await actions.selectImportJsonl();
+    if (selected?.canceled || !clean(selected?.sourcePath)) return;
+    const confirmed = typeof window === "undefined" || window.confirm(
+      "会完整替换当前联系人的 Claude 会话 JSONL，并先创建安全备份。\n\n来源文件不会被修改；导入后会重新绑定到当前联系人的固定会话。\n\n确定导入吗？",
+    );
+    if (!confirmed) return;
+    await actions.importJsonl({ ...contactScope, sourcePath: selected.sourcePath });
+  });
 
   return (
     <GlassPanel as="section" className="conversation-compactor-workspace__main" intensity="soft">
@@ -227,9 +245,20 @@ function CompactorWorkspace({ actions, snapshot }) {
           </section>
         </div>
 
+        <section className="conversation-compactor-section conversation-compactor-section--import">
+          <header>
+            <div><span>IMPORT</span><h3>导入历史 JSONL</h3></div>
+          </header>
+          <p className="conversation-compactor-section__description">选择一份 Claude 会话 JSONL，完整替换当前联系人的会话记录。</p>
+          <p className="conversation-compactor-section__hint">源文件不会被修改；替换前会自动备份当前会话，并重新绑定到当前联系人的固定会话。</p>
+          <div className="conversation-compactor-section-actions">
+            <Button disabled={!canCompact || Boolean(pending)} onClick={importHistory} type="button" variant="secondary">{pending === "import" ? "正在导入…" : "导入历史 JSONL"}</Button>
+          </div>
+        </section>
+
         <section className="conversation-compactor-section conversation-compactor-section--result">
           <header>
-            <div><span>LAST RESULT</span><h3>最近一次压缩</h3></div>
+            <div><span>LAST RESULT</span><h3>最近一次操作</h3></div>
             {snapshot.lastRun?.mode ? <small>{snapshot.lastRun.mode}</small> : null}
           </header>
           <p className="conversation-compactor-section__description">{runDescription(snapshot.lastRun)}</p>

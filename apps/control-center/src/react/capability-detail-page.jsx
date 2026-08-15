@@ -601,7 +601,7 @@ function WechatSettings({ actions, wechatSnapshot }) {
       <SettingSurface description={status} eyebrow="行动 / 软件连接" title="连接微信">
         <AsyncSwitchRow checked={settings.enabled} label={settings.enabled ? "微信连接已开启" : "微信连接已关闭"} onChange={(enabled) => actions.saveWechatSettings?.({ enabled })} />
       </SettingSurface>
-      <SettingSurface description="这组设置独立于聊天页面的显示设置。默认只发送 Agent 的最终回复；工具权限始终需要回到桌面端确认。" eyebrow="DELIVERY" title="投递到微信的内容">
+      <SettingSurface description="这组设置独立于聊天页面的显示设置。默认发送 Agent 的最终回复和审批提示；收到提示后可在微信回复“允许”或“拒绝”。" eyebrow="DELIVERY" title="投递到微信的内容">
         <div className="capability-delivery-grid">
           {WECHAT_DELIVERY_OPTIONS.map(([key, label, description]) => <AsyncSwitchRow checked={settings.delivery[key] === true} description={description} key={key} label={label} onChange={(enabled) => actions.saveWechatSettings?.({ delivery: { ...settings.delivery, [key]: enabled } })} />)}
         </div>

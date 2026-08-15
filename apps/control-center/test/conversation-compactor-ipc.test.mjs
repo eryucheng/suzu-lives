@@ -11,10 +11,17 @@ test("conversation compactor IPC forwards only the selected contact scope", asyn
     save(value) { calls.push(["save", value]); return { status: "ready" }; },
     check(value) { calls.push(["check", value]); return { status: "ready" }; },
     run(value) { calls.push(["run", value]); return { status: "ready" }; },
+    importHistory(value) { calls.push(["import", value]); return { status: "ready" }; },
   };
   registerConversationCompactorIpc({
     ipcMain: { handle: (channel, handler) => handlers.set(channel, handler) },
     compactorService: service,
+    dialog: {
+      showOpenDialog: async () => ({
+        canceled: false,
+        filePaths: ["C:\\history.jsonl"],
+      }),
+    },
   });
 
   const scope = { contactId: "contact-suzu" };
@@ -22,10 +29,19 @@ test("conversation compactor IPC forwards only the selected contact scope", asyn
   await handlers.get("conversation-compactor:save")(null, { ...scope, prompt: "只用于这位联系人" });
   await handlers.get("conversation-compactor:check")(null, scope);
   await handlers.get("conversation-compactor:run")(null, scope);
+  assert.deepEqual(await handlers.get("conversation-compactor:select-import-jsonl")(), {
+    canceled: false,
+    sourcePath: "C:\\history.jsonl",
+  });
+  await handlers.get("conversation-compactor:import-jsonl")(null, {
+    ...scope,
+    sourcePath: "C:\\history.jsonl",
+  });
   assert.deepEqual(calls, [
     ["snapshot", scope],
     ["save", { ...scope, prompt: "只用于这位联系人" }],
     ["check", scope],
     ["run", scope],
+    ["import", { ...scope, sourcePath: "C:\\history.jsonl" }],
   ]);
 });

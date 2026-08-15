@@ -248,3 +248,176 @@ export async function runCompaction({
   writeJsonAtomic(path.join(paths.workDirectory, "last-run.json"), report);
   return report;
 }
+
+function importTimestamp(date) {
+  return date.toISOString().replace(/[:.]/gu, "-");
+}
+
+function samePath(left, right) {
+  return process.platform === "win32"
+    ? left.toLowerCase() === right.toLowerCase()
+    : left === right;
+}
+
+function rewriteImportedTranscript(sourceText, entries, { sessionId, projectRoot }) {
+  const entriesByIndex = new Map(entries.map((entry) => [entry.index, entry]));
+  const lineEnding = sourceText.includes("\r\n") ? "\r\n" : "\n";
+  const lines = sourceText.split(/\r?\n/u);
+  return lines.map((line, index) => {
+    const entry = entriesByIndex.get(index);
+    if (!entry) return line;
+    const record = { ...entry.record };
+    if (typeof record.sessionId === "string") record.sessionId = sessionId;
+    if (projectRoot && typeof record.cwd === "string") record.cwd = projectRoot;
+    return JSON.stringify(record);
+  }).join(lineEnding);
+}
+
+function importedSummaryText(context) {
+  const record = [...context.logical].reverse().find((entry) => entry.record?.isCompactSummary)?.record;
+  return typeof record?.message?.content === "string" ? record.message.content.trim() : "";
+}
+
+function replaceTranscriptFile({ backupDirectory, importedText, now, originalText, transcriptPath }) {
+  if (fs.readFileSync(transcriptPath, "utf8") !== originalText) {
+    throw new Error("导入期间当前会话 JSONL 发生了变化；本次未替换。 ");
+  }
+  fs.mkdirSync(backupDirectory, { recursive: true });
+  const suffix = `${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const backupPath = path.join(
+    backupDirectory,
+    `${path.basename(transcriptPath)}.pre-import-${importTimestamp(now)}.bak`,
+  );
+  const stagedPath = `${transcriptPath}.suzu-import-${suffix}.tmp`;
+  const retiredPath = `${transcriptPath}.suzu-import-retired-${suffix}.tmp`;
+  fs.writeFileSync(backupPath, originalText, { encoding: "utf8", flag: "wx" });
+  fs.writeFileSync(stagedPath, importedText, { encoding: "utf8", flag: "wx" });
+  let retired = false;
+  try {
+    if (fs.readFileSync(transcriptPath, "utf8") !== originalText) {
+      throw new Error("导入期间当前会话 JSONL 发生了变化；本次未替换。 ");
+    }
+    fs.renameSync(transcriptPath, retiredPath);
+    retired = true;
+    try {
+      fs.renameSync(stagedPath, transcriptPath);
+    } catch (error) {
+      if (!fs.existsSync(transcriptPath)) fs.renameSync(retiredPath, transcriptPath);
+      throw error;
+    }
+  } finally {
+    fs.rmSync(stagedPath, { force: true });
+  }
+
+  try {
+    const writtenText = fs.readFileSync(transcriptPath, "utf8");
+    if (writtenText !== importedText) {
+      throw new Error(`导入后当前会话 JSONL 又发生了变化；安全备份位于 ${backupPath}。`);
+    }
+    try {
+      reconstructLogicalContext(parseJsonlText(writtenText, transcriptPath));
+    } catch (error) {
+      fs.copyFileSync(backupPath, transcriptPath);
+      throw new Error(`导入后的 JSONL 校验失败，已从备份恢复：${error.message}`);
+    }
+  } finally {
+    if (retired) fs.rmSync(retiredPath, { force: true });
+  }
+  return { backupPath };
+}
+
+/**
+ * Replaces the current contact transcript with a selected native Claude JSONL.
+ * The source UUID chain stays intact; only the session/project scope is rebound
+ * so later --resume calls continue using the current contact's fixed session.
+ */
+export async function importConversationHistory({
+  sourceTranscriptPath,
+  transcriptPath,
+  agentId,
+  softwareDataDirectory,
+  targetProjectRoot = "",
+  now = new Date(),
+  sessionId = "",
+} = {}) {
+  const normalizedAgentId = clean(agentId);
+  if (!normalizedAgentId) throw new Error("importConversationHistory 需要 agentId。 ");
+  if (!clean(softwareDataDirectory)) throw new Error("importConversationHistory 需要 softwareDataDirectory。 ");
+  const targetSessionId = clean(sessionId);
+  if (!SESSION_ID_PATTERN.test(targetSessionId)) {
+    throw new Error("importConversationHistory 的目标 sessionId 无效。 ");
+  }
+  const requestedSourcePath = clean(sourceTranscriptPath);
+  const requestedTargetPath = clean(transcriptPath);
+  if (!requestedSourcePath) throw new Error("importConversationHistory 需要 sourceTranscriptPath。 ");
+  if (!requestedTargetPath) throw new Error("importConversationHistory 需要 transcriptPath。 ");
+  const normalizedSourcePath = path.resolve(requestedSourcePath);
+  const normalizedTargetPath = path.resolve(requestedTargetPath);
+  if (!fs.existsSync(normalizedSourcePath)) {
+    throw new Error(`导入来源 JSONL 不存在：${normalizedSourcePath}`);
+  }
+  if (!fs.existsSync(normalizedTargetPath)) {
+    throw new Error(`当前会话 JSONL 不存在：${normalizedTargetPath}`);
+  }
+  if (samePath(fs.realpathSync(normalizedSourcePath), fs.realpathSync(normalizedTargetPath))) {
+    throw new Error("不能把当前会话 JSONL 导入到自身。 ");
+  }
+  const executionTime = now instanceof Date ? now : new Date(now);
+  if (!Number.isFinite(executionTime.getTime())) throw new Error("now 不是有效时间。 ");
+  const projectRoot = clean(targetProjectRoot);
+  if (projectRoot && !path.isAbsolute(projectRoot)) {
+    throw new Error("importConversationHistory 的目标项目目录无效。 ");
+  }
+
+  const paths = resolvePaths({
+    softwareDataDirectory,
+    agentId: normalizedAgentId,
+    sessionId: targetSessionId,
+  });
+  fs.mkdirSync(paths.workDirectory, { recursive: true });
+  const sourceText = fs.readFileSync(normalizedSourcePath, "utf8");
+  const sourceEntries = parseJsonlText(sourceText, normalizedSourcePath);
+  const sourceContext = reconstructLogicalContext(sourceEntries);
+  if (!sourceEntries.some((entry) => typeof entry.record?.sessionId === "string" && entry.record.sessionId)) {
+    throw new Error("导入文件不是带会话标识的 Claude JSONL。 ");
+  }
+  const importedText = rewriteImportedTranscript(sourceText, sourceEntries, {
+    sessionId: targetSessionId,
+    projectRoot: projectRoot ? path.resolve(projectRoot) : "",
+  });
+  const importedEntries = parseJsonlText(importedText, normalizedSourcePath);
+  const importedContext = reconstructLogicalContext(importedEntries);
+  if (importedContext.currentTail?.record?.sessionId !== targetSessionId) {
+    throw new Error("导入 JSONL 无法绑定到当前联系人的会话。 ");
+  }
+  if (importedEntries.some((entry) => (
+    typeof entry.record?.sessionId === "string" && entry.record.sessionId !== targetSessionId
+  ))) {
+    throw new Error("导入 JSONL 无法绑定到当前联系人的会话。 ");
+  }
+
+  const originalText = fs.readFileSync(normalizedTargetPath, "utf8");
+  const replacement = replaceTranscriptFile({
+    backupDirectory: paths.backupDirectory,
+    importedText,
+    now: executionTime,
+    originalText,
+    transcriptPath: normalizedTargetPath,
+  });
+  const summary = importedSummaryText(importedContext);
+  writeFileAtomic(path.join(paths.workDirectory, "latest-summary.md"), summary ? `${summary}\n` : "");
+  const report = {
+    status: "imported",
+    transcriptPath: normalizedTargetPath,
+    sourceFileName: path.basename(normalizedSourcePath),
+    sessionId: targetSessionId,
+    backupPath: replacement.backupPath,
+    mode: "replace",
+    sourceRecords: sourceContext.logical.filter((entry) => entry.record.uuid).length,
+    importedRecords: importedEntries.filter((entry) => entry.record.uuid).length,
+    writtenAt: executionTime.toISOString(),
+  };
+  writeJsonAtomic(path.join(paths.workDirectory, "last-run.json"), report);
+  writeJsonAtomic(path.join(paths.workDirectory, "last-import.json"), report);
+  return report;
+}
