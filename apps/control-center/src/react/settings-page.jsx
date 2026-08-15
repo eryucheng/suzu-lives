@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Button, GlassPanel, PageHeader, Status, Tabs } from "suzu-design-system";
 
+import { sortSystemStatusSections } from "./system-status-order.mjs";
 import "./settings-page.css";
 
 const SETTINGS_TABS = [
@@ -190,7 +191,13 @@ function SystemStatusItem({ item }) {
 function SystemStatusCheck({ onCheck, pending, snapshot }) {
   const presentation = systemStatusPresentation(snapshot);
   const summary = snapshot?.summary || null;
-  const sections = Array.isArray(snapshot?.sections) ? snapshot.sections : [];
+  const sections = sortSystemStatusSections(snapshot?.sections);
+  const hasResults = sections.length > 0;
+  const [resultsOpen, setResultsOpen] = useState(true);
+  const check = async () => {
+    await onCheck?.();
+    setResultsOpen(true);
+  };
   return (
     <SettingCard className="settings-system-status-card">
       <div className="settings-card__layout">
@@ -201,10 +208,11 @@ function SystemStatusCheck({ onCheck, pending, snapshot }) {
           {summary ? <span className="settings-system-status-card__summary">已检查 {summary.total} 项 · Suzu 管理 {summary.managed} 项 · 外部/自定义 {summary.external} 项{formatCheckedAt(snapshot?.checkedAt) ? ` · ${formatCheckedAt(snapshot.checkedAt)}` : ""}</span> : null}
         </div>
         <div className="settings-card__actions">
-          <Button className="settings-action-button" disabled={pending} onClick={onCheck} size="md" variant="secondary">{pending ? "正在检查…" : "检查系统状态"}</Button>
+          {hasResults ? <Button aria-controls="settings-system-status-results" aria-expanded={resultsOpen} className="settings-action-button" disabled={pending} onClick={() => setResultsOpen((open) => !open)} size="md" variant="secondary">{resultsOpen ? "收起检查结果" : "查看检查结果"}</Button> : null}
+          <Button className="settings-action-button" disabled={pending} onClick={check} size="md" variant="secondary">{pending ? "正在检查…" : "检查系统状态"}</Button>
         </div>
       </div>
-      {sections.length ? <div className="settings-system-status-results">{sections.map((section) => {
+      {hasResults ? <div className="settings-system-status-results" hidden={!resultsOpen} id="settings-system-status-results">{sections.map((section) => {
         const items = Array.isArray(section?.items) ? section.items : [];
         const attention = items.some((entry) => ["error", "warning", "notice"].includes(cleanText(entry?.state)));
         return (

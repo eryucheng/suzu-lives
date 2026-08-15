@@ -70,6 +70,160 @@ function Get-GitHubAccessToken {
   return $token
 }
 
+function Format-ShortSha {
+  param(
+    [AllowEmptyString()]
+    [string]$Sha
+  )
+
+  if ([string]::IsNullOrWhiteSpace($Sha)) {
+    return "未知提交"
+  }
+  return $Sha.Substring(0, [Math]::Min(7, $Sha.Length))
+}
+
+function Format-LocalTimestamp {
+  param(
+    [AllowEmptyString()]
+    [string]$Timestamp
+  )
+
+  if ([string]::IsNullOrWhiteSpace($Timestamp)) {
+    return "未知时间"
+  }
+  try {
+    return ([DateTimeOffset]::Parse($Timestamp)).ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")
+  } catch {
+    return $Timestamp
+  }
+}
+
+function Get-TestBranchHead {
+  $head = Invoke-GitHubCli -CliArguments @(
+    "api",
+    "--method", "GET",
+    "repos/$Repository/commits/$Branch",
+    "--jq", ".sha"
+  ) -FailureMessage "无法查询远端 test 分支的最新提交。"
+  if ([string]::IsNullOrWhiteSpace($head)) {
+    throw "远端 test 分支没有返回最新提交。"
+  }
+  return $head
+}
+
+function Get-WorkflowRunForCommit {
+  param(
+    [Parameter(Mandatory)]
+    [string]$CommitSha
+  )
+
+  $runsJson = Invoke-GitHubCli -CliArguments @(
+    "run", "list",
+    "--repo", $Repository,
+    "--workflow", $Workflow,
+    "--branch", $Branch,
+    "--commit", $CommitSha,
+    "--limit", "1",
+    "--json", "databaseId,headSha,status,conclusion,createdAt,updatedAt"
+  ) -FailureMessage "无法查询远端最新提交的打包状态。"
+  $runs = @($runsJson | ConvertFrom-Json)
+  if ($runs.Count -eq 0) {
+    return $null
+  }
+  return $runs[0]
+}
+
+function Get-LatestSuccessfulWorkflowRun {
+  $runsJson = Invoke-GitHubCli -CliArguments @(
+    "run", "list",
+    "--repo", $Repository,
+    "--workflow", $Workflow,
+    "--branch", $Branch,
+    "--status", "success",
+    "--limit", "1",
+    "--json", "databaseId,headSha,status,conclusion,createdAt,updatedAt"
+  ) -FailureMessage "无法查询私有测试构建。"
+  $runs = @($runsJson | ConvertFrom-Json)
+  if ($runs.Count -ne 1 -or -not $runs[0].databaseId) {
+    throw "还没有成功的测试安装包。请先把代码推送到私有仓库的 test 分支，等待 GitHub Actions 完成。"
+  }
+  return $runs[0]
+}
+
+function Format-WorkflowStatus {
+  param(
+    [AllowNull()]
+    [object]$Run
+  )
+
+  if ($null -eq $Run) {
+    return "尚未创建构建任务"
+  }
+
+  $status = ([string]$Run.status).ToLowerInvariant()
+  $conclusion = ([string]$Run.conclusion).ToLowerInvariant()
+  switch ($status) {
+    "queued" { return "排队中" }
+    "requested" { return "等待调度" }
+    "waiting" { return "等待开始" }
+    "pending" { return "等待开始" }
+    "in_progress" { return "正在打包" }
+    "completed" {
+      switch ($conclusion) {
+        "success" { return "已成功" }
+        "failure" { return "失败" }
+        "cancelled" { return "已取消" }
+        "timed_out" { return "超时" }
+        "skipped" { return "已跳过" }
+        default { return "已结束（$conclusion）" }
+      }
+    }
+    default { return "状态：$status" }
+  }
+}
+
+function Confirm-DevUpdateDownload {
+  param(
+    [Parameter(Mandatory)]
+    [string]$BranchHead,
+    [AllowNull()]
+    [object]$CurrentRun,
+    [Parameter(Mandatory)]
+    [object]$LatestSuccessfulRun,
+    [Parameter(Mandatory)]
+    [object]$Artifact
+  )
+
+  $latestSha = Format-ShortSha -Sha ([string]$BranchHead)
+  $successfulSha = Format-ShortSha -Sha ([string]$LatestSuccessfulRun.headSha)
+  $artifactCreatedAt = Format-LocalTimestamp -Timestamp ([string]$Artifact.created_at)
+  $artifactSize = if ($null -ne $Artifact.size_in_bytes) { [Int64]$Artifact.size_in_bytes } else { 0 }
+  $artifactSizeLabel = if ($artifactSize -gt 0) { Format-ByteSize -Bytes $artifactSize } else { "未知大小" }
+
+  Write-Host ""
+  Write-Host "远端 test 更新检查："
+  Write-Host "  最新提交：$latestSha"
+  if ($CurrentRun) {
+    Write-Host "  该提交打包：$(Format-WorkflowStatus -Run $CurrentRun)"
+    Write-Host "  构建开始：$(Format-LocalTimestamp -Timestamp ([string]$CurrentRun.createdAt))"
+    if ([string]::IsNullOrWhiteSpace([string]$CurrentRun.updatedAt) -eq $false) {
+      Write-Host "  状态更新：$(Format-LocalTimestamp -Timestamp ([string]$CurrentRun.updatedAt))"
+    }
+  } else {
+    Write-Host "  该提交打包：尚未创建构建任务（可能仍在等待 GitHub Actions 接收推送）"
+  }
+  Write-Host "  可下载安装包：$successfulSha，产出于 $artifactCreatedAt，$artifactSizeLabel"
+
+  if ([string]$LatestSuccessfulRun.headSha -eq $BranchHead) {
+    Write-Host "  结果：可下载安装包就是远端最新提交。"
+  } else {
+    Write-Host "  注意：远端最新提交尚未成功打包；现在下载的是上一份成功安装包。"
+  }
+
+  $confirmation = (Read-Host "输入 Y 确认下载并继续更新；直接回车或输入其他内容退出").Trim()
+  return $confirmation -in @("Y", "y", "YES", "yes", "是")
+}
+
 function Get-WorkflowArtifact {
   param(
     [Parameter(Mandatory)]
@@ -288,29 +442,22 @@ try {
 
   Invoke-GitHubCli -CliArguments @("auth", "status", "--hostname", "github.com") -FailureMessage "GitHub CLI 尚未登录。请先运行 gh auth login 登录有私有仓库访问权的 GitHub 账号。" | Out-Null
 
-  $runsJson = Invoke-GitHubCli -CliArguments @(
-    "run", "list",
-    "--repo", $Repository,
-    "--workflow", $Workflow,
-    "--branch", $Branch,
-    "--status", "success",
-    "--limit", "1",
-    "--json", "databaseId,headSha,createdAt"
-  ) -FailureMessage "无法查询私有测试构建。"
-  $runs = @($runsJson | ConvertFrom-Json)
-  if ($runs.Count -ne 1 -or -not $runs[0].databaseId) {
-    throw "还没有成功的测试安装包。请先把代码推送到私有仓库的 test 分支，等待 GitHub Actions 完成。"
+  $branchHead = Get-TestBranchHead
+  $currentRun = Get-WorkflowRunForCommit -CommitSha $branchHead
+  $run = Get-LatestSuccessfulWorkflowRun
+  $artifact = Get-WorkflowArtifact -RunId ([Int64]$run.databaseId)
+  $artifactSize = if ($null -ne $artifact.size_in_bytes) { [Int64]$artifact.size_in_bytes } else { 0 }
+  if (-not (Confirm-DevUpdateDownload -BranchHead $branchHead -CurrentRun $currentRun -LatestSuccessfulRun $run -Artifact $artifact)) {
+    Write-Host "已取消更新；没有下载或安装任何内容。"
+    return
   }
 
-  $run = $runs[0]
   $temporaryDirectory = Join-Path ([System.IO.Path]::GetTempPath()) ("suzu-dev-update-" + [guid]::NewGuid().ToString("N"))
   New-Item -ItemType Directory -Path $temporaryDirectory | Out-Null
 
-  $shortSha = ([string]$run.headSha).Substring(0, [Math]::Min(7, ([string]$run.headSha).Length))
-  $artifact = Get-WorkflowArtifact -RunId ([Int64]$run.databaseId)
-  $artifactSize = if ($null -ne $artifact.size_in_bytes) { [Int64]$artifact.size_in_bytes } else { 0 }
+  $shortSha = Format-ShortSha -Sha ([string]$run.headSha)
   $artifactSizeLabel = if ($artifactSize -gt 0) { Format-ByteSize -Bytes $artifactSize } else { "未知大小" }
-  Write-Host "正在下载 test 分支的最新成功安装包（$shortSha，约 $artifactSizeLabel）..."
+  Write-Host "正在下载已确认的 test 安装包（$shortSha，约 $artifactSizeLabel）..."
   $archivePath = Join-Path $temporaryDirectory "$ArtifactName.zip"
   Download-GitHubArtifactArchive -ArtifactId ([Int64]$artifact.id) -ExpectedBytes $artifactSize -DestinationPath $archivePath
 

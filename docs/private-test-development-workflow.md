@@ -24,11 +24,16 @@ git push origin test
 
 ## 3. 进入私有 main
 
-测试通过后，只把已经验证的功能提交带入私有 `main`。不要把 `test` 分支的开发流程文档、测试更新器或其他 test 专用内容一并合入；必要时使用挑选提交的方式推进，而不是无差别合并整个 `test` 分支。
+测试通过后，只把已经验证的功能提交带入私有 `main`。必要时使用挑选提交的方式推进，而不是无差别合并整个 `test` 分支。
 
 私有 `main` 是完整能力的稳定基线，但不承载本机或 test 专用开发规则。
 
-`docs/private/**` 是私有 `test` 专用资料；其中 `docs/private/memory/**` 仅供开发查阅。推进私有 `main` 时，不得挑选、合并或复制这些文件。
+推进私有 `main` 时，以下私有 `test` 专用路径不得挑选、合并或复制：
+
+- `docs/private-test-development-workflow.md`
+- `docs/private/**`（其中 `docs/private/memory/**` 仅供开发查阅）
+- `tools/suzu-dev-update/Suzu Dev Update.cmd`
+- `tools/suzu-dev-update/suzu-dev-update.ps1`
 
 ## 4. 整理并同步公开版本
 

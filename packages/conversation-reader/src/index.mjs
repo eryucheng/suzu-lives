@@ -340,6 +340,17 @@ function textParts(content) {
   });
 }
 
+// Claude writes the text it generates immediately before a tool call as an
+// assistant record with stop_reason=tool_use.  It is execution reasoning, not
+// a person-facing reply, even though the block itself is encoded as text.
+function toolPlanningBlocks(blocks) {
+  return (blocks || []).map((block) => {
+    if (block?.kind !== "text") return block;
+    const text = boundedText(block.text);
+    return { kind: "thinking", text, preview: text.slice(0, 80) };
+  });
+}
+
 function isManagedSuzuSkillContext(content) {
   const values = typeof content === "string"
     ? [content]
@@ -426,7 +437,15 @@ export function buildDisplayMessages(records, maxMessages = 500) {
     let kind = "";
     let blocks = [];
     let label = "";
-    if (type === "user") {
+    // A compaction summary is deliberately stored as a Claude `user` record
+    // so it can be injected back into the resumed context. It is not a message
+    // authored by the local user, so preserve its contents but render it with
+    // the existing centered system-message treatment.
+    if (type === "user" && record?.isCompactSummary === true) {
+      kind = "system";
+      blocks = textParts(message.content);
+    }
+    else if (type === "user") {
       // Claude Code may append an internal `isMeta` resume marker. It is not
       // person-authored chat content and has a paired synthetic assistant row.
       if (isClaudeResumeMetaRecord(record)) continue;
@@ -454,6 +473,7 @@ export function buildDisplayMessages(records, maxMessages = 500) {
       kind = voiceCall ? "system" : "assistant";
       blocks = textParts(message.content);
       if (noReplyBlocks(blocks)) continue;
+      if (message.stop_reason === "tool_use") blocks = toolPlanningBlocks(blocks);
       if (voiceCall) blocks = callTranscriptBlocks(blocks, "对方");
     }
     else if (type === "system") { kind = "system"; blocks = [{ kind: "text", text: boundedText(record.content || (record.subtype ? `[系统: ${record.subtype}]` : "[系统消息]")) }]; }

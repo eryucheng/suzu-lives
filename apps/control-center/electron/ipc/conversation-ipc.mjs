@@ -42,10 +42,20 @@ function contactPresentationValue(value) {
     throw new Error("联系人显示状态只接受 contactId。 ");
   }
   const result = { id: clean(source.id) };
-  for (const key of ["pinned", "unread", "muted", "hidden"]) {
+  if (Object.hasOwn(source, "unread")) throw new Error("联系人未读状态请使用 unreadCount。 ");
+  for (const key of ["pinned", "muted", "hidden"]) {
     if (!Object.hasOwn(source, key)) continue;
     if (typeof source[key] !== "boolean") throw new Error("联系人显示状态无效。 ");
     result[key] = source[key];
+  }
+  for (const key of ["unreadCount", "unreadIncrement"]) {
+    if (!Object.hasOwn(source, key)) continue;
+    const minimum = key === "unreadIncrement" ? 1 : 0;
+    if (!Number.isSafeInteger(source[key]) || source[key] < minimum) throw new Error("联系人未读数无效。 ");
+    result[key] = source[key];
+  }
+  if (Object.hasOwn(result, "unreadCount") && Object.hasOwn(result, "unreadIncrement")) {
+    throw new Error("联系人未读状态不能同时指定多个值。 ");
   }
   if (!result.id || Object.keys(result).length === 1) throw new Error("请指定联系人及其显示状态。 ");
   return result;

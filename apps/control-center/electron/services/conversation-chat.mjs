@@ -135,6 +135,10 @@ function messageText(content) {
     .join("\n"), MAX_EVENT_TEXT_LENGTH);
 }
 
+function isToolPlanningAssistantMessage(value) {
+  return clean(value?.type) === "assistant" && clean(value?.message?.stop_reason) === "tool_use";
+}
+
 function serializedText(value) {
   if (typeof value === "string") return bounded(value, MAX_EVENT_TEXT_LENGTH);
   try { return bounded(JSON.stringify(value ?? {}, null, 2), MAX_EVENT_TEXT_LENGTH); }
@@ -865,6 +869,10 @@ export function createConversationChatService({
       for (const item of auxiliaryParts(raw?.message?.content)) emitAuxiliary(turn, item.type, item.content);
       const next = messageText(raw?.message?.content);
       if (next) {
+        if (isToolPlanningAssistantMessage(raw)) {
+          emitAuxiliary(turn, "thinking", next);
+          return;
+        }
         turn.text = mergeFullText(turn.text, next);
         turn.lastAssistantText = next;
         if (turn.kind !== "schedule") {

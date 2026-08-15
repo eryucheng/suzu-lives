@@ -4,6 +4,7 @@ import { resolveOnboardingStep, shouldShowOnboarding } from "./features/onboardi
 import { conversationReactSnapshot, createConversationReactActions, isScheduledAgentReply, startConversationPolling, stopConversationPolling } from "./features/conversation/index.mjs";
 import { loadRelationshipFiles, selectRelationshipContact } from "./features/relationship-settings/index.mjs";
 import { getAgentProfile, getIdentity } from "./core/identity.mjs";
+import { getSuzuSearchItem } from "./core/suzu-search.mjs";
 import { renderAppWorkspace, setGlobalNotice } from "./react/app-shell.jsx";
 import { endActiveConversationCall } from "./react/conversation-call-coordinator.mjs";
 
@@ -189,6 +190,42 @@ function setCapabilityPage(page, category = "", abilityId = "") {
 function setSettingsTab(tab) {
   state.settingsTab = ["general", "data", "privacy"].includes(tab) ? tab : "general";
   if (state.settingsTab === "privacy") void loadSettingsContacts();
+}
+
+function openSuzuSearchItem(value) {
+  const entry = getSuzuSearchItem(typeof value === "string" ? value : value?.id);
+  const target = entry?.target || {};
+  const view = String(target.view || "");
+  if (!view) return;
+
+  if (view === "relationships") {
+    setView("relationships");
+    if (target.relationshipPage) setRelationshipPage(target.relationshipPage);
+    return;
+  }
+  if (view === "settings") {
+    setSettingsTab(target.settingsTab);
+    setView("settings");
+    return;
+  }
+  if (view === "admin") {
+    setAdminTab(target.adminTab);
+    setView("admin");
+    return;
+  }
+  if (view === "create") {
+    setView("create");
+    if (target.createPage) setCreatePage(target.createPage);
+    return;
+  }
+  if (view === "capabilities") {
+    setView("capabilities");
+    if (target.capabilityPage) {
+      setCapabilityPage(target.capabilityPage, target.capabilityCategory, target.capabilityId);
+    }
+    return;
+  }
+  setView(view);
 }
 
 function openOnboarding() {
@@ -808,9 +845,9 @@ async function showIncomingConversationNotice(event) {
   const shouldMarkUnread = !conversationOpen || !contactId || contactId !== activeContactId;
   if (shouldMarkUnread) {
     state.conversationUnread = true;
-    if (contact && contact.unread !== true && typeof api.conversation?.updateContactPresentation === "function") {
+    if (contact && typeof api.conversation?.updateContactPresentation === "function") {
       try {
-        await api.conversation.updateContactPresentation({ id: contactId, unread: true });
+        await api.conversation.updateContactPresentation({ id: contactId, unreadIncrement: 1 });
       } catch {
         // Do not suppress an incoming-message signal if only its saved badge fails.
       }
@@ -854,9 +891,10 @@ async function showIncomingVoiceCall(event) {
   const identity = getIdentity(state.settings);
   const profile = identity.agents?.[String(contact.agentId || "").trim()] || identity.defaultAgent || getAgentProfile(state.settings);
   state.conversationUnread = true;
-  if (contact.unread !== true && typeof api.conversation?.updateContactPresentation === "function") {
+  const contactUnreadCount = Number.isSafeInteger(contact.unreadCount) && contact.unreadCount >= 0 ? contact.unreadCount : 0;
+  if (contactUnreadCount < 1 && typeof api.conversation?.updateContactPresentation === "function") {
     try {
-      await api.conversation.updateContactPresentation({ id: contactId, unread: true });
+      await api.conversation.updateContactPresentation({ id: contactId, unreadCount: 1 });
     } catch {
       // A visible incoming call remains useful if saving its badge fails.
     }
@@ -1434,7 +1472,7 @@ function routeForCurrentView() {
 
 function buildWorkspace() {
   return {
-    actions: { answerIncomingVoiceCall, declineIncomingVoiceCall, navigate: setView },
+    actions: { answerIncomingVoiceCall, declineIncomingVoiceCall, navigate: setView, openSuzuSearchItem },
     activeView: state.view,
     contentClassName: contentClassName(),
     conversationUnread: state.conversationUnread,

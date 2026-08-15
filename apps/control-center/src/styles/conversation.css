@@ -683,8 +683,8 @@
 
 .content--conversation .conversation-contact__avatar {
   display: grid;
-  overflow: hidden;
   place-items: center;
+  position: relative;
   background: #2a3040;
   color: #a9a2ff;
   font-weight: 720;
@@ -699,6 +699,7 @@
 .content--conversation .conversation-contact__avatar img {
   width: 100%;
   height: 100%;
+  border-radius: inherit;
   object-fit: cover;
 }
 
@@ -736,14 +737,27 @@
   padding-top: 4px;
 }
 
-.content--conversation .conversation-contact__unread-dot {
-  display: block;
-  width: 8px;
-  height: 8px;
+.content--conversation .conversation-contact__unread-badge {
+  position: absolute;
+  z-index: 1;
+  top: -6px;
+  right: -7px;
+  display: grid;
+  min-width: 18px;
+  height: 18px;
+  box-sizing: border-box;
+  place-items: center;
+  border: 2px solid #171a20;
   border-radius: 999px;
-  background: #ff5b68;
-  box-shadow: 0 0 0 2px #171a20;
+  background: #fa5151;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 720;
+  line-height: 1;
+  padding: 0 3px;
 }
+
+.content--conversation .conversation-contact.active .conversation-contact__unread-badge { border-color: #252a33; }
 
 .content--conversation .conversation-contact__muted-mark {
   color: #8993a3;
@@ -2470,9 +2484,11 @@
   color: #07c160;
 }
 
-:root[data-theme="light"] .content--conversation .conversation-contact__unread-dot {
-  box-shadow: 0 0 0 2px #f4f4f5;
+:root[data-theme="light"] .content--conversation .conversation-contact__unread-badge {
+  border-color: #f4f4f5;
 }
+
+:root[data-theme="light"] .content--conversation .conversation-contact.active .conversation-contact__unread-badge { border-color: #e5e5e5; }
 
 :root[data-theme="light"] .content--conversation .conversation-contact__muted-mark {
   color: #8b8e95;

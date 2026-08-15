@@ -6,9 +6,9 @@
 }
 
 #content.content--settings > #settingsReactRoot {
-  display:flex;
+  display:block;
   min-height:0;
-  flex:1;
+  flex:0 0 auto;
 }
 
 .settings-react-page {

@@ -75,6 +75,10 @@ function clean(value) {
   return String(value ?? "").trim();
 }
 
+function unreadCount(contact) {
+  return Number.isSafeInteger(contact?.unreadCount) && contact.unreadCount >= 0 ? contact.unreadCount : 0;
+}
+
 export function isScheduledAgentReply(event) {
   return clean(event?.kind) === "schedule"
     && clean(event?.type) === "agent-reply"
@@ -785,6 +789,7 @@ export function conversationReactSnapshot(context) {
     const name = clean(contact?.name) || "未命名联系人";
     const selectedContact = clean(activeContact?.id) === clean(contact?.id);
     const contactAgent = identity?.agents?.[clean(contact?.agentId)] || identity?.defaultAgent || { displayName: name, avatarDataUrl: "" };
+    const contactUnreadCount = unreadCount(contact);
     return {
       avatar: avatarPayload(contactAgent, name),
       hidden: contact?.hidden === true,
@@ -794,7 +799,8 @@ export function conversationReactSnapshot(context) {
       pinned: contact?.pinned === true,
       preferred: clean(contact?.id) === preferredContactId,
       selected: selectedContact,
-      unread: contact?.unread === true,
+      unread: contactUnreadCount > 0,
+      unreadCount: contactUnreadCount,
     };
   });
   const contactRows = allContactRows.filter((contact) => !contact.hidden);
@@ -921,9 +927,9 @@ async function load(context, force = false) {
 async function markOpenedContactRead(context) {
   const contact = viewState.snapshot?.activeContact || null;
   const id = clean(contact?.id);
-  if (!id || contact?.unread !== true || !context.api.conversation.updateContactPresentation) return;
+  if (!id || unreadCount(contact) < 1 || !context.api.conversation.updateContactPresentation) return;
   try {
-    viewState.snapshot = await context.api.conversation.updateContactPresentation({ id, unread: false });
+    viewState.snapshot = await context.api.conversation.updateContactPresentation({ id, unreadCount: 0 });
     viewState.lastVersion = viewState.snapshot.version;
     context.render();
   } catch {
@@ -1620,9 +1626,10 @@ export function createConversationReactActions(context) {
       const id = clean(contactId);
       const source = value && typeof value === "object" && !Array.isArray(value) ? value : {};
       const patch = {};
-      for (const key of ["pinned", "unread", "muted", "hidden"]) {
+      for (const key of ["pinned", "muted", "hidden"]) {
         if (typeof source[key] === "boolean") patch[key] = source[key];
       }
+      if (Number.isSafeInteger(source.unreadCount) && source.unreadCount >= 0) patch.unreadCount = source.unreadCount;
       if (!id || !Object.keys(patch).length || viewState.sending || !context.api.conversation.updateContactPresentation) return;
       const contact = (Array.isArray(viewState.snapshot?.contacts) ? viewState.snapshot.contacts : [])
         .find((item) => clean(item?.id) === id) || null;
@@ -1636,8 +1643,8 @@ export function createConversationReactActions(context) {
         viewState.error = "";
         if (Object.hasOwn(patch, "pinned")) {
           viewState.notice = patch.pinned ? `已将“${name}”置顶。` : `已取消“${name}”置顶。`;
-        } else if (Object.hasOwn(patch, "unread")) {
-          viewState.notice = patch.unread ? `已将“${name}”标为未读。` : `已将“${name}”标为已读。`;
+        } else if (Object.hasOwn(patch, "unreadCount")) {
+          viewState.notice = patch.unreadCount > 0 ? `已将“${name}”标为未读。` : `已将“${name}”标为已读。`;
         } else if (Object.hasOwn(patch, "muted")) {
           viewState.notice = patch.muted ? `已开启“${name}”的消息免打扰。` : `已关闭“${name}”的消息免打扰。`;
         } else if (Object.hasOwn(patch, "hidden")) {

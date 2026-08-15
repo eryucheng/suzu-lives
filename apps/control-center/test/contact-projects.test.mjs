@@ -181,31 +181,37 @@ test("contact presentation state is persisted by ID and deletion removes only th
   const presented = await service.updatePresentation({
     id: second.activeContact.id,
     pinned: true,
-    unread: true,
+    unreadCount: 1,
     muted: true,
     hidden: true,
   });
   const secondContact = presented.contacts.find((contact) => contact.id === second.activeContact.id);
   assert.deepEqual(presented.contacts.map((contact) => contact.id), [second.activeContact.id, first.activeContact.id]);
   assert.deepEqual(
-    { hidden: secondContact?.hidden, pinned: secondContact?.pinned, unread: secondContact?.unread, muted: secondContact?.muted },
-    { hidden: true, pinned: true, unread: true, muted: true },
+    { hidden: secondContact?.hidden, pinned: secondContact?.pinned, unread: secondContact?.unread, unreadCount: secondContact?.unreadCount, muted: secondContact?.muted },
+    { hidden: true, pinned: true, unread: true, unreadCount: 1, muted: true },
   );
+
+  const incremented = await service.updatePresentation({ id: second.activeContact.id, unreadIncrement: 104 });
+  const incrementedContact = incremented.contacts.find((contact) => contact.id === second.activeContact.id);
+  assert.equal(incrementedContact?.unreadCount, 105);
 
   await service.rename({ id: second.activeContact.id, name: "已改备注" });
   const metadataPath = path.join(second.activeContact.projectRoot, ".suzu-lives", "contact.json");
   const metadata = JSON.parse(await fs.readFile(metadataPath, "utf8"));
   assert.deepEqual(
-    { hidden: metadata.hidden, pinned: metadata.pinned, unread: metadata.unread, muted: metadata.muted },
-    { hidden: true, pinned: true, unread: true, muted: true },
+    { hidden: metadata.hidden, pinned: metadata.pinned, unreadCount: metadata.unreadCount, muted: metadata.muted },
+    { hidden: true, pinned: true, unreadCount: 105, muted: true },
   );
+  assert.equal(Object.hasOwn(metadata, "unread"), false);
 
-  const read = await service.updatePresentation({ id: second.activeContact.id, unread: false });
+  const read = await service.updatePresentation({ id: second.activeContact.id, unreadCount: 0 });
   const readContact = read.contacts.find((contact) => contact.id === second.activeContact.id);
   assert.deepEqual(
-    { hidden: readContact?.hidden, pinned: readContact?.pinned, unread: readContact?.unread, muted: readContact?.muted },
-    { hidden: true, pinned: true, unread: false, muted: true },
+    { hidden: readContact?.hidden, pinned: readContact?.pinned, unread: readContact?.unread, unreadCount: readContact?.unreadCount, muted: readContact?.muted },
+    { hidden: true, pinned: true, unread: false, unreadCount: 0, muted: true },
   );
+  assert.equal(Object.hasOwn(JSON.parse(await fs.readFile(metadataPath, "utf8")), "unreadCount"), false);
 
   const restored = await service.updatePresentation({ id: second.activeContact.id, hidden: false });
   const restoredContact = restored.contacts.find((contact) => contact.id === second.activeContact.id);
@@ -223,6 +229,18 @@ test("contact presentation state is persisted by ID and deletion removes only th
   assert.deepEqual(removed.contacts.map((contact) => contact.id), [second.activeContact.id]);
   assert.equal(settings.preferredContactId, second.activeContact.id);
   assert.equal(settings.projectRoot, second.activeContact.projectRoot);
+});
+
+test("unread counts reject the former boolean flag", async () => {
+  const contactsRoot = await temporaryDirectory("suzu-contact-unread-count-");
+  let settings = { contactsRoot, projectRoot: "", preferredContactId: "" };
+  const service = createContactProjectsService({
+    settingsService: { load: () => settings, save: (next) => { settings = next; return settings; } },
+  });
+  const created = await service.create({ name: "小苏" });
+  await assert.rejects(service.updatePresentation({ id: created.activeContact.id, unread: true }), /unreadCount/u);
+  await assert.rejects(service.updatePresentation({ id: created.activeContact.id, unreadCount: -1 }), /未读数无效/u);
+  await assert.rejects(service.updatePresentation({ id: created.activeContact.id, unreadCount: 1, unreadIncrement: 1 }), /不能同时指定/u);
 });
 
 test("renaming the owner only updates matching user profile titles", async () => {

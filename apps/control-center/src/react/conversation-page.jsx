@@ -9,6 +9,11 @@ const COMMON_EMOJI = ["🙂", "😊", "🥺", "✨", "❤️"];
 
 let activeConversationAudio = null;
 
+function unreadBadgeLabel(value) {
+  const count = Number.isSafeInteger(value) && value > 0 ? value : 1;
+  return count > 99 ? "99+" : String(count);
+}
+
 function PersonAvatar({ avatar, fallback = "" }) {
   if (avatar?.src) return <img alt="" src={avatar.src} />;
   return <span>{avatar?.initial || fallback}</span>;
@@ -52,7 +57,7 @@ function ConversationRoster({ actions, contacts, hasContactsRoot, rosterEmpty })
       </div>
       {contacts.length ? contacts.map((contact, index) => (
         <button
-          aria-label={`${contact.name}${contact.unread ? "，有未读消息" : ""}${contact.muted ? "，已开启消息免打扰" : ""}`}
+          aria-label={`${contact.name}${contact.unread ? `，有${unreadBadgeLabel(contact.unreadCount)}条未读消息` : ""}${contact.muted ? "，已开启消息免打扰" : ""}`}
           aria-current={contact.selected ? "page" : undefined}
           className={`conversation-contact${contact.selected ? " active" : ""}`}
           key={`${contact.id || "contact"}-${index}`}
@@ -69,12 +74,13 @@ function ConversationRoster({ actions, contacts, hasContactsRoot, rosterEmpty })
           }}
           type="button"
         >
-          <span className="conversation-contact__avatar"><PersonAvatar avatar={contact.avatar} fallback={contact.name} /></span>
+          <span className="conversation-contact__avatar">
+            <PersonAvatar avatar={contact.avatar} fallback={contact.name} />
+            {contact.unread ? <span aria-hidden="true" className="conversation-contact__unread-badge">{unreadBadgeLabel(contact.unreadCount)}</span> : null}
+          </span>
           <span className="conversation-contact__copy"><strong>{contact.name}</strong></span>
           <span className="conversation-contact__state" title={contact.unread ? "有未读消息" : contact.muted ? "已开启消息免打扰" : contact.selected ? "当前联系人" : "联系人"}>
-            {contact.unread ? <span aria-hidden="true" className="conversation-contact__unread-dot" /> : null}
             {contact.muted ? <span aria-hidden="true" className="conversation-contact__muted-mark">免</span> : null}
-            {contact.selected ? <span aria-hidden="true" className="conversation-contact__selected-mark">●</span> : null}
           </span>
         </button>
       )) : <div className="conversation-roster__empty">{rosterEmpty}</div>}
@@ -98,7 +104,7 @@ function ContactContextMenu({ actions, menu }) {
   >
     <button disabled={menu.preferred} onClick={() => { void actions.setPreferredContact?.(menu.contactId); }} role="menuitem" type="button">{preferredLabel}</button>
     <button onClick={() => { void actions.updateContactPresentation?.(menu.contactId, { pinned: !menu.pinned }); }} role="menuitem" type="button">{pinnedLabel}</button>
-    <button onClick={() => { void actions.updateContactPresentation?.(menu.contactId, { unread: !menu.unread }); }} role="menuitem" type="button">{unreadLabel}</button>
+    <button onClick={() => { void actions.updateContactPresentation?.(menu.contactId, { unreadCount: menu.unread ? 0 : 1 }); }} role="menuitem" type="button">{unreadLabel}</button>
     <button onClick={() => { void actions.updateContactPresentation?.(menu.contactId, { muted: !menu.muted }); }} role="menuitem" type="button">{mutedLabel}</button>
     <button onClick={() => { void actions.updateContactPresentation?.(menu.contactId, { hidden: !menu.hidden }); }} role="menuitem" type="button">{hiddenLabel}</button>
     <button className="conversation-contact-context-menu__danger" onClick={() => { void actions.removeContact?.(menu.contactId); }} role="menuitem" type="button">删除联系人</button>

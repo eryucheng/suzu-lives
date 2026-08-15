@@ -127,7 +127,7 @@ test("reader exposes contact presentation state and clears an unread contact whe
   });
   const first = await contactProjectsService.create({ name: "小苏" });
   await contactProjectsService.create({ name: "工作" });
-  await contactProjectsService.updatePresentation({ id: first.activeContact.id, pinned: true, unread: true, muted: true, hidden: true });
+  await contactProjectsService.updatePresentation({ id: first.activeContact.id, pinned: true, unreadCount: 105, muted: true, hidden: true });
   const reader = createConversationReader({
     contactProjectsService,
     settingsService: { load: () => settings, save: (next) => { settings = next; return settings; } },
@@ -137,15 +137,15 @@ test("reader exposes contact presentation state and clears an unread contact whe
   const beforeOpen = await reader.snapshot();
   assert.equal(beforeOpen.contacts[0].id, first.activeContact.id);
   assert.deepEqual(
-    { hidden: beforeOpen.contacts[0].hidden, pinned: beforeOpen.contacts[0].pinned, unread: beforeOpen.contacts[0].unread, muted: beforeOpen.contacts[0].muted },
-    { hidden: true, pinned: true, unread: true, muted: true },
+    { hidden: beforeOpen.contacts[0].hidden, pinned: beforeOpen.contacts[0].pinned, unread: beforeOpen.contacts[0].unread, unreadCount: beforeOpen.contacts[0].unreadCount, muted: beforeOpen.contacts[0].muted },
+    { hidden: true, pinned: true, unread: true, unreadCount: 105, muted: true },
   );
 
   const opened = await reader.selectContact({ id: first.activeContact.id });
   assert.equal(opened.activeContact.id, first.activeContact.id);
   assert.deepEqual(
-    { hidden: opened.activeContact.hidden, pinned: opened.activeContact.pinned, unread: opened.activeContact.unread, muted: opened.activeContact.muted },
-    { hidden: true, pinned: true, unread: false, muted: true },
+    { hidden: opened.activeContact.hidden, pinned: opened.activeContact.pinned, unread: opened.activeContact.unread, unreadCount: opened.activeContact.unreadCount, muted: opened.activeContact.muted },
+    { hidden: true, pinned: true, unread: false, unreadCount: 0, muted: true },
   );
 });
 

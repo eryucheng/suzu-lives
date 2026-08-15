@@ -27,6 +27,43 @@ test("display model covers user, assistant blocks, system, attachment, and tool 
   assert.deepEqual(messages.map((message) => message.kind), ["user", "assistant", "system", "system", "attachment"]); assert.deepEqual(messages[1].blocks.map((block) => block.kind), ["thinking", "tool_use", "text"]); assert.equal(messages[2].blocks[0].kind, "tool_result");
 });
 
+test("assistant text that stops for a tool renders as thinking rather than a reply", () => {
+  const messages = buildDisplayMessages([
+    {
+      type: "assistant",
+      message: {
+        stop_reason: "tool_use",
+        content: [
+          { type: "text", text: "先核对当前状态。" },
+          { type: "tool_use", name: "Read", input: { file_path: "CLAUDE.md" } },
+        ],
+      },
+    },
+    { type: "assistant", message: { stop_reason: "end_turn", content: [{ type: "text", text: "这是最终回复。" }] } },
+  ]);
+
+  assert.deepEqual(messages[0].blocks.map((block) => block.kind), ["thinking", "tool_use"]);
+  assert.equal(messages[0].blocks[0].text, "先核对当前状态。");
+  assert.deepEqual(messages[1].blocks.map((block) => block.kind), ["text"]);
+});
+
+test("compactor summaries stay system messages even though Claude stores them as user records", () => {
+  const messages = buildDisplayMessages([
+    { type: "user", uuid: "person-message", message: { role: "user", content: "这是我自己发的消息。" } },
+    { type: "system", subtype: "compact_boundary", content: "Conversation compacted" },
+    {
+      type: "user",
+      uuid: "compact-summary",
+      isCompactSummary: true,
+      message: { role: "user", content: "<conversation_summary>这是压缩摘要。</conversation_summary>" },
+    },
+  ]);
+
+  assert.deepEqual(messages.map((message) => message.kind), ["user", "system", "system"]);
+  assert.equal(messages[0].blocks[0].text, "这是我自己发的消息。");
+  assert.equal(messages[2].blocks[0].text, "<conversation_summary>这是压缩摘要。</conversation_summary>");
+});
+
 test("managed Skill context injected by Claude never becomes a user chat bubble", () => {
   const messages = buildDisplayMessages([
     { type: "user", timestamp: "2026-08-07T16:48:32.531Z", message: { content: "还好，你能发语音给我听吗" } },

@@ -22,6 +22,10 @@ function clean(value) {
   return String(value ?? "").trim();
 }
 
+function unreadCount(contact) {
+  return Number.isSafeInteger(contact?.unreadCount) && contact.unreadCount >= 0 ? contact.unreadCount : 0;
+}
+
 function projectScopeKey(value) {
   const source = clean(value);
   if (!source || !path.isAbsolute(source)) return "";
@@ -125,6 +129,7 @@ function publicSession(session) {
 
 function publicContact(contact) {
   if (!contact || typeof contact !== "object") return null;
+  const count = unreadCount(contact);
   return {
     id: clean(contact.id),
     name: clean(contact.name),
@@ -132,7 +137,8 @@ function publicContact(contact) {
     hidden: contact.hidden === true,
     muted: contact.muted === true,
     pinned: contact.pinned === true,
-    unread: contact.unread === true,
+    unread: count > 0,
+    unreadCount: count,
     approvalMode: normalizeClaudePermissionMode(contact.approvalMode),
     longTermMemoryEnabled: contact.longTermMemoryEnabled !== false,
     ...(clean(contact.updatedAt) ? { updatedAt: clean(contact.updatedAt) } : {}),
@@ -313,7 +319,7 @@ export function createConversationReader({
       clean(contact?.agentId),
       contact?.hidden === true,
       contact?.pinned === true,
-      contact?.unread === true,
+      unreadCount(contact),
       contact?.muted === true,
       normalizeClaudePermissionMode(contact?.approvalMode),
       contact?.longTermMemoryEnabled !== false,
@@ -451,8 +457,8 @@ export function createConversationReader({
   const selectContact = async ({ id } = {}) => {
     if (!contactProjectsService?.select) throw new ConversationReaderError("当前版本未接入联系人项目服务。 ");
     const selected = await contactProjectsService.select({ id });
-    if (selected?.activeContact?.unread === true && contactProjectsService.updatePresentation) {
-      await contactProjectsService.updatePresentation({ id: selected.activeContact.id, unread: false });
+    if (unreadCount(selected?.activeContact) > 0 && contactProjectsService.updatePresentation) {
+      await contactProjectsService.updatePresentation({ id: selected.activeContact.id, unreadCount: 0 });
     }
     return snapshot();
   };

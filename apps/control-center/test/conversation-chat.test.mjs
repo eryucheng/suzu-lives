@@ -192,9 +192,12 @@ test("chat starts the local Claude CLI and forwards its stream", async () => {
   });
 
   spawned[0].child.emitJson({ type: "system", subtype: "init", slash_commands: ["/compact", { name: "/goal" }] });
-  spawned[0].child.emitJson({ type: "assistant", message: { content: [
+  spawned[0].child.emitJson({ type: "assistant", message: { stop_reason: "tool_use", content: [
     { type: "thinking", thinking: "先检查当前项目。" },
+    { type: "text", text: "先核对当前状态。" },
     { type: "tool_use", name: "Read", input: { file_path: "CLAUDE.md" } },
+  ] } });
+  spawned[0].child.emitJson({ type: "assistant", message: { stop_reason: "end_turn", content: [
     { type: "text", text: "我在。" },
   ] } });
   spawned[0].child.emitJson({ type: "user", message: { content: [{
@@ -224,10 +227,13 @@ test("chat starts the local Claude CLI and forwards its stream", async () => {
   await flush();
   assert.equal(events.find((event) => event.type === "reply-stream")?.content, "我在。");
   assert.deepEqual(events.filter((event) => event.type === "agent-reply").map((event) => event.content), ["我在。"]);
+  assert.equal(events.some((event) => event.type === "reply-stream" && event.content.includes("先核对当前状态。")), false);
+  assert.equal(events.some((event) => event.type === "agent-reply" && event.content.includes("先核对当前状态。")), false);
   assert.equal(events.find((event) => event.type === "reply")?.done, true);
   assert.equal(events.find((event) => event.type === "turn-complete")?.sessionId, "session-1");
   assert.equal(events.find((event) => event.type === "reply")?.projectRoot, projectRoot);
   assert.match(events.find((event) => event.type === "thinking")?.content || "", /先检查/u);
+  assert.match(events.filter((event) => event.type === "thinking").map((event) => event.content).join("\n"), /先核对当前状态/u);
   assert.match(events.find((event) => event.type === "tool")?.content || "", /Read/u);
   assert.match(events.find((event) => event.type === "usage")?.content || "", /合计 5/u);
   assert.deepEqual(events.find((event) => event.type === "slash-commands")?.commands, ["/compact", "/goal"]);

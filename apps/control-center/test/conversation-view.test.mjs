@@ -49,6 +49,18 @@ test("conversation display preferences filter optional records but keep user tex
   assert.deepEqual(filterConversationItems(messages), [{ kind: "user", blocks: [{ kind: "text", text: "保留的普通文本" }] }]);
 });
 
+test("tool-planning thinking follows the thinking preference and uses the detail renderer", () => {
+  const toolPlanning = [{
+    kind: "assistant",
+    blocks: [{ kind: "thinking", preview: "先核对当前状态。", text: "先核对当前状态。" }],
+  }];
+
+  const hidden = conversationMessageRows(toolPlanning, { state: { settings: { conversationPreferences: { thinking: false } } } });
+  assert.equal(hidden.some((row) => row.type === "message"), false);
+  const shown = conversationMessageRows(toolPlanning, { state: { settings: { conversationPreferences: { thinking: true } } } });
+  assert.deepEqual(shown[0]?.blocks, [{ detail: "先核对当前状态。", title: "思考 · 先核对当前状态。", type: "detail" }]);
+});
+
 test("local chat overlays reconcile across tool-heavy transcripts without hiding a later repeated message", () => {
   const sentAt = "2026-08-14T10:00:00.000Z";
   const repliedAt = "2026-08-14T10:01:00.000Z";
