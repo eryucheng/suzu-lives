@@ -74,6 +74,10 @@ test("Electron preload exposes the memory bridge", async () => {
   assert.equal(typeof bridge?.conversation?.updateContactApprovalMode, "function");
   assert.equal(typeof bridge?.conversation?.updateContactLongTermMemoryEnabled, "function");
   assert.equal(typeof bridge?.conversation?.removeContact, "function");
+  assert.equal(typeof bridge?.conversation?.emojiStickers?.snapshot, "function");
+  assert.equal(typeof bridge?.conversation?.emojiStickers?.select, "function");
+  assert.equal(typeof bridge?.conversation?.emojiStickers?.add, "function");
+  assert.equal(typeof bridge?.conversation?.emojiStickers?.send, "function");
   assert.equal(typeof bridge?.conversationCompactor?.snapshot, "function");
   assert.equal(typeof bridge?.conversationCompactor?.save, "function");
   assert.equal(typeof bridge?.conversationCompactor?.check, "function");
@@ -132,6 +136,18 @@ test("Electron preload exposes the memory bridge", async () => {
   await bridge.conversation.removeContact({ id: "contact-suzu", confirmed: true });
   assert.equal(calls.at(-1).channel, "conversation:remove-contact");
   assert.deepEqual(JSON.parse(JSON.stringify(calls.at(-1).args[0])), { id: "contact-suzu", confirmed: true });
+  await bridge.conversation.emojiStickers.snapshot();
+  await bridge.conversation.emojiStickers.select();
+  await bridge.conversation.emojiStickers.add({ selectionToken: "selected-sticker" });
+  await bridge.conversation.emojiStickers.send({ id: "sticker-1" });
+  assert.deepEqual(calls.slice(-4).map((call) => call.channel), [
+    "conversation:emoji-stickers",
+    "conversation:select-emoji-sticker",
+    "conversation:add-emoji-sticker",
+    "conversation:send-emoji-sticker",
+  ]);
+  assert.deepEqual(JSON.parse(JSON.stringify(calls.at(-2).args[0])), { selectionToken: "selected-sticker" });
+  assert.deepEqual(JSON.parse(JSON.stringify(calls.at(-1).args[0])), { id: "sticker-1" });
   await bridge.memory.reviewOverview({ reviewStates: ["pending"] });
   await bridge.memory.reviewProposal("relation", "review-1");
   await bridge.memory.resolveReview("structure", "review-2", "accept", "确认");
