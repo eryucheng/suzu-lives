@@ -488,6 +488,57 @@ test("a WeChat image and file become one native Claude multimodal user message",
   service.dispose();
 });
 
+test("a favorite sticker keeps its image and sends an explicit sticker meaning to Claude", async () => {
+  const root = await temporaryDirectory("suzu-sticker-inbound-chat-");
+  const projectRoot = path.join(root, "project");
+  const homeDirectory = path.join(root, "home");
+  const commandPath = path.join(homeDirectory, ".local", "bin", "claude.exe");
+  const stickerPath = path.join(root, "cheer.gif");
+  await Promise.all([
+    fs.mkdir(projectRoot, { recursive: true }),
+    fs.mkdir(path.dirname(commandPath), { recursive: true }),
+    fs.writeFile(stickerPath, Buffer.from("GIF89a-sticker")),
+  ]);
+  await fs.writeFile(commandPath, "fixture");
+  const spawned = [];
+  const service = createConversationChatService({
+    settingsService: { load: () => ({ projectRoot }) },
+    reader: { ensureActiveSession: async () => ({ id: "unused", projectRoot, hasTranscript: false }) },
+    homeDirectory,
+    spawnImpl: () => {
+      const child = new FakeChild();
+      spawned.push(child);
+      return child;
+    },
+  });
+
+  await service.sendToSession({
+    content: "",
+    memoryText: "用户发送了一个表情包：cheer.gif",
+    media: [{
+      data: Buffer.from("GIF89a-sticker"),
+      fileName: "cheer.gif",
+      kind: "image",
+      mimeType: "image/gif",
+      path: stickerPath,
+    }],
+    mediaSource: "sticker",
+    projectRoot,
+    sessionId: "sticker-session",
+  });
+  await flush();
+
+  const input = JSON.parse(spawned[0].input.trim());
+  assert.deepEqual(input.message.content[0], {
+    type: "image",
+    source: { type: "base64", media_type: "image/gif", data: Buffer.from("GIF89a-sticker").toString("base64") },
+  });
+  assert.match(input.message.content.at(-1).text, /<suzu-sticker>/u);
+  assert.match(input.message.content.at(-1).text, /"source":"suzu-sticker"/u);
+  assert.match(input.message.content.at(-1).text, /不要当成普通照片或文件附件/u);
+  service.dispose();
+});
+
 test("messages in the same Claude session run in FIFO order", async () => {
   const root = await temporaryDirectory("suzu-chat-queue-");
   const projectRoot = path.join(root, "project");

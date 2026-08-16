@@ -186,6 +186,10 @@
   gap:8px;
 }
 
+.settings-system-status-results[hidden] {
+  display:none;
+}
+
 .settings-system-status-section {
   border-top:1px solid var(--border);
   padding-top:8px;

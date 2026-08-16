@@ -1,17 +1,52 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import emojiMartData from "@emoji-mart/data/sets/15/apple.json";
+import emojiMartI18n from "@emoji-mart/data/i18n/zh.json";
+import appleEmojiSpritesheet from "emoji-datasource-apple/img/apple/sheets-128/32.png";
+import { Picker } from "emoji-mart";
 import { ChatVoice } from "suzu-design-system";
 
 import { shouldSubmitConversationOnEnter } from "../features/conversation/index.mjs";
 import { useConversationCall } from "./conversation-call.jsx";
 import "./conversation-page.css";
 
-const COMMON_EMOJI = ["🙂", "😊", "🥺", "✨", "❤️"];
-
 let activeConversationAudio = null;
+
+const EMOJI_COLLECTION_CATEGORIES = emojiMartData.categories
+  .map((category) => String(category?.id || "").trim())
+  .filter(Boolean);
 
 function unreadBadgeLabel(value) {
   const count = Number.isSafeInteger(value) && value > 0 ? value : 1;
   return count > 99 ? "99+" : String(count);
+}
+
+function unreadContactSummary(contacts) {
+  const unreadContacts = (Array.isArray(contacts) ? contacts : []).filter((contact) => contact?.unread);
+  if (!unreadContacts.length) return null;
+  const visibleNames = unreadContacts
+    .map((contact) => String(contact?.name || "").trim())
+    .filter(Boolean)
+    .slice(0, 2);
+  const names = visibleNames.join("、") || "联系人";
+  const more = unreadContacts.length > visibleNames.length ? `等 ${unreadContacts.length} 位` : "";
+  const label = unreadContacts.length === 1
+    ? `${names}有 ${unreadBadgeLabel(unreadContacts[0]?.unreadCount)} 条未读`
+    : `${names}${more}有未读`;
+  const title = unreadContacts
+    .map((contact) => `${String(contact?.name || "").trim() || "联系人"} ${unreadBadgeLabel(contact?.unreadCount)} 条`)
+    .join("；");
+  return { label, title: `未读消息：${title}` };
+}
+
+function ConversationUnreadIndicator({ contacts }) {
+  const summary = unreadContactSummary(contacts);
+  if (!summary) return null;
+  return (
+    <span className="conversation-pane__unread-summary" title={summary.title}>
+      <i aria-hidden="true" />
+      <span className="conversation-pane__unread-summary-copy">{summary.label}</span>
+    </span>
+  );
 }
 
 function PersonAvatar({ avatar, fallback = "" }) {
@@ -26,6 +61,12 @@ function ConversationIcon({ name }) {
   }
   if (name === "emoji") {
     return <svg {...common}><circle cx="12" cy="12" r="8.3" /><path d="M8.4 14.2c.9 1.2 2.1 1.8 3.6 1.8s2.7-.6 3.6-1.8M9 9.5h.01M15 9.5h.01" /></svg>;
+  }
+  if (name === "favorite") {
+    return <svg {...common}><path d="M12 20s-7.1-4.4-8.6-8.6C2.2 8.1 4.1 5.5 7.1 5.5c1.8 0 3.5.9 4.9 2.6 1.4-1.7 3.1-2.6 4.9-2.6 3 0 4.9 2.6 3.7 5.9C19.1 15.6 12 20 12 20Z" /></svg>;
+  }
+  if (name === "plus") {
+    return <svg {...common}><path d="M12 5v14M5 12h14" /></svg>;
   }
   if (name === "box") {
     return <svg {...common}><path d="m12 3 8 4.4v9.2L12 21l-8-4.4V7.4L12 3Z" /><path d="m4 7.4 8 4.4 8-4.4M12 11.8V21" /></svg>;
@@ -115,6 +156,160 @@ function StaticTool({ icon, label }) {
   return <span aria-hidden="true" className="conversation-composer__static-tool" title={label}><ConversationIcon name={icon} /></span>;
 }
 
+function EmojiMartContent({ mode, onSelect }) {
+  const hostRef = useRef(null);
+  const onSelectRef = useRef(onSelect);
+  const selectionPendingRef = useRef(false);
+
+  useEffect(() => {
+    onSelectRef.current = onSelect;
+  }, [onSelect]);
+
+  useEffect(() => {
+    const host = hostRef.current;
+    if (!host) return undefined;
+    let selectionTimer = null;
+
+    const picker = new Picker({
+      data: emojiMartData,
+      getSpritesheetURL: () => appleEmojiSpritesheet,
+      i18n: emojiMartI18n,
+      onEmojiSelect: (emoji) => {
+        const native = String(emoji?.native || "");
+        if (!native || selectionPendingRef.current) return;
+        selectionPendingRef.current = true;
+        selectionTimer = window.setTimeout(() => {
+          selectionTimer = null;
+          onSelectRef.current?.(native);
+        }, 0);
+      },
+      autoFocus: mode === "search",
+      categories: mode === "search" ? [] : EMOJI_COLLECTION_CATEGORIES,
+      emojiButtonSize: 42,
+      emojiSize: 26,
+      maxFrequentRows: 0,
+      navPosition: "none",
+      perLine: 8,
+      previewPosition: "none",
+      searchPosition: mode === "search" ? "static" : "none",
+      set: "apple",
+      theme: document.documentElement.dataset.theme === "light" ? "light" : "dark",
+    });
+
+    host.replaceChildren(picker);
+    return () => {
+      if (selectionTimer !== null) window.clearTimeout(selectionTimer);
+      picker.remove();
+    };
+  }, [mode]);
+
+  return <div className="conversation-emoji-mart" ref={hostRef} />;
+}
+
+function stickerErrorMessage(error) {
+  return String(error?.message || error || "无法完成表情包操作。").trim() || "无法完成表情包操作。";
+}
+
+function ConversationEmojiPicker({ actions }) {
+  const [tab, setTab] = useState("collection");
+  const [stickers, setStickers] = useState([]);
+  const [loadingStickers, setLoadingStickers] = useState(true);
+  const [addingSticker, setAddingSticker] = useState(false);
+  const [sendingStickerId, setSendingStickerId] = useState("");
+  const [stickerError, setStickerError] = useState("");
+
+  useEffect(() => {
+    let current = true;
+    void (async () => {
+      try {
+        const snapshot = await actions.loadEmojiStickers?.();
+        if (!current || !snapshot || snapshot.status === "unavailable") return;
+        if (snapshot.status === "invalid") throw new Error(snapshot.message || "表情包收藏无法读取。");
+        setStickers(Array.isArray(snapshot.items) ? snapshot.items : []);
+      } catch (error) {
+        if (current) setStickerError(stickerErrorMessage(error));
+      } finally {
+        if (current) setLoadingStickers(false);
+      }
+    })();
+    return () => { current = false; };
+  }, []);
+
+  const addSticker = async () => {
+    if (addingSticker) return;
+    setAddingSticker(true);
+    setStickerError("");
+    try {
+      const snapshot = await actions.addEmojiSticker?.();
+      if (!snapshot || snapshot.canceled) return;
+      if (snapshot.status === "invalid") throw new Error(snapshot.message || "表情包收藏无法读取。");
+      setStickers(Array.isArray(snapshot.items) ? snapshot.items : []);
+    } catch (error) {
+      setStickerError(stickerErrorMessage(error));
+    } finally {
+      setAddingSticker(false);
+    }
+  };
+
+  const sendSticker = async (id) => {
+    if (!id || sendingStickerId) return;
+    setSendingStickerId(id);
+    setStickerError("");
+    try {
+      await actions.sendEmojiSticker?.(id);
+    } catch (error) {
+      setStickerError(stickerErrorMessage(error));
+    } finally {
+      setSendingStickerId("");
+    }
+  };
+
+  const selectTab = (next) => {
+    setStickerError("");
+    setTab(next);
+  };
+
+  return (
+    <section aria-label="表情选择器" className="conversation-emoji-panel conversation-emoji-picker">
+      <div className="conversation-emoji-picker__body">
+        {tab === "favorites" ? (
+          <div aria-label="收藏表情包" className="conversation-sticker-favorites" role="tabpanel">
+            <div className="conversation-sticker-favorites__grid">
+              <button
+                aria-label="添加收藏表情包"
+                className="conversation-sticker-favorites__item conversation-sticker-favorites__add"
+                disabled={addingSticker}
+                onClick={() => { void addSticker(); }}
+                title="添加收藏表情包"
+                type="button"
+              ><ConversationIcon name="plus" /></button>
+              {stickers.map((sticker) => (
+                <button
+                  aria-label={`发送表情包 ${sticker.fileName || "未命名表情包"}`}
+                  className="conversation-sticker-favorites__item"
+                  disabled={Boolean(sendingStickerId)}
+                  key={sticker.id}
+                  onClick={() => { void sendSticker(sticker.id); }}
+                  title={sticker.fileName || "收藏表情包"}
+                  type="button"
+                ><img alt="" src={sticker.fileUrl} /></button>
+              ))}
+            </div>
+            {!loadingStickers && !stickers.length ? <p className="conversation-sticker-favorites__empty">收藏的表情包会显示在这里。</p> : null}
+            <p className="conversation-sticker-favorites__hint">支持 PNG、JPG、WebP、GIF；发送时会标记为表情包。</p>
+          </div>
+        ) : <EmojiMartContent mode={tab} onSelect={actions.insertEmoji} />}
+      </div>
+      {stickerError ? <p className="conversation-emoji-picker__error" role="status">{stickerError}</p> : null}
+      <nav aria-label="表情选择器分类" className="conversation-emoji-picker__tabs" role="tablist">
+        <button aria-label="搜索表情" aria-selected={tab === "search"} className={tab === "search" ? "is-active" : ""} onClick={() => selectTab("search")} role="tab" title="搜索表情" type="button"><ConversationIcon name="search" /></button>
+        <button aria-label="全部表情" aria-selected={tab === "collection"} className={tab === "collection" ? "is-active" : ""} onClick={() => selectTab("collection")} role="tab" title="全部表情" type="button"><ConversationIcon name="emoji" /></button>
+        <button aria-label="收藏表情包" aria-selected={tab === "favorites"} className={tab === "favorites" ? "is-active" : ""} onClick={() => selectTab("favorites")} role="tab" title="收藏表情包" type="button"><ConversationIcon name="favorite" /></button>
+      </nav>
+    </section>
+  );
+}
+
 function ConversationComposer({ actions, composer, focusRequest = 0 }) {
   const inputRef = useRef(null);
   const unavailable = Boolean(composer.unavailable);
@@ -168,12 +363,8 @@ function ConversationComposer({ actions, composer, focusRequest = 0 }) {
             <button className="conversation-send-button" disabled={unavailable}>{submitLabel}</button>
           </div>
         </div>
-        {composer.emojiOpen ? (
-          <div aria-label="常用表情" className="conversation-emoji-panel" role="group">
-            {COMMON_EMOJI.map((emoji) => <button aria-label={`插入表情 ${emoji}`} key={emoji} onClick={() => actions.insertEmoji(emoji)} type="button">{emoji}</button>)}
-          </div>
-        ) : null}
       </div>
+      {composer.emojiOpen ? <ConversationEmojiPicker actions={actions} /> : null}
     </form>
   );
 }
@@ -184,6 +375,7 @@ function ConversationHeader({ actions, snapshot, callControl }) {
     <header className="conversation-pane__header">
       <h1 className="conversation-peer">{snapshot.peer || "未选择联系人"}</h1>
       <div className="conversation-pane__actions">
+        <ConversationUnreadIndicator contacts={snapshot.contacts} />
         <button
           aria-label={callControl.active ? "正在与此联系人语音通话，可在下方状态栏挂断" : "开始与此联系人语音通话"}
           aria-pressed={callControl.active}
@@ -317,6 +509,17 @@ function ConversationMessageBlock({ block, onPreview }) {
   if (block.type === "detail") return <details className="conversation-detail"><summary>{block.title}</summary><pre>{block.detail}</pre></details>;
   if (block.type !== "media") return null;
   const preview = block.preview;
+  if (block.mediaKind === "sticker") {
+    return preview ? (
+      <button
+        aria-label={`放大查看表情包 ${preview.name}`}
+        className="conversation-sticker"
+        onClick={() => onPreview(preview)}
+        title={preview.name}
+        type="button"
+      ><img alt="表情包" loading="lazy" src={preview.url} /></button>
+    ) : null;
+  }
   return (
     <section className={`conversation-media conversation-media--${block.mediaKind}`}>
       {preview ? (

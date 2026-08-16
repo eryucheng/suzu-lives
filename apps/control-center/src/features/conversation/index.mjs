@@ -347,7 +347,7 @@ function messageLineNumber(message) {
 
 function imageMediaItem(value, message) {
   const url = clean(value?.fileUrl);
-  if (value?.kind !== "media" || value?.mediaKind !== "image" || !url) return null;
+  if (value?.kind !== "media" || !["image", "sticker"].includes(value?.mediaKind) || !url) return null;
   const messageId = messageSourceId(message);
   const lineNumber = messageLineNumber(message);
   const name = clean(value.fileName) || "图片附件";
@@ -367,14 +367,15 @@ function messageBlock(value, prefs, message) {
     if (value.mediaKind === "audio") return null;
     const imageName = clean(value.fileName) || "图片附件";
     const imageItem = imageMediaItem(value, message);
+    const sticker = value.mediaKind === "sticker";
     return {
       fileName: clean(value.fileName) || "未命名附件",
       fileUrl: clean(value.fileUrl),
-      mediaKind: value.mediaKind === "image" ? "image" : "file",
+      mediaKind: sticker ? "sticker" : value.mediaKind === "image" ? "image" : "file",
       preview: imageItem,
       size: attachmentSize(value.size),
       type: "media",
-      typeLabel: value.mediaKind === "image" ? "图片" : "文件",
+      typeLabel: sticker ? "表情包" : value.mediaKind === "image" ? "图片" : "文件",
     };
   }
   if (value.kind === "thinking" && !prefs.thinking) return null;
@@ -1865,8 +1866,37 @@ export function createConversationReactActions(context) {
     },
     insertEmoji: (emoji) => {
       viewState.draft = `${viewState.draft}${String(emoji || "")}`;
+      viewState.emojiOpen = false;
       focusComposer();
       context.render();
+    },
+    loadEmojiStickers: async () => {
+      const stickers = context.api?.conversation?.emojiStickers;
+      if (typeof stickers?.snapshot !== "function") return { items: [], status: "unavailable" };
+      return stickers.snapshot();
+    },
+    addEmojiSticker: async () => {
+      const stickers = context.api?.conversation?.emojiStickers;
+      if (typeof stickers?.select !== "function" || typeof stickers?.add !== "function") {
+        throw new Error("当前版本无法添加收藏表情包。");
+      }
+      const selection = await stickers.select();
+      if (selection?.canceled) return selection;
+      return stickers.add({ selectionToken: clean(selection?.selectionToken) });
+    },
+    sendEmojiSticker: async (id) => {
+      const stickers = context.api?.conversation?.emojiStickers;
+      if (typeof stickers?.send !== "function") throw new Error("当前版本无法发送收藏表情包。");
+      const result = await stickers.send({ id: clean(id) });
+      viewState.emojiOpen = false;
+      viewState.error = "";
+      viewState.notice = "";
+      viewState.shouldStickToLatest = true;
+      scheduleScrollToLatest();
+      focusComposer();
+      context.render();
+      void load(context, true);
+      return result;
     },
     jumpFromMediaPreview: async ({ lineNumber, messageId } = {}) => {
       viewState.mediaPreview = null;

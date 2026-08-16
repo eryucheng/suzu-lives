@@ -46,5 +46,6 @@ test("system status results can be collapsed without shrinking the settings tabs
   assert.match(page, /收起检查结果/u);
   assert.match(page, /查看检查结果/u);
   assert.match(page, /hidden=\{!resultsOpen\}/u);
+  assert.match(styles, /\.settings-system-status-results\[hidden\]\s*\{\s*display:none;/u);
   assert.match(styles, /#content\.content--settings > #settingsReactRoot\s*\{[\s\S]*?display:block;[\s\S]*?flex:0 0 auto;/u);
 });

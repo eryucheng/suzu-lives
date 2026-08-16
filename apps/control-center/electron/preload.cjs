@@ -66,6 +66,12 @@ contextBridge.exposeInMainWorld("suzuConsole", {
     updateContactApprovalMode: (value) => ipcRenderer.invoke("conversation:update-contact-approval-mode", value),
     updateContactLongTermMemoryEnabled: (value) => ipcRenderer.invoke("conversation:update-contact-long-term-memory", value),
     removeContact: (value) => ipcRenderer.invoke("conversation:remove-contact", value),
+    emojiStickers: {
+      snapshot: () => ipcRenderer.invoke("conversation:emoji-stickers"),
+      select: () => ipcRenderer.invoke("conversation:select-emoji-sticker"),
+      add: (value) => ipcRenderer.invoke("conversation:add-emoji-sticker", value),
+      send: (value) => ipcRenderer.invoke("conversation:send-emoji-sticker", value),
+    },
     send: (value) => ipcRenderer.invoke("conversation:send", value),
     stop: (value) => ipcRenderer.invoke("conversation:stop", value),
     steer: (value) => ipcRenderer.invoke("conversation:steer", value),

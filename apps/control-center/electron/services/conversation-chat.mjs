@@ -27,6 +27,8 @@ const CONVERSATION_ATTACHMENT_RECEIPT = "suzu-conversation-attachment";
 const VOICE_CALL_REQUEST_RECEIPT = "suzu-voice-call-request";
 const WECHAT_MEDIA_MANIFEST_OPEN = "<suzu-wechat-media>";
 const WECHAT_MEDIA_MANIFEST_CLOSE = "</suzu-wechat-media>";
+const STICKER_MEDIA_MANIFEST_OPEN = "<suzu-sticker>";
+const STICKER_MEDIA_MANIFEST_CLOSE = "</suzu-sticker>";
 const CLAUDE_RUNTIME_FEATURE_DEFAULTS = Object.freeze({
   bash: true,
   edit: true,
@@ -350,26 +352,28 @@ function inboundMediaFileName(value, fallback) {
 
 function normalizeInboundMedia(value, mediaSource = "wechat") {
   const items = Array.isArray(value) ? value : [];
-  const source = clean(mediaSource).toLowerCase();
-  if (!new Set(["wechat", "iphone"]).has(source)) throw new ConversationChatError("会话附件来源无效。");
+  const sourceKey = clean(mediaSource).toLowerCase();
+  if (!new Set(["wechat", "iphone", "sticker"]).has(sourceKey)) throw new ConversationChatError("会话附件来源无效。");
   if (items.length > MAX_INBOUND_MEDIA_ITEMS) {
     throw new ConversationChatError(`单条会话消息最多包含 ${MAX_INBOUND_MEDIA_ITEMS} 个附件。`);
   }
+  if (sourceKey === "sticker" && items.length !== 1) throw new ConversationChatError("一条表情包消息只能包含一张图片。");
   return items.map((entry, index) => {
-    const source = plainObject(entry);
-    const kind = clean(source.kind).toLowerCase();
+    const item = plainObject(entry);
+    const kind = clean(item.kind).toLowerCase();
     if (!new Set(["image", "file"]).has(kind)) throw new ConversationChatError("会话附件类型无效。");
-    const sourcePath = clean(source.path);
+    if (sourceKey === "sticker" && kind !== "image") throw new ConversationChatError("表情包必须是图片。");
+    const sourcePath = clean(item.path);
     if (!sourcePath || !path.isAbsolute(sourcePath)) throw new ConversationChatError("会话附件缓存路径无效。");
-    const data = Buffer.isBuffer(source.data) ? source.data : Buffer.from(source.data || []);
+    const data = Buffer.isBuffer(item.data) ? item.data : Buffer.from(item.data || []);
     if (!data.length || data.length > MAX_INBOUND_MEDIA_BYTES) {
       throw new ConversationChatError(`会话附件大小必须在 1 B 到 ${MAX_INBOUND_MEDIA_BYTES >> 20} MiB 之间。`);
     }
     return {
       kind,
       path: path.resolve(sourcePath),
-      fileName: inboundMediaFileName(source.fileName, `${kind}-${index + 1}`),
-      mimeType: clean(source.mimeType) || (kind === "image" ? "image/jpeg" : "application/octet-stream"),
+      fileName: inboundMediaFileName(item.fileName, `${kind}-${index + 1}`),
+      mimeType: clean(item.mimeType) || (kind === "image" ? "image/jpeg" : "application/octet-stream"),
       size: data.length,
       data,
     };
@@ -389,6 +393,20 @@ function wechatMediaManifest(media, mediaSource = "wechat") {
       size: item.size,
     })),
   })}${WECHAT_MEDIA_MANIFEST_CLOSE}`;
+}
+
+function stickerMediaManifest(media) {
+  return `${STICKER_MEDIA_MANIFEST_OPEN}${JSON.stringify({
+    source: "suzu-sticker",
+    type: "sticker",
+    instruction: "这是用户以表情包形式发送的图片。请把它当作表情、情绪或反应理解，不要当成普通照片或文件附件。",
+    items: media.map((item) => ({
+      kind: item.kind,
+      path: item.path,
+      fileName: item.fileName,
+      size: item.size,
+    })),
+  })}${STICKER_MEDIA_MANIFEST_CLOSE}`;
 }
 
 function voiceCallInputContent(text) {
@@ -428,7 +446,10 @@ function claudeInputContent(text, media, mediaSource = "wechat") {
         data: item.data.toString("base64"),
       },
     }));
-  const content = [text, wechatMediaManifest(media, mediaSource)].filter(Boolean).join("\n\n");
+  const manifest = mediaSource === "sticker"
+    ? stickerMediaManifest(media)
+    : wechatMediaManifest(media, mediaSource);
+  const content = [text, manifest].filter(Boolean).join("\n\n");
   parts.push({ type: "text", text: content });
   return parts;
 }
@@ -1270,7 +1291,8 @@ export function createConversationChatService({
 
   const enqueue = async ({ content, contactId = "", kind = "message", callDirection = "", media: suppliedMedia = [], mediaSource = "wechat", memoryText: suppliedMemoryText = "", requestId: suppliedRequestId = "", scheduleSource = "", session: requestedSession = null } = {}) => {
     if (disposed) throw new ConversationChatError("聊天服务已经停止。");
-    const media = normalizeInboundMedia(suppliedMedia, mediaSource);
+    const normalizedMediaSource = clean(mediaSource).toLowerCase() || "wechat";
+    const media = normalizeInboundMedia(suppliedMedia, normalizedMediaSource);
     const voiceCallOpening = kind === "call-open";
     const text = validateContent(content, { allowEmpty: media.length > 0 || voiceCallOpening });
     const session = await resolveSession(requestedSession || {});
@@ -1297,7 +1319,7 @@ export function createConversationChatService({
             ? voiceCallOpeningContent(callInitiator)
             : text,
         media,
-        mediaSource,
+        normalizedMediaSource,
       ),
       contactId: resolvedContactId,
       hasTranscript: Boolean(session.hasTranscript) || knownTranscripts.has(turnKey(session.id, session.projectRoot)),
@@ -1309,7 +1331,7 @@ export function createConversationChatService({
         ? voiceCallMemoryText(text)
         : voiceCallOpening
           ? voiceCallOpeningMemoryText(callInitiator)
-          : text,
+          : clean(suppliedMemoryText) || text,
       projectRoot: session.projectRoot,
       requestId: clean(suppliedRequestId) || `suzu-${randomUUID()}`,
       scheduleSource: clean(scheduleSource),

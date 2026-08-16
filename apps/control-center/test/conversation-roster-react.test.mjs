@@ -21,3 +21,15 @@ test("contact roster places the unread indicator on the avatar and does not dupl
   assert.match(styles, /\.conversation-contact__unread-badge[\s\S]*?position: absolute/u);
   assert.match(styles, /\.conversation-contact__unread-badge[\s\S]*?background: #fa5151/u);
 });
+
+test("conversation header names contacts with unread messages beside its actions", () => {
+  const page = readFileSync(resolve(HERE, "..", "src", "react", "conversation-page.jsx"), "utf8");
+  const styles = readFileSync(resolve(HERE, "..", "src", "styles", "conversation.css"), "utf8");
+
+  assert.match(page, /function unreadContactSummary\(contacts\)/u);
+  assert.match(page, /function ConversationUnreadIndicator\(\{ contacts \}\)/u);
+  assert.match(page, /<ConversationUnreadIndicator contacts=\{snapshot\.contacts\} \/>/u);
+  assert.match(page, /未读消息：\$\{title\}/u);
+  assert.match(styles, /\.conversation-pane__unread-summary[\s\S]*?background: #fa5151/u);
+  assert.match(styles, /\.conversation-pane__unread-summary-copy[\s\S]*?text-overflow: ellipsis/u);
+});
