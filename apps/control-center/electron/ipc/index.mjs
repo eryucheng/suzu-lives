@@ -232,6 +232,8 @@ export function registerIpcHandlers({ app, appUpdateService = null, dataStorageS
     app,
     contactProjectsService,
     connectionsService,
+    dialog,
+    getMainWindow,
     ipcMain,
     memoryRuntime: memoryService,
     settingsService,

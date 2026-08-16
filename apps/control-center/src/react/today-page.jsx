@@ -55,7 +55,7 @@ function calendarEvents(events, year, month) {
   const prefix = `${year}-${two(month + 1)}-`;
   for (const event of events || []) {
     if (!event?.enabled) continue;
-    const key = String(event.date || "").length === 5 ? `${prefix}${event.date}` : String(event.date || "");
+    const key = String(event.date || "").length === 5 ? `${year}-${event.date}` : String(event.date || "");
     if (!key.startsWith(prefix)) continue;
     const entries = result[key] || [];
     if (entries.length < 3) entries.push(event.source === "holiday" ? "holiday" : "personal");

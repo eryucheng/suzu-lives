@@ -1,7 +1,17 @@
+import { randomUUID } from "node:crypto";
+import { pathToFileURL } from "node:url";
+
 import { createConversationReader } from "../services/conversation-reader.mjs";
 import { createConversationChatService } from "../services/conversation-chat.mjs";
+import {
+  createEmojiStickerLibrary,
+  EMOJI_STICKER_DIALOG_FILTER,
+  resolveEmojiStickerLibraryRoot,
+} from "../services/emoji-sticker-library.mjs";
 import { createConversationSessionSettingsService } from "../services/conversation-session-settings.mjs";
 import { createRealtimeVoiceCallService } from "../services/realtime-voice-call.mjs";
+
+const STICKER_SELECTION_TTL_MS = 10 * 60 * 1_000;
 
 function clean(value) {
   return String(value ?? "").trim();
@@ -83,6 +93,8 @@ export function registerConversationIpc({
   app,
   contactProjectsService = null,
   connectionsService,
+  dialog,
+  getMainWindow,
   ipcMain,
   memoryRuntime = null,
   settingsService,
@@ -99,6 +111,40 @@ export function registerConversationIpc({
     dataRoot: settingsService.response(settingsService.load()).dataRoot,
     reader,
   });
+  const stickerLibrary = () => createEmojiStickerLibrary({
+    libraryRoot: resolveEmojiStickerLibraryRoot(settingsService.response(settingsService.load()).dataRoot),
+  });
+  const stickerSnapshot = async (providedSnapshot = null) => {
+    const snapshot = providedSnapshot || await stickerLibrary().snapshot();
+    return {
+      status: snapshot.status,
+      ...(clean(snapshot.message) ? { message: clean(snapshot.message) } : {}),
+      items: (Array.isArray(snapshot.items) ? snapshot.items : []).flatMap((item) => {
+        try {
+          return [{
+            createdAt: clean(item.createdAt),
+            fileName: clean(item.fileName),
+            fileUrl: pathToFileURL(item.path).toString(),
+            id: clean(item.id),
+            mimeType: clean(item.mimeType),
+            size: Number(item.size) || 0,
+          }];
+        } catch {
+          return [];
+        }
+      }),
+    };
+  };
+  const stickerSelections = new Map();
+  const consumeStickerSelection = (value) => {
+    const token = clean(value?.selectionToken);
+    const selection = stickerSelections.get(token);
+    if (!selection || selection.expiresAt < Date.now()) {
+      stickerSelections.delete(token);
+      throw new Error("所选表情包已失效，请重新选择。");
+    }
+    return { selection, token };
+  };
   const attachmentCommand = ({ sessionId, projectRoot } = {}) => {
     const invocation = clean(wechatAttachmentCli);
     const dataRoot = clean(settingsService.response(settingsService.load()).dataRoot);
@@ -160,6 +206,58 @@ export function registerConversationIpc({
   ipcMain.handle("conversation:snapshot", (event) => {
     sender = event.sender;
     return reader.snapshot();
+  });
+  ipcMain.handle("conversation:emoji-stickers", async (event) => {
+    sender = event.sender;
+    return stickerSnapshot();
+  });
+  ipcMain.handle("conversation:select-emoji-sticker", async (event) => {
+    sender = event.sender;
+    if (typeof dialog?.showOpenDialog !== "function") throw new Error("当前环境无法选择本地表情包。");
+    const result = await dialog.showOpenDialog(getMainWindow?.(), {
+      title: "添加收藏表情包",
+      properties: ["openFile"],
+      filters: [EMOJI_STICKER_DIALOG_FILTER],
+    });
+    if (result.canceled || !result.filePaths?.[0]) return { canceled: true };
+    const inspected = await stickerLibrary().inspect(result.filePaths[0]);
+    const selectionToken = randomUUID();
+    stickerSelections.set(selectionToken, {
+      expiresAt: Date.now() + STICKER_SELECTION_TTL_MS,
+      source: inspected.source,
+    });
+    return {
+      canceled: false,
+      fileName: inspected.fileName,
+      mimeType: inspected.mimeType,
+      selectionToken,
+      size: inspected.size,
+    };
+  });
+  ipcMain.handle("conversation:add-emoji-sticker", async (event, value) => {
+    sender = event.sender;
+    const { selection, token } = consumeStickerSelection(value);
+    try {
+      return stickerSnapshot(await stickerLibrary().add({ source: selection.source }));
+    } finally {
+      stickerSelections.delete(token);
+    }
+  });
+  ipcMain.handle("conversation:send-emoji-sticker", async (event, value) => {
+    sender = event.sender;
+    const sticker = await stickerLibrary().read(clean(value?.id));
+    return chat.send({
+      content: "",
+      media: [{
+        data: sticker.data,
+        fileName: sticker.fileName,
+        kind: "image",
+        mimeType: sticker.mimeType,
+        path: sticker.path,
+      }],
+      mediaSource: "sticker",
+      memoryText: `用户发送了一个表情包：${sticker.fileName}`,
+    });
   });
   ipcMain.handle("conversation:search", (_event, query) => reader.search(query));
   ipcMain.handle("conversation:focus", (_event, value) => reader.focus(value));

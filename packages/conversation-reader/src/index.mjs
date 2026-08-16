@@ -13,6 +13,8 @@ const MAX_CONVERSATION_ATTACHMENT_ITEMS = 24;
 const CONVERSATION_ATTACHMENT_RECEIPT = "suzu-conversation-attachment";
 const WECHAT_MEDIA_MANIFEST_OPEN = "<suzu-wechat-media>";
 const WECHAT_MEDIA_MANIFEST_CLOSE = "</suzu-wechat-media>";
+const STICKER_MEDIA_MANIFEST_OPEN = "<suzu-sticker>";
+const STICKER_MEDIA_MANIFEST_CLOSE = "</suzu-sticker>";
 const SCHEDULE_TASK_OPEN = "<suzu-schedule-task>";
 const MERCHANT_TASK_OPEN = "<suzu-merchant-task>";
 const SUZU_MANAGED_SKILL_CONTEXT = /^Base directory for this skill:\s*[^\r\n]+[\s\S]*?<!--\s*suzu-lives:ability:[a-z0-9._-]+\s*-->/iu;
@@ -113,7 +115,7 @@ function searchRequest(value) {
 function displayMessageMatchesCategory(message, category) {
   const blocks = Array.isArray(message?.blocks) ? message.blocks : [];
   if (category === "messages") return true;
-  if (category === "images") return blocks.some((block) => block?.kind === "media" && block.mediaKind === "image");
+  if (category === "images") return blocks.some((block) => block?.kind === "media" && ["image", "sticker"].includes(block.mediaKind));
   if (category === "files") return blocks.some((block) => block?.kind === "media" && block.mediaKind === "file");
   if (category === "audio") return blocks.some((block) => block?.kind === "media" && block.mediaKind === "audio");
   if (category === "links") return blocks.some((block) => /https?:\/\/[^\s<>()]+/iu.test(String(block?.text || "")));
@@ -160,14 +162,15 @@ function mediaBlock(value, mediaSource = "") {
   const filePath = path.resolve(sourcePath);
   let fileUrl = "";
   try { fileUrl = pathToFileURL(filePath).toString(); } catch { /* Keep the local attachment usable as a file card. */ }
+  const source = String(mediaSource || "").trim().toLowerCase();
   return {
     kind: "media",
-    mediaKind: kind,
+    mediaKind: source === "sticker" && kind === "image" ? "sticker" : kind,
     fileName: String(entry.fileName || path.basename(filePath)).trim() || path.basename(filePath),
     filePath,
     fileUrl,
     size,
-    ...(mediaSource ? { mediaSource } : {}),
+    ...(source ? { mediaSource: source } : {}),
   };
 }
 
@@ -185,33 +188,42 @@ function attachmentBlocksFromToolResult(value) {
   return attachmentReceipt(value);
 }
 
-function textWithWechatMedia(value) {
+function textWithConversationMedia(value) {
   const source = String(value ?? "");
   const blocks = [];
   let cursor = 0;
   let found = false;
   while (cursor < source.length) {
-    const start = source.indexOf(WECHAT_MEDIA_MANIFEST_OPEN, cursor);
-    if (start < 0) break;
-    const end = source.indexOf(WECHAT_MEDIA_MANIFEST_CLOSE, start + WECHAT_MEDIA_MANIFEST_OPEN.length);
+    const candidates = [
+      { close: WECHAT_MEDIA_MANIFEST_CLOSE, open: WECHAT_MEDIA_MANIFEST_OPEN, sources: new Set(["wechat", "iphone"]), type: "inbound" },
+      { close: STICKER_MEDIA_MANIFEST_CLOSE, open: STICKER_MEDIA_MANIFEST_OPEN, sources: new Set(["suzu-sticker"]), type: "sticker" },
+    ]
+      .map((protocol) => ({ ...protocol, start: source.indexOf(protocol.open, cursor) }))
+      .filter((protocol) => protocol.start >= 0)
+      .sort((left, right) => left.start - right.start);
+    const protocol = candidates[0];
+    if (!protocol) break;
+    const { open, close, start } = protocol;
+    const end = source.indexOf(close, start + open.length);
     if (end < 0) break;
-    const encoded = source.slice(start + WECHAT_MEDIA_MANIFEST_OPEN.length, end);
+    const encoded = source.slice(start + open.length, end);
     const manifest = objectValue(parsedObject(encoded));
     const mediaSource = String(manifest.source || "").trim().toLowerCase();
-    const media = new Set(["wechat", "iphone"]).has(mediaSource)
+    const normalizedMediaSource = protocol.type === "sticker" ? "sticker" : mediaSource;
+    const media = protocol.sources.has(mediaSource)
       ? (Array.isArray(manifest.items) ? manifest.items : [])
         .slice(0, MAX_CONVERSATION_ATTACHMENT_ITEMS)
-        .map((item) => mediaBlock(item, mediaSource))
+        .map((item) => mediaBlock(item, normalizedMediaSource))
         .filter(Boolean)
       : [];
     if (!media.length) {
-      cursor = end + WECHAT_MEDIA_MANIFEST_CLOSE.length;
+      cursor = end + close.length;
       continue;
     }
     const leading = source.slice(cursor, start).trim();
     if (leading) blocks.push({ kind: "text", text: boundedText(leading) });
     blocks.push(...media);
-    cursor = end + WECHAT_MEDIA_MANIFEST_CLOSE.length;
+    cursor = end + close.length;
     found = true;
   }
   if (!found) return source ? [{ kind: "text", text: boundedText(source) }] : [];
@@ -320,7 +332,7 @@ function textWithConversationProtocol(value, { media = false } = {}) {
   const transcript = voiceCallTranscript(value);
   const text = transcript === null ? String(value ?? "") : transcript;
   return media
-    ? textWithWechatMedia(text)
+    ? textWithConversationMedia(text)
     : text ? [{ kind: "text", text: boundedText(text) }] : [];
 }
 
@@ -462,7 +474,7 @@ export function buildDisplayMessages(records, maxMessages = 500) {
       } else {
         blocks = textParts(message.content);
         const hasMedia = blocks.some((block) => block.kind === "media");
-        const hasInboundMedia = blocks.some((block) => block.kind === "media" && ["wechat", "iphone"].includes(block.mediaSource));
+        const hasInboundMedia = blocks.some((block) => block.kind === "media" && ["wechat", "iphone", "sticker"].includes(block.mediaSource));
         const onlyToolResults = blocks.length > 0 && blocks.every((block) => block.kind === "tool_result");
         kind = voiceCall ? "system" : hasInboundMedia ? "user" : hasMedia ? "assistant" : onlyToolResults ? "system" : "user";
         if (voiceCall && voiceCallTranscript(message.content) !== null) blocks = callTranscriptBlocks(blocks, "我");

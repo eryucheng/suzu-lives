@@ -281,6 +281,26 @@ test("WeChat media manifests render as the current user's image and file cards",
   assert.match(messages[0].blocks[2].fileUrl, /^file:/u);
 });
 
+test("favorite sticker manifests render as a sticker rather than an ordinary image card", () => {
+  const stickerPath = path.join(os.tmpdir(), "suzu-favorite-sticker.gif");
+  const manifest = JSON.stringify({
+    source: "suzu-sticker",
+    type: "sticker",
+    items: [{ kind: "image", path: stickerPath, fileName: "cheer.gif", size: 40 }],
+  });
+  const messages = buildDisplayMessages([{
+    type: "user",
+    timestamp: "2026-08-05T10:05:00.000Z",
+    message: { content: [{ type: "text", text: `<suzu-sticker>${manifest}</suzu-sticker>` }] },
+  }]);
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].kind, "user");
+  assert.deepEqual(messages[0].blocks.map((block) => block.kind), ["media"]);
+  assert.equal(messages[0].blocks[0].mediaKind, "sticker");
+  assert.equal(messages[0].blocks[0].mediaSource, "sticker");
+  assert.equal(messages[0].blocks[0].fileName, "cheer.gif");
+});
+
 test("iPhone feedback manifests render as the current user's image cards", () => {
   const imagePath = path.join(os.tmpdir(), "suzu-iphone-image.png");
   const manifest = JSON.stringify({
