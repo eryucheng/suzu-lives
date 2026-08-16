@@ -62,19 +62,54 @@ Suzu Lives 是管理个人 Agent 联系人的桌面端：每位联系人都有�
 
 ![Suzu Memory：可浏览的记忆神经网络](docs/images/memory-brain.png)
 
-## 直接打电话
 
-除了文字聊天，你可以主动拨给联系人，也可以接听它发起的应用内语音来电；通话继续使用当前会话上下文，每位联系人也能使用自己配置的声音。
+## 核心功能
 
-![Suzu Lives 应用内语音通话](docs/images/voice-call.png)
+### 一键连接
 
-## 一键连接微信，手机上继续聊
-
-在当前联系人的设置里点一次“连接微信”，就会生成专属二维码。用希望绑定的微信扫码，再按提示发出一条文字即可完成确认。
+在任意联系人（Agent会话）的设置中点击“连接微信”，就会生成专属二维码。用希望绑定的微信扫码，再按提示发出一条文字即可完成确认。
 
 之后从微信发来的消息会进入这位联系人的固定对话，回复也会沿着同一段关系回来；多个联系人可以分别绑定，不会串到一起。
 
 ![为当前联系人连接微信的二维码示意](docs/images/wechat-connect.png)
+
+### 日历功能
+
+设置联系人专属或共享的纪念日，注意事项，时间到了之后会通过时间感知hook注入给对应联系人
+
+![为联系人添加日期](docs/images/calendar-add-date.png)
+
+![日历中的联系人日期](docs/images/calendar-overview.png)
+
+### 语音通话功能
+
+在配置联系人对应的音色api后，agent不仅能发送语音条，也可以进行语音通话，通话将会保持原来的上下文。
+
+![主动拨打语音电话](docs/images/voice-call-outgoing.png)
+
+![Agent 发起的语音来电](docs/images/voice-call-incoming.png)
+
+### 主动关心与回访
+
+Agent不再是只能回复的机器，用链式主动关心机制，让Agent自行决定下一次唤醒自己的时间，并由软件维护这条链。
+
+### 查看调用流水
+
+统计软件内部所有功能的花销（需自行填写不同厂家价格）
+
+![按功能筛选的调用流水和费用统计](docs/images/usage-invocation-log.png)
+
+### 管理计划
+
+Suzu lives内置计时器，调用计时器的行为可以统一在计划页面检查并且管理，也可以新建计划执行自己的脚本。
+
+![统一查看和管理计划](docs/images/plan-management.png)
+
+### 相处设定
+
+每位联系人隔离，可填写不同的设定。
+
+![为不同联系人编辑相处设定](docs/images/relationship-setup.png)
 
 ## 在需要时，让它做更多
 
@@ -87,6 +122,18 @@ Suzu Lives 是管理个人 Agent 联系人的桌面端：每位联系人都有�
 - **保持可控**：语音、媒体和外部连接所需的服务或设备，均在你需要时再单独配置。
 
 ![能力面板](docs/images/capabilities.png)
+
+### Suzu Memory 记忆架构
+
+Suzu Memory 以本地优先的方式，把对话和活动先保存为可追溯事件，再组织成带有主体、时间、证据与关系的长期记忆网络。回复前只针对当前问题召回少量相关上下文；新的认识可以补充或纠正旧结论，仍能回到原始证据核查。
+
+项目基于 Node.js 与 SQLite，模型和 Embedding Provider 可配置。详细架构与代码见 [Suzu Memory](https://github.com/eryucheng/suzu-memory)。
+
+![Suzu Memory 记忆网络总览](docs/images/suzu-memory-architecture-overview.png)
+
+![Suzu Memory：查看关系上下文](docs/images/suzu-memory-architecture-context.png)
+
+![Suzu Memory：查看单条记忆与证据](docs/images/suzu-memory-architecture-evidence.png)
 
 ## 面向更多 Agent 的接入方向
 
