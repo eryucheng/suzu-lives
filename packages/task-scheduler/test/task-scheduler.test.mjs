@@ -215,8 +215,8 @@ test("runner keeps a local history for triggered plans, including plans accepted
   const operation = await createScheduleTask({
     dataRoot: root,
     cron: "2 10 * * *",
-    exec: "traveling-merchant",
-    description: "远行商人检查",
+    scriptPath: path.join(root, "history-check.mjs"),
+    description: "例行检查",
     now: current,
   });
   const runner = createScheduleRunner({
