@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Select } from "suzu-design-system";
 
 const STEPS = [
   ["text-model", "文字模型"],
@@ -31,7 +32,7 @@ function TextModelStep({ snapshot, actions }) {
       <h2>先让 Claude Code 能聊天</h2>
       <p>{model.copy}</p>
       <form className="onboarding-form" onSubmit={submit}>
-        <label><span>文字模型服务</span><select name="provider" onChange={(event) => setProvider(event.currentTarget.value)} value={provider}>{model.providers.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}</select></label>
+        <label><span>文字模型服务</span><Select ariaLabel="文字模型服务" className="onboarding-provider-select" fullWidth onChange={setProvider} options={model.providers.map((item) => ({ label: item.label, value: item.id }))} value={provider} /></label>
         <label><span>API Key</span><input autoComplete="new-password" maxLength={1000} name="apiKey" onChange={(event) => setApiKey(event.currentTarget.value)} placeholder={model.ready ? "已保存；重新填写才会替换" : "填写所选服务的 API Key"} required={!model.ready} type="password" value={apiKey} /></label>
         <p className="onboarding-hint">需要自定义服务地址或模型映射时，之后可以在“管理 → Claude Code”中调整。</p>
         <OnboardingError error={snapshot.error} />

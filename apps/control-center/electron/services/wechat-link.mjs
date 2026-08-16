@@ -789,6 +789,7 @@ export function createWeChatLinkService({
           projectRoot: session.projectRoot,
           hasTranscript: session.hasTranscript === true,
           kind: "message",
+          deliverToWechat: true,
         };
         if (media.length) request.media = media;
         await chat.sendToSession(request);
@@ -1059,6 +1060,7 @@ export function createWeChatLinkService({
 
   const handleChatEvent = (event) => {
     if (disposed || !event?.sessionId) return;
+    if (event.deliverToWechat === false) return;
     // A schedule marker is a local conversation-system event.  Its final
     // Agent reply may still be delivered normally, but task state, tool
     // details, errors, and usage must never become a WeChat notification.

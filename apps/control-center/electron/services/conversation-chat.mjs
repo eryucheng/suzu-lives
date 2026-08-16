@@ -729,6 +729,7 @@ export function createConversationChatService({
         sessionId: turn.sessionId,
         projectRoot: turn.projectRoot,
         kind: turn.kind,
+        deliverToWechat: turn.deliverToWechat,
         message: turn.interruptMessage || "已停止当前 Claude Code 任务。",
         timestamp: new Date().toISOString(),
       });
@@ -739,6 +740,7 @@ export function createConversationChatService({
         sessionId: turn.sessionId,
         projectRoot: turn.projectRoot,
         kind: turn.kind,
+        deliverToWechat: turn.deliverToWechat,
         message: error,
         timestamp: new Date().toISOString(),
       });
@@ -749,6 +751,7 @@ export function createConversationChatService({
         sessionId: turn.sessionId,
         projectRoot: turn.projectRoot,
         kind: turn.kind,
+        deliverToWechat: turn.deliverToWechat,
         timestamp: new Date().toISOString(),
       });
     }
@@ -762,6 +765,7 @@ export function createConversationChatService({
     child,
     completed: false,
     contactId: clean(request.contactId),
+    deliverToWechat: request.deliverToWechat === true,
     finished: false,
     interrupted: false,
     kind: request.kind,
@@ -799,6 +803,7 @@ export function createConversationChatService({
       sessionId: turn.sessionId,
       projectRoot: turn.projectRoot,
       kind: turn.kind,
+      deliverToWechat: turn.deliverToWechat,
       content: turn.text,
       done,
       timestamp: new Date().toISOString(),
@@ -814,6 +819,7 @@ export function createConversationChatService({
       sessionId: turn.sessionId,
       projectRoot: turn.projectRoot,
       kind: turn.kind,
+      deliverToWechat: turn.deliverToWechat,
       content: text,
       ...(clean(turn.contactId) ? { contactId: clean(turn.contactId) } : {}),
       timestamp: new Date().toISOString(),
@@ -839,6 +845,7 @@ export function createConversationChatService({
       sessionId: turn.sessionId,
       projectRoot: turn.projectRoot,
       kind: turn.kind,
+      deliverToWechat: turn.deliverToWechat,
       content: text,
       timestamp: new Date().toISOString(),
     });
@@ -858,6 +865,7 @@ export function createConversationChatService({
         sessionId: turn.sessionId,
         projectRoot: turn.projectRoot,
         kind: turn.kind,
+        deliverToWechat: turn.deliverToWechat,
         media,
         timestamp: new Date().toISOString(),
       });
@@ -875,6 +883,7 @@ export function createConversationChatService({
       sessionId: turn.sessionId,
       projectRoot: turn.projectRoot,
       kind: turn.kind,
+      deliverToWechat: turn.deliverToWechat,
       contactId: turn.contactId,
       reason: clean(request.reason),
       timestamp: new Date().toISOString(),
@@ -893,6 +902,7 @@ export function createConversationChatService({
         sessionId: turn.sessionId,
         projectRoot: turn.projectRoot,
         kind: turn.kind,
+        deliverToWechat: turn.deliverToWechat,
         commands,
         timestamp: new Date().toISOString(),
       });
@@ -964,6 +974,7 @@ export function createConversationChatService({
         sessionId: turn.sessionId,
         projectRoot: turn.projectRoot,
         kind: turn.kind,
+        deliverToWechat: turn.deliverToWechat,
         toolName: permission.toolName,
         preview: permissionPreview(permission.input),
         timestamp: new Date().toISOString(),
@@ -1289,7 +1300,7 @@ export function createConversationChatService({
     };
   };
 
-  const enqueue = async ({ content, contactId = "", kind = "message", callDirection = "", media: suppliedMedia = [], mediaSource = "wechat", memoryText: suppliedMemoryText = "", requestId: suppliedRequestId = "", scheduleSource = "", session: requestedSession = null } = {}) => {
+  const enqueue = async ({ content, contactId = "", kind = "message", callDirection = "", media: suppliedMedia = [], mediaSource = "wechat", memoryText: suppliedMemoryText = "", requestId: suppliedRequestId = "", scheduleSource = "", deliverToWechat = false, session: requestedSession = null } = {}) => {
     if (disposed) throw new ConversationChatError("聊天服务已经停止。");
     const normalizedMediaSource = clean(mediaSource).toLowerCase() || "wechat";
     const media = normalizeInboundMedia(suppliedMedia, normalizedMediaSource);
@@ -1322,6 +1333,7 @@ export function createConversationChatService({
         normalizedMediaSource,
       ),
       contactId: resolvedContactId,
+      deliverToWechat: deliverToWechat === true,
       hasTranscript: Boolean(session.hasTranscript) || knownTranscripts.has(turnKey(session.id, session.projectRoot)),
       kind,
       approvalMode: session.approvalMode,
@@ -1374,9 +1386,9 @@ export function createConversationChatService({
     return true;
   };
 
-  const send = ({ content, media = [], mediaSource = "wechat", memoryText = "" } = {}) => enqueue({ content, media, mediaSource, memoryText });
-  const sendToSession = ({ content, contactId = "", sessionId, projectRoot, hasTranscript = false, kind = "message", callDirection = "", media = [], mediaSource = "wechat", memoryText = "", requestId = "", scheduleSource = "" } = {}) => (
-    enqueue({ content, contactId, kind, callDirection, media, mediaSource, memoryText, requestId, scheduleSource, session: { sessionId, projectRoot, hasTranscript } })
+  const send = ({ content, media = [], mediaSource = "wechat", memoryText = "" } = {}) => enqueue({ content, media, mediaSource, memoryText, deliverToWechat: false });
+  const sendToSession = ({ content, contactId = "", sessionId, projectRoot, hasTranscript = false, kind = "message", callDirection = "", media = [], mediaSource = "wechat", memoryText = "", requestId = "", scheduleSource = "", deliverToWechat = true } = {}) => (
+    enqueue({ content, contactId, kind, callDirection, media, mediaSource, memoryText, requestId, scheduleSource, deliverToWechat, session: { sessionId, projectRoot, hasTranscript } })
   );
 
   const stop = ({ sessionId, projectRoot, requestId } = {}) => {

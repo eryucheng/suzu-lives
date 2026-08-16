@@ -72,12 +72,82 @@ const DEFAULT_API_CONNECTION = Object.freeze({
   type: "dashscope",
 });
 
+const CUSTOM_PRICE_TEMPLATES = Object.freeze([
+  Object.freeze({
+    value: "text",
+    label: "文本模型 · 输入 / 输出 Token",
+    hint: "适用于大多数聊天、推理与文本生成模型。",
+    rateDefinitions: Object.freeze({
+      inputTokens: Object.freeze({ label: "输入", unitLabel: "元 / 百万 Token", per: 1_000_000 }),
+      outputTextTokens: Object.freeze({ label: "输出", unitLabel: "元 / 百万 Token", per: 1_000_000 }),
+    }),
+  }),
+  Object.freeze({
+    value: "text-cache",
+    label: "文本模型 · 未缓存 / 缓存 / 输出 Token",
+    hint: "调用记录包含缓存命中与未命中 Token 时使用。",
+    rateDefinitions: Object.freeze({
+      inputUncachedTokens: Object.freeze({ label: "未缓存输入", unitLabel: "元 / 百万 Token", per: 1_000_000 }),
+      inputCachedTokens: Object.freeze({ label: "缓存命中输入", unitLabel: "元 / 百万 Token", per: 1_000_000 }),
+      outputTextTokens: Object.freeze({ label: "输出", unitLabel: "元 / 百万 Token", per: 1_000_000 }),
+    }),
+  }),
+  Object.freeze({
+    value: "embedding",
+    label: "向量模型 · 输入 Token",
+    hint: "适用于 Embedding、检索向量等只按输入 Token 计费的模型。",
+    rateDefinitions: Object.freeze({
+      inputTokens: Object.freeze({ label: "输入", unitLabel: "元 / 百万 Token", per: 1_000_000 }),
+    }),
+  }),
+  Object.freeze({
+    value: "characters",
+    label: "语音合成 · 输入字符",
+    hint: "适用于按文本字符数计费的语音合成模型。",
+    rateDefinitions: Object.freeze({
+      inputCharacters: Object.freeze({ label: "输入字符", unitLabel: "元 / 万字符", per: 10_000 }),
+    }),
+  }),
+  Object.freeze({
+    value: "audio-seconds",
+    label: "语音识别 · 输入音频时长",
+    hint: "适用于按输入音频秒数计费的模型。",
+    rateDefinitions: Object.freeze({
+      inputAudioSeconds: Object.freeze({ label: "输入音频时长", unitLabel: "元 / 秒", per: 1 }),
+    }),
+  }),
+  Object.freeze({
+    value: "image-request",
+    label: "图片生成 · 按请求次数",
+    hint: "仅用于调用流水已经记录“图片请求”次数的来源。",
+    rateDefinitions: Object.freeze({
+      imageRequests: Object.freeze({ label: "图片请求", unitLabel: "元 / 次", per: 1 }),
+    }),
+  }),
+]);
+
 function clean(value) {
   return String(value ?? "").trim();
 }
 
 function list(value) {
   return Array.isArray(value) ? value : [];
+}
+
+function customPriceTemplate(value) {
+  return CUSTOM_PRICE_TEMPLATES.find((item) => item.value === value) || CUSTOM_PRICE_TEMPLATES[0];
+}
+
+function newCustomPriceDraft() {
+  const template = customPriceTemplate();
+  return {
+    modelId: "",
+    label: "",
+    provider: "",
+    template: template.value,
+    effectiveFrom: startOfTodayInput(),
+    rates: Object.fromEntries(Object.keys(template.rateDefinitions).map((key) => [key, ""])),
+  };
 }
 
 function validClaudeProvider(value) {
@@ -1008,12 +1078,104 @@ function usageEvents(data, filter, query) {
   });
 }
 
+function CustomPriceModelDialog({ onClose, onCreate }) {
+  const [draft, setDraft] = useState(newCustomPriceDraft);
+  const [error, setError] = useState("");
+  const [pending, setPending] = useState(false);
+  const template = customPriceTemplate(draft.template);
+
+  const change = (key, value) => setDraft((current) => ({ ...current, [key]: value }));
+  const chooseTemplate = (value) => {
+    const next = customPriceTemplate(value);
+    setDraft((current) => ({
+      ...current,
+      template: next.value,
+      rates: Object.fromEntries(Object.keys(next.rateDefinitions).map((key) => [key, current.rates[key] ?? ""])),
+    }));
+  };
+  const create = async () => {
+    const modelId = clean(draft.modelId).toLowerCase();
+    const effectiveDate = new Date(draft.effectiveFrom);
+    if (!modelId) {
+      setError("请填写调用记录中实际返回的模型标识。");
+      return;
+    }
+    if (!Number.isFinite(effectiveDate.getTime())) {
+      setError("请填写有效的价格生效时间。");
+      return;
+    }
+    const rates = {};
+    for (const key of Object.keys(template.rateDefinitions)) {
+      const raw = String(draft.rates[key] ?? "").trim();
+      const value = Number(raw);
+      if (!raw || !Number.isFinite(value) || value < 0) {
+        setError("请填写每一项大于或等于 0 的单价。");
+        return;
+      }
+      rates[key] = value;
+    }
+    if (!onCreate || pending) return;
+    setPending(true);
+    setError("");
+    try {
+      await onCreate({
+        modelId,
+        label: clean(draft.label) || modelId,
+        provider: clean(draft.provider) || "自定义服务商",
+        rateDefinitions: template.rateDefinitions,
+        effectiveFrom: effectiveDate.toISOString(),
+        rates,
+      });
+      onClose();
+    } catch (createError) {
+      setError(clean(createError?.message) || "无法新建模型价格。");
+      setPending(false);
+    }
+  };
+  const footer = <div className="admin-dialog-actions"><Button disabled={pending} onClick={onClose} type="button" variant="secondary">取消</Button><Button disabled={pending} onClick={() => void create()} type="button">{pending ? "正在创建…" : "创建模型价格"}</Button></div>;
+
+  return (
+    <Dialog footer={footer} onClose={pending ? () => {} : onClose} open title="新建模型价格">
+      <div className="admin-custom-price-dialog">
+        <form className="admin-form" onSubmit={(event) => { event.preventDefault(); void create(); }}>
+          <p className="admin-dialog-copy">模型标识必须和调用流水里的 model 完全一致。创建后，过去和之后的调用都会按各自发生时间对应的价格计算。</p>
+          <section className="admin-form-section">
+            <div className="admin-form-grid">
+              <Field label="模型标识">
+                <Input autoComplete="off" disabled={pending} maxLength="200" onChange={(event) => change("modelId", event.target.value)} placeholder="例如 gpt-4.1-mini" spellCheck={false} value={draft.modelId} />
+              </Field>
+              <Field label="显示名称（可选）">
+                <Input disabled={pending} maxLength="120" onChange={(event) => change("label", event.target.value)} placeholder="例如 GPT-4.1 mini" value={draft.label} />
+              </Field>
+              <Field label="服务商（可选）">
+                <Input disabled={pending} maxLength="120" onChange={(event) => change("provider", event.target.value)} placeholder="例如 OpenAI" value={draft.provider} />
+              </Field>
+              <Field hint={template.hint} label="计费方式">
+                <Select disabled={pending} fullWidth onChange={chooseTemplate} options={CUSTOM_PRICE_TEMPLATES.map((item) => ({ label: item.label, value: item.value }))} value={template.value} />
+              </Field>
+            </div>
+          </section>
+          <section className="admin-form-section">
+            <div className="admin-form-section__heading"><h3>单价</h3><p>人民币；填写服务商公布的对应计费单位。</p></div>
+            <div className="admin-price-rate-grid">
+              {Object.entries(template.rateDefinitions).map(([key, definition]) => <Field key={key} label={definition.label}><Input disabled={pending} min="0" onChange={(event) => setDraft((current) => ({ ...current, rates: { ...current.rates, [key]: event.target.value } }))} placeholder="0" step="any" type="number" value={draft.rates[key] ?? ""} /><small>{definition.unitLabel}</small></Field>)}
+            </div>
+            <Field label="生效时间"><Input disabled={pending} onChange={(event) => change("effectiveFrom", event.target.value)} type="datetime-local" value={draft.effectiveFrom} /></Field>
+          </section>
+          <InlineError>{error}</InlineError>
+        </form>
+      </div>
+    </Dialog>
+  );
+}
+
 function PriceModelCard({ actions, model }) {
   const [rates, setRates] = useState(() => ({ ...(model?.rates || {}) }));
   const [effectiveFrom, setEffectiveFrom] = useState(model?.origin === "custom" ? localDateTimeInput(model.effectiveFrom) : startOfTodayInput());
   const [error, setError] = useState("");
   const [pending, setPending] = useState(false);
   const definitions = model?.rateDefinitions || {};
+  const userDefined = model?.isUserDefined === true;
 
   useEffect(() => {
     setRates({ ...(model?.rates || {}) });
@@ -1061,7 +1223,7 @@ function PriceModelCard({ actions, model }) {
 
   return (
     <AdminPanel className="admin-price-card">
-      <PanelHeading description={(model.provider || "未知服务商") + " · " + (model.origin === "custom" ? "当前使用自定义价格" : "当前使用官方默认价")} status={<Status label={model.origin === "custom" ? "自定义" : "官方默认"} tone={model.origin === "custom" ? "success" : "muted"} />} title={model.label || model.modelId} />
+      <PanelHeading description={(model.provider || "未知服务商") + " · " + (userDefined ? "用户新建模型" : model.origin === "custom" ? "当前使用自定义价格" : "当前使用官方默认价")} status={<Status label={userDefined ? "自建" : model.origin === "custom" ? "自定义" : "官方默认"} tone={userDefined || model.origin === "custom" ? "success" : "muted"} />} title={model.label || model.modelId} />
       <div className="admin-price-rate-grid">
         {Object.entries(definitions).map(([key, definition]) => (
           <Field key={key} label={definition.label}>
@@ -1072,7 +1234,7 @@ function PriceModelCard({ actions, model }) {
       </div>
       <footer className="admin-price-card__footer">
         <Field label="生效时间"><Input disabled={pending} onChange={(event) => setEffectiveFrom(event.target.value)} type="datetime-local" value={effectiveFrom} /></Field>
-        <div className="admin-panel-buttons">{model.customRevisionCount ? <Button disabled={pending} onClick={reset} size="md" type="button" variant="secondary">恢复官方默认</Button> : null}<Button disabled={pending} onClick={save} size="md" type="button">{pending ? "正在保存…" : "保存价格"}</Button></div>
+        <div className="admin-panel-buttons">{model.customRevisionCount ? <Button disabled={pending} onClick={reset} size="md" type="button" variant="secondary">{userDefined ? "恢复创建时价格" : "恢复官方默认"}</Button> : null}<Button disabled={pending} onClick={save} size="md" type="button">{pending ? "正在保存…" : "保存价格"}</Button></div>
       </footer>
       <InlineError>{error}</InlineError>
     </AdminPanel>
@@ -1101,6 +1263,7 @@ function UsageSettings({ actions, data }) {
   const [sourceScopeOpen, setSourceScopeOpen] = useState(false);
   const [allUsageOpen, setAllUsageOpen] = useState(false);
   const [allConversationCostsOpen, setAllConversationCostsOpen] = useState(false);
+  const [customPriceOpen, setCustomPriceOpen] = useState(false);
   const summary = usageSummary(data);
   const events = list(data?.events);
   const sources = list(data?.sources);
@@ -1176,9 +1339,13 @@ function UsageSettings({ actions, data }) {
         {summary.conversations.length ? <footer className="admin-usage-ledger__footer"><Button onClick={() => setAllConversationCostsOpen(true)} size="md" type="button" variant="secondary">查看全部会话花销</Button></footer> : null}
       </AdminPanel>
 
+      <AdminPanel className="admin-price-intro">
+        <PanelHeading actions={<Button onClick={() => setCustomPriceOpen(true)} size="md" type="button">新建模型价格</Button>} description="内置价格可直接调整；其他模型可按实际返回的 model 名称自行建立映射。" title="模型价格" />
+      </AdminPanel>
       <section className="admin-price-list">
         {prices.map((model) => <PriceModelCard actions={actions} key={model.modelId} model={model} />)}
       </section>
+      {customPriceOpen ? <CustomPriceModelDialog onClose={() => setCustomPriceOpen(false)} onCreate={actions?.createPriceModel} /> : null}
     </section>
   );
 }

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Banner, Button, Dialog, Empty, GlassPanel, Input, PageHeader, Status, Switch, Tabs, Textarea } from "suzu-design-system";
+import { Banner, Button, Dialog, Empty, GlassPanel, Input, PageHeader, Select, Status, Switch, Tabs, Textarea } from "suzu-design-system";
 
 import { createMemoryBrainView } from "../features/memory-brain/brain-view.mjs";
 
@@ -424,11 +424,14 @@ function MemoryLibrary({ api, contactId, onDelete, onEdit, onError, onRestore, o
         type="search"
         value={query}
       />
-      <select className="select-input" disabled={pending} onChange={(event) => setStatus(event.target.value)} value={status}>
-        <option value="active">使用中</option>
-        <option value="deleted">已删除</option>
-        <option value="all">全部状态</option>
-      </select>
+      <Select
+        ariaLabel="记忆状态"
+        className="memory-library-status-select"
+        disabled={pending}
+        onChange={setStatus}
+        options={[{ label: "使用中", value: "active" }, { label: "已删除", value: "deleted" }, { label: "全部状态", value: "all" }]}
+        value={status}
+      />
       <Button disabled={pending} onClick={() => void load()} type="button" variant="secondary">{pending ? "读取中…" : "查记忆库"}</Button>
     </div>
     {!library ? <div className="memory-library-empty">输入关键词可以查找记忆；不输入则查看最近记忆。删除是可恢复的软删除。</div>

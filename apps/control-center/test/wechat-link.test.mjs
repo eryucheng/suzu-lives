@@ -290,7 +290,19 @@ test("WeChat links persist a contact scope and relay through its fixed Claude se
     projectRoot,
     hasTranscript: true,
     kind: "message",
+    deliverToWechat: true,
   });
+
+  for (const listener of chatSubscribers) listener({
+    type: "agent-reply",
+    requestId: "local-reply",
+    sessionId: "session-1",
+    projectRoot,
+    deliverToWechat: false,
+    content: "这条只留在软件里。",
+  });
+  await flush();
+  assert.equal(outgoing.length, 0);
 
   for (const listener of chatSubscribers) listener({
     type: "agent-reply",

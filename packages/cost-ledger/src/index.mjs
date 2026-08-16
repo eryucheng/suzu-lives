@@ -1,10 +1,12 @@
 export {
   DEFAULT_PRICE_CATALOG,
+  createPriceCatalog,
   loadDefaultPriceCatalog,
   normalizeModelId,
   priceCatalogView,
   resolveCatalogModel,
   resolvePriceRevision,
+  sanitizeCustomPriceModels,
   sanitizePriceRevisions,
 } from "./catalog.mjs";
 

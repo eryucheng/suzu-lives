@@ -177,6 +177,53 @@ test("applies a software price revision from its effective time", async () => {
   assert.ok(Math.abs(result.summary.all.amountCny - 5) < 0.000001);
 });
 
+test("scans a user-created model mapping from a contact transcript", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "suzu-console-custom-price-"));
+  const projectRoot = path.join(root, "contact-project");
+  const homeDirectory = path.join(root, "home");
+  writeClaudeSession({ projectRoot, homeDirectory, records: [
+    {
+      type: "user",
+      uuid: "u1",
+      timestamp: "2026-08-17T00:00:00.000Z",
+      message: { role: "user", content: "自定义模型价格" },
+    },
+    {
+      type: "assistant",
+      uuid: "a1",
+      timestamp: "2026-08-17T00:00:02.000Z",
+      message: {
+        role: "assistant",
+        id: "msg-custom-1",
+        model: "openai/gpt-4.1-mini",
+        content: [{ type: "text", text: "已识别。" }],
+        usage: { input_tokens: 1_000_000, output_tokens: 1_000_000 },
+      },
+    },
+  ] });
+
+  const result = await scanCostLedger({
+    customPriceModels: [{
+      modelId: "openai/gpt-4.1-mini",
+      label: "GPT-4.1 mini",
+      provider: "OpenAI",
+      effectiveFrom: "2026-08-17T00:00:00.000Z",
+      rateDefinitions: {
+        inputTokens: { label: "输入", unitLabel: "元 / 百万 Token", per: 1_000_000 },
+        outputTextTokens: { label: "输出", unitLabel: "元 / 百万 Token", per: 1_000_000 },
+      },
+      rates: { inputTokens: 2, outputTextTokens: 8 },
+    }],
+  }, {
+    contactScopes: [contactScope({ projectRoot })],
+    homeDirectory,
+  });
+
+  assert.equal(result.events[0].provider, "OpenAI");
+  assert.ok(Math.abs(result.events[0].amountCny - 10) < 0.000001);
+  assert.equal(result.priceCatalog.models.find((item) => item.modelId === "openai/gpt-4.1-mini")?.isUserDefined, true);
+});
+
 test("includes events written through the unified ledger", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "suzu-console-unified-"));
   const projectRoot = path.join(root, "contact-project");

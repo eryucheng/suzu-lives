@@ -28,6 +28,7 @@ export function setGlobalNotice(message = "") {
 
 const PRIMARY_NAVIGATION = [
   { view: "today", label: "今天", icon: "spark" },
+  { view: "conversation", label: "对话", icon: "chat" },
   { view: "relationships", label: "关系", icon: "people" },
   { view: "plans", label: "计划", icon: "calendar" },
   { view: "create", label: "创造", icon: "palette" },
@@ -45,6 +46,7 @@ function ShellIcon({ name }) {
     people: <><path d="M16 20v-1.6a4.1 4.1 0 0 0-4.1-4.1H7.1A4.1 4.1 0 0 0 3 18.4V20" /><circle cx="9.5" cy="7.1" r="3.1" /><path d="M17.1 4.3a3.1 3.1 0 0 1 0 5.9" /><path d="M21 20v-1.6a4.1 4.1 0 0 0-2.8-3.9" /></>,
     calendar: <><rect x="3" y="5" width="18" height="16" rx="2" /><path d="M16 3v4M8 3v4M3 10h18" /><path d="M8 14h3M8 17h5" /></>,
     palette: <><path d="M12 3a9 9 0 1 0 0 18h1.3a1.7 1.7 0 0 0 0-3.4h-.8a1.6 1.6 0 0 1 0-3.2h2.2A6.3 6.3 0 0 0 21 8.1 5.1 5.1 0 0 0 16 3Z" /><circle cx="7.7" cy="10" r=".8" /><circle cx="10.5" cy="6.8" r=".8" /><circle cx="15" cy="7.3" r=".8" /></>,
+    chat: <><path d="M20 11.5a7.5 7.5 0 0 1-8 7.5 8.2 8.2 0 0 1-3.3-.7L4 20l1.5-4A7.5 7.5 0 1 1 20 11.5Z" /><path d="M8.5 11.5h.01M12 11.5h.01M15.5 11.5h.01" /></>,
     sliders: <><path d="M4 6h16M4 12h16M4 18h16" /><circle cx="9" cy="6" r="2" /><circle cx="15" cy="12" r="2" /><circle cx="7" cy="18" r="2" /></>,
     gear: <><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.1 2.1-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5v.2h-3v-.2a1.7 1.7 0 0 0-1-1.5 1.7 1.7 0 0 0-1.9.3l-.1.1-2.1-2.1.1-.1A1.7 1.7 0 0 0 7 15a1.7 1.7 0 0 0-1.5-1H5.3v-3h.2A1.7 1.7 0 0 0 7 10a1.7 1.7 0 0 0-.3-1.9l-.1-.1 2.1-2.1.1.1a1.7 1.7 0 0 0 1.9.3 1.7 1.7 0 0 0 1-1.5v-.2h3v.2a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1 2.1 2.1-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.5 1h.2v3h-.2a1.7 1.7 0 0 0-1.4 1Z" /></>,
     search: <><circle cx="10.8" cy="10.8" r="5.8" /><path d="m15.2 15.2 4.1 4.1" /></>,
@@ -59,7 +61,7 @@ function Navigation({ items, activeView, conversationUnread = false, onNavigate,
         <SideNavItem
           key={item.view}
           active={activeView === item.view}
-          className={`shell-nav-item${item.view === "relationships" && conversationUnread ? " shell-nav-item--unread" : ""}`}
+          className={`shell-nav-item${item.view === "conversation" && conversationUnread ? " shell-nav-item--unread" : ""}`}
           icon={<ShellIcon name={item.icon} />}
           onClick={() => onNavigate(item.view)}
         >
@@ -280,8 +282,16 @@ export function AppShell() {
     };
   }, []);
 
-  const activeView = String(workspace?.activeView || "today");
-  const navigate = (view) => workspace?.actions?.navigate?.(view);
+  const activeView = workspace?.route?.kind === "conversation"
+    ? "conversation"
+    : String(workspace?.activeView || "today");
+  const navigate = (view) => {
+    if (view === "conversation") {
+      workspace?.actions?.openSuzuSearchItem?.("conversation");
+      return;
+    }
+    workspace?.actions?.navigate?.(view);
+  };
   const conversationProps = workspace?.route?.kind === "conversation" ? workspace.route.props : null;
   const conversationUnread = workspace?.conversationUnread === true;
 

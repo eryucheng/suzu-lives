@@ -141,7 +141,7 @@
 }
 
 .onboarding-form input,
-.onboarding-form select {
+.onboarding-form .onboarding-provider-select {
   width: 100%;
 }
 
