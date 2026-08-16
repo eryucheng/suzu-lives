@@ -37,7 +37,7 @@ Suzu Lives 是管理个人 Agent 联系人的桌面端：每位联系人都有�
 ## 三步开始
 
 1. 在 Windows x64 设备上下载并安装 [最新版本](https://github.com/eryucheng/suzu-lives/releases/latest)。
-2. 在本机安装并登录 Claude Code。
+2. 在本机安装并登录 Claude Code（也可自行填写 API，软件会自动跳过 Claude 登录）。
 3. 打开 Suzu Lives，创建联系人，并为它选择或创建一个 Claude 项目目录，然后从第一段对话开始。
 
 不需要把现有项目搬进 Suzu Lives。软件会在你明确同意后维护必要的轻量接入文件；你的项目文件、人设和聊天上下文仍由你自己掌控。安装完成后可在 **设置 → 软件更新** 检查更新。
