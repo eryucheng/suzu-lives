@@ -226,6 +226,7 @@ test("chat starts the local Claude CLI and forwards its stream", async () => {
   await flush();
   assert.equal(events.find((event) => event.type === "reply-stream")?.content, "我在。");
   assert.deepEqual(events.filter((event) => event.type === "agent-reply").map((event) => event.content), ["我在。"]);
+  assert.equal(events.find((event) => event.type === "agent-reply")?.deliverToWechat, false);
   assert.equal(events.some((event) => event.type === "reply-stream" && event.content.includes("先核对当前状态。")), false);
   assert.equal(events.some((event) => event.type === "agent-reply" && event.content.includes("先核对当前状态。")), false);
   assert.equal(events.find((event) => event.type === "reply")?.done, true);
@@ -435,6 +436,7 @@ test("scheduled turns hide NO_REPLY and deliver a visible answer only after comp
   await flush();
   assert.deepEqual(events.filter((event) => event.type === "agent-reply").map((event) => event.content), ["你那边现在怎么样？"]);
   assert.equal(events.filter((event) => event.type === "agent-reply").at(-1)?.contactId, "contact-a1b2c3d4-1111-2222-3333-444444444444");
+  assert.equal(events.filter((event) => event.type === "agent-reply").at(-1)?.deliverToWechat, true);
   assert.equal(events.filter((event) => event.type === "reply").at(-1)?.done, true);
   service.dispose();
 });

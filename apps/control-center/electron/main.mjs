@@ -1,7 +1,7 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { app, BrowserWindow, ipcMain, Menu, safeStorage } from "electron";
+import { app, BrowserWindow, ipcMain, Menu, safeStorage, screen } from "electron";
 import electronUpdater from "electron-updater";
 
 import { runSuzuLivesCli } from "@suzu-lives/claude-integration/agent-cli";
@@ -12,6 +12,8 @@ import { runProjectHookCli } from "./hooks/runtime.mjs";
 import { applyFeatureConnectionOverrides } from "./services/connection-model-overrides.mjs";
 import { createAppUpdateService } from "./services/app-update.mjs";
 import { createDataStorageLocationService } from "./services/data-storage-location.mjs";
+import { resetRendererZoom } from "./services/renderer-zoom.mjs";
+import { windowSizeForDisplay } from "./services/window-default-size.mjs";
 import { applyWindowControl, windowControlState } from "./services/window-controls.mjs";
 
 const { autoUpdater } = electronUpdater;
@@ -107,11 +109,12 @@ function configureMicrophonePermission(webContents) {
 
 function createWindow(settingsService) {
   const startupTheme = normalizeTheme(settingsService.load().theme);
+  const windowSize = windowSizeForDisplay(screen.getPrimaryDisplay());
   mainWindow = new BrowserWindow({
-    width: 1460,
-    height: 920,
-    minWidth: 1080,
-    minHeight: 700,
+    width: windowSize.width,
+    height: windowSize.height,
+    minWidth: windowSize.minWidth,
+    minHeight: windowSize.minHeight,
     show: false,
     backgroundColor: startupTheme === "light" ? "#eef2f7" : "#090b12",
     icon: APP_ICON,
@@ -128,6 +131,7 @@ function createWindow(settingsService) {
   });
 
   configureMicrophonePermission(mainWindow.webContents);
+  mainWindow.webContents.once("did-finish-load", () => resetRendererZoom(mainWindow?.webContents));
   const developmentUrl = rendererUrl(startupTheme);
   if (developmentUrl) mainWindow.loadURL(developmentUrl);
   else mainWindow.loadFile(path.join(RENDERER_ROOT, "index.html"), { query: { theme: startupTheme } });

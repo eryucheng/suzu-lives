@@ -6,6 +6,7 @@ import readline from "node:readline";
 import {
   DEFAULT_PRICE_CATALOG,
   calculateCost,
+  createPriceCatalog,
   priceCatalogView,
   readUsageEvents,
   resolveCatalogModel,
@@ -130,8 +131,8 @@ function assistantShape(record) {
   };
 }
 
-function modelProvider(model) {
-  return resolveCatalogModel(PRICE_CATALOG, model)?.model?.provider || "未知供应商";
+function modelProvider(catalog, model) {
+  return resolveCatalogModel(catalog, model)?.model?.provider || "未知供应商";
 }
 
 function withUnitTotals(units = {}) {
@@ -152,6 +153,7 @@ function withUnitTotals(units = {}) {
 }
 
 function pricedUsage({
+  catalog,
   model,
   usage,
   units,
@@ -159,7 +161,7 @@ function pricedUsage({
   customRevisions,
 }) {
   const calculated = calculateCost({
-    catalog: PRICE_CATALOG,
+    catalog,
     customRevisions,
     model,
     usage,
@@ -172,7 +174,7 @@ function pricedUsage({
   };
 }
 
-async function scanTranscript(transcriptPath, customRevisions, contact) {
+async function scanTranscript(transcriptPath, catalog, customRevisions, contact) {
   const result = {
     status: "missing",
     path: transcriptPath || "",
@@ -224,6 +226,7 @@ async function scanTranscript(transcriptPath, customRevisions, contact) {
     seen.add(identity);
     const model = clean(record.message?.model);
     const cost = pricedUsage({
+      catalog,
       model,
       usage,
       timestamp: record.timestamp,
@@ -237,7 +240,7 @@ async function scanTranscript(transcriptPath, customRevisions, contact) {
       ...contactEventFields(contact),
       source: "对话",
       feature: shape.kind,
-      provider: modelProvider(model),
+      provider: modelProvider(catalog, model),
       model,
       requestId: clean(record.message?.id),
       turnId: activeTurn.id,
@@ -270,7 +273,7 @@ async function listJsonFiles(directory) {
   return files;
 }
 
-async function scanVideoCache(projectRoot, customRevisions, contact) {
+async function scanVideoCache(projectRoot, catalog, customRevisions, contact) {
   const directory = path.join(
     projectRoot,
     "scripts",
@@ -308,6 +311,7 @@ async function scanVideoCache(projectRoot, customRevisions, contact) {
     const timestamp = stat.mtime.toISOString();
     const model = clean(record.responseModel || record.model);
     const cost = pricedUsage({
+      catalog,
       model,
       usage: record.usage,
       timestamp,
@@ -320,7 +324,7 @@ async function scanVideoCache(projectRoot, customRevisions, contact) {
       ...contactEventFields(contact),
       source: "视频理解",
       feature: "视频分析",
-      provider: modelProvider(model),
+      provider: modelProvider(catalog, model),
       model,
       requestId,
       turnId: "",
@@ -339,7 +343,7 @@ async function scanVideoCache(projectRoot, customRevisions, contact) {
   return result;
 }
 
-async function scanUnifiedLedger(ledgerPath, customRevisions, contact) {
+async function scanUnifiedLedger(ledgerPath, catalog, customRevisions, contact) {
   const stored = await readUsageEvents(ledgerPath, { limit: MAX_EVENTS });
   const result = {
     ...stored,
@@ -361,6 +365,7 @@ async function scanUnifiedLedger(ledgerPath, customRevisions, contact) {
     }
     seen.add(identity);
     const cost = pricedUsage({
+      catalog,
       model: event.model,
       usage: event.usage,
       units: event.units,
@@ -374,7 +379,7 @@ async function scanUnifiedLedger(ledgerPath, customRevisions, contact) {
       ...contactEventFields(contact),
       source: clean(event.source || event.feature || "统一流水"),
       feature: clean(event.feature || "API 调用"),
-      provider: clean(event.provider) || modelProvider(event.model),
+      provider: clean(event.provider) || modelProvider(catalog, event.model),
       model: clean(event.model),
       requestId: clean(event.requestId),
       turnId: clean(event.metadata?.turnId),
@@ -584,10 +589,14 @@ function mergeEvents(...eventGroups) {
 
 export async function scanCostLedger(settings = {}, { contactScopes = [], homeDirectory } = {}) {
   const startedAt = Date.now();
+  const catalog = createPriceCatalog({
+    catalog: PRICE_CATALOG,
+    customPriceModels: settings.customPriceModels || [],
+  });
   const customRevisions = settings.priceRevisions || [];
   const today = dateKey(new Date());
   const priceCatalog = priceCatalogView({
-    catalog: PRICE_CATALOG,
+    catalog,
     customRevisions,
   });
   const contacts = Array.isArray(contactScopes)
@@ -606,9 +615,9 @@ export async function scanCostLedger(settings = {}, { contactScopes = [], homeDi
   const scans = await Promise.all(contacts.map(async (contact) => {
     const transcriptResolution = await fixedContactTranscript(contact, { homeDirectory });
     const [transcript, video, ledger] = await Promise.all([
-      scanTranscript(transcriptResolution.path, customRevisions, contact),
-      scanVideoCache(transcriptResolution.projectRoot, customRevisions, contact),
-      scanUnifiedLedger(contact.usageLedgerPath, customRevisions, contact),
+      scanTranscript(transcriptResolution.path, catalog, customRevisions, contact),
+      scanVideoCache(transcriptResolution.projectRoot, catalog, customRevisions, contact),
+      scanUnifiedLedger(contact.usageLedgerPath, catalog, customRevisions, contact),
     ]);
     return { ...contact, transcript, video, ledger };
   }));

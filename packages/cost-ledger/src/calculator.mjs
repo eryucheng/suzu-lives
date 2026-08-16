@@ -64,11 +64,33 @@ export function normalizeUsage(modelName, usage = {}) {
     };
   }
 
-  return Object.fromEntries(
+  const raw = Object.fromEntries(
     Object.entries(usage)
       .map(([key, value]) => [key, number(value)])
       .filter(([, value]) => value > 0),
   );
+  const inputTokens = number(usage.prompt_tokens) || number(usage.input_tokens);
+  const outputTextTokens = number(usage.completion_tokens) || number(usage.output_tokens);
+  const inputCachedTokens = number(usage.prompt_cache_hit_tokens) || number(usage.cache_read_input_tokens);
+  const cacheMiss = number(usage.prompt_cache_miss_tokens);
+  const hasCacheBreakdown = Object.hasOwn(usage, "prompt_cache_miss_tokens")
+    || Object.hasOwn(usage, "prompt_cache_hit_tokens")
+    || Object.hasOwn(usage, "cache_read_input_tokens");
+  return {
+    ...raw,
+    ...(inputTokens ? { inputTokens } : {}),
+    ...(outputTextTokens ? { outputTextTokens } : {}),
+    ...(hasCacheBreakdown ? {
+      inputUncachedTokens: cacheMiss || Math.max(0, inputTokens - inputCachedTokens),
+      inputCachedTokens,
+    } : {}),
+    ...(number(usage.characters) || number(usage.input_characters)
+      ? { inputCharacters: number(usage.characters) || number(usage.input_characters) }
+      : {}),
+    ...(number(usage.input_audio_seconds) || number(usage.audio_seconds) || number(usage.audio_duration_seconds)
+      ? { inputAudioSeconds: number(usage.input_audio_seconds) || number(usage.audio_seconds) || number(usage.audio_duration_seconds) }
+      : {}),
+  };
 }
 
 export function calculateCost({
@@ -89,11 +111,17 @@ export function calculateCost({
     && typeof units === "object"
     && !Array.isArray(units)
     && Object.keys(units).length > 0;
-  const normalizedUnits = hasExplicitUnits
+  const inferredUnits = normalizeUsage(model, usage);
+  const explicitUnits = hasExplicitUnits
     ? Object.fromEntries(
-      Object.entries(units).map(([key, value]) => [key, number(value)]),
+      Object.entries(units)
+        .map(([key, value]) => [key, number(value)])
+        .filter(([, value]) => value > 0),
     )
-    : normalizeUsage(model, usage);
+    : {};
+  const normalizedUnits = hasExplicitUnits
+    ? { ...inferredUnits, ...explicitUnits }
+    : inferredUnits;
   if (!price) {
     return {
       amountCny: null,

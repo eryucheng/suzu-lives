@@ -5,6 +5,7 @@ import path from "node:path";
 import test from "node:test";
 
 import { resolveAgentDataRoot, stableAgentId } from "@suzu-lives/agent-registry";
+import { executeInternalCapability, parseInternalCapabilityRequest } from "@suzu-lives/capability-registry/internal-cli";
 import {
   DirectVoiceMessageError,
   resolveDirectVoiceRuntime,
@@ -314,4 +315,35 @@ test("voice-message rejects a missing contact or a voice that is not in that con
     () => runDirectVoiceMessage({ dataRoot, text: "没有联系人" }),
     (error) => error instanceof DirectVoiceMessageError && error.code === "agent_identity_missing",
   );
+});
+
+test("voice-message ignores the unset timeout sentinel from a selected DashScope connection", async () => {
+  const fixture = await createFixture();
+  const agentId = stableAgentId(fixture.projectRoot);
+  const request = parseInternalCapabilityRequest({
+    positional: ["voice-message", "inspect"],
+    options: { "input-json": JSON.stringify({ configPath: fixture.configPath }) },
+  });
+
+  const result = await executeInternalCapability({
+    request,
+    runtime: {
+      dataRoot: fixture.dataRoot,
+      agentId,
+      ledgerPath: path.join(fixture.root, "cost-ledger", "events.jsonl"),
+      connection: {
+        type: "dashscope",
+        apiKey: "selected-dashscope-key",
+        key: "selected-dashscope-key",
+        baseUrl: "https://selected.example.test/api/v1",
+        model: "selected-dashscope-model",
+        timeoutMs: 0,
+      },
+      environment: {},
+    },
+  });
+
+  assert.equal(result.status, "ready");
+  assert.equal(result.tts.apiKeyConfigured, true);
+  assert.equal(result.tts.voiceConfigured, true);
 });

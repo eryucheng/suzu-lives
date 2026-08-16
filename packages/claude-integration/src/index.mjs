@@ -592,7 +592,7 @@ function renderStandardVoiceMessageSkill(launcher) {
     "",
     markdownCode(command),
     "",
-    "其中 JSON 例如 " + markdownCode('{"text":"<要说的话>"}') + "。也可使用 " + markdownCode('{"audioPath":"<用户明确给出的本地音频路径>"}') + " 转换已有音频；text 与 audioPath 必须且只能提供一个。可选字段只有 timeoutMs。音色始终使用当前联系人的已保存选择；未配置时，向用户说明需要到“能力 → 语音消息”配置联系人音色，不要自行指定或猜测音色。",
+    "其中 JSON 例如 " + markdownCode('{"text":"<要说的话>"}') + "。也可使用 " + markdownCode('{"audioPath":"<用户明确给出的本地音频路径>"}') + " 转换已有音频；text 与 audioPath 必须且只能提供一个。可选字段只有 timeoutMs。connection 是软件在运行时自动提供的配置，绝不能写进输入 JSON。音色始终使用当前联系人的已保存选择；未配置时，向用户说明需要到“能力 → 语音消息”配置联系人音色，不要自行指定或猜测音色。",
     "",
     "成功 JSON 的 result.savedPath 是生成的 MP3。必须紧接着使用当前 Suzu 会话系统提示中提供的附件交付命令，以 --audio 交付这个路径。只检查当前联系人语音配置时，使用 " + markdownCode(inspect) + "；无需指定配置路径。",
     "",

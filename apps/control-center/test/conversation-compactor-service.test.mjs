@@ -79,6 +79,9 @@ test("conversation compactor keeps prompts and invocations isolated by contact p
   assert.equal(Object.hasOwn(suzuSnapshot, "selectedSessionId"), false);
   assert.equal(suzuSnapshot.settings.prompt, "Suzu 会话的提示词");
   assert.equal(workSnapshot.settings.prompt, "工作会话的提示词");
+  assert.equal(workSnapshot.settings.automatic.tokenThreshold, 60_000);
+  assert.equal(workSnapshot.settings.automatic.retainTokens, 10_000);
+  assert.equal(workSnapshot.settings.manual.retainTokens, 10_000);
 
   await service.run({ contactId: "contact-suzu", retainTokens: 3_200 });
   await service.run({ contactId: "contact-work" });
@@ -104,7 +107,7 @@ test("conversation compactor keeps prompts and invocations isolated by contact p
       systemPrompt: "工作会话的提示词",
       transcriptPath: path.join(contacts[1].projectRoot, "shared-session.jsonl"),
       strategy: "token-tail",
-      retainTokens: 5_000,
+      retainTokens: 10_000,
     },
   ]);
 

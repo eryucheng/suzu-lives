@@ -7,6 +7,8 @@ import test from "node:test";
 import {
   appendUsageEvent,
   calculateCost,
+  createPriceCatalog,
+  priceCatalogView,
   readUsageEvents,
 } from "../src/index.mjs";
 
@@ -100,6 +102,47 @@ test("matches custom prices by event timestamp without changing older events", (
   });
   assert.ok(Math.abs(before.amountCny - 9.025) < 0.000001);
   assert.ok(Math.abs(after.amountCny - 12.04) < 0.000001);
+});
+
+test("calculates an arbitrary user-created text model from its own price mapping", () => {
+  const catalog = createPriceCatalog({
+    customPriceModels: [{
+      modelId: "openai/gpt-4.1-mini",
+      label: "GPT-4.1 mini",
+      provider: "OpenAI",
+      effectiveFrom: "2026-08-17T00:00:00.000Z",
+      rateDefinitions: {
+        inputTokens: { label: "输入", unitLabel: "元 / 百万 Token", per: 1_000_000 },
+        outputTextTokens: { label: "输出", unitLabel: "元 / 百万 Token", per: 1_000_000 },
+      },
+      rates: { inputTokens: 2, outputTextTokens: 8 },
+    }],
+  });
+  const result = calculateCost({
+    catalog,
+    model: "OPENAI/GPT-4.1-MINI",
+    timestamp: "2026-08-17T00:00:01.000Z",
+    usage: { prompt_tokens: 1_000_000, completion_tokens: 1_000_000 },
+  });
+
+  assert.equal(result.status, "estimated");
+  assert.ok(Math.abs(result.amountCny - 10) < 0.000001);
+  assert.equal(result.units.inputTokens, 1_000_000);
+  assert.equal(result.units.outputTextTokens, 1_000_000);
+  assert.equal(priceCatalogView({ catalog }).models.find((item) => item.modelId === "openai/gpt-4.1-mini")?.isUserDefined, true);
+
+  const revised = calculateCost({
+    catalog,
+    customRevisions: [{
+      modelId: "openai/gpt-4.1-mini",
+      effectiveFrom: "2026-08-18T00:00:00.000Z",
+      rates: { inputTokens: 3, outputTextTokens: 9 },
+    }],
+    model: "openai/gpt-4.1-mini",
+    timestamp: "2026-08-18T00:00:00.000Z",
+    usage: { prompt_tokens: 1_000_000, completion_tokens: 1_000_000 },
+  });
+  assert.ok(Math.abs(revised.amountCny - 12) < 0.000001);
 });
 
 test("appends and reads a raw usage event without storing a price snapshot", async () => {

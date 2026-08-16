@@ -5,7 +5,7 @@ import {
   resolveAgentDataRoot,
   stableAgentId,
 } from "@suzu-lives/agent-registry";
-import { sanitizePriceRevisions } from "@suzu-lives/cost-ledger";
+import { createPriceCatalog, sanitizeCustomPriceModels, sanitizePriceRevisions } from "@suzu-lives/cost-ledger";
 import { createContactProjectsService } from "../services/contact-projects.mjs";
 import { createSystemStatusService } from "../services/system-status.mjs";
 
@@ -31,6 +31,7 @@ const DEFAULT_SETTINGS = Object.freeze({
   },
   theme: "light",
   agentId: "",
+  customPriceModels: [],
   priceRevisions: [],
   identity: {
     owner: { displayName: "我", avatarDataUrl: "", gender: "", signature: "" },
@@ -182,6 +183,8 @@ function normalizeSettings(value = {}) {
   const hasContactsRoot = Boolean(contactsRoot);
   const projectRoot = hasContactsRoot ? String(value.projectRoot || "").trim() : "";
   const hasClaudeProjectDefaults = Object.hasOwn(value, "claudeProjectDefaults");
+  const customPriceModels = sanitizeCustomPriceModels(value.customPriceModels);
+  const priceCatalog = createPriceCatalog({ customPriceModels });
   return {
     contactsRoot,
     preferredContactId: hasContactsRoot ? normalizePreferredContactId(value.preferredContactId) : "",
@@ -194,15 +197,20 @@ function normalizeSettings(value = {}) {
     claudeRuntimeFeatures: normalizeClaudeRuntimeFeatures(value.claudeRuntimeFeatures),
     theme: value.theme === "dark" ? "dark" : "light",
     agentId: stableAgentId(projectRoot),
-    priceRevisions: sanitizePriceRevisions(value.priceRevisions),
+    customPriceModels,
+    priceRevisions: sanitizePriceRevisions(value.priceRevisions, priceCatalog),
     identity: normalizeIdentity(value.identity),
     conversationPreferences: normalizeConversationPreferences(value.conversationPreferences),
   };
 }
 
-function safePatch(value) {
+function safePatch(value, current = {}) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return {};
   const patch = {};
+  const customPriceModels = Object.hasOwn(value, "customPriceModels")
+    ? sanitizeCustomPriceModels(value.customPriceModels)
+    : sanitizeCustomPriceModels(current.customPriceModels);
+  const priceCatalog = createPriceCatalog({ customPriceModels });
   if (Object.hasOwn(value, "contactsRoot")) patch.contactsRoot = String(value.contactsRoot || "");
   if (Object.hasOwn(value, "projectRoot")) patch.projectRoot = String(value.projectRoot || "");
   if (Object.hasOwn(value, "onboardingCompleted")) patch.onboardingCompleted = normalizeOnboardingCompleted(value.onboardingCompleted);
@@ -212,7 +220,8 @@ function safePatch(value) {
   if (Object.hasOwn(value, "claudeProjectDefaults")) patch.claudeProjectDefaults = normalizeClaudeProjectDefaults(value.claudeProjectDefaults);
   if (Object.hasOwn(value, "claudeRuntimeFeatures")) patch.claudeRuntimeFeatures = normalizeClaudeRuntimeFeatures(value.claudeRuntimeFeatures);
   if (Object.hasOwn(value, "theme")) patch.theme = value.theme === "light" ? "light" : "dark";
-  if (Object.hasOwn(value, "priceRevisions")) patch.priceRevisions = sanitizePriceRevisions(value.priceRevisions);
+  if (Object.hasOwn(value, "customPriceModels")) patch.customPriceModels = customPriceModels;
+  if (Object.hasOwn(value, "priceRevisions")) patch.priceRevisions = sanitizePriceRevisions(value.priceRevisions, priceCatalog);
   if (Object.hasOwn(value, "identity")) patch.identity = normalizeIdentity(value.identity);
   if (Object.hasOwn(value, "conversationPreferences")) patch.conversationPreferences = normalizeConversationPreferences(value.conversationPreferences);
   return patch;
@@ -283,7 +292,7 @@ export function registerSettingsIpc({ app, appUpdateService = null, contactProje
   });
   ipcMain.handle("settings:update", async (_event, value) => {
     const current = settingsService.load();
-    const patch = settingsService.safePatch(value);
+    const patch = settingsService.safePatch(value, current);
     const settings = settingsService.save({ ...current, ...patch });
     let ownerProfileTitleSync = null;
     if (Object.hasOwn(patch, "identity")) {

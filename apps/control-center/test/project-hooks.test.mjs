@@ -183,7 +183,9 @@ test("project Hook runtime serves time-awareness only", async () => {
 
   const time = timeAwarenessContext({ now, calendarPath: managedCalendar, agentId });
   assert.match(time, /10月1日/u);
-  assert.match(time, /国庆节，也是软件纪念日/u);
+  assert.match(time, /国庆节/u);
+  assert.match(time, /国庆节假期/u);
+  assert.match(time, /软件纪念日/u);
   assert.doesNotMatch(time, /工作交付日/u);
   const result = await runProjectHook({ args: ["time-awareness", "--project-root", root, "--data-root", software], input: "{}", now });
   assert.match(result.hookSpecificOutput.additionalContext, /软件纪念日/u);
@@ -195,6 +197,15 @@ test("project Hook runtime serves time-awareness only", async () => {
     await runProjectHook({ args: ["assistant-stop", "--project-root", root, "--data-root", software], input: JSON.stringify({ last_assistant_message: "收到。" }), now }),
     {},
   );
+});
+
+test("time-awareness reuses every public event from the calendar", () => {
+  const midAutumn = timeAwarenessContext({ now: new Date(2026, 8, 25, 9, 20) });
+  assert.match(midAutumn, /中秋节假期/u);
+  assert.match(midAutumn, /中秋节/u);
+
+  const makeupWorkday = timeAwarenessContext({ now: new Date(2026, 8, 20, 9, 20) });
+  assert.match(makeupWorkday, /国庆节调休上班/u);
 });
 
 test("packaged-style Electron time Hook reads the Claude pipe through its Node runner", { skip: process.platform !== "win32" }, async (t) => {

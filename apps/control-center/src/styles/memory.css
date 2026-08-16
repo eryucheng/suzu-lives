@@ -245,8 +245,7 @@
 }
 
 .memory-editor input,
-.memory-editor textarea,
-.select-input {
+.memory-editor textarea {
   border: 1px solid var(--line);
   border-radius: 12px;
   background: var(--panel-soft);
@@ -971,10 +970,15 @@
 }
 
 .memory-library-controls .search-input,
-.memory-library-controls .select-input {
+.memory-library-controls .memory-library-status-select > button {
   min-height: 38px;
   border-color: transparent;
   background: rgba(255, 255, 255, .025);
+}
+
+.memory-library-controls .memory-library-status-select {
+  width: 132px;
+  flex: 0 0 132px;
 }
 
 .memory-library-empty {
@@ -1047,7 +1051,7 @@
 
 .memory-editor input,
 .memory-editor textarea,
-.memory-library-controls .select-input {
+.memory-library-controls .memory-library-status-select > button {
   border-color: rgba(255, 255, 255, .09);
   background: rgba(4, 8, 17, .35);
 }
@@ -1196,7 +1200,7 @@
 .memory-editor input:focus,
 .memory-editor textarea:focus,
 .memory-overview .search-input:focus,
-.memory-overview .select-input:focus,
+.memory-overview .memory-library-status-select > button:focus-visible,
 .memory-brain-card .search-input:focus,
 #memoryBrainCanvas:focus-visible {
   outline: 2px solid var(--accent2);
@@ -1265,7 +1269,7 @@
 
 [data-theme="light"] .memory-search-row .search-input,
 [data-theme="light"] .memory-library-controls .search-input,
-[data-theme="light"] .memory-library-controls .select-input {
+[data-theme="light"] .memory-library-controls .memory-library-status-select > button {
   background: rgba(247, 249, 253, .92);
 }
 

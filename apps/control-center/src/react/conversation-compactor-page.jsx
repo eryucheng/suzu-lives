@@ -41,13 +41,13 @@ function settingsDraft(settings = {}) {
   return {
     automatic: {
       enabled: automatic.enabled === true,
-      retainTokens: positiveTokenText(automatic.retainTokens, 5_000),
+      retainTokens: positiveTokenText(automatic.retainTokens, 10_000),
       time: /^(?:[01]\d|2[0-3]):[0-5]\d$/u.test(String(automatic.time || "")) ? automatic.time : "09:00",
-      tokenThreshold: positiveTokenText(automatic.tokenThreshold, 15_000),
+      tokenThreshold: positiveTokenText(automatic.tokenThreshold, 60_000),
       trigger: automatic.trigger === "time" ? "time" : "token",
     },
     manual: {
-      retainTokens: positiveTokenText(manual.retainTokens, 5_000),
+      retainTokens: positiveTokenText(manual.retainTokens, 10_000),
     },
     prompt: settings?.prompt || "",
   };

@@ -624,6 +624,22 @@ async function saveAdminPrice({ effectiveFrom, modelId, rates }) {
   await refreshData();
 }
 
+async function createAdminPriceModel(value) {
+  const modelId = String(value?.modelId || "").trim().toLowerCase();
+  if (!modelId) throw new Error("请填写实际返回的模型标识。");
+  const existing = Array.isArray(state.settings?.customPriceModels) ? state.settings.customPriceModels : [];
+  if (existing.some((item) => String(item?.modelId || "").trim().toLowerCase() === modelId)) {
+    throw new Error("这个模型已经有自定义价格，可以直接在它的价格卡片中调整。");
+  }
+  const settings = await api.settings.update({ customPriceModels: [...existing, value] });
+  if (!settings.customPriceModels?.some((item) => item?.modelId === modelId)) {
+    throw new Error("模型标识或计费字段无效，也可能与内置价格表重复。");
+  }
+  state.settings = settings;
+  await refreshData();
+  setNotice("已添加自定义模型价格。");
+}
+
 async function resetAdminPrice(modelId) {
   state.settings = await api.settings.update({
     priceRevisions: (state.settings?.priceRevisions || []).filter((item) => item.modelId !== modelId),
@@ -1300,6 +1316,7 @@ function routeForCurrentView() {
         actions: {
           bindApi: bindAdminApiConnection,
           continueOnboarding: continueAdminOnboarding,
+          createPriceModel: createAdminPriceModel,
           fetchClaudeCodeModels: fetchAdminClaudeCodeModels,
           openConversation: openConversationFromAdmin,
           removeApiConnection: removeAdminApiConnection,

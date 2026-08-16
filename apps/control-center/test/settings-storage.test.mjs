@@ -17,6 +17,36 @@ test("new installations default to the light theme while preserving an explicit 
   assert.equal(settings.load().theme, "dark");
 });
 
+test("settings persist user-created price models and later price revisions for them", () => {
+  const userData = fs.mkdtempSync(path.join(os.tmpdir(), "suzu-settings-custom-price-"));
+  const app = { getPath: () => userData };
+  const settings = createSettingsService({ app });
+  settings.save({
+    customPriceModels: [{
+      modelId: "openai/gpt-4.1-mini",
+      label: "GPT-4.1 mini",
+      provider: "OpenAI",
+      effectiveFrom: "2026-08-17T00:00:00.000Z",
+      rateDefinitions: {
+        inputTokens: { label: "输入", unitLabel: "元 / 百万 Token", per: 1_000_000 },
+        outputTextTokens: { label: "输出", unitLabel: "元 / 百万 Token", per: 1_000_000 },
+      },
+      rates: { inputTokens: 2, outputTextTokens: 8 },
+    }],
+    priceRevisions: [{
+      modelId: "openai/gpt-4.1-mini",
+      effectiveFrom: "2026-08-18T00:00:00.000Z",
+      rates: { inputTokens: 3, outputTextTokens: 9 },
+    }],
+  });
+
+  const loaded = settings.load();
+  assert.equal(loaded.customPriceModels.length, 1);
+  assert.equal(loaded.customPriceModels[0].modelId, "openai/gpt-4.1-mini");
+  assert.equal(loaded.priceRevisions.length, 1);
+  assert.equal(loaded.priceRevisions[0].modelId, "openai/gpt-4.1-mini");
+});
+
 test("data settings show one unified storage location and a migration action", () => {
   const html = renderSettings({
     state: {
