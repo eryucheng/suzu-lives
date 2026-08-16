@@ -221,7 +221,7 @@ test("runner executes future tasks only while Suzu is running and does not catch
 
 test("runner keeps a local history for triggered plans, including plans accepted by the conversation queue", async () => {
   const root = await temporaryDirectory("suzu-schedule-history-");
-  let current = new Date("2026-08-05T10:00:00+08:00");
+  let current = new Date(2026, 7, 5, 10, 0);
   const conversation = await createScheduleTask({
     dataRoot: root,
     delay: "1m",
@@ -246,9 +246,9 @@ test("runner keeps a local history for triggered plans, including plans accepted
   });
 
   await runner.start();
-  current = new Date("2026-08-05T10:01:00+08:00");
+  current = new Date(2026, 7, 5, 10, 1);
   await runner.poll();
-  current = new Date("2026-08-05T10:02:00+08:00");
+  current = new Date(2026, 7, 5, 10, 2);
   await runner.poll();
 
   const history = await listScheduleHistory({ dataRoot: root });
