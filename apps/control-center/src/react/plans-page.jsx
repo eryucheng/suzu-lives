@@ -63,6 +63,28 @@ function scheduleTask(task) {
   };
 }
 
+function scheduleHistoryStatus(value) {
+  const status = clean(value).toLowerCase();
+  if (status === "running") return { label: "执行中", tone: "warning" };
+  if (status === "queued") return { label: "已进入会话队列", tone: "warning" };
+  if (status === "dispatched") return { label: "已提交给会话", tone: "success" };
+  if (status === "completed") return { label: "已完成", tone: "success" };
+  if (status === "failed") return { label: "执行失败", tone: "warning" };
+  if (status === "interrupted") return { label: "已中断", tone: "muted" };
+  return { label: "未投递", tone: "muted" };
+}
+
+function scheduleHistoryEntry(entry) {
+  const details = scheduleTask(entry?.task);
+  const status = scheduleHistoryStatus(entry?.status);
+  return {
+    ...details,
+    finishedAt: clean(entry?.finishedAt) ? dateTime(entry.finishedAt) : "等待记录结果",
+    status,
+    triggeredAt: dateTime(entry?.triggeredAt),
+  };
+}
+
 function PlansTaskCard({ actions, onRemove, task }) {
   const details = scheduleTask(task);
   const [pending, setPending] = useState(false);
@@ -117,6 +139,60 @@ function PlansTaskCard({ actions, onRemove, task }) {
       </footer>
       {error ? <p className="plans-task-card__error" role="alert">{error}</p> : null}
     </GlassPanel>
+  );
+}
+
+function PlansHistoryCard({ entry }) {
+  const details = scheduleHistoryEntry(entry);
+  return (
+    <GlassPanel as="article" className="plans-history-card" intensity="soft">
+      <div className="plans-history-card__summary">
+        <h3>{details.description}</h3>
+        <dl className="plans-history-card__meta">
+          <div>
+            <dt>触发</dt>
+            <dd>{details.triggeredAt}</dd>
+          </div>
+          <div>
+            <dt>主体</dt>
+            <dd title={details.scope}>{details.scope}</dd>
+          </div>
+          <div>
+            <dt>记录</dt>
+            <dd>{details.finishedAt}</dd>
+          </div>
+        </dl>
+        <p className="plans-history-card__content" title={details.content}>
+          <span>{details.contentLabel}</span>
+          <span>{details.content || "未填写"}</span>
+        </p>
+      </div>
+      <Status label={details.status.label} tone={details.status.tone} />
+    </GlassPanel>
+  );
+}
+
+function PlansHistoryDialog({ history, onClose }) {
+  return (
+    <Dialog
+      footer={<div className="plans-editor-actions"><Button onClick={onClose} variant="secondary">关闭</Button></div>}
+      onClose={onClose}
+      open
+      title="计划历史"
+    >
+      <div className="plans-history-dialog">
+        <p>保留最近 100 次已触发计划，方便核对它是否进入了会话队列。</p>
+        {history.length ? (
+          <ol className="plans-history-dialog__list">
+            {history.map((entry, index) => (
+              <li key={entry?.id || `${entry?.triggeredAt || "history"}-${index}`}>
+                <PlansHistoryCard entry={entry} />
+              </li>
+            ))}
+          </ol>
+        ) : <p className="plans-history-dialog__empty">尚无已触发的计划。</p>}
+      </div>
+    </Dialog>
   );
 }
 
@@ -294,6 +370,7 @@ function DeletePlanDialog({ actions, onClose, task }) {
 export function PlansPage({ actions = {}, snapshot = null }) {
   const [currentSnapshot, setCurrentSnapshot] = useState(snapshot);
   const [editorOpen, setEditorOpen] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
   const [removingTask, setRemovingTask] = useState(null);
   useEffect(() => { setCurrentSnapshot(snapshot); }, [snapshot]);
   const updateSnapshot = async (method, value) => {
@@ -311,12 +388,18 @@ export function PlansPage({ actions = {}, snapshot = null }) {
   };
   const loading = currentSnapshot === null;
   const tasks = Array.isArray(currentSnapshot?.tasks) ? currentSnapshot.tasks : [];
+  const history = Array.isArray(currentSnapshot?.history) ? currentSnapshot.history : [];
   const contacts = Array.isArray(currentSnapshot?.contacts) ? currentSnapshot.contacts : [];
 
   return (
     <div className="plans-react-page">
       <PageHeader
-        action={<Button className="plans-create-button" disabled={loading} onClick={() => setEditorOpen(true)} variant="secondary">新增计划</Button>}
+        action={(
+          <div className="plans-page-actions">
+            <Button className="plans-history-button" disabled={loading} onClick={() => setHistoryOpen(true)} variant="secondary">计划历史</Button>
+            <Button className="plans-create-button" disabled={loading} onClick={() => setEditorOpen(true)} variant="secondary">新增计划</Button>
+          </div>
+        )}
         eyebrow="PLANS"
         subtitle="管理本机保存的定时器、每日任务与系统脚本。"
         title="计划，不只是待办列表"
@@ -349,6 +432,7 @@ export function PlansPage({ actions = {}, snapshot = null }) {
       )}
 
       {editorOpen ? <PlanEditor actions={pageActions} contacts={contacts} onClose={() => setEditorOpen(false)} /> : null}
+      {historyOpen ? <PlansHistoryDialog history={history} onClose={() => setHistoryOpen(false)} /> : null}
       {removingTask ? <DeletePlanDialog actions={pageActions} onClose={() => setRemovingTask(null)} task={removingTask} /> : null}
     </div>
   );
