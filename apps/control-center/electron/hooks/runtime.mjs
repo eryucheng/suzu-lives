@@ -6,9 +6,9 @@ import {
   resolveSuzuLivesDataRoot,
   stableAgentId,
 } from "@suzu-lives/agent-registry";
+import { PUBLIC_CALENDAR_EVENTS } from "../services/public-calendar-events.mjs";
 
 const WEEKDAYS = ["星期日", "星期一", "星期二", "星期三", "星期四", "星期五", "星期六"];
-const PUBLIC_DATES = new Map([["01-01", "元旦"], ["05-01", "劳动节"], ["10-01", "国庆节"]]);
 const DEFAULT_TIME_AWARENESS_INTERVAL_MINUTES = 10;
 const MIN_TIME_AWARENESS_INTERVAL_MINUTES = 1;
 const MAX_TIME_AWARENESS_INTERVAL_MINUTES = 24 * 60;
@@ -91,11 +91,19 @@ function readContactEvents(filePath, now, agentId) {
     .filter(Boolean);
 }
 
+function readPublicEvents(now) {
+  const date = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+  const recurring = date.slice(5);
+  return PUBLIC_CALENDAR_EVENTS
+    .filter((event) => clean(event.date) === date || clean(event.date) === recurring)
+    .map((event) => clean(event.name).slice(0, 120))
+    .filter(Boolean);
+}
+
 export function timeAwarenessContext({ now = new Date(), calendarPath = "", agentId = "" } = {}) {
   const current = now instanceof Date ? now : new Date(now);
   if (!Number.isFinite(current.getTime())) throw new Error("当前时间无效。");
-  const dateKey = `${pad(current.getMonth() + 1)}-${pad(current.getDate())}`;
-  const names = [...new Set([PUBLIC_DATES.get(dateKey), ...readContactEvents(calendarPath, current, agentId)].filter(Boolean))];
+  const names = [...new Set([...readPublicEvents(current), ...readContactEvents(calendarPath, current, agentId)])];
   const base = `你知道现在是${current.getMonth() + 1}月${current.getDate()}日 ${WEEKDAYS[current.getDay()]} ${pad(current.getHours())}:${pad(current.getMinutes())}。`;
   if (!names.length) return base;
   return `${base}今天是${names.map((name, index) => index ? `也是${name}` : name).join("，")}。`;

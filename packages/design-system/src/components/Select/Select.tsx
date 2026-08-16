@@ -28,6 +28,8 @@ export interface SelectProps {
   fullWidth?: boolean;
   /** a11y 关联 label 的 id */
   id?: string;
+  /** 没有可关联 <label> 时提供的可访问名称 */
+  ariaLabel?: string;
   className?: string;
 }
 
@@ -44,6 +46,7 @@ export function Select({
   disabled = false,
   fullWidth = false,
   id,
+  ariaLabel,
   className,
 }: SelectProps) {
   const [open, setOpen] = useState(false);
@@ -132,6 +135,7 @@ export function Select({
         className={[styles.trigger, open && styles.open].filter(Boolean).join(' ')}
         onClick={() => !disabled && setOpen((v) => !v)}
         onKeyDown={handleKeyDown}
+        aria-label={ariaLabel}
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-disabled={disabled}

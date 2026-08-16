@@ -71,11 +71,14 @@
 /* ---- 浮层面板 ---- */
 .panel {
   position: absolute;
-  z-index: 30;
+  z-index: 60;
   top: calc(100% + 2px);
   left: 0;
   right: 0;
-  overflow: hidden;
+  max-height: min(360px, calc(100dvh - 24px));
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   background: var(--panel);

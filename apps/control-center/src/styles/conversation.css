@@ -1361,15 +1361,9 @@
   gap: 14px;
 }
 
-.content--conversation .conversation-settings__time-display select {
-  min-width: 116px;
-  border: 1px solid rgba(255, 255, 255, .15);
-  border-radius: 5px;
-  background: #2b313b;
-  color: #e5eaf1;
-  font: inherit;
-  font-size: 11px;
-  padding: 4px 6px;
+.content--conversation .conversation-settings__select {
+  width: 142px;
+  flex: 0 0 142px;
 }
 
 .content--conversation .conversation-session-settings {
@@ -1571,15 +1565,9 @@
   padding: 7px 8px;
 }
 
-.content--conversation .conversation-session-settings .conversation-settings__time-display select {
-  min-width: 126px;
-  border: 1px solid rgba(255, 255, 255, .15);
-  border-radius: 6px;
-  background: #252a33;
-  color: #e5eaf1;
-  font: inherit;
-  font-size: 11px;
-  padding: 5px 6px;
+.content--conversation .conversation-session-settings .conversation-settings__select {
+  width: 142px;
+  flex-basis: 142px;
 }
 
 .content--conversation .conversation-session-settings__wechat > header {
@@ -2926,12 +2914,6 @@
   color: #686c75;
 }
 
-:root[data-theme="light"] .content--conversation .conversation-settings__time-display select {
-  border-color: #d9dadd;
-  background: #f6f6f6;
-  color: #40434a;
-}
-
 :root[data-theme="light"] .content--conversation .conversation-session-settings {
   border-left-color: #e4e4e4;
   background: #fff;
@@ -2985,12 +2967,6 @@
 
 :root[data-theme="light"] .content--conversation .conversation-session-settings__checks label:not(.conversation-settings__time-display):hover {
   background: #f5f5f5;
-}
-
-:root[data-theme="light"] .content--conversation .conversation-session-settings .conversation-settings__time-display select {
-  border-color: #dedfe2;
-  background: #f7f7f7;
-  color: #42464e;
 }
 
 :root[data-theme="light"] .content--conversation .conversation-wechat-qr-overlay {

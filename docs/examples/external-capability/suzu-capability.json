@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "id": "example.local-weather",
+  "name": "本地天气示例",
+  "version": "1.0.0",
+  "description": "演示 Agent 中立的 Skill、MCP 与 CLI 适配器字段。",
+  "adapters": {
+    "skill": {
+      "directory": "skill"
+    },
+    "mcp": {
+      "transport": "stdio",
+      "command": "node",
+      "args": ["./server.mjs"],
+      "env": {
+        "WEATHER_CACHE": "${WEATHER_CACHE_DIR:-./cache}"
+      }
+    },
+    "cli": {
+      "command": "local-weather",
+      "args": ["--json"]
+    }
+  }
+}

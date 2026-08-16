@@ -117,6 +117,7 @@ test("realtime call uses the configured contact voice and streams ASR audio", as
   assert.equal(sentTurns.length, 1);
   assert.equal(sentTurns[0].kind, "call");
   assert.equal(sentTurns[0].content, "你好，能听见吗？");
+  assert.equal(sentTurns[0].deliverToWechat, false);
   assert.match(sentTurns[0].requestId, /^suzu-call-/u);
   assert.equal(ledgerEvents.length, 1);
   assert.equal(ledgerEvents[0].ledgerPath, "D:/suzu-data/usage.json");
@@ -211,6 +212,7 @@ test("a connected call asks Claude for one greeting, speaks it, and lets the fir
   assert.equal(sentTurns[0].kind, "call-open");
   assert.equal(sentTurns[0].content, "");
   assert.equal(sentTurns[0].callDirection, "agent");
+  assert.equal(sentTurns[0].deliverToWechat, false);
   assert.match(sentTurns[0].requestId, /^suzu-call-open-/u);
   assert.deepEqual(
     await service.open({ callId: started.callId, senderId: "renderer-1" }),

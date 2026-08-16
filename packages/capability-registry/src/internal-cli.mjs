@@ -297,6 +297,12 @@ function requiredRuntimeText(value, label) {
 function normalizedConnection(value) {
   if (!plainObject(value)) return {};
   const apiKey = optionalText(value.apiKey ?? value.key, "connection.apiKey");
+  // Named DashScope connections intentionally store 0 when they do not own a
+  // request-timeout setting.  Runtime connections are optional, so translate
+  // that storage sentinel back to an omitted value before validating it.
+  const timeoutMs = value.timeoutMs === 0
+    ? null
+    : optionalSafeInteger(value.timeoutMs, "connection.timeoutMs", { minimum: 1, maximum: 600000 });
   return {
     apiKey,
     key: apiKey,
@@ -304,7 +310,7 @@ function normalizedConnection(value) {
     model: optionalText(value.model, "connection.model"),
     type: optionalText(value.type, "connection.type"),
     provider: optionalText(value.provider, "connection.provider"),
-    timeoutMs: optionalSafeInteger(value.timeoutMs, "connection.timeoutMs", { minimum: 1, maximum: 600000 }),
+    timeoutMs,
   };
 }
 

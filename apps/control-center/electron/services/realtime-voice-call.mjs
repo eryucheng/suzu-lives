@@ -418,6 +418,7 @@ export function createRealtimeVoiceCallService({
         hasTranscript: call.session.hasTranscript,
         kind: "call-open",
         callDirection: call.initiator,
+        deliverToWechat: false,
         requestId,
       });
       if (!callIsActive(call) || generation !== call.generation) {
@@ -464,6 +465,7 @@ export function createRealtimeVoiceCallService({
         projectRoot: call.session.projectRoot,
         hasTranscript: call.session.hasTranscript,
         kind: "call",
+        deliverToWechat: false,
         requestId,
       });
       if (!callIsActive(call) || generation !== call.generation) {

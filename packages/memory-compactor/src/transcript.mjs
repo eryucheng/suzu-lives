@@ -12,8 +12,8 @@ import {
 export const DEFAULT_COMPACTION_RULES = Object.freeze({
   minimumHoursSinceLastCompaction: 24,
   recentRawHoursToKeep: 24,
-  contextTokensTrigger: 15_000,
-  recentRawTokensToKeep: 5_000,
+  contextTokensTrigger: 60_000,
+  recentRawTokensToKeep: 10_000,
 });
 
 function clean(value) {
