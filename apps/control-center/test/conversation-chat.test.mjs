@@ -534,6 +534,67 @@ test("messages in the same Claude session run in FIFO order", async () => {
   service.dispose();
 });
 
+test("proactive scheduled turns remain observable while active or queued", async () => {
+  const root = await temporaryDirectory("suzu-proactive-queue-");
+  const projectRoot = path.join(root, "project");
+  const homeDirectory = path.join(root, "home");
+  const commandPath = path.join(homeDirectory, ".local", "bin", "claude.exe");
+  await fs.mkdir(projectRoot, { recursive: true });
+  await fs.mkdir(path.dirname(commandPath), { recursive: true });
+  await fs.writeFile(commandPath, "fixture");
+  const spawned = [];
+  const service = createConversationChatService({
+    settingsService: { load: () => ({ projectRoot }) },
+    reader: { ensureActiveSession: async () => ({ id: "proactive-queue-session", projectRoot, hasTranscript: false }) },
+    homeDirectory,
+    spawnImpl: () => {
+      const child = new FakeChild();
+      spawned.push(child);
+      return child;
+    },
+  });
+  const scheduledTurn = {
+    contactId: "contact-proactive-queue",
+    hasTranscript: false,
+    kind: "schedule",
+    projectRoot,
+    scheduleSource: "proactive-chain",
+    sessionId: "proactive-queue-session",
+  };
+
+  const first = await service.sendToSession({ ...scheduledTurn, content: "第一条主动关心" });
+  const second = await service.sendToSession({ ...scheduledTurn, content: "第二条主动关心" });
+  assert.equal(first.queued, false);
+  assert.equal(second.queued, true);
+  assert.equal(service.hasPendingTurn({
+    contactId: scheduledTurn.contactId,
+    kind: "schedule",
+    scheduleSource: "proactive-chain",
+  }), true);
+
+  spawned[0].emitJson({ type: "result", result: "第一条完成" });
+  spawned[0].close();
+  await flush();
+  await flush();
+  assert.equal(spawned.length, 2);
+  assert.equal(service.hasPendingTurn({
+    contactId: scheduledTurn.contactId,
+    kind: "schedule",
+    scheduleSource: "proactive-chain",
+  }), true);
+
+  spawned[1].emitJson({ type: "result", result: "第二条完成" });
+  spawned[1].close();
+  await flush();
+  await flush();
+  assert.equal(service.hasPendingTurn({
+    contactId: scheduledTurn.contactId,
+    kind: "schedule",
+    scheduleSource: "proactive-chain",
+  }), false);
+  service.dispose();
+});
+
 test("plain text reuses one Claude stream and closes it after the idle timeout", async () => {
   const root = await temporaryDirectory("suzu-chat-idle-stream-");
   const projectRoot = path.join(root, "project");

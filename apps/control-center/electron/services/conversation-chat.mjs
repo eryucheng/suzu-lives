@@ -571,6 +571,7 @@ export function createConversationChatService({
   const permissionRequests = new Map();
   const reusableTextStreams = new Map();
   const startingSessions = new Set();
+  const startingTurns = new Map();
   const textStreamIdleTimeout = boundedDelay(idleStreamTimeoutMs, TEXT_STREAM_IDLE_TIMEOUT_MS);
   const textStreamCloseGrace = boundedDelay(idleStreamCloseGraceMs, TEXT_STREAM_CLOSE_GRACE_MS);
   let disposed = false;
@@ -583,6 +584,22 @@ export function createConversationChatService({
       pendingTurns.set(key, queue);
     }
     return queue;
+  };
+
+  const hasPendingTurn = ({ contactId, kind = "", scheduleSource = "" } = {}) => {
+    const expectedContactId = clean(contactId);
+    const expectedKind = clean(kind);
+    const expectedScheduleSource = clean(scheduleSource);
+    if (!expectedContactId) return false;
+    const matches = (turn) => (
+      clean(turn?.contactId) === expectedContactId
+      && (!expectedKind || clean(turn?.kind) === expectedKind)
+      && (!expectedScheduleSource || clean(turn?.scheduleSource) === expectedScheduleSource)
+      && turn?.finished !== true
+    );
+    if ([...activeTurns.values()].some(matches)) return true;
+    if ([...startingTurns.values()].some(matches)) return true;
+    return [...pendingTurns.values()].some((queue) => queue.some(matches));
   };
 
   const emitQueue = (sessionId, projectRoot = "") => {
@@ -734,6 +751,7 @@ export function createConversationChatService({
     projectRoot: request.projectRoot,
     requestId: request.requestId,
     resultError: "",
+    scheduleSource: clean(request.scheduleSource),
     sessionId: request.sessionId,
     settling: false,
     stderr: "",
@@ -1204,6 +1222,7 @@ export function createConversationChatService({
     if (!queue.length) pendingTurns.delete(key);
     emitQueue(sessionId, request.projectRoot);
     startingSessions.add(key);
+    startingTurns.set(key, request);
     try {
       await startTurn(request);
     } catch (error) {
@@ -1219,6 +1238,7 @@ export function createConversationChatService({
       });
     } finally {
       startingSessions.delete(key);
+      if (startingTurns.get(key) === request) startingTurns.delete(key);
       if (!disposed && !activeTurns.has(key)) void pumpSession(sessionId, projectRoot);
     }
   };
@@ -1248,7 +1268,7 @@ export function createConversationChatService({
     };
   };
 
-  const enqueue = async ({ content, contactId = "", kind = "message", callDirection = "", media: suppliedMedia = [], mediaSource = "wechat", requestId: suppliedRequestId = "", session: requestedSession = null } = {}) => {
+  const enqueue = async ({ content, contactId = "", kind = "message", callDirection = "", media: suppliedMedia = [], mediaSource = "wechat", memoryText: suppliedMemoryText = "", requestId: suppliedRequestId = "", scheduleSource = "", session: requestedSession = null } = {}) => {
     if (disposed) throw new ConversationChatError("聊天服务已经停止。");
     const media = normalizeInboundMedia(suppliedMedia, mediaSource);
     const voiceCallOpening = kind === "call-open";
@@ -1292,6 +1312,7 @@ export function createConversationChatService({
           : text,
       projectRoot: session.projectRoot,
       requestId: clean(suppliedRequestId) || `suzu-${randomUUID()}`,
+      scheduleSource: clean(scheduleSource),
       sessionId: session.id,
     };
     const queue = queueFor(session.id, session.projectRoot);
@@ -1331,9 +1352,9 @@ export function createConversationChatService({
     return true;
   };
 
-  const send = ({ content } = {}) => enqueue({ content });
-  const sendToSession = ({ content, contactId = "", sessionId, projectRoot, hasTranscript = false, kind = "message", callDirection = "", media = [], mediaSource = "wechat", requestId = "" } = {}) => (
-    enqueue({ content, contactId, kind, callDirection, media, mediaSource, requestId, session: { sessionId, projectRoot, hasTranscript } })
+  const send = ({ content, media = [], mediaSource = "wechat", memoryText = "" } = {}) => enqueue({ content, media, mediaSource, memoryText });
+  const sendToSession = ({ content, contactId = "", sessionId, projectRoot, hasTranscript = false, kind = "message", callDirection = "", media = [], mediaSource = "wechat", memoryText = "", requestId = "", scheduleSource = "" } = {}) => (
+    enqueue({ content, contactId, kind, callDirection, media, mediaSource, memoryText, requestId, scheduleSource, session: { sessionId, projectRoot, hasTranscript } })
   );
 
   const stop = ({ sessionId, projectRoot, requestId } = {}) => {
@@ -1453,6 +1474,7 @@ export function createConversationChatService({
     disposed = true;
     pendingTurns.clear();
     startingSessions.clear();
+    startingTurns.clear();
     for (const turn of activeTurns.values()) {
       turn.finished = true;
       removePermissionRequests(turn);
@@ -1471,6 +1493,7 @@ export function createConversationChatService({
 
   return {
     dispose,
+    hasPendingTurn,
     respondPermission,
     respondPermissionForSession,
     send,
