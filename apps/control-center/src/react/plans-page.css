@@ -155,8 +155,106 @@
 
 .plans-task-card__error { grid-column:1 / -1; }
 
+.plans-page-actions {
+  display:flex;
+  align-items:center;
+  gap:var(--space-sm);
+}
+
+.plans-history-dialog {
+  display:grid;
+  min-width:0;
+  gap:var(--space-md);
+}
+
+.plans-history-dialog > p,
+.plans-history-dialog__empty {
+  margin:0;
+  color:var(--text-secondary);
+  font-size:var(--font-size-xs);
+  line-height:1.55;
+}
+
+.plans-history-dialog__list {
+  display:grid;
+  gap:var(--space-sm);
+  margin:0;
+  padding:0;
+  list-style:none;
+}
+
+.plans-history-card {
+  display:grid;
+  grid-template-columns:minmax(0,1fr) auto;
+  align-items:center;
+  gap:var(--space-md);
+  min-width:0;
+  padding:clamp(12px,1.2cqw,16px) clamp(14px,1.5cqw,20px);
+}
+
+.plans-history-card__summary { display:grid; min-width:0; gap:5px; }
+
+.plans-history-card h3 {
+  margin:0;
+  overflow:hidden;
+  color:var(--text);
+  font-size:var(--font-size-sm);
+  line-height:1.4;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+
+.plans-history-card__meta {
+  display:flex;
+  flex-wrap:wrap;
+  gap:3px var(--space-lg);
+  margin:0;
+}
+
+.plans-history-card__meta div {
+  display:flex;
+  min-width:0;
+  align-items:baseline;
+  gap:5px;
+}
+
+.plans-history-card__meta dt,
+.plans-history-card__content > span:first-child {
+  flex:none;
+  color:var(--text-muted);
+  font-size:var(--font-size-xs);
+}
+
+.plans-history-card__meta dd {
+  margin:0;
+  overflow:hidden;
+  color:var(--text-secondary);
+  font-size:var(--font-size-xs);
+  line-height:1.5;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+
+.plans-history-card__content {
+  display:flex;
+  min-width:0;
+  gap:5px;
+  margin:0;
+  color:var(--text-secondary);
+  font-size:var(--font-size-xs);
+  line-height:1.5;
+}
+
+.plans-history-card__content > span:last-child {
+  min-width:0;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+
 .plans-empty { width:min(100%,850px); }
 
+.plans-history-button,
 .plans-create-button {
   background:var(--panel);
   border-color:var(--border);
@@ -164,6 +262,7 @@
   color:var(--text);
 }
 
+.plans-history-button:hover:not(:disabled),
 .plans-create-button:hover:not(:disabled) {
   background:var(--panel-soft);
   border-color:color-mix(in srgb, var(--accent) 42%, var(--border));
@@ -252,13 +351,16 @@
 .plans-delete-dialog p { margin:0; }
 
 body:has(.plans-editor-form) [role="dialog"],
-body:has(.plans-delete-dialog) [role="dialog"] {
+body:has(.plans-delete-dialog) [role="dialog"],
+body:has(.plans-history-dialog) [role="dialog"] {
   background:linear-gradient(
     160deg,
     color-mix(in srgb, var(--panel) 96%, transparent),
     color-mix(in srgb, var(--panel) 90%, transparent)
   );
 }
+
+body:has(.plans-history-dialog) [role="dialog"] { max-width:min(92vw,920px); }
 
 body:has(.plans-editor-form) [role="dialog"]:has([aria-expanded="true"]) {
   overflow:visible;
@@ -294,4 +396,6 @@ body:has(.plans-editor-form) [role="dialog"] [role="option"][aria-selected="true
   .plans-editor-delay { grid-template-columns:minmax(0,1fr); }
   .plans-task-card { grid-template-columns:minmax(0,1fr); }
   .plans-task-card__footer { justify-content:flex-start; flex-wrap:wrap; }
+  .plans-page-actions { flex-wrap:wrap; }
+  .plans-history-card { grid-template-columns:minmax(0,1fr); }
 }

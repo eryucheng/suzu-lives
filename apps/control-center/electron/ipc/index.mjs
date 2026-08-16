@@ -34,6 +34,7 @@ import { ensureSuzuClaudeProjectSettings } from "@suzu-lives/claude-integration"
 import {
   createScheduleRunner,
   createScheduleTask,
+  listScheduleHistory,
   listScheduleTasks,
   removeScheduleTask,
   scheduleTaskSummary,
@@ -57,6 +58,8 @@ function projectScopeKey(value) {
   const resolved = path.resolve(source);
   return process.platform === "win32" ? resolved.toLowerCase() : resolved;
 }
+
+const PROACTIVE_CHAIN_TURN_SOURCE = "proactive-chain";
 
 function scheduleDurationPart(value, label, maximum) {
   const source = clean(value);
@@ -306,24 +309,36 @@ export function registerIpcHandlers({ app, appUpdateService = null, dataStorageS
         return id && name ? [{ id, name }] : [];
       });
     const contactById = new Map(contacts.map((contact) => [contact.id, contact]));
-    const tasks = (await listScheduleTasks({ dataRoot }))
-      .filter((task) => !(
-        task.source === "system"
-        && task.target?.type === "operation"
-        && task.target?.name === "conversation-compactor"
-      ))
-      .map((task) => {
-        const summary = scheduleTaskSummary(task);
-        if (summary.target?.type !== "conversation") return summary;
-        const target = { ...summary.target, prompt: clean(task.target?.prompt) };
-        const contact = contactById.get(clean(summary.target.contactId));
-        return contact
-          ? { ...summary, target: { ...target, contact: { id: contact.id, name: contact.name } } }
-          : { ...summary, target };
-      });
+    const isInternalCompactor = (task) => (
+      task?.source === "system"
+      && task.target?.type === "operation"
+      && task.target?.name === "conversation-compactor"
+    );
+    const presentTask = (summary, rawTask = null) => {
+      if (summary?.target?.type !== "conversation") return summary;
+      const target = {
+        ...summary.target,
+        prompt: clean(rawTask?.target?.prompt ?? summary.target?.prompt),
+      };
+      const contact = contactById.get(clean(summary.target.contactId));
+      return contact
+        ? { ...summary, target: { ...target, contact: { id: contact.id, name: contact.name } } }
+        : { ...summary, target };
+    };
+    const [storedTasks, storedHistory] = await Promise.all([
+      listScheduleTasks({ dataRoot }),
+      listScheduleHistory({ dataRoot, limit: 100 }),
+    ]);
+    const tasks = storedTasks
+      .filter((task) => !isInternalCompactor(task))
+      .map((task) => presentTask(scheduleTaskSummary(task), task));
+    const history = storedHistory
+      .filter((entry) => !isInternalCompactor(entry?.task))
+      .map((entry) => ({ ...entry, task: presentTask(entry.task) }));
     return {
       contacts: contacts.map(({ id, name }) => ({ id, name })),
       contactsStatus: clean(contactSnapshot?.status) || "needs-root",
+      history,
       tasks,
     };
   };
@@ -397,6 +412,11 @@ export function registerIpcHandlers({ app, appUpdateService = null, dataStorageS
         if (proactiveMaintenanceStopped) return [];
         return maintainProactiveContactChains({
           dataRoot,
+          hasPendingScheduledTurn: ({ contactId }) => conversation.chat.hasPendingTurn?.({
+            contactId,
+            kind: "schedule",
+            scheduleSource: PROACTIVE_CHAIN_TURN_SOURCE,
+          }) === true,
           now,
           scope,
           settings: capabilitiesService.proactiveContactSettings(),
@@ -421,6 +441,14 @@ export function registerIpcHandlers({ app, appUpdateService = null, dataStorageS
     delayedProactiveMaintenanceChecks.set(key, timer);
   };
   requestProactiveContactMaintenance = scheduleProactiveContactChainCheck;
+  const proactiveChainRequests = new Map();
+  const unsubscribeProactiveChainTurns = conversation.chat.subscribe((event) => {
+    const requestId = clean(event?.requestId);
+    const contactId = proactiveChainRequests.get(requestId);
+    if (!contactId || !["turn-complete", "turn-stopped", "error"].includes(event?.type)) return;
+    proactiveChainRequests.delete(requestId);
+    scheduleProactiveContactChainCheck({ scope: { contactId } });
+  });
   const syncEnabledTravelingMerchantSchedule = async () => {
     const targets = await capabilitiesService.enabledCompanionSessions("traveling-merchant");
     return syncTravelingMerchantSchedule({ dataRoot, hasEnabledContacts: targets.length > 0 });
@@ -435,6 +463,7 @@ export function registerIpcHandlers({ app, appUpdateService = null, dataStorageS
         abilityId: "proactive-contact",
         contactId,
       })) return undefined;
+      const proactiveChain = isActiveProactiveChainTask(task, { contactId });
       const target = await conversation.reader.resolveContactSession(contactId);
       const result = await conversation.chat.sendToSession({
         content: scheduledTaskContent(task),
@@ -443,9 +472,11 @@ export function registerIpcHandlers({ app, appUpdateService = null, dataStorageS
         projectRoot: target.projectRoot,
         hasTranscript: target.hasTranscript === true,
         kind: "schedule",
+        scheduleSource: proactiveChain ? PROACTIVE_CHAIN_TURN_SOURCE : "",
       });
-      if (isActiveProactiveChainTask(task, { contactId })) {
-        scheduleProactiveContactChainCheck({ scope: { contactId } });
+      if (proactiveChain && result?.accepted === true) {
+        const requestId = clean(result?.requestId);
+        if (requestId) proactiveChainRequests.set(requestId, contactId);
       }
       return result;
     },
@@ -479,7 +510,9 @@ export function registerIpcHandlers({ app, appUpdateService = null, dataStorageS
   });
   app?.once?.("before-quit", () => {
     unsubscribeCompactorAuto();
+    unsubscribeProactiveChainTurns();
     proactiveMaintenanceStopped = true;
+    proactiveChainRequests.clear();
     for (const timer of delayedProactiveMaintenanceChecks.values()) clearTimeout(timer);
     delayedProactiveMaintenanceChecks.clear();
     scheduleRunner.stop();

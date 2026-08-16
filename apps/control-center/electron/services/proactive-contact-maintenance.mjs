@@ -33,7 +33,13 @@ export function isActiveProactiveChainTask(task, scope) {
 }
 
 /** Ensures the selected opted-in contact(s) have one pending Agent-owned chain task. */
-export async function maintainProactiveContactChains({ dataRoot, scope = null, settings = {}, now = new Date() } = {}) {
+export async function maintainProactiveContactChains({
+  dataRoot,
+  scope = null,
+  settings = {},
+  now = new Date(),
+  hasPendingScheduledTurn = () => false,
+} = {}) {
   if (settings?.autoMaintain !== true) return [];
   const requestedScopeKey = scope ? proactiveContactScopeKey(scope) : "";
   if (scope && !requestedScopeKey) return [];
@@ -45,7 +51,12 @@ export async function maintainProactiveContactChains({ dataRoot, scope = null, s
   const covered = new Set();
   for (const target of targets) {
     const key = proactiveContactScopeKey(target);
-    if (existing.some((task) => isActiveProactiveChainTask(task, target))) {
+    const hasScheduledPlan = existing.some((task) => isActiveProactiveChainTask(task, target));
+    let hasQueuedTurn = false;
+    if (!hasScheduledPlan) {
+      try { hasQueuedTurn = hasPendingScheduledTurn({ contactId: target.contactId }) === true; } catch { /* A transient chat lookup must not prevent plan recovery. */ }
+    }
+    if (hasScheduledPlan || hasQueuedTurn) {
       covered.add(key);
     }
   }

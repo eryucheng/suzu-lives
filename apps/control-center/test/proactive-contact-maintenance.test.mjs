@@ -72,6 +72,37 @@ test("automatic proactive maintenance stays idle when the switch is off", async 
   assert.equal((await listScheduleTasks({ dataRoot })).length, 1);
 });
 
+test("a queued scheduled turn covers its proactive chain until that turn finishes", async () => {
+  const dataRoot = await temporaryDirectory("suzu-proactive-maintenance-queued-");
+  const contactId = "contact-queued";
+  const settings = {
+    autoMaintain: true,
+    chainPrompt: "等当前会话完成后再继续。",
+    enabledContactIds: [contactId],
+  };
+  const checked = [];
+
+  const blocked = await maintainProactiveContactChains({
+    dataRoot,
+    settings,
+    hasPendingScheduledTurn: (scope) => {
+      checked.push(scope.contactId);
+      return scope.contactId === contactId;
+    },
+  });
+  assert.deepEqual(blocked, []);
+  assert.deepEqual(checked, [contactId]);
+  assert.equal((await listScheduleTasks({ dataRoot })).length, 0);
+
+  const restored = await maintainProactiveContactChains({
+    dataRoot,
+    settings,
+    hasPendingScheduledTurn: () => false,
+  });
+  assert.equal(restored.length, 1);
+  assert.equal(restored[0].target.contactId, contactId);
+});
+
 test("a targeted maintenance check only follows its own contact", async () => {
   const dataRoot = await temporaryDirectory("suzu-proactive-maintenance-targeted-");
   const target = { contactId: "contact-running" };

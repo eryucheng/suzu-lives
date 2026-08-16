@@ -8,6 +8,7 @@ import {
   createScheduleRunner,
   createScheduleTask,
   cronMatches,
+  listScheduleHistory,
   listScheduleTasks,
   parseCronExpression,
   removeScheduleTask,
@@ -215,5 +216,49 @@ test("runner executes future tasks only while Suzu is running and does not catch
   assert.deepEqual(operations, ["traveling-merchant"]);
   await runner.poll();
   assert.deepEqual(operations, ["traveling-merchant"]);
+  runner.stop();
+});
+
+test("runner keeps a local history for triggered plans, including plans accepted by the conversation queue", async () => {
+  const root = await temporaryDirectory("suzu-schedule-history-");
+  let current = new Date("2026-08-05T10:00:00+08:00");
+  const conversation = await createScheduleTask({
+    dataRoot: root,
+    delay: "1m",
+    prompt: "早上问候一下。",
+    contactId: "contact-history",
+    description: "早安提醒",
+    now: current,
+  });
+  const operation = await createScheduleTask({
+    dataRoot: root,
+    cron: "2 10 * * *",
+    exec: "traveling-merchant",
+    description: "远行商人检查",
+    now: current,
+  });
+  const runner = createScheduleRunner({
+    dataRoot: root,
+    intervalMs: 1_000,
+    now: () => current,
+    onConversationTask: async () => ({ accepted: true, queued: true }),
+    onOperationTask: async () => undefined,
+  });
+
+  await runner.start();
+  current = new Date("2026-08-05T10:01:00+08:00");
+  await runner.poll();
+  current = new Date("2026-08-05T10:02:00+08:00");
+  await runner.poll();
+
+  const history = await listScheduleHistory({ dataRoot: root });
+  assert.equal(history.length, 2);
+  assert.equal(history[0].task.id, operation.id);
+  assert.equal(history[0].status, "completed");
+  assert.equal(history[1].task.id, conversation.id);
+  assert.equal(history[1].status, "queued");
+  assert.equal(history[1].task.description, "早安提醒");
+  assert.equal(history[1].task.target.prompt, "早上问候一下。");
+  assert.ok(history.every((entry) => entry.finishedAt));
   runner.stop();
 });

@@ -3,14 +3,19 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 const TASK_VERSION = 1;
+const HISTORY_VERSION = 1;
 const TASK_ID = /^schedule-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
+const HISTORY_ID = /^schedule-history-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
 const CONTACT_ID = /^contact-[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
 const SESSION_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
 const MAX_PROMPT_LENGTH = 20_000;
 const MAX_DESCRIPTION_LENGTH = 500;
+const MAX_HISTORY_ENTRIES = 500;
 const OPERATION_NAMES = new Set(["traveling-merchant", "conversation-compactor"]);
 const COMPACTOR_TRIGGERS = new Set(["time", "token"]);
 const TASK_SOURCES = new Set(["agent", "manual", "system"]);
+const HISTORY_STATUSES = new Set(["running", "dispatched", "queued", "completed", "failed", "skipped", "interrupted"]);
+const historyMutationQueues = new Map();
 
 export class ScheduleError extends Error {
   constructor(message) {
@@ -37,6 +42,18 @@ function taskId(value) {
   const id = clean(value);
   if (!TASK_ID.test(id)) throw new ScheduleError("自动任务 ID 无效。 ");
   return id;
+}
+
+function historyId(value) {
+  const id = clean(value);
+  if (!HISTORY_ID.test(id)) throw new ScheduleError("自动任务历史 ID 无效。 ");
+  return id;
+}
+
+function historyStatus(value) {
+  const status = clean(value).toLowerCase();
+  if (!HISTORY_STATUSES.has(status)) throw new ScheduleError("自动任务历史状态无效。 ");
+  return status;
 }
 
 function requiredText(value, label, limit = MAX_PROMPT_LENGTH) {
@@ -178,6 +195,10 @@ export function scheduleTasksDirectory(dataRoot) {
   return path.join(absolutePath(dataRoot, "Suzu 数据目录"), "automation", "schedule", "tasks");
 }
 
+export function scheduleHistoryDirectory(dataRoot) {
+  return path.join(absolutePath(dataRoot, "Suzu 数据目录"), "automation", "schedule", "history");
+}
+
 export function parseDelay(value) {
   const source = clean(value).toLowerCase();
   const match = /^(\d+)(s|m|h|d)$/u.exec(source);
@@ -274,6 +295,10 @@ function taskFile(dataRoot, id) {
   return path.join(scheduleTasksDirectory(dataRoot), `${taskId(id)}.json`);
 }
 
+function historyFile(dataRoot, id) {
+  return path.join(scheduleHistoryDirectory(dataRoot), `${historyId(id)}.json`);
+}
+
 function validateStoredTask(value) {
   const source = value && typeof value === "object" && !Array.isArray(value) ? value : null;
   if (!source || source.version !== TASK_VERSION) throw new ScheduleError("自动任务文件格式无效。 ");
@@ -315,6 +340,25 @@ function validateStoredTask(value) {
   throw new ScheduleError("自动任务类型无效。 ");
 }
 
+function validateStoredHistory(value) {
+  const source = value && typeof value === "object" && !Array.isArray(value) ? value : null;
+  if (!source || source.version !== HISTORY_VERSION) throw new ScheduleError("自动任务历史文件格式无效。 ");
+  const status = historyStatus(source.status);
+  const triggeredAt = asDate(source.triggeredAt, "自动任务触发时间").toISOString();
+  const finishedAt = clean(source.finishedAt)
+    ? asDate(source.finishedAt, "自动任务结束时间").toISOString()
+    : "";
+  if (status !== "running" && !finishedAt) throw new ScheduleError("已结束的自动任务历史缺少结束时间。 ");
+  return {
+    version: HISTORY_VERSION,
+    id: historyId(source.id),
+    task: validateStoredTask(source.task),
+    status,
+    triggeredAt,
+    finishedAt,
+  };
+}
+
 async function writeTask(dataRoot, task) {
   const directory = scheduleTasksDirectory(dataRoot);
   await fs.mkdir(directory, { recursive: true });
@@ -329,6 +373,20 @@ async function writeTask(dataRoot, task) {
   }
 }
 
+async function writeHistory(dataRoot, history) {
+  const directory = scheduleHistoryDirectory(dataRoot);
+  await fs.mkdir(directory, { recursive: true });
+  const target = historyFile(dataRoot, history.id);
+  const temporary = path.join(directory, `.${history.id}.${randomUUID()}.tmp`);
+  try {
+    await fs.writeFile(temporary, `${JSON.stringify(history, null, 2)}\n`, { encoding: "utf8", flag: "wx" });
+    await fs.rename(temporary, target);
+  } catch (error) {
+    await fs.unlink(temporary).catch(() => undefined);
+    throw error;
+  }
+}
+
 async function readTaskFile(filePath) {
   try {
     const source = await fs.readFile(filePath, "utf8");
@@ -336,6 +394,94 @@ async function readTaskFile(filePath) {
   } catch {
     return null;
   }
+}
+
+async function readHistoryFile(filePath) {
+  try {
+    const source = await fs.readFile(filePath, "utf8");
+    return validateStoredHistory(JSON.parse(source));
+  } catch {
+    return null;
+  }
+}
+
+async function storedScheduleHistory(dataRoot) {
+  const directory = scheduleHistoryDirectory(dataRoot);
+  let entries;
+  try {
+    entries = await fs.readdir(directory, { withFileTypes: true });
+  } catch (error) {
+    if (error?.code === "ENOENT") return [];
+    throw error;
+  }
+  const records = await Promise.all(entries
+    .filter((entry) => entry.isFile() && entry.name.endsWith(".json"))
+    .map(async (entry) => ({
+      filePath: path.join(directory, entry.name),
+      record: await readHistoryFile(path.join(directory, entry.name)),
+    })));
+  return records
+    .filter((entry) => entry.record)
+    .sort((left, right) => right.record.triggeredAt.localeCompare(left.record.triggeredAt) || right.record.id.localeCompare(left.record.id));
+}
+
+function serializeHistoryMutation(dataRoot, operation) {
+  const root = absolutePath(dataRoot, "Suzu 数据目录");
+  const previous = historyMutationQueues.get(root) || Promise.resolve();
+  const next = previous.catch(() => undefined).then(operation);
+  historyMutationQueues.set(root, next);
+  return next.finally(() => {
+    if (historyMutationQueues.get(root) === next) historyMutationQueues.delete(root);
+  });
+}
+
+async function trimScheduleHistory(dataRoot) {
+  const records = await storedScheduleHistory(dataRoot);
+  const stale = records.slice(MAX_HISTORY_ENTRIES);
+  await Promise.all(stale.map((entry) => fs.unlink(entry.filePath).catch(() => undefined)));
+}
+
+async function beginScheduleHistory({ dataRoot, task, now }) {
+  const triggeredAt = currentDate(now).toISOString();
+  const record = {
+    version: HISTORY_VERSION,
+    id: `schedule-history-${randomUUID()}`,
+    task: validateStoredTask(task),
+    status: "running",
+    triggeredAt,
+    finishedAt: "",
+  };
+  return serializeHistoryMutation(dataRoot, async () => {
+    await writeHistory(dataRoot, record);
+    await trimScheduleHistory(dataRoot);
+    return record;
+  });
+}
+
+async function finishScheduleHistory({ dataRoot, id, status, now }) {
+  const history = historyId(id);
+  const nextStatus = historyStatus(status);
+  return serializeHistoryMutation(dataRoot, async () => {
+    const existing = await readHistoryFile(historyFile(dataRoot, history));
+    if (!existing) return null;
+    const record = {
+      ...existing,
+      status: nextStatus,
+      finishedAt: currentDate(now).toISOString(),
+    };
+    await writeHistory(dataRoot, record);
+    return record;
+  });
+}
+
+async function interruptRunningScheduleHistory({ dataRoot, now }) {
+  return serializeHistoryMutation(dataRoot, async () => {
+    const records = await storedScheduleHistory(dataRoot);
+    const finishedAt = currentDate(now).toISOString();
+    await Promise.all(records
+      .filter((entry) => entry.record.status === "running")
+      .map((entry) => writeHistory(dataRoot, { ...entry.record, status: "interrupted", finishedAt })));
+  });
 }
 
 export function scheduleTaskSummary(value) {
@@ -354,6 +500,21 @@ export function scheduleTaskSummary(value) {
         contactId: task.target.contactId,
       }
       : { ...task.target },
+  };
+}
+
+export function scheduleHistorySummary(value) {
+  const history = validateStoredHistory(value);
+  const task = scheduleTaskSummary(history.task);
+  if (history.task.target.type === "conversation") {
+    task.target = { ...task.target, prompt: history.task.target.prompt };
+  }
+  return {
+    id: history.id,
+    status: history.status,
+    triggeredAt: history.triggeredAt,
+    finishedAt: history.finishedAt,
+    task,
   };
 }
 
@@ -446,6 +607,15 @@ export async function listScheduleTasks({ dataRoot } = {}) {
   return tasks
     .filter(Boolean)
     .sort((left, right) => left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id));
+}
+
+export async function listScheduleHistory({ dataRoot, limit = MAX_HISTORY_ENTRIES } = {}) {
+  const maximum = Number(limit);
+  if (!Number.isSafeInteger(maximum) || maximum < 1 || maximum > MAX_HISTORY_ENTRIES) {
+    throw new ScheduleError(`自动任务历史读取数量必须在 1-${MAX_HISTORY_ENTRIES} 之间。 `);
+  }
+  const records = await storedScheduleHistory(dataRoot);
+  return records.slice(0, maximum).map((entry) => scheduleHistorySummary(entry.record));
 }
 
 export async function removeScheduleTask({ dataRoot, id } = {}) {
@@ -563,15 +733,29 @@ export function createScheduleRunner({
   const runTask = async (task) => {
     if (running.has(task.id)) return;
     running.add(task.id);
+    let history = null;
     try {
+      history = await beginScheduleHistory({ dataRoot: root, task, now });
+    } catch {
+      // A local history write must not suppress an otherwise valid scheduled task.
+    }
+    try {
+      let result;
       if (task.target.type === "conversation") {
         if (typeof onConversationTask !== "function") throw new ScheduleError("当前 Suzu 未接入会话自动任务执行器。 ");
-        await onConversationTask(task);
+        result = await onConversationTask(task);
       } else {
         if (typeof onOperationTask !== "function") throw new ScheduleError("当前 Suzu 未接入自动任务执行器。 ");
-        await onOperationTask(task);
+        result = await onOperationTask(task);
+      }
+      if (history) {
+        const status = task.target.type === "conversation"
+          ? result?.accepted === true ? (result.queued === true ? "queued" : "dispatched") : "skipped"
+          : "completed";
+        await finishScheduleHistory({ dataRoot: root, id: history.id, status, now }).catch(() => undefined);
       }
     } catch (error) {
+      if (history) await finishScheduleHistory({ dataRoot: root, id: history.id, status: "failed", now }).catch(() => undefined);
       reportError(error, task);
     } finally {
       running.delete(task.id);
@@ -620,6 +804,7 @@ export function createScheduleRunner({
     startedAt = currentDate(now);
     startedMinute = minuteKey(startedAt);
     await fs.mkdir(scheduleTasksDirectory(root), { recursive: true });
+    await interruptRunningScheduleHistory({ dataRoot: root, now: startedAt }).catch(() => undefined);
     await poll();
     timer = setIntervalImpl(() => { void poll(); }, intervalMs);
     timer?.unref?.();
