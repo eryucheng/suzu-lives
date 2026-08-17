@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "updatedAt": "2026-07-30",
+  "updatedAt": "2026-08-17",
   "models": {
     "deepseek-v4-pro": {
       "label": "DeepSeek V4 Pro",
@@ -29,14 +29,51 @@
       },
       "revisions": [
         {
-          "id": "official-current",
+          "id": "official-before-2026-08-16",
           "effectiveFrom": "1970-01-01T00:00:00.000Z",
           "publishedAt": "2026-07-29",
-          "label": "当前官方公开价",
+          "label": "2026-08-16 前官方公开价",
           "rates": {
             "inputUncachedTokens": 3,
             "inputCachedTokens": 0.025,
             "outputTextTokens": 6
+          }
+        },
+        {
+          "id": "official-2026-08-16-peak-offpeak",
+          "effectiveFrom": "2026-08-16T16:00:00.000Z",
+          "publishedAt": "2026-08-13",
+          "label": "官方峰谷价",
+          "rates": {
+            "inputUncachedTokens": 4.5,
+            "inputCachedTokens": 0.15,
+            "outputTextTokens": 13.5
+          },
+          "rateSchedule": {
+            "timeZone": "Asia/Shanghai",
+            "defaultLabel": "空闲时段",
+            "intervals": [
+              {
+                "label": "高峰时段",
+                "start": "09:00",
+                "end": "12:00",
+                "rates": {
+                  "inputUncachedTokens": 9,
+                  "inputCachedTokens": 0.3,
+                  "outputTextTokens": 27
+                }
+              },
+              {
+                "label": "高峰时段",
+                "start": "14:00",
+                "end": "18:00",
+                "rates": {
+                  "inputUncachedTokens": 9,
+                  "inputCachedTokens": 0.3,
+                  "outputTextTokens": 27
+                }
+              }
+            ]
           }
         }
       ]
@@ -68,14 +105,51 @@
       },
       "revisions": [
         {
-          "id": "official-current",
+          "id": "official-before-2026-08-16",
           "effectiveFrom": "1970-01-01T00:00:00.000Z",
           "publishedAt": "2026-07-29",
-          "label": "当前官方公开价",
+          "label": "2026-08-16 前官方公开价",
           "rates": {
             "inputUncachedTokens": 1,
             "inputCachedTokens": 0.02,
             "outputTextTokens": 2
+          }
+        },
+        {
+          "id": "official-2026-08-16-peak-offpeak",
+          "effectiveFrom": "2026-08-16T16:00:00.000Z",
+          "publishedAt": "2026-08-13",
+          "label": "官方峰谷价",
+          "rates": {
+            "inputUncachedTokens": 1.5,
+            "inputCachedTokens": 0.05,
+            "outputTextTokens": 4.5
+          },
+          "rateSchedule": {
+            "timeZone": "Asia/Shanghai",
+            "defaultLabel": "空闲时段",
+            "intervals": [
+              {
+                "label": "高峰时段",
+                "start": "09:00",
+                "end": "12:00",
+                "rates": {
+                  "inputUncachedTokens": 3,
+                  "inputCachedTokens": 0.1,
+                  "outputTextTokens": 9
+                }
+              },
+              {
+                "label": "高峰时段",
+                "start": "14:00",
+                "end": "18:00",
+                "rates": {
+                  "inputUncachedTokens": 3,
+                  "inputCachedTokens": 0.1,
+                  "outputTextTokens": 9
+                }
+              }
+            ]
           }
         }
       ]

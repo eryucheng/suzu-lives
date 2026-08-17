@@ -10,11 +10,13 @@ import { createSettingsService, registerIpcHandlers } from "./ipc/index.mjs";
 import { runMemoryRecallHookWorker } from "./hooks/memory-recall.mjs";
 import { runProjectHookCli } from "./hooks/runtime.mjs";
 import { applyFeatureConnectionOverrides } from "./services/connection-model-overrides.mjs";
-import { createAppUpdateService } from "./services/app-update.mjs";
+import { createAppUpdateService, scheduleAppUpdateChecks } from "./services/app-update.mjs";
+import { createReleaseAnnouncementService } from "./services/release-announcement.mjs";
 import { createDataStorageLocationService } from "./services/data-storage-location.mjs";
 import { resetRendererZoom } from "./services/renderer-zoom.mjs";
 import { windowSizeForDisplay } from "./services/window-default-size.mjs";
 import { applyWindowControl, windowControlState } from "./services/window-controls.mjs";
+import { CURRENT_RELEASE_ANNOUNCEMENT } from "../shared/current-release-announcement.mjs";
 
 const { autoUpdater } = electronUpdater;
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -213,10 +215,16 @@ if (memoryHookWorkerArgumentIndex !== -1) {
     Menu.setApplicationMenu(null);
     const settingsService = createSettingsService({ app, dataStorageService });
     const appUpdateService = createAppUpdateService({ app, autoUpdater });
+    const releaseAnnouncementService = createReleaseAnnouncementService({
+      app,
+      announcement: CURRENT_RELEASE_ANNOUNCEMENT,
+      settingsService,
+    });
     const cliLauncherCommand = conversationAttachmentCli();
     registerIpcHandlers({
       app,
       appUpdateService,
+      releaseAnnouncementService,
       getMainWindow: () => mainWindow,
       settingsService,
       dataStorageService,
@@ -237,6 +245,10 @@ if (memoryHookWorkerArgumentIndex !== -1) {
       return applyWindowControl(mainWindow, action);
     });
     createWindow(settingsService);
+    const stopAppUpdateChecks = scheduleAppUpdateChecks({
+      checkForUpdates: () => appUpdateService.checkForUpdates(),
+    });
+    app.once("before-quit", stopAppUpdateChecks);
     app.on("activate", () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow(settingsService);
     });

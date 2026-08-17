@@ -472,11 +472,16 @@ export function scheduleSystemPrompt(commands) {
   const conversationAdd = clean(commands?.conversationAdd);
   const list = clean(commands?.list);
   const remove = clean(commands?.remove);
-  const chainPrompt = clean(commands?.proactiveChainPrompt) || "根据时间和前面聊的内容判断要不要主动联系对方，要发就正常发，不发就沉默，然后记得要设置下一次自动任务";
+  const chainPrompt = clean(commands?.proactiveChainPrompt) || "根据时间和前面聊的内容判断要不要主动联系对方，要发就正常发，不发就沉默。";
   const followUpPrompt = clean(commands?.proactiveFollowUpPrompt) || "临时回访：用户在 TIME 提到 EVENT。先检查当前会话里是否已经有结果；已经有结果就只输出 NO_REPLY；还没有结果就自然地关心或询问。不要提及自动任务、回访任务或系统机制。这是一次性回访，不要设置下一次自动任务。";
+  const proactivePlanning = commands?.proactivePlanning === true;
+  const chainDescription = clean(commands?.proactiveChainDescription) || "链式主动关心";
+  const chainTaskPrompt = clean(commands?.proactiveChainTaskPrompt) || "执行一次主动关心判断。";
   if (!conversationAdd) return "";
   const sections = ["## Suzu 自动任务", "任务只会在 Suzu 软件运行期间执行；关闭期间不会执行或补跑。不要使用旧的 timer 或 cron 命令。"];
-  if (conversationAdd) {
+  if (proactivePlanning) {
+    sections.push(`### 安排下一轮主动关心\n\n当前是内部安排阶段。不要向用户说话；根据当前时间、最近对话和相处节奏，必须且只能创建一条下一次判断任务：\n\n${conversationAdd} --delay <间隔> --prompt "${chainTaskPrompt}" --desc "${chainDescription}"\n\n安排完成后只输出精确的 NO_REPLY。不要创建临时回访或其他自动任务。`);
+  } else {
     sections.push(`### 主动关心\n\n当前会话已在“主动关心”能力中启用。一次性任务会自动绑定当前 Claude 会话和项目：\n\n${conversationAdd} --delay 45m --prompt "到时间后要处理的完整任务内容" --desc "简短说明"\n\n链式主动关心触发时使用这段提示词：\n\n${chainPrompt}\n\n临时回访使用这段提示词：\n\n${followUpPrompt}`);
   }
   if (list && remove) {
@@ -729,6 +734,7 @@ export function createConversationChatService({
         sessionId: turn.sessionId,
         projectRoot: turn.projectRoot,
         kind: turn.kind,
+        displayAsSystem: turn.displayAsSystem,
         deliverToWechat: turn.deliverToWechat,
         message: turn.interruptMessage || "已停止当前 Claude Code 任务。",
         timestamp: new Date().toISOString(),
@@ -740,6 +746,7 @@ export function createConversationChatService({
         sessionId: turn.sessionId,
         projectRoot: turn.projectRoot,
         kind: turn.kind,
+        displayAsSystem: turn.displayAsSystem,
         deliverToWechat: turn.deliverToWechat,
         message: error,
         timestamp: new Date().toISOString(),
@@ -751,6 +758,7 @@ export function createConversationChatService({
         sessionId: turn.sessionId,
         projectRoot: turn.projectRoot,
         kind: turn.kind,
+        displayAsSystem: turn.displayAsSystem,
         deliverToWechat: turn.deliverToWechat,
         timestamp: new Date().toISOString(),
       });
@@ -765,6 +773,7 @@ export function createConversationChatService({
     child,
     completed: false,
     contactId: clean(request.contactId),
+    displayAsSystem: request.displayAsSystem === true,
     deliverToWechat: request.deliverToWechat === true,
     finished: false,
     interrupted: false,
@@ -803,6 +812,7 @@ export function createConversationChatService({
       sessionId: turn.sessionId,
       projectRoot: turn.projectRoot,
       kind: turn.kind,
+      displayAsSystem: turn.displayAsSystem,
       deliverToWechat: turn.deliverToWechat,
       content: turn.text,
       done,
@@ -819,6 +829,7 @@ export function createConversationChatService({
       sessionId: turn.sessionId,
       projectRoot: turn.projectRoot,
       kind: turn.kind,
+      displayAsSystem: turn.displayAsSystem,
       deliverToWechat: turn.deliverToWechat,
       content: text,
       ...(clean(turn.contactId) ? { contactId: clean(turn.contactId) } : {}),
@@ -845,6 +856,7 @@ export function createConversationChatService({
       sessionId: turn.sessionId,
       projectRoot: turn.projectRoot,
       kind: turn.kind,
+      displayAsSystem: turn.displayAsSystem,
       deliverToWechat: turn.deliverToWechat,
       content: text,
       timestamp: new Date().toISOString(),
@@ -865,6 +877,7 @@ export function createConversationChatService({
         sessionId: turn.sessionId,
         projectRoot: turn.projectRoot,
         kind: turn.kind,
+        displayAsSystem: turn.displayAsSystem,
         deliverToWechat: turn.deliverToWechat,
         media,
         timestamp: new Date().toISOString(),
@@ -883,6 +896,7 @@ export function createConversationChatService({
       sessionId: turn.sessionId,
       projectRoot: turn.projectRoot,
       kind: turn.kind,
+      displayAsSystem: turn.displayAsSystem,
       deliverToWechat: turn.deliverToWechat,
       contactId: turn.contactId,
       reason: clean(request.reason),
@@ -902,6 +916,7 @@ export function createConversationChatService({
         sessionId: turn.sessionId,
         projectRoot: turn.projectRoot,
         kind: turn.kind,
+        displayAsSystem: turn.displayAsSystem,
         deliverToWechat: turn.deliverToWechat,
         commands,
         timestamp: new Date().toISOString(),
@@ -974,6 +989,7 @@ export function createConversationChatService({
         sessionId: turn.sessionId,
         projectRoot: turn.projectRoot,
         kind: turn.kind,
+        displayAsSystem: turn.displayAsSystem,
         deliverToWechat: turn.deliverToWechat,
         toolName: permission.toolName,
         preview: permissionPreview(permission.input),
@@ -1077,6 +1093,7 @@ export function createConversationChatService({
       sessionId: turn.sessionId,
       projectRoot: turn.projectRoot,
       kind: turn.kind,
+      displayAsSystem: turn.displayAsSystem,
       timestamp: new Date().toISOString(),
     });
     try {
@@ -1110,7 +1127,12 @@ export function createConversationChatService({
       ? agentAttachmentCommand({ sessionId: request.sessionId, projectRoot: request.projectRoot })
       : "";
     const scheduleCommands = typeof agentScheduleCommand === "function"
-      ? await Promise.resolve(agentScheduleCommand({ sessionId: request.sessionId, projectRoot: request.projectRoot }))
+      ? await Promise.resolve(agentScheduleCommand({
+        sessionId: request.sessionId,
+        projectRoot: request.projectRoot,
+        kind: request.kind,
+        scheduleSource: request.scheduleSource,
+      }))
       : null;
     const currentSettings = settingsService.load() || {};
     const claudeRuntimeFeatures = currentSettings.claudeRuntimeFeatures;
@@ -1199,6 +1221,7 @@ export function createConversationChatService({
       sessionId: turn.sessionId,
       projectRoot: turn.projectRoot,
       kind: turn.kind,
+      displayAsSystem: turn.displayAsSystem,
       timestamp: new Date().toISOString(),
     });
     const output = readline.createInterface({ input: child.stdout, crlfDelay: Infinity });
@@ -1265,6 +1288,7 @@ export function createConversationChatService({
         sessionId,
         projectRoot: request.projectRoot,
         kind: request.kind,
+        displayAsSystem: request.displayAsSystem === true,
         message: processErrorMessage(error, "无法启动本机 Claude Code。"),
         timestamp: new Date().toISOString(),
       });
@@ -1300,7 +1324,7 @@ export function createConversationChatService({
     };
   };
 
-  const enqueue = async ({ content, contactId = "", kind = "message", callDirection = "", media: suppliedMedia = [], mediaSource = "wechat", memoryText: suppliedMemoryText = "", requestId: suppliedRequestId = "", scheduleSource = "", deliverToWechat = false, session: requestedSession = null } = {}) => {
+  const enqueue = async ({ content, contactId = "", kind = "message", callDirection = "", media: suppliedMedia = [], mediaSource = "wechat", memoryText: suppliedMemoryText = "", requestId: suppliedRequestId = "", scheduleSource = "", displayAsSystem = false, deliverToWechat = false, session: requestedSession = null } = {}) => {
     if (disposed) throw new ConversationChatError("聊天服务已经停止。");
     const normalizedMediaSource = clean(mediaSource).toLowerCase() || "wechat";
     const media = normalizeInboundMedia(suppliedMedia, normalizedMediaSource);
@@ -1333,6 +1357,7 @@ export function createConversationChatService({
         normalizedMediaSource,
       ),
       contactId: resolvedContactId,
+      displayAsSystem: displayAsSystem === true,
       deliverToWechat: deliverToWechat === true,
       hasTranscript: Boolean(session.hasTranscript) || knownTranscripts.has(turnKey(session.id, session.projectRoot)),
       kind,
@@ -1387,8 +1412,8 @@ export function createConversationChatService({
   };
 
   const send = ({ content, media = [], mediaSource = "wechat", memoryText = "" } = {}) => enqueue({ content, media, mediaSource, memoryText, deliverToWechat: false });
-  const sendToSession = ({ content, contactId = "", sessionId, projectRoot, hasTranscript = false, kind = "message", callDirection = "", media = [], mediaSource = "wechat", memoryText = "", requestId = "", scheduleSource = "", deliverToWechat = true } = {}) => (
-    enqueue({ content, contactId, kind, callDirection, media, mediaSource, memoryText, requestId, scheduleSource, deliverToWechat, session: { sessionId, projectRoot, hasTranscript } })
+  const sendToSession = ({ content, contactId = "", sessionId, projectRoot, hasTranscript = false, kind = "message", callDirection = "", media = [], mediaSource = "wechat", memoryText = "", requestId = "", scheduleSource = "", displayAsSystem = false, deliverToWechat = true } = {}) => (
+    enqueue({ content, contactId, kind, callDirection, media, mediaSource, memoryText, requestId, scheduleSource, displayAsSystem, deliverToWechat, session: { sessionId, projectRoot, hasTranscript } })
   );
 
   const stop = ({ sessionId, projectRoot, requestId } = {}) => {

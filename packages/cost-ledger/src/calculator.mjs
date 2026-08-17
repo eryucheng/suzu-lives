@@ -158,6 +158,7 @@ export function calculateCost({
       revisionId: price.revisionId,
       effectiveFrom: price.effectiveFrom,
       origin: price.origin,
+      ...(price.ratePeriod ? { ratePeriod: price.ratePeriod } : {}),
     },
     units: normalizedUnits,
     breakdown,

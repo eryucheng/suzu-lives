@@ -46,7 +46,7 @@ function DirectoryCard({ action, configured, description, onOpen, onSelect, pend
   );
 }
 
-function SoftwareUpdate({ onCheckForUpdate, onDownloadUpdate, onInstallUpdate, pending, update }) {
+function SoftwareUpdate({ onCheckForUpdate, onDownloadUpdate, onInstallUpdate, onOpenReleaseAnnouncement, pending, releaseAnnouncement, update }) {
   const status = cleanText(update?.status).toLowerCase();
   const version = cleanText(update?.version);
   const availableVersion = cleanText(update?.availableVersion);
@@ -79,6 +79,7 @@ function SoftwareUpdate({ onCheckForUpdate, onDownloadUpdate, onInstallUpdate, p
           {version ? <span className="settings-update-version">当前版本 v{version}{availableVersion ? ` · 可更新至 v${availableVersion}` : ""}</span> : null}
         </div>
         <div className="settings-card__actions">
+          {releaseAnnouncement?.announcement ? <Button className="settings-action-button" disabled={Boolean(pending)} onClick={onOpenReleaseAnnouncement} size="md" variant="secondary">查看本次公告</Button> : null}
           <Button className="settings-action-button" disabled={Boolean(pending)} onClick={presentation.action} size="md" variant="secondary">{busyLabel}</Button>
         </div>
       </div>
@@ -86,7 +87,7 @@ function SoftwareUpdate({ onCheckForUpdate, onDownloadUpdate, onInstallUpdate, p
   );
 }
 
-function GeneralSettings({ appUpdate, onCheckForUpdate, onDownloadUpdate, onInstallUpdate, onOpenOnboarding, onThemeChange, pending, settings }) {
+function GeneralSettings({ appUpdate, onCheckForUpdate, onDownloadUpdate, onInstallUpdate, onOpenOnboarding, onOpenReleaseAnnouncement, onThemeChange, pending, releaseAnnouncement, settings }) {
   const completed = settings.onboardingCompleted === true;
   const theme = settings.theme === "dark" ? "dark" : "light";
   return (
@@ -108,7 +109,9 @@ function GeneralSettings({ appUpdate, onCheckForUpdate, onDownloadUpdate, onInst
         onCheckForUpdate={onCheckForUpdate}
         onDownloadUpdate={onDownloadUpdate}
         onInstallUpdate={onInstallUpdate}
+        onOpenReleaseAnnouncement={onOpenReleaseAnnouncement}
         pending={pending}
+        releaseAnnouncement={releaseAnnouncement}
         update={appUpdate}
       />
 
@@ -369,8 +372,10 @@ export function SettingsPage({ actions = {}, snapshot = {} }) {
             onDownloadUpdate={() => run("download-update", actions.downloadUpdate)}
             onInstallUpdate={() => run("install-update", actions.installUpdate)}
             onOpenOnboarding={() => run("onboarding", actions.openOnboarding)}
+            onOpenReleaseAnnouncement={() => run("release-announcement", actions.openReleaseAnnouncement)}
             onThemeChange={(theme) => run("theme", () => actions.changeTheme?.(theme))}
             pending={pending}
+            releaseAnnouncement={snapshot.releaseAnnouncement}
             settings={settings}
           />
         )}

@@ -24,7 +24,7 @@ const DEFAULT_IPHONE_BRIDGE_FEEDBACK_SUBJECT = "查岗";
 const DEFAULT_IPHONE_BRIDGE_FEEDBACK_PROMPT = "这是来自 iPhone 的反馈（{{subject}}，来自 {{from}}，{{receivedAt}}）：\n{{content}}\n{{attachments}}";
 const HIDDEN_CONTACT_DEFAULT_ABILITY_IDS = Object.freeze(["visual-reference-manager", "voice-call"]);
 const MANAGED_REGISTRATION_VERSION = 7;
-const DEFAULT_PROACTIVE_CHAIN_PROMPT = "根据时间和前面聊的内容判断要不要主动联系对方，要发就正常发，不发就沉默，然后记得要设置下一次自动任务";
+const DEFAULT_PROACTIVE_CHAIN_PROMPT = "根据时间和前面聊的内容判断要不要主动联系对方。把判断过程写在思考中；要联系就正常发，不联系就只输出 NO_REPLY。";
 const DEFAULT_PROACTIVE_FOLLOW_UP_PROMPT = "临时回访：用户在 TIME 提到 EVENT。先检查当前会话里是否已经有结果；已经有结果就只输出 NO_REPLY；还没有结果就自然地关心或询问。不要提及自动任务、回访任务或系统机制。这是一次性回访，不要设置下一次自动任务。";
 
 function clean(value) {
@@ -811,9 +811,9 @@ export function createCapabilitiesService({
   const requestProactiveContactMaintenance = ({ scope = null } = {}) => {
     if (typeof onProactiveContactMaintenanceRequested !== "function") return;
     try {
-      Promise.resolve(onProactiveContactMaintenanceRequested({ scope, delayMs: 60_000 })).catch(() => undefined);
+      Promise.resolve(onProactiveContactMaintenanceRequested({ scope })).catch(() => undefined);
     } catch {
-      // A delayed local check must never make an already-saved setting fail.
+      // A local chain seed must never make an already-saved setting fail.
     }
   };
   const syncTravelingMerchantSchedule = async () => {

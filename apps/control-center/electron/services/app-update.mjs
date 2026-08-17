@@ -1,6 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
 
+export const APP_UPDATE_INITIAL_CHECK_DELAY_MS = 10_000;
+export const APP_UPDATE_CHECK_INTERVAL_MS = 12 * 60 * 60 * 1_000;
+
 function clean(value) {
   return String(value ?? "").trim();
 }
@@ -19,6 +22,43 @@ function updaterErrorMessage(error) {
 function updateInfo(value) {
   const version = clean(value?.version);
   return version ? { version } : null;
+}
+
+export function scheduleAppUpdateChecks({
+  checkForUpdates,
+  clearIntervalFn = globalThis.clearInterval,
+  clearTimeoutFn = globalThis.clearTimeout,
+  initialDelayMs = APP_UPDATE_INITIAL_CHECK_DELAY_MS,
+  intervalMs = APP_UPDATE_CHECK_INTERVAL_MS,
+  setIntervalFn = globalThis.setInterval,
+  setTimeoutFn = globalThis.setTimeout,
+} = {}) {
+  if (typeof checkForUpdates !== "function") return () => {};
+
+  let disposed = false;
+  let intervalHandle = null;
+  const runCheck = () => {
+    if (disposed) return;
+    try {
+      const operation = checkForUpdates();
+      if (operation && typeof operation.catch === "function") void operation.catch(() => undefined);
+    } catch {
+      // Background checks are intentionally silent.  Manual checks still
+      // surface their result in Settings.
+    }
+  };
+  const timeoutHandle = setTimeoutFn(() => {
+    if (disposed) return;
+    runCheck();
+    intervalHandle = setIntervalFn(runCheck, intervalMs);
+  }, initialDelayMs);
+
+  return () => {
+    if (disposed) return;
+    disposed = true;
+    clearTimeoutFn(timeoutHandle);
+    if (intervalHandle !== null) clearIntervalFn(intervalHandle);
+  };
 }
 
 export function createAppUpdateService({

@@ -25,6 +25,19 @@ test("React settings keeps software updates in the existing settings action chai
   assert.match(app, /runAppUpdateAction\("installUpdate"/u);
 });
 
+test("React settings exposes one current release announcement, not a changelog list", () => {
+  const page = readFileSync(resolve(ROOT, "src", "react", "settings-page.jsx"), "utf8");
+  const shell = readFileSync(resolve(ROOT, "src", "react", "app-shell.jsx"), "utf8");
+  const app = readFileSync(resolve(ROOT, "src", "app.mjs"), "utf8");
+
+  assert.match(page, /查看本次公告/u);
+  assert.match(page, /onOpenReleaseAnnouncement/u);
+  assert.match(shell, /function ReleaseAnnouncementDialog/u);
+  assert.match(shell, /知道了/u);
+  assert.match(app, /api\.settings\?\.releaseAnnouncementStatus/u);
+  assert.match(app, /acknowledgeReleaseAnnouncement/u);
+});
+
 test("React data settings exposes the read-only system status check", () => {
   const page = readFileSync(resolve(ROOT, "src", "react", "settings-page.jsx"), "utf8");
   const app = readFileSync(resolve(ROOT, "src", "app.mjs"), "utf8");

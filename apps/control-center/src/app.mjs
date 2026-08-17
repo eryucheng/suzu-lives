@@ -451,6 +451,26 @@ function installAppUpdate() {
   return runAppUpdateAction("installUpdate", "无法安装更新");
 }
 
+function openReleaseAnnouncement() {
+  if (!state.releaseAnnouncement?.announcement) return;
+  state.releaseAnnouncementOpen = true;
+  render();
+}
+
+async function acknowledgeReleaseAnnouncement() {
+  if (!state.releaseAnnouncement?.announcement) return;
+  state.releaseAnnouncementOpen = false;
+  render();
+  try {
+    if (typeof api.settings?.acknowledgeReleaseAnnouncement !== "function") return;
+    state.releaseAnnouncement = await api.settings.acknowledgeReleaseAnnouncement();
+  } catch (error) {
+    state.releaseAnnouncementOpen = true;
+    setNotice(`无法确认更新公告：${error?.message || error}`);
+  }
+  render();
+}
+
 async function removeSettingsPreviousCopy() {
   try {
     const result = await api.settings.removePreviousDataCopy();
@@ -1326,6 +1346,7 @@ function routeForCurrentView() {
           checkSystemStatus,
           downloadUpdate: downloadAppUpdate,
           installUpdate: installAppUpdate,
+          openReleaseAnnouncement,
           openDirectory: openSettingsDirectory,
           openOnboarding,
           removePreviousCopy: removeSettingsPreviousCopy,
@@ -1340,6 +1361,7 @@ function routeForCurrentView() {
           contacts: state.settingsContacts,
           contactsLoading: state.settingsContactsLoading,
           appUpdate: state.appUpdate,
+          releaseAnnouncement: state.releaseAnnouncement,
           systemStatus: state.systemStatus,
           settings: state.settings,
           tab: state.settingsTab,
@@ -1489,7 +1511,7 @@ function routeForCurrentView() {
 
 function buildWorkspace() {
   return {
-    actions: { answerIncomingVoiceCall, declineIncomingVoiceCall, navigate: setView, openSuzuSearchItem },
+    actions: { acknowledgeReleaseAnnouncement, answerIncomingVoiceCall, declineIncomingVoiceCall, navigate: setView, openSuzuSearchItem },
     activeView: state.view,
     contentClassName: contentClassName(),
     conversationUnread: state.conversationUnread,
@@ -1497,6 +1519,8 @@ function buildWorkspace() {
     incomingVoiceCall: state.incomingVoiceCall,
     notice: currentGlobalNotice(),
     onboarding: onboardingWorkspace(),
+    releaseAnnouncement: state.releaseAnnouncement,
+    releaseAnnouncementOpen: state.releaseAnnouncementOpen,
     route: routeForCurrentView(),
   };
 }
@@ -1516,13 +1540,18 @@ async function refreshData() {
     const apiServicesSnapshot = needsOnboardingApiSnapshot
       ? api.connections.apiServicesSnapshot().catch(() => state.apiServices)
       : Promise.resolve(state.apiServices);
-    [state.data, state.memoryStatus, state.todayCalendar, state.claudeCodeApi, state.apiServices] = await Promise.all([
+    const releaseAnnouncementSnapshot = typeof api.settings?.releaseAnnouncementStatus === "function"
+      ? api.settings.releaseAnnouncementStatus().catch(() => null)
+      : Promise.resolve(null);
+    [state.data, state.memoryStatus, state.todayCalendar, state.claudeCodeApi, state.apiServices, state.releaseAnnouncement] = await Promise.all([
       api.ledger.scan(),
       api.memory.status({ contactId: state.memoryContactId }),
       api.todayCalendar.snapshot(),
       api.agentRuntime.claudeCodeApiSnapshot().catch(() => null),
       apiServicesSnapshot,
+      releaseAnnouncementSnapshot,
     ]);
+    state.releaseAnnouncementOpen = state.releaseAnnouncement?.pending === true;
     state.memoryContactId = String(state.memoryStatus?.selectedContactId || "");
     if (!state.onboardingInitialized) {
       state.onboardingInitialized = true;

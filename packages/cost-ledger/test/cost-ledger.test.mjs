@@ -43,6 +43,58 @@ test("uses DeepSeek native cache hit and miss fields when present", () => {
   assert.equal(result.units.inputCachedTokens, 1_000_000);
 });
 
+test("uses the official DeepSeek V4 peak and off-peak rates from their effective time", () => {
+  const usage = {
+    prompt_cache_miss_tokens: 1_000_000,
+    prompt_cache_hit_tokens: 1_000_000,
+    completion_tokens: 1_000_000,
+  };
+  const flashOffPeak = calculateCost({
+    model: "deepseek-v4-flash",
+    timestamp: "2026-08-16T16:00:00.000Z",
+    usage,
+  });
+  const flashPeak = calculateCost({
+    model: "deepseek-v4-flash",
+    timestamp: "2026-08-17T01:00:00.000Z",
+    usage,
+  });
+  const proOffPeak = calculateCost({
+    model: "deepseek-v4-pro",
+    timestamp: "2026-08-16T16:00:00.000Z",
+    usage,
+  });
+  const proPeak = calculateCost({
+    model: "deepseek-v4-pro",
+    timestamp: "2026-08-17T06:00:00.000Z",
+    usage,
+  });
+
+  assert.ok(Math.abs(flashOffPeak.amountCny - 6.05) < 0.000001);
+  assert.equal(flashOffPeak.price.ratePeriod, "空闲时段");
+  assert.ok(Math.abs(flashPeak.amountCny - 12.1) < 0.000001);
+  assert.equal(flashPeak.price.ratePeriod, "高峰时段");
+  assert.ok(Math.abs(proOffPeak.amountCny - 18.15) < 0.000001);
+  assert.equal(proOffPeak.price.ratePeriod, "空闲时段");
+  assert.ok(Math.abs(proPeak.amountCny - 36.3) < 0.000001);
+  assert.equal(proPeak.price.ratePeriod, "高峰时段");
+});
+
+test("keeps DeepSeek V4 usage before the price change on the former price", () => {
+  const result = calculateCost({
+    model: "deepseek-v4-flash",
+    timestamp: "2026-08-16T15:59:59.999Z",
+    usage: {
+      prompt_cache_miss_tokens: 1_000_000,
+      prompt_cache_hit_tokens: 1_000_000,
+      completion_tokens: 1_000_000,
+    },
+  });
+
+  assert.ok(Math.abs(result.amountCny - 3.02) < 0.000001);
+  assert.equal(result.price.revisionId, "official-before-2026-08-16");
+});
+
 test("falls back to raw usage when a compatibility event has empty units", () => {
   const result = calculateCost({
     model: "text-embedding-v4",

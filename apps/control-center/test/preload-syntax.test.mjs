@@ -201,16 +201,22 @@ test("Electron preload exposes the memory bridge", async () => {
   ]);
   assert.equal(calls.at(-1).args[0], "toggle-maximize");
   assert.equal(typeof bridge?.settings?.appUpdateStatus, "function");
+  assert.equal(typeof bridge?.settings?.releaseAnnouncementStatus, "function");
+  assert.equal(typeof bridge?.settings?.acknowledgeReleaseAnnouncement, "function");
   assert.equal(typeof bridge?.settings?.checkForUpdate, "function");
   assert.equal(typeof bridge?.settings?.downloadUpdate, "function");
   assert.equal(typeof bridge?.settings?.installUpdate, "function");
   assert.equal(typeof bridge?.settings?.systemStatus, "function");
+  await bridge.settings.releaseAnnouncementStatus();
+  await bridge.settings.acknowledgeReleaseAnnouncement();
   await bridge.settings.appUpdateStatus();
   await bridge.settings.checkForUpdate();
   await bridge.settings.downloadUpdate();
   await bridge.settings.installUpdate();
   await bridge.settings.systemStatus();
-  assert.deepEqual(calls.slice(-5).map((call) => call.channel), [
+  assert.deepEqual(calls.slice(-7).map((call) => call.channel), [
+    "settings:release-announcement-status",
+    "settings:acknowledge-release-announcement",
     "settings:app-update-status",
     "settings:check-for-update",
     "settings:download-update",

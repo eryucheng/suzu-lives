@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { createSettingsService, normalizeClaudeProjectDefaults, normalizeClaudeRuntimeFeatures, normalizeClaudeToolPermissions, normalizeConversationPreferences, normalizeMemoryRecallEnabled, normalizeOnboardingCompleted, normalizeOnboardingMultimodalCompleted, registerSettingsIpc } from "../electron/ipc/settings-ipc.mjs";
+import { createSettingsService, normalizeClaudeProjectDefaults, normalizeClaudeRuntimeFeatures, normalizeClaudeToolPermissions, normalizeConversationPreferences, normalizeMemoryRecallEnabled, normalizeOnboardingCompleted, normalizeOnboardingMultimodalCompleted, normalizeReleaseAnnouncementState, registerSettingsIpc } from "../electron/ipc/settings-ipc.mjs";
 import { renderManagedAgentRuntimeSettings, renderSettings } from "../src/features/settings/index.mjs";
 
 test("new installations default to the light theme while preserving an explicit dark preference", () => {
@@ -110,6 +110,17 @@ test("memory recall remains default-on after leaving runtime management", () => 
     state: { settingsTab: "general", settings: { memoryRecallEnabled: false } },
   });
   assert.doesNotMatch(html, /记忆召回|data-memory-recall-toggle/u);
+});
+
+test("release announcement state only retains the two version markers", () => {
+  assert.deepEqual(normalizeReleaseAnnouncementState({
+    lastAcknowledgedVersion: " 1.2.0 ",
+    lastStartedVersion: "1.2.0",
+    oldAnnouncements: ["ignored"],
+  }), {
+    lastAcknowledgedVersion: "1.2.0",
+    lastStartedVersion: "1.2.0",
+  });
 });
 
 test("Claude read and web permissions are default-on and shown in runtime management", () => {
@@ -394,6 +405,36 @@ test("settings update IPC delegates the check, download, and install actions to 
   assert.deepEqual(await handlers.get("settings:download-update")(), { status: "downloaded" });
   assert.deepEqual(await handlers.get("settings:install-update")(), { status: "installing" });
   assert.deepEqual(calls, ["check", "download", "install"]);
+});
+
+test("settings release announcement IPC delegates status and acknowledgement", async () => {
+  const handlers = new Map();
+  const calls = [];
+  const releaseAnnouncementService = {
+    acknowledge: () => {
+      calls.push("acknowledge");
+      return { pending: false };
+    },
+    status: () => {
+      calls.push("status");
+      return { pending: true };
+    },
+  };
+  registerSettingsIpc({
+    app: { relaunch: () => {}, exit: () => {} },
+    contactProjectsService: {},
+    dataStorageService: null,
+    dialog: { showOpenDialog: async () => ({ canceled: true }), showMessageBox: async () => ({ response: 1 }) },
+    getMainWindow: () => null,
+    ipcMain: { handle: (name, handler) => handlers.set(name, handler) },
+    releaseAnnouncementService,
+    shell: { showItemInFolder: () => {}, openPath: () => {} },
+    settingsService: { load: () => ({}), save: (next) => next, response: () => ({}) },
+  });
+
+  assert.deepEqual(await handlers.get("settings:release-announcement-status")(), { pending: true });
+  assert.deepEqual(await handlers.get("settings:acknowledge-release-announcement")(), { pending: false });
+  assert.deepEqual(calls, ["status", "acknowledge"]);
 });
 
 test("system status IPC delegates only to the read-only status service", async () => {

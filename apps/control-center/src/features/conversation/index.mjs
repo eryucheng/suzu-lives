@@ -82,6 +82,7 @@ function unreadCount(contact) {
 export function isScheduledAgentReply(event) {
   return clean(event?.kind) === "schedule"
     && clean(event?.type) === "agent-reply"
+    && event?.displayAsSystem !== true
     && Boolean(clean(event?.content));
 }
 
@@ -976,6 +977,7 @@ function handleConversationEvent(context, event) {
   if (activeProjectRoot && clean(event?.projectRoot) && !sameProjectRoot(activeProjectRoot, event.projectRoot)) return;
   const requestId = clean(event?.requestId);
   const sessionId = clean(event?.sessionId);
+  const internalSystemTurn = event?.displayAsSystem === true;
   if (event?.type === "queue" && sessionId) {
     const positions = new Map((Array.isArray(event.items) ? event.items : [])
       .map((item) => [clean(item?.requestId), Number(item?.position) || 0])
@@ -1019,6 +1021,11 @@ function handleConversationEvent(context, event) {
     viewState.permissions.forEach((item, id) => {
       if (item.sessionId === sessionId) viewState.permissions.delete(id);
     });
+    if (internalSystemTurn) {
+      context.render();
+      void load(context, true);
+      return;
+    }
     viewState.notice = "";
     viewState.error = `Claude Code 没有完成这次回复：${event.message || "未知错误"}`;
     context.render();
@@ -1032,6 +1039,11 @@ function handleConversationEvent(context, event) {
     });
     const reply = viewState.liveReplies.get(requestId);
     if (reply) viewState.liveReplies.set(requestId, { ...reply, done: true });
+    if (internalSystemTurn) {
+      context.render();
+      load(context, true);
+      return;
+    }
     viewState.error = "";
     viewState.notice = clean(event.message) || "已停止当前 Claude Code 任务。";
     context.render();
@@ -1046,6 +1058,10 @@ function handleConversationEvent(context, event) {
   }
   if (!requestId || !sessionId) return;
   if (event.type === "reply" || event.type === "reply-stream") {
+    if (internalSystemTurn) {
+      if (event.type === "reply" || event.done === true) void load(context, true);
+      return;
+    }
     const previous = viewState.liveReplies.get(requestId);
     viewState.liveReplies.set(requestId, {
       content: clean(event.content) || previous?.content || "",
