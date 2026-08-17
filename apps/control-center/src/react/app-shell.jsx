@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { flushSync } from "react-dom";
-import { Avatar, Input, SideNav, SideNavItem } from "suzu-design-system";
+import { Avatar, Button, Dialog, Input, SideNav, SideNavItem } from "suzu-design-system";
 import { searchSuzuSearchItems } from "../core/suzu-search.mjs";
 import { ApplicationRouter } from "./app-router.jsx";
 import { ConversationCallProvider } from "./conversation-call.jsx";
@@ -113,6 +113,28 @@ function IncomingVoiceCall({ call = null, onAnswer, onDecline }) {
         </button>
       </div>}
     </aside>
+  );
+}
+
+function ReleaseAnnouncementDialog({ announcement = null, onAcknowledge, open = false }) {
+  const release = announcement?.announcement;
+  if (!open || !release) return null;
+  const version = String(release.version || announcement?.version || "").trim();
+  const items = Array.isArray(release.items) ? release.items.filter(Boolean) : [];
+  const acknowledge = () => { void onAcknowledge?.(); };
+  return (
+    <Dialog
+      footer={<Button onClick={acknowledge} type="button">知道了</Button>}
+      onClose={acknowledge}
+      open
+      title={release.title || "Suzu Lives 已更新"}
+    >
+      <div className="release-announcement">
+        <span className="release-announcement__version">UPDATE{version ? ` · v${version}` : ""}</span>
+        {release.summary ? <p>{release.summary}</p> : null}
+        {items.length ? <ul>{items.map((item) => <li key={item}>{item}</li>)}</ul> : null}
+      </div>
+    </Dialog>
   );
 }
 
@@ -351,6 +373,7 @@ export function AppShell() {
 
           <IncomingConversationNotice notice={workspace?.incomingConversationNotice} />
           <IncomingVoiceCall call={workspace?.incomingVoiceCall} onAnswer={workspace?.actions?.answerIncomingVoiceCall} onDecline={workspace?.actions?.declineIncomingVoiceCall} />
+          <ReleaseAnnouncementDialog announcement={workspace?.releaseAnnouncement} onAcknowledge={workspace?.actions?.acknowledgeReleaseAnnouncement} open={workspace?.releaseAnnouncementOpen === true} />
           <GlobalNotice message={notice} />
           <section className={`content${workspace?.contentClassName ? ` ${workspace.contentClassName}` : ""}`} id="content" aria-live="polite">
             <ConversationCallProvider active={Boolean(conversationProps)} api={conversationProps?.api} snapshot={conversationProps?.snapshot}>

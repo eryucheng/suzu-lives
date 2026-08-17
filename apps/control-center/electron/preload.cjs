@@ -15,6 +15,8 @@ contextBridge.exposeInMainWorld("suzuConsole", {
   },
   settings: {
     get: () => ipcRenderer.invoke("settings:get"),
+    releaseAnnouncementStatus: () => ipcRenderer.invoke("settings:release-announcement-status"),
+    acknowledgeReleaseAnnouncement: () => ipcRenderer.invoke("settings:acknowledge-release-announcement"),
     appUpdateStatus: () => ipcRenderer.invoke("settings:app-update-status"),
     checkForUpdate: () => ipcRenderer.invoke("settings:check-for-update"),
     downloadUpdate: () => ipcRenderer.invoke("settings:download-update"),

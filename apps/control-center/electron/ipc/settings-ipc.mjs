@@ -33,6 +33,7 @@ const DEFAULT_SETTINGS = Object.freeze({
   agentId: "",
   customPriceModels: [],
   priceRevisions: [],
+  releaseAnnouncementState: { lastStartedVersion: "", lastAcknowledgedVersion: "" },
   identity: {
     owner: { displayName: "我", avatarDataUrl: "", gender: "", signature: "" },
     defaultAgent: { displayName: "Suzu", avatarDataUrl: "" },
@@ -101,6 +102,15 @@ export function normalizeConversationPreferences(value = {}) {
 
 export function normalizeMemoryRecallEnabled(value) {
   return value !== false;
+}
+
+export function normalizeReleaseAnnouncementState(value = {}) {
+  const source = value && typeof value === "object" && !Array.isArray(value) ? value : {};
+  const marker = (candidate) => String(candidate || "").trim().slice(0, 80);
+  return {
+    lastStartedVersion: marker(source.lastStartedVersion),
+    lastAcknowledgedVersion: marker(source.lastAcknowledgedVersion),
+  };
 }
 
 export function normalizeOnboardingCompleted(value) {
@@ -199,6 +209,7 @@ function normalizeSettings(value = {}) {
     agentId: stableAgentId(projectRoot),
     customPriceModels,
     priceRevisions: sanitizePriceRevisions(value.priceRevisions, priceCatalog),
+    releaseAnnouncementState: normalizeReleaseAnnouncementState(value.releaseAnnouncementState),
     identity: normalizeIdentity(value.identity),
     conversationPreferences: normalizeConversationPreferences(value.conversationPreferences),
   };
@@ -229,6 +240,13 @@ function safePatch(value, current = {}) {
 
 export function createSettingsService({ app, dataStorageService = null }) {
   const settingsPath = () => path.join(app.getPath("userData"), "settings.json");
+  const hasStoredSettings = () => {
+    try {
+      return fs.existsSync(settingsPath());
+    } catch {
+      return false;
+    }
+  };
   const localDataRoot = () => path.resolve(app.getPath("userData"));
   const usageLedgerPath = (settings) => {
     const agentId = settings.agentId || stableAgentId(settings.projectRoot) || "unassigned";
@@ -257,10 +275,10 @@ export function createSettingsService({ app, dataStorageService = null }) {
     dataStorage: dataStorageService?.snapshot?.() || { dataRoot: localDataRoot(), previousDataRoot: "", migration: { status: "idle" } },
     usageLedgerPath: usageLedgerPath(settings),
   });
-  return { load, response, save, safePatch, usageLedgerPath };
+  return { hasStoredSettings, load, response, save, safePatch, usageLedgerPath };
 }
 
-export function registerSettingsIpc({ app, appUpdateService = null, contactProjectsService = null, dataStorageService, dialog, getMainWindow, ipcMain, onMemoryRecallEnabledChanged = null, shell, settingsService, systemStatusService = null }) {
+export function registerSettingsIpc({ app, appUpdateService = null, contactProjectsService = null, dataStorageService, dialog, getMainWindow, ipcMain, onMemoryRecallEnabledChanged = null, releaseAnnouncementService = null, shell, settingsService, systemStatusService = null }) {
   const contacts = contactProjectsService || createContactProjectsService({ settingsService });
   const systemStatus = systemStatusService || createSystemStatusService({
     dataRoot: () => clean(dataStorageService?.dataRoot) || clean(settingsService.response?.(settingsService.load?.())?.dataRoot),
@@ -272,7 +290,13 @@ export function registerSettingsIpc({ app, appUpdateService = null, contactProje
     downloadUpdate: () => ({ status: "unavailable", mode: "manual", version: "未知", message: "当前版本没有启用更新服务。" }),
     installUpdate: () => ({ status: "unavailable", mode: "manual", version: "未知", message: "当前版本没有启用更新服务。" }),
   };
+  const announcementService = releaseAnnouncementService || {
+    acknowledge: () => ({ announcement: null, pending: false, version: "" }),
+    status: () => ({ announcement: null, pending: false, version: "" }),
+  };
   ipcMain.handle("settings:get", () => settingsService.response());
+  ipcMain.handle("settings:release-announcement-status", () => announcementService.status());
+  ipcMain.handle("settings:acknowledge-release-announcement", () => announcementService.acknowledge());
   ipcMain.handle("settings:app-update-status", () => updateService.status());
   ipcMain.handle("settings:check-for-update", () => updateService.checkForUpdates());
   ipcMain.handle("settings:download-update", () => updateService.downloadUpdate());

@@ -572,16 +572,16 @@ function ProactiveContactSettings({ actions, capability, contactsSnapshot }) {
     <>
       <CapabilitySettingsForm abilityId="proactive-contact" actions={actions}>
         {({ submitButton }) => (
-          <SettingSurface action={submitButton} description="这两段文字会在对应自动任务触发时交给 Agent；可以按你的相处方式修改。" eyebrow="主动关心" title="触发提示词">
+          <SettingSurface action={submitButton} description="A 只判断要不要联系；它结束后，软件会交给 B 让 Agent 自己安排下一次 A。可以按你的相处方式修改判断提示词。" eyebrow="主动关心" title="触发提示词">
             <AsyncSwitchRow
               checked={capability.enabled === true && autoMaintain}
-              description="软件启动时会检查；开启联系人或链式任务触发 1 分钟后，只检查这一位联系人是否缺少链式任务。"
+              description="软件启动或开启联系人时会补上第一条 A；之后由 A → B → 下一条 A 自己闭环。"
               disabled={capability.enabled !== true}
-              label="自动维护"
+              label="自动链式唤醒"
               onChange={(enabled) => actions.saveSettings?.("proactive-contact", { autoMaintain: enabled })}
             />
             <FormGrid>
-              <FormField className="capability-form-field--wide" label="链式主动关心提示词"><textarea defaultValue={settings.chainPrompt || ""} maxLength="12000" name="chainPrompt" /></FormField>
+              <FormField className="capability-form-field--wide" label="A · 是否主动联系提示词"><textarea defaultValue={settings.chainPrompt || ""} maxLength="12000" name="chainPrompt" /></FormField>
               <FormField className="capability-form-field--wide" label="临时回访提示词"><textarea defaultValue={settings.followUpPrompt || ""} maxLength="12000" name="followUpPrompt" /></FormField>
             </FormGrid>
           </SettingSurface>

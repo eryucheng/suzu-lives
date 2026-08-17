@@ -44,7 +44,7 @@ test("capability inner pages reuse every existing save and switch boundary", asy
   assert.match(detail, /CapabilitySettingsForm/u);
   assert.match(detail, /actions\.setContactEnabled/u);
   assert.match(detail, /在哪些联系人中启用/u);
-  assert.match(detail, /label="自动维护"/u);
+  assert.match(detail, /label="自动链式唤醒"/u);
   assert.match(detail, /autoMaintain: enabled/u);
   assert.match(detail, /contact\.name/u);
   assert.doesNotMatch(detail, /session\.title/u);

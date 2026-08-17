@@ -219,6 +219,7 @@ test("Suzu reserves a namespaced stop and steer command without swallowing Claud
 
 test("only completed scheduled agent text replies are eligible for an outside-chat notification", () => {
   assert.equal(isScheduledAgentReply({ kind: "schedule", type: "agent-reply", content: "你那边现在怎么样？" }), true);
+  assert.equal(isScheduledAgentReply({ kind: "schedule", type: "agent-reply", content: "我安排两小时后再来。", displayAsSystem: true }), false);
   assert.equal(isScheduledAgentReply({ kind: "schedule", type: "agent-reply", content: "  " }), false);
   assert.equal(isScheduledAgentReply({ kind: "schedule", type: "reply", content: "完成" }), false);
   assert.equal(isScheduledAgentReply({ kind: "message", type: "agent-reply", content: "普通聊天" }), false);

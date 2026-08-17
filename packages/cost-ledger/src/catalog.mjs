@@ -19,6 +19,60 @@ function validDate(value) {
   return Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : "";
 }
 
+function clockMinutes(value, timeZone) {
+  const timestamp = new Date(value);
+  if (!Number.isFinite(timestamp.getTime())) return null;
+  try {
+    const parts = new Intl.DateTimeFormat("en-GB", {
+      hour: "2-digit",
+      hourCycle: "h23",
+      minute: "2-digit",
+      timeZone: clean(timeZone),
+    }).formatToParts(timestamp);
+    const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+    const hour = Number(values.hour);
+    const minute = Number(values.minute);
+    if (!Number.isInteger(hour) || !Number.isInteger(minute)) return null;
+    return (hour % 24) * 60 + minute;
+  } catch {
+    return null;
+  }
+}
+
+function parseClockMinutes(value) {
+  const match = /^(?:[01]\d|2[0-3]):[0-5]\d$/u.exec(clean(value));
+  if (!match) return null;
+  const [hour, minute] = match[0].split(":").map(Number);
+  return hour * 60 + minute;
+}
+
+function intervalContains(minutes, start, end) {
+  if (start === end) return false;
+  return start < end
+    ? minutes >= start && minutes < end
+    : minutes >= start || minutes < end;
+}
+
+function scheduledRates(rateSchedule, timestamp) {
+  const schedule = plainObject(rateSchedule);
+  const timeZone = clean(schedule.timeZone);
+  const minutes = timeZone ? clockMinutes(timestamp, timeZone) : null;
+  if (minutes === null) return null;
+  for (const value of Array.isArray(schedule.intervals) ? schedule.intervals : []) {
+    const interval = plainObject(value);
+    const start = parseClockMinutes(interval.start);
+    const end = parseClockMinutes(interval.end);
+    if (start === null || end === null || !intervalContains(minutes, start, end)) continue;
+    const rates = {};
+    for (const [key, candidate] of Object.entries(plainObject(interval.rates))) {
+      const rate = finiteNonNegative(candidate);
+      if (rate !== null) rates[key] = rate;
+    }
+    return { label: clean(interval.label).slice(0, 80), rates };
+  }
+  return { label: clean(schedule.defaultLabel).slice(0, 80), rates: {} };
+}
+
 const CUSTOM_MODEL_ID_PATTERN = /^[a-z0-9][a-z0-9._:/-]{0,199}$/u;
 const MAX_CUSTOM_PRICE_MODELS = 100;
 
@@ -203,9 +257,14 @@ export function resolvePriceRevision({
   if (!selected) return null;
 
   const rates = {};
+  let ratePeriod = "";
   for (const revision of revisions) {
     if (revision.effectiveFrom > selected.effectiveFrom) break;
     Object.assign(rates, revision.rates || {});
+    const schedule = scheduledRates(revision.rateSchedule, at);
+    if (!schedule) continue;
+    Object.assign(rates, schedule.rates);
+    ratePeriod = schedule.label;
   }
   return {
     modelId: resolved.id,
@@ -218,6 +277,7 @@ export function resolvePriceRevision({
     revisionLabel: selected.label,
     effectiveFrom: selected.effectiveFrom,
     origin: selected.origin,
+    ratePeriod,
     rates,
   };
 }

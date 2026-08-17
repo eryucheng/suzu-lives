@@ -10,6 +10,12 @@ import {
 } from "../services/emoji-sticker-library.mjs";
 import { createConversationSessionSettingsService } from "../services/conversation-session-settings.mjs";
 import { createRealtimeVoiceCallService } from "../services/realtime-voice-call.mjs";
+import {
+  PROACTIVE_CHAIN_DESCRIPTION,
+  PROACTIVE_CHAIN_PLANNING_TURN_SOURCE,
+  PROACTIVE_CHAIN_TASK_PROMPT,
+  PROACTIVE_CHAIN_TURN_SOURCE,
+} from "../services/proactive-contact-maintenance.mjs";
 
 const STICKER_SELECTION_TTL_MS = 10 * 60 * 1_000;
 
@@ -156,11 +162,15 @@ export function registerConversationIpc({
       ? `${invocation} conversation-attachment --data-root ${rootArgument} --project-root ${projectArgument} --session-id ${sessionArgument}`
       : `${invocation} conversation-attachment`;
   };
-  const scheduleCommand = async ({ sessionId, projectRoot } = {}) => {
+  const scheduleCommand = async ({ sessionId, projectRoot, scheduleSource = "" } = {}) => {
     const invocation = clean(wechatAttachmentCli);
     const dataRoot = clean(settingsService.response(settingsService.load()).dataRoot);
     const rootArgument = quotedArgument(dataRoot);
     if (!invocation || !rootArgument) return null;
+    const source = clean(scheduleSource);
+    // A is deliberately a decision-only turn. Only B is allowed to receive
+    // the scheduler command that creates the next A task.
+    if (source === PROACTIVE_CHAIN_TURN_SOURCE) return null;
     const proactive = proactiveContactSettings() || {};
     const contactId = await reader.contactIdForSession({ sessionId, projectRoot });
     const contactArgument = quotedArgument(contactId);
@@ -173,6 +183,9 @@ export function registerConversationIpc({
       remove: `${invocation} schedule remove <任务ID> --data-root ${rootArgument}`,
       proactiveChainPrompt: clean(proactive.chainPrompt),
       proactiveFollowUpPrompt: clean(proactive.followUpPrompt),
+      proactivePlanning: source === PROACTIVE_CHAIN_PLANNING_TURN_SOURCE,
+      proactiveChainDescription: PROACTIVE_CHAIN_DESCRIPTION,
+      proactiveChainTaskPrompt: PROACTIVE_CHAIN_TASK_PROMPT,
     };
   };
   let sender = null;

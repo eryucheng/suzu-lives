@@ -19,6 +19,8 @@ export const state = {
   settingsContacts: null,
   settingsContactsLoading: false,
   appUpdate: null,
+  releaseAnnouncement: null,
+  releaseAnnouncementOpen: false,
   systemStatus: null,
   onboardingInitialized: false,
   onboardingOpen: false,

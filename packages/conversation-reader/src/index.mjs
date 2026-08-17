@@ -16,6 +16,7 @@ const WECHAT_MEDIA_MANIFEST_CLOSE = "</suzu-wechat-media>";
 const STICKER_MEDIA_MANIFEST_OPEN = "<suzu-sticker>";
 const STICKER_MEDIA_MANIFEST_CLOSE = "</suzu-sticker>";
 const SCHEDULE_TASK_OPEN = "<suzu-schedule-task>";
+const SCHEDULE_TASK_SYSTEM_DISPLAY_MARKER = "<!-- suzu-lives:display-system -->";
 const MERCHANT_TASK_OPEN = "<suzu-merchant-task>";
 const SUZU_MANAGED_SKILL_CONTEXT = /^Base directory for this skill:\s*[^\r\n]+[\s\S]*?<!--\s*suzu-lives:ability:[a-z0-9._-]+\s*-->/iu;
 const CLAUDE_RESUME_META_TEXT = "Continue from where you left off.";
@@ -398,7 +399,7 @@ export function isClaudeSyntheticNoResponseRecord(record) {
     && hasExactTextContent(message.content, CLAUDE_SYNTHETIC_NO_RESPONSE_TEXT);
 }
 
-function scheduledTaskNotice(content) {
+function scheduledTaskPresentation(content) {
   const values = typeof content === "string"
     ? [content]
     : Array.isArray(content)
@@ -406,12 +407,15 @@ function scheduledTaskNotice(content) {
       : [];
   for (const value of values) {
     const source = value.trim();
-    if (source.startsWith(MERCHANT_TASK_OPEN)) return "远行商人已检查";
+    if (source.startsWith(MERCHANT_TASK_OPEN)) return { text: "远行商人已检查", displayAsSystem: false };
     if (!source.startsWith(SCHEDULE_TASK_OPEN)) continue;
     const description = /^<suzu-schedule-task>\s*\n任务说明：([^\r\n]+)/u.exec(source)?.[1]?.trim();
-    return description ? `定时器触发：${description}` : "自动任务已触发";
+    return {
+      text: description ? `定时器触发：${description}` : "自动任务已触发",
+      displayAsSystem: source.includes(SCHEDULE_TASK_SYSTEM_DISPLAY_MARKER),
+    };
   }
-  return "";
+  return null;
 }
 
 function noReplyBlocks(blocks) {
@@ -442,6 +446,7 @@ function displayOrderFromTranscript(messages) {
 export function buildDisplayMessages(records, maxMessages = 500) {
   const messages = [];
   const belongsToVoiceCall = voiceCallRecordResolver(records);
+  let displayScheduledTurnAsSystem = false;
   for (const record of records || []) {
     const type = record?.type;
     const message = record?.message || {};
@@ -467,22 +472,24 @@ export function buildDisplayMessages(records, maxMessages = 500) {
       // The call-open marker asks the agent to greet after the line connects.
       // It is transport metadata rather than a sentence the person said.
       if (voiceCallOpening(message.content)) continue;
-      const taskNotice = scheduledTaskNotice(message.content);
-      if (taskNotice) {
+      const taskPresentation = scheduledTaskPresentation(message.content);
+      if (taskPresentation) {
         kind = "system";
-        blocks = [{ kind: "text", text: taskNotice }];
+        blocks = [{ kind: "text", text: taskPresentation.text }];
+        displayScheduledTurnAsSystem = taskPresentation.displayAsSystem;
       } else {
         blocks = textParts(message.content);
         const hasMedia = blocks.some((block) => block.kind === "media");
         const hasInboundMedia = blocks.some((block) => block.kind === "media" && ["wechat", "iphone", "sticker"].includes(block.mediaSource));
         const onlyToolResults = blocks.length > 0 && blocks.every((block) => block.kind === "tool_result");
+        if (!onlyToolResults) displayScheduledTurnAsSystem = false;
         kind = voiceCall ? "system" : hasInboundMedia ? "user" : hasMedia ? "assistant" : onlyToolResults ? "system" : "user";
         if (voiceCall && voiceCallTranscript(message.content) !== null) blocks = callTranscriptBlocks(blocks, "我");
       }
     }
     else if (type === "assistant") {
       if (isClaudeSyntheticNoResponseRecord(record)) continue;
-      kind = voiceCall ? "system" : "assistant";
+      kind = voiceCall || displayScheduledTurnAsSystem ? "system" : "assistant";
       blocks = textParts(message.content);
       if (noReplyBlocks(blocks)) continue;
       if (message.stop_reason === "tool_use") blocks = toolPlanningBlocks(blocks);

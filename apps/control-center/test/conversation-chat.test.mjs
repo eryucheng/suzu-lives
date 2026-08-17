@@ -119,6 +119,17 @@ test("schedule prompt keeps Agent scheduling scoped to proactive contact", () =>
   assert.match(proactiveOnly, /用我的回访提示/u);
   assert.doesNotMatch(proactiveOnly, /远行商人/u);
 
+  const planning = scheduleSystemPrompt({
+    conversationAdd: "suzu-lives schedule add --contact-id contact-suzu",
+    proactivePlanning: true,
+    proactiveChainDescription: "链式主动关心",
+    proactiveChainTaskPrompt: "执行一次主动关心判断。",
+  });
+  assert.match(planning, /内部安排阶段/u);
+  assert.match(planning, /必须且只能创建一条/u);
+  assert.match(planning, /--desc "链式主动关心"/u);
+  assert.match(planning, /执行一次主动关心判断/u);
+
   const merchantOnly = scheduleSystemPrompt({
     operationAdd: "suzu-lives schedule add",
     list: "suzu-lives schedule list",

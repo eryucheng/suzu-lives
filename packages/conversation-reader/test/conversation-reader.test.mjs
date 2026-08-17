@@ -215,6 +215,19 @@ test("scheduled task inputs are centered system notices and NO_REPLY stays hidde
   assert.equal(messages[1].blocks[0].text, "正常回复");
 });
 
+test("an internal scheduled planning turn never renders its Agent output as contact speech", () => {
+  const messages = buildDisplayMessages([
+    { type: "user", message: { content: "<suzu-schedule-task>\n任务说明：安排下次主动关心\n<!-- suzu-lives:display-system -->\n内部任务\n</suzu-schedule-task>" } },
+    { type: "assistant", message: { content: [{ type: "text", text: "我决定两小时后再来确认。" }] } },
+    { type: "user", message: { content: "现在我自己说一句。" } },
+    { type: "assistant", message: { content: [{ type: "text", text: "这是正常对话回复。" }] } },
+  ]);
+
+  assert.deepEqual(messages.map((message) => message.kind), ["system", "system", "user", "assistant"]);
+  assert.equal(messages[1].blocks[0].text, "我决定两小时后再来确认。");
+  assert.equal(messages[3].blocks[0].text, "这是正常对话回复。");
+});
+
 test("timer and merchant markers stay local system notices", () => {
   const messages = buildDisplayMessages([
     { type: "user", message: { content: "<suzu-schedule-task>\n任务说明：链式主动关心\n内部任务\n</suzu-schedule-task>" } },
