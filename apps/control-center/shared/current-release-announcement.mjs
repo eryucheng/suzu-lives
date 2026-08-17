@@ -2,7 +2,7 @@
 // its version range and copy before packaging a release; it is only presented
 // after an upgrade.
 export const CURRENT_RELEASE_ANNOUNCEMENT = Object.freeze({
-  title: "Suzu Lives v0.1.3 → v0.1.4",
+  title: "Suzu Lives v0.1.4 → v0.1.5",
   summary: "本次更新内容（最近会比较频繁更新）：",
   items: [
     "优化主动关心链机制，更稳定。",
