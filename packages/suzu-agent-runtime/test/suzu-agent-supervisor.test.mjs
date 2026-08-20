@@ -23,6 +23,15 @@ function waitBriefly(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, Math.min(milliseconds, 2)));
 }
 
+async function awaitWithActiveHandle(promise) {
+  const keepAlive = setInterval(() => {}, 1_000);
+  try {
+    return await promise;
+  } finally {
+    clearInterval(keepAlive);
+  }
+}
+
 function createFakeChild(pid = 55123) {
   const child = new EventEmitter();
   child.pid = pid;
@@ -215,7 +224,7 @@ test("supervisor resolves a parent-originated product command only from its owne
 test("supervisor tears down its owned child after an IPC startup timeout", async () => {
   const { supervisor, child } = makeSupervisor({ ready: false });
   await assert.rejects(
-    supervisor.start(),
+    awaitWithActiveHandle(supervisor.start()),
     (error) => error instanceof SuzuAgentRuntimeError && error.code === "AGENT_CORE_START_TIMEOUT",
   );
   await waitBriefly(2);

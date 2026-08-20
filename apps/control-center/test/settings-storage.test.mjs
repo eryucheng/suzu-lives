@@ -36,7 +36,7 @@ test("the first settings snapshot materializes the managed contacts directory", 
   });
 
   const snapshot = await handlers.get("settings:get")();
-  const contactsRoot = path.join(userData, "contacts");
+  const contactsRoot = await fs.promises.realpath(path.join(userData, "contacts"));
   assert.equal(snapshot.contactsRoot, contactsRoot);
   assert.equal(settingsService.load().contactsRoot, contactsRoot);
   assert.equal(fs.statSync(contactsRoot).isDirectory(), true);

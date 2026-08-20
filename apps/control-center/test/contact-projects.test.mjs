@@ -13,7 +13,6 @@ async function temporaryDirectory(prefix) {
 
 test("contacts default to the managed contacts directory below Suzu data", async () => {
   const dataRoot = await temporaryDirectory("suzu-contact-managed-root-");
-  const expectedRoot = path.join(dataRoot, "contacts");
   let settings = { contactsRoot: "", preferredContactId: "", projectRoot: "" };
   const service = createContactProjectsService({
     dataRoot,
@@ -21,6 +20,7 @@ test("contacts default to the managed contacts directory below Suzu data", async
   });
 
   const initial = await service.snapshot();
+  const expectedRoot = await fs.realpath(path.join(dataRoot, "contacts"));
   assert.equal(initial.status, "ready");
   assert.equal(initial.contactsRoot, expectedRoot);
   assert.equal(settings.contactsRoot, expectedRoot);

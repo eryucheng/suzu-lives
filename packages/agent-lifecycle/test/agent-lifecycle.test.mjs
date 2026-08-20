@@ -7,6 +7,15 @@ import {
   createSuzuAgentLifecycle,
 } from "../src/index.mjs";
 
+async function awaitWithActiveHandle(promise) {
+  const keepAlive = setInterval(() => {}, 1_000);
+  try {
+    return await promise;
+  } finally {
+    clearInterval(keepAlive);
+  }
+}
+
 test("Suzu lifecycle runs hooks deterministically and isolates observer failures", async () => {
   const calls = [];
   const failures = [];
@@ -86,7 +95,7 @@ test("dynamic context collection has the same block contract without invoking du
 test("timed-out observer hooks are reported without blocking the turn", async () => {
   const lifecycle = createSuzuAgentLifecycle({ defaultTimeoutMs: 10 });
   lifecycle.on("AssistantDelta", () => new Promise(() => {}), { id: "slow" });
-  const result = await lifecycle.dispatch("AssistantDelta", { text: "hi" });
+  const result = await awaitWithActiveHandle(lifecycle.dispatch("AssistantDelta", { text: "hi" }));
   assert.equal(result.failures[0].hookId, "slow");
   assert.equal(result.failures[0].policy, "observe");
   assert.match(result.failures[0].message, /10ms/u);
