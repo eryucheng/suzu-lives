@@ -1,0 +1,285 @@
+{
+  "format": "suzu-agent-core-bundle/v1",
+  "generatedAt": "2026-08-20T10:28:31.396Z",
+  "upstreamSnapshot": "deepseek-harness@0.1.0-rc.6",
+  "sourceRoot": "external-upstream-snapshot",
+  "moduleCount": 48,
+  "sourcePackageCount": 202,
+  "sizeBytes": 27705205,
+  "modules": [
+    {
+      "id": "timer",
+      "source": "@deepseek-ai/cordis-plugin-timer",
+      "output": "vendor/core/modules/timer.mjs"
+    },
+    {
+      "id": "app-boot",
+      "source": "@deepseek-ai/dsh-app-boot",
+      "output": "vendor/core/modules/app-boot.mjs"
+    },
+    {
+      "id": "launch-environment",
+      "source": "@deepseek-ai/dsh-launch-environment",
+      "output": "vendor/core/modules/launch-environment.mjs"
+    },
+    {
+      "id": "llm",
+      "source": "@deepseek-ai/dsh-llm",
+      "output": "vendor/core/modules/llm.mjs"
+    },
+    {
+      "id": "session",
+      "source": "@deepseek-ai/dsh-session",
+      "output": "vendor/core/modules/session.mjs"
+    },
+    {
+      "id": "type-registry",
+      "source": "@deepseek-ai/dsh-typert-registry",
+      "output": "vendor/core/modules/type-registry.mjs"
+    },
+    {
+      "id": "type-loader",
+      "source": "@deepseek-ai/dsh-typert-loader",
+      "output": "vendor/core/modules/type-loader.mjs"
+    },
+    {
+      "id": "agent",
+      "source": "@deepseek-ai/dsh-agent",
+      "output": "vendor/core/modules/agent.mjs"
+    },
+    {
+      "id": "agent-default-model",
+      "source": "@deepseek-ai/dsh-agent-default-model",
+      "output": "vendor/core/modules/agent-default-model.mjs"
+    },
+    {
+      "id": "jobs-local",
+      "source": "@deepseek-ai/dsh-jobs-local",
+      "output": "vendor/core/modules/jobs-local.mjs"
+    },
+    {
+      "id": "llm-retry",
+      "source": "@deepseek-ai/dsh-llm-retry",
+      "output": "vendor/core/modules/llm-retry.mjs"
+    },
+    {
+      "id": "settings-file",
+      "source": "@deepseek-ai/dsh-settings-file",
+      "output": "vendor/core/modules/settings-file.mjs"
+    },
+    {
+      "id": "credentials",
+      "source": "@deepseek-ai/dsh-credentials",
+      "output": "vendor/core/modules/credentials.mjs"
+    },
+    {
+      "id": "credentials-local",
+      "source": "@deepseek-ai/dsh-credentials-local",
+      "output": "vendor/core/modules/credentials-local.mjs"
+    },
+    {
+      "id": "compatible-protocols",
+      "source": "@deepseek-ai/dsh-llm-pi-ai",
+      "output": "vendor/core/modules/compatible-protocols.mjs"
+    },
+    {
+      "id": "session-persistence-jsonl",
+      "source": "@deepseek-ai/dsh-session-persistence-jsonl",
+      "output": "vendor/core/modules/session-persistence-jsonl.mjs"
+    },
+    {
+      "id": "attachment-local",
+      "source": "@deepseek-ai/dsh-attachment-local",
+      "output": "vendor/core/modules/attachment-local.mjs"
+    },
+    {
+      "id": "subprocess-local",
+      "source": "@deepseek-ai/dsh-subprocess-local",
+      "output": "vendor/core/modules/subprocess-local.mjs"
+    },
+    {
+      "id": "sandbox-local",
+      "source": "@deepseek-ai/dsh-sandbox-local",
+      "output": "vendor/core/modules/sandbox-local.mjs"
+    },
+    {
+      "id": "sandbox-policy",
+      "source": "@deepseek-ai/dsh-sandbox-policy",
+      "output": "vendor/core/modules/sandbox-policy.mjs"
+    },
+    {
+      "id": "bash-sandbox",
+      "source": "@deepseek-ai/dsh-bash-sandbox",
+      "output": "vendor/core/modules/bash-sandbox.mjs"
+    },
+    {
+      "id": "pwsh-sandbox",
+      "source": "@deepseek-ai/dsh-pwsh-sandbox",
+      "output": "vendor/core/modules/pwsh-sandbox.mjs"
+    },
+    {
+      "id": "user-approval",
+      "source": "@deepseek-ai/dsh-user-approval",
+      "output": "vendor/core/modules/user-approval.mjs"
+    },
+    {
+      "id": "permission-presets",
+      "source": "@deepseek-ai/dsh-permission-presets",
+      "output": "vendor/core/modules/permission-presets.mjs"
+    },
+    {
+      "id": "shell-environment",
+      "source": "@deepseek-ai/dsh-shell-env",
+      "output": "vendor/core/modules/shell-environment.mjs"
+    },
+    {
+      "id": "filesystem-observation",
+      "source": "@deepseek-ai/dsh-fs-observation-policy",
+      "output": "vendor/core/modules/filesystem-observation.mjs"
+    },
+    {
+      "id": "skill-catalog",
+      "source": "@deepseek-ai/dsh-skill",
+      "output": "vendor/core/modules/skill-catalog.mjs"
+    },
+    {
+      "id": "commands",
+      "source": "@deepseek-ai/dsh-commands",
+      "output": "vendor/core/modules/commands.mjs"
+    },
+    {
+      "id": "token-meter",
+      "source": "@deepseek-ai/dsh-token-meter",
+      "output": "vendor/core/modules/token-meter.mjs"
+    },
+    {
+      "id": "tools",
+      "source": "@deepseek-ai/dsh-tools",
+      "output": "vendor/core/modules/tools.mjs"
+    },
+    {
+      "id": "system-prompt",
+      "source": "@deepseek-ai/dsh-system-prompt",
+      "output": "vendor/core/modules/system-prompt.mjs"
+    },
+    {
+      "id": "agent-loop",
+      "source": "@deepseek-ai/dsh-agent-loop",
+      "output": "vendor/core/modules/agent-loop.mjs"
+    },
+    {
+      "id": "filesystem-sandbox",
+      "source": "@deepseek-ai/dsh-fs-sandbox",
+      "output": "vendor/core/modules/filesystem-sandbox.mjs"
+    },
+    {
+      "id": "deepseek-model",
+      "source": "@deepseek-ai/dsh-llm-deepseek",
+      "output": "vendor/core/modules/deepseek-model.mjs"
+    },
+    {
+      "id": "agent-presets",
+      "source": "@deepseek-ai/dsh-agent-presets",
+      "output": "vendor/core/modules/agent-presets.mjs"
+    },
+    {
+      "id": "persona",
+      "source": "@deepseek-ai/dsh-persona",
+      "output": "vendor/core/modules/persona.mjs"
+    },
+    {
+      "id": "agent-instructions",
+      "source": "@deepseek-ai/dsh-agent-instructions",
+      "output": "vendor/core/modules/agent-instructions.mjs"
+    },
+    {
+      "id": "command-compact",
+      "source": "@deepseek-ai/dsh-command-compact",
+      "output": "vendor/core/modules/command-compact.mjs"
+    },
+    {
+      "id": "terminal-bash",
+      "source": "@deepseek-ai/dsh-tool-bash",
+      "output": "vendor/core/modules/terminal-bash.mjs"
+    },
+    {
+      "id": "terminal-pwsh",
+      "source": "@deepseek-ai/dsh-tool-pwsh",
+      "output": "vendor/core/modules/terminal-pwsh.mjs"
+    },
+    {
+      "id": "filesystem",
+      "source": "@deepseek-ai/dsh-tool-fs",
+      "output": "vendor/core/modules/filesystem.mjs"
+    },
+    {
+      "id": "filesystem-search",
+      "source": "@deepseek-ai/dsh-tool-fs-search",
+      "output": "vendor/core/modules/filesystem-search.mjs"
+    },
+    {
+      "id": "background-jobs",
+      "source": "@deepseek-ai/dsh-tool-jobs",
+      "output": "vendor/core/modules/background-jobs.mjs"
+    },
+    {
+      "id": "skill-filesystem",
+      "source": "@deepseek-ai/dsh-skill-filesystem",
+      "output": "vendor/core/modules/skill-filesystem.mjs"
+    },
+    {
+      "id": "skill-tool",
+      "source": "@deepseek-ai/dsh-tool-skill",
+      "output": "vendor/core/modules/skill-tool.mjs"
+    },
+    {
+      "id": "compaction",
+      "source": "@deepseek-ai/dsh-compaction",
+      "output": "vendor/core/modules/compaction.mjs"
+    },
+    {
+      "id": "compaction-basic",
+      "source": "@deepseek-ai/dsh-compaction-basic",
+      "output": "vendor/core/modules/compaction-basic.mjs"
+    },
+    {
+      "id": "mcp-client",
+      "source": "@deepseek-ai/dsh-mcp-client",
+      "output": "vendor/core/modules/mcp-client.mjs"
+    }
+  ],
+  "nativeRuntimePackages": [
+    {
+      "name": "node-pty",
+      "version": "1.1.0"
+    },
+    {
+      "name": "sharp",
+      "version": "0.35.3"
+    },
+    {
+      "name": "@img/colour",
+      "version": "1.1.0"
+    },
+    {
+      "name": "@img/sharp-win32-x64",
+      "version": "0.35.3"
+    },
+    {
+      "name": "detect-libc",
+      "version": "2.1.2"
+    },
+    {
+      "name": "semver",
+      "version": "7.8.5"
+    },
+    {
+      "name": "koffi",
+      "version": "3.1.5"
+    },
+    {
+      "name": "@koromix/koffi-win32-x64",
+      "version": "3.1.5"
+    }
+  ]
+}

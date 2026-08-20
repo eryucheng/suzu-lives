@@ -1,0 +1,30 @@
+{
+  "name": "@suzu-lives/suzu-agent-runtime",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.mjs",
+    "./companion-compaction": "./src/companion-compaction.mjs",
+    "./companion-compaction-prompt": "./src/companion-compaction-prompt.mjs",
+    "./software-assistant-compaction": "./src/software-assistant-compaction.mjs",
+    "./software-assistant-compaction-prompt": "./src/software-assistant-compaction-prompt.mjs",
+    "./software-assistant-bridge": "./src/software-assistant-bridge.mjs",
+    "./supervisor": "./src/supervisor.mjs",
+    "./lifecycle-bridge": "./src/lifecycle-bridge.mjs",
+    "./capability-bridge": "./src/capability-bridge.mjs",
+    "./structured-generator": "./src/structured-generator.mjs",
+    "./compatible-llm": "./src/compatible-llm.mjs",
+    "./compatible-provider-catalog": "./src/compatible-provider-catalog.mjs",
+    "./core/*": "./vendor/core/modules/*.mjs"
+  },
+  "scripts": {
+    "test": "node --experimental-loader ./src/embedded-module-loader.mjs --test test/*.test.mjs",
+    "build:core": "node scripts/bundle-agent-core.mjs"
+  },
+  "files": [
+    "src/**/*",
+    "assets/**/*",
+    "vendor/**/*"
+  ]
+}

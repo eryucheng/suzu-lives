@@ -1162,20 +1162,6 @@
   font-weight: 500;
 }
 
-.claude-api-model-actions {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
-}
-
-.claude-api-model-actions p {
-  margin: 0;
-  color: var(--muted);
-  font-size: 11px;
-  line-height: 1.5;
-}
-
 .runtime-checkbox {
   display: flex !important;
   min-height: 40px;
@@ -1387,164 +1373,6 @@
   min-height: 0;
 }
 
-/* A web capability owns sites; every site owns its own action switches. */
-.site-automation-site-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
-}
-
-.site-automation-site-card {
-  display: grid;
-  min-width: 0;
-  min-height: 176px;
-  align-content: space-between;
-  gap: 17px;
-  border: 1px solid color-mix(in srgb, var(--accent) 26%, var(--line));
-  border-radius: 16px;
-  background: radial-gradient(circle at 94% 8%, color-mix(in srgb, var(--accent2) 16%, transparent), transparent 35%), color-mix(in srgb, var(--panel) 94%, transparent);
-  color: var(--text);
-  cursor: pointer;
-  padding: 17px;
-  text-align: left;
-  transition: transform .18s ease, border-color .18s ease, box-shadow .18s ease;
-}
-
-.site-automation-site-card:hover {
-  transform: translateY(-3px);
-  border-color: color-mix(in srgb, var(--accent) 58%, var(--line));
-  box-shadow: 0 16px 30px rgba(0, 0, 0, .16);
-}
-
-.site-automation-site-card__top,
-.site-automation-site-card__enter {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-
-.site-automation-site-card__copy {
-  display: grid;
-  gap: 6px;
-}
-
-.site-automation-site-card__copy strong {
-  font-size: 20px;
-  letter-spacing: -.35px;
-}
-
-.site-automation-site-card__copy small {
-  color: var(--muted);
-  font-size: 11px;
-}
-
-.site-automation-site-card__enter {
-  color: var(--accent2);
-  font-size: 11px;
-  font-weight: 650;
-}
-
-.site-automation-site-card__enter b {
-  font-size: 15px;
-  transition: transform .18s ease;
-}
-
-.site-automation-site-card:hover .site-automation-site-card__enter b {
-  transform: translateX(3px);
-}
-
-.site-automation-site-settings,
-.site-automation-actions,
-.site-automation-action-group,
-.site-automation-action-list {
-  display: grid;
-  gap: 13px;
-}
-
-.site-automation-site-settings__head,
-.site-automation-actions > header,
-.site-automation-action {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 18px;
-}
-
-.site-automation-site-settings__head {
-  border: 1px solid color-mix(in srgb, var(--accent) 34%, var(--line));
-  border-radius: 15px;
-  background: linear-gradient(116deg, color-mix(in srgb, var(--accent) 13%, var(--panel)), var(--panel));
-  padding: 17px;
-}
-
-.site-automation-site-settings__head h3,
-.site-automation-actions h4,
-.site-automation-action h5 {
-  margin: 5px 0 0;
-}
-
-.site-automation-site-settings__head h3 {
-  font-size: 21px;
-}
-
-.site-automation-site-settings__head p,
-.site-automation-actions > header p,
-.site-automation-action p {
-  margin: 6px 0 0;
-  color: var(--muted2);
-  font-size: 11px;
-  line-height: 1.6;
-}
-
-.site-automation-actions {
-  border-top: 1px solid var(--line);
-  padding-top: 20px;
-}
-
-.site-automation-actions > header h4 {
-  font-size: 16px;
-}
-
-.site-automation-action-group {
-  border: 1px solid var(--line);
-  border-radius: 14px;
-  background: color-mix(in srgb, var(--panel-soft) 44%, transparent);
-  padding: 14px;
-}
-
-.site-automation-action-group > h4 {
-  margin: 0;
-  color: var(--accent2);
-  font-size: 12px;
-}
-
-.site-automation-action-list {
-  gap: 8px;
-}
-
-.site-automation-action {
-  min-width: 0;
-  border-top: 1px solid color-mix(in srgb, var(--line) 88%, transparent);
-  padding: 12px 1px 0;
-}
-
-.site-automation-action:first-child {
-  border-top: 0;
-  padding-top: 0;
-}
-
-.site-automation-action > div {
-  min-width: 0;
-}
-
-.site-automation-action__meta .status-pill {
-  font-size: 9px;
-}
-
-.site-automation-action h5 {
-  font-size: 13px;
-}
-
 .settings-transfer {
   display: flex;
   max-width: 1100px;
@@ -1588,7 +1416,6 @@
 @media (max-width: 820px) {
   .capability-space-grid,
   .capability-entry-grid,
-  .site-automation-site-grid,
   .runtime-settings__grid,
   .runtime-connection-grid {
     grid-template-columns: 1fr;
@@ -1613,9 +1440,6 @@
 
   .capability-detail__header,
   .capability-detail__switch,
-  .site-automation-site-settings__head,
-  .site-automation-actions > header,
-  .site-automation-action,
   .capability-info-section,
   .capability-api-binding,
   .capability-inline-action {

@@ -14,7 +14,6 @@ const activeCameraSessions = new Map();
 function clean(value) {
   return String(value ?? "").trim();
 }
-
 function dataRoot(value) {
   const root = clean(value);
   if (!root) throw new DeviceBridgeError("缺少 Suzu Lives 软件数据目录。");
@@ -282,7 +281,6 @@ export async function executeComputerCameraSession({
     throw error;
   }
 }
-
 /** Capture, inspect, or explicitly close the persistent session. */
 export async function executeComputerCameraCapture({
   dataRoot: root,
@@ -334,64 +332,6 @@ export async function executeComputerCameraCapture({
     return { abilityId: "computer-camera", status: "ok", sessionId: active.sessionId, cameraIndex: camera, outputPath, statePath, capture: worker };
   } catch (error) {
     await writeJsonAtomic(statePath, { ...active.baseState, status: "failed", failedAt: now().toISOString(), error: clean(error?.message).slice(0, 500) || "camera capture failed" });
-    throw error;
-  }
-}
-
-export function planIphoneBridgeMessage({ dataRoot: root, topic, content } = {}) {
-  const runtimeDataRoot = deviceRuntimeRoot(root, "iphone-bridge");
-  return {
-    abilityId: "iphone-bridge",
-    status: "blocked-unverified-bridge-protocol",
-    topic: bounded(topic, "主题", 120),
-    content: bounded(content, "内容", 4_000),
-    runtimeDataRoot,
-    inboxDirectory: path.join(runtimeDataRoot, "inbox"),
-    statePath: path.join(runtimeDataRoot, "state.json"),
-    willSendMessage: false,
-    willReadMailbox: false,
-    nextRequirement: "尚未确认可发布的 Suzu Lives iPhone bridge 协议，因此不会发起 HTTP 请求。",
-  };
-}
-
-/**
- * No outbound iPhone protocol has been verified yet. A future software-owned
- * bridge may inject this adapter; this package never invents an endpoint or
- * reads unconfigured external credentials.
- */
-export async function executeIphoneBridgeMessage({
-  dataRoot: root,
-  gate,
-  authorization,
-  invocation,
-  topic,
-  content,
-  bridgeAdapter,
-  now = () => new Date(),
-  randomId = randomUUID,
-} = {}) {
-  assertInvocationGate({ abilityId: "iphone-bridge", gate, dependencies: {} });
-  assertVerifiedCapabilityAuthorization({ authorization, abilityId: "iphone-bridge", action: "send-message", scope: invocation?.scope });
-  const messageTopic = bounded(topic, "主题", 120);
-  const messageContent = bounded(content, "内容", 4_000);
-  if (typeof bridgeAdapter !== "function") {
-    throw new CapabilityExecutionError("IPHONE_BRIDGE_PROTOCOL_UNAVAILABLE", "尚未接入经过验证的软件 iPhone bridge 协议；不会猜测 HTTP 路径或尝试未配置的外部连接。", { abilityId: "iphone-bridge" });
-  }
-  const runtimeDataRoot = deviceRuntimeRoot(root, "iphone-bridge");
-  const messageId = `iphone-${safeStamp(now())}-${safeSessionId(randomId())}`;
-  const outboxPath = path.join(runtimeDataRoot, "outbox", `${messageId}.json`);
-  const statePath = path.join(runtimeDataRoot, "state.json");
-  const record = { id: messageId, status: "pending", topic: messageTopic, content: messageContent, createdAt: now().toISOString() };
-  await writeJsonAtomic(outboxPath, record);
-  try {
-    const delivery = await bridgeAdapter({ abilityId: "iphone-bridge", messageId, topic: messageTopic, content: messageContent, runtimeDataRoot });
-    if (delivery?.accepted !== true) throw new DeviceBridgeError("软件 iPhone bridge 没有确认接收消息。 ");
-    const acceptedAt = now().toISOString();
-    await writeJsonAtomic(outboxPath, { ...record, status: "accepted", acceptedAt, bridgeReceipt: clean(delivery.receipt).slice(0, 300) || undefined });
-    await writeJsonAtomic(statePath, { lastOutboundId: messageId, updatedAt: acceptedAt });
-    return { abilityId: "iphone-bridge", status: "ok", messageId, outboxPath, statePath, bridgeStatus: "accepted" };
-  } catch (error) {
-    await writeJsonAtomic(outboxPath, { ...record, status: "failed", error: clean(error?.message).slice(0, 500) || "bridge delivery failed" });
     throw error;
   }
 }

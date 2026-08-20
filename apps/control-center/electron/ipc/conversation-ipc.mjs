@@ -1,8 +1,14 @@
 import { randomUUID } from "node:crypto";
-import { pathToFileURL } from "node:url";
+import path from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
+import { createSuzuAgentLifecycle } from "@suzu-lives/agent-lifecycle";
 import { createConversationReader } from "../services/conversation-reader.mjs";
 import { createConversationChatService } from "../services/conversation-chat.mjs";
+import { createConversationAttachmentService } from "../services/conversation-attachment-service.mjs";
+import { createConversationCompactorService } from "../services/conversation-compactor-service.mjs";
+import { createSuzuAgentRuntime } from "../services/suzu-agent-runtime.mjs";
+import { registerSuzuAgentHooks } from "../services/agent-hook-registry.mjs";
 import {
   createEmojiStickerLibrary,
   EMOJI_STICKER_DIALOG_FILTER,
@@ -10,14 +16,17 @@ import {
 } from "../services/emoji-sticker-library.mjs";
 import { createConversationSessionSettingsService } from "../services/conversation-session-settings.mjs";
 import { createRealtimeVoiceCallService } from "../services/realtime-voice-call.mjs";
-import {
-  PROACTIVE_CHAIN_DESCRIPTION,
-  PROACTIVE_CHAIN_PLANNING_TURN_SOURCE,
-  PROACTIVE_CHAIN_TASK_PROMPT,
-  PROACTIVE_CHAIN_TURN_SOURCE,
-} from "../services/proactive-contact-maintenance.mjs";
 
 const STICKER_SELECTION_TTL_MS = 10 * 60 * 1_000;
+const ATTACHMENT_SELECTION_TTL_MS = 10 * 60 * 1_000;
+const IMAGE_ATTACHMENT_DIALOG_FILTER = Object.freeze({
+  name: "图片",
+  extensions: ["png", "jpg", "jpeg", "webp", "gif"],
+});
+const FILE_ATTACHMENT_DIALOG_FILTER = Object.freeze({
+  name: "所有文件",
+  extensions: ["*"],
+});
 
 function clean(value) {
   return String(value ?? "").trim();
@@ -33,14 +42,6 @@ function contactSettingsValue(value) {
     throw new Error("联系人设置只接受 contactId。 ");
   }
   return { contactId: clean(source.contactId) };
-}
-
-function contactApprovalModeValue(value) {
-  const source = plainObject(value);
-  if (Object.hasOwn(source, "sessionId") || Object.hasOwn(source, "projectRoot")) {
-    throw new Error("联系人审批模式只接受 contactId。 ");
-  }
-  return { id: clean(source.id), approvalMode: clean(source.approvalMode) };
 }
 
 function contactLongTermMemoryValue(value) {
@@ -77,6 +78,24 @@ function contactPresentationValue(value) {
   return result;
 }
 
+function contextTraceValue(value) {
+  const source = plainObject(value);
+  if (Object.hasOwn(source, "sessionId") || Object.hasOwn(source, "projectRoot") || Object.hasOwn(source, "contactId")) {
+    throw new Error("上下文查询使用当前联系人，不能指定会话或目录。 ");
+  }
+  const result = {
+    category: clean(source.category),
+    query: clean(source.query),
+  };
+  if (Object.hasOwn(source, "limit")) {
+    if (!Number.isSafeInteger(source.limit) || source.limit < 1 || source.limit > 600) {
+      throw new Error("上下文查询数量无效。 ");
+    }
+    result.limit = source.limit;
+  }
+  return result;
+}
+
 function contactRemovalValue(value) {
   const source = plainObject(value);
   if (Object.hasOwn(source, "sessionId") || Object.hasOwn(source, "projectRoot")) {
@@ -90,13 +109,30 @@ function callStartValue(value) {
   return { initiator: clean(source.initiator).toLowerCase() === "agent" ? "agent" : "user" };
 }
 
-function quotedArgument(value) {
-  const source = clean(value);
-  return source && !/["\r\n]/u.test(source) ? `"${source}"` : "";
+function attachmentPickerValue(value) {
+  const kind = clean(plainObject(value).kind).toLowerCase();
+  if (!new Set(["file", "image"]).has(kind)) throw new Error("附件类型无效。 ");
+  return { kind };
+}
+
+function attachmentSendValue(value) {
+  const source = plainObject(value);
+  const tokens = Array.isArray(source.attachmentTokens) ? source.attachmentTokens : [];
+  if (tokens.length > 24) throw new Error("一次最多发送 24 个附件。 ");
+  const attachmentTokens = tokens.map((token) => clean(token)).filter(Boolean);
+  if (new Set(attachmentTokens).size !== attachmentTokens.length) throw new Error("附件选择重复。 ");
+  if (Object.hasOwn(source, "media")) throw new Error("聊天附件必须先通过本地选择器。 ");
+  return {
+    content: typeof source.content === "string" ? source.content : "",
+    attachmentTokens,
+    queued: source.queued === true,
+  };
 }
 
 export function registerConversationIpc({
   app,
+  capabilityRegistry = null,
+  capabilityRuntime = null,
   contactProjectsService = null,
   connectionsService,
   dialog,
@@ -105,16 +141,63 @@ export function registerConversationIpc({
   memoryRuntime = null,
   settingsService,
   shell,
-  wechatAttachmentCli = "",
-  claudeWorkspaceDirectories = [],
   initializeContactCapabilities = null,
   onContactLongTermMemoryEnabledChanged = null,
-  proactiveContactSettings = () => ({}),
-  isProactiveContactEnabled = () => false,
 }) {
-  const reader = createConversationReader({ contactProjectsService, onContactCreated: initializeContactCapabilities, settingsService });
+  const dataRoot = settingsService.response(settingsService.load()).dataRoot;
+  const agentRuntime = createSuzuAgentRuntime({
+    dataRoot,
+    // The host process needs an ordinary cwd of its own, but it must never
+    // inherit the application source/package directory. Individual Agent Core
+    // sessions still receive their contact projectRoot as their actual cwd.
+    workspaceDirectory: path.resolve(dataRoot),
+  });
+  const attachmentService = createConversationAttachmentService({ dataRoot });
+  // Keep product extension points provider-neutral. The Agent Core bridge is
+  // registered here, at the composition boundary, rather than making future
+  // Suzu hooks depend on vendor composition internals.
+  const agentLifecycle = createSuzuAgentLifecycle({
+    onError: ({ event, hookId, message, policy }) => {
+      console.warn(`[Suzu agent lifecycle] ${policy} hook ${hookId} failed during ${event}: ${message}`);
+    },
+  });
+  const agentHooks = registerSuzuAgentHooks({
+    agentLifecycle,
+    dataRoot,
+    memoryRuntime,
+    ...(typeof capabilityRegistry?.createHookModules === "function"
+      ? { createDefaultHookModules: (options) => capabilityRegistry.createHookModules(options) }
+      : {}),
+  });
+  agentLifecycle.on("TurnStarting", async (payload) => {
+    const result = await agentRuntime.prepareInstructions();
+    if (result.changed || result.createdGlobal) {
+      void agentLifecycle.dispatch("InstructionsChanged", {
+        ...payload,
+        bytes: Number(result.bytes) || 0,
+        globalPath: result.globalPath,
+      }).catch(() => undefined);
+    }
+    return result;
+  }, {
+    id: "agent-instruction-bridge",
+    order: -1_000,
+    policy: "critical",
+    timeoutMs: 5_000,
+  });
+  const reader = createConversationReader({
+    contactProjectsService,
+    dataRoot,
+    onContactCreated: initializeContactCapabilities,
+    runtime: agentRuntime,
+    settingsService,
+  });
+  const compactor = createConversationCompactorService({
+    reader,
+    runtime: agentRuntime,
+  });
   const sessionSettings = createConversationSessionSettingsService({
-    dataRoot: settingsService.response(settingsService.load()).dataRoot,
+    dataRoot,
     reader,
   });
   const stickerLibrary = () => createEmojiStickerLibrary({
@@ -151,53 +234,34 @@ export function registerConversationIpc({
     }
     return { selection, token };
   };
-  const attachmentCommand = ({ sessionId, projectRoot } = {}) => {
-    const invocation = clean(wechatAttachmentCli);
-    const dataRoot = clean(settingsService.response(settingsService.load()).dataRoot);
-    const rootArgument = quotedArgument(dataRoot);
-    const projectArgument = quotedArgument(projectRoot);
-    const sessionArgument = quotedArgument(sessionId);
-    if (!invocation) return "";
-    return rootArgument && projectArgument && sessionArgument
-      ? `${invocation} conversation-attachment --data-root ${rootArgument} --project-root ${projectArgument} --session-id ${sessionArgument}`
-      : `${invocation} conversation-attachment`;
+  const attachmentSelections = new Map();
+  const discardExpiredAttachmentSelections = () => {
+    const now = Date.now();
+    for (const [token, selection] of attachmentSelections) {
+      if (selection.expiresAt < now) attachmentSelections.delete(token);
+    }
   };
-  const scheduleCommand = async ({ sessionId, projectRoot, scheduleSource = "" } = {}) => {
-    const invocation = clean(wechatAttachmentCli);
-    const dataRoot = clean(settingsService.response(settingsService.load()).dataRoot);
-    const rootArgument = quotedArgument(dataRoot);
-    if (!invocation || !rootArgument) return null;
-    const source = clean(scheduleSource);
-    // A is deliberately a decision-only turn. Only B is allowed to receive
-    // the scheduler command that creates the next A task.
-    if (source === PROACTIVE_CHAIN_TURN_SOURCE) return null;
-    const proactive = proactiveContactSettings() || {};
-    const contactId = await reader.contactIdForSession({ sessionId, projectRoot });
-    const contactArgument = quotedArgument(contactId);
-    const proactiveEnabled = await Promise.resolve(isProactiveContactEnabled({ contactId })) === true;
-    return {
-      conversationAdd: proactiveEnabled && contactArgument
-        ? `${invocation} schedule add --data-root ${rootArgument} --contact-id ${contactArgument}`
-        : "",
-      list: `${invocation} schedule list --data-root ${rootArgument}`,
-      remove: `${invocation} schedule remove <任务ID> --data-root ${rootArgument}`,
-      proactiveChainPrompt: clean(proactive.chainPrompt),
-      proactiveFollowUpPrompt: clean(proactive.followUpPrompt),
-      proactivePlanning: source === PROACTIVE_CHAIN_PLANNING_TURN_SOURCE,
-      proactiveChainDescription: PROACTIVE_CHAIN_DESCRIPTION,
-      proactiveChainTaskPrompt: PROACTIVE_CHAIN_TASK_PROMPT,
-    };
+  const consumeAttachmentSelections = (tokens = []) => {
+    discardExpiredAttachmentSelections();
+    const media = [];
+    for (const token of tokens) {
+      const selection = attachmentSelections.get(token);
+      if (!selection) throw new Error("所选附件已失效，请重新选择。 ");
+      media.push(selection.media);
+    }
+    return media;
   };
   let sender = null;
   let callSender = null;
   const chat = createConversationChatService({
-    agentAttachmentCommand: attachmentCommand,
-    agentScheduleCommand: scheduleCommand,
-    claudeWorkspaceDirectories,
-    suzuCliCommand: wechatAttachmentCli,
+    attachmentService,
+    compactor,
+    capabilityRuntime,
     settingsService,
     reader,
+    runtime: agentRuntime,
     memoryRuntime,
+    lifecycle: agentLifecycle,
     onEvent: (payload) => {
       if (sender && !sender.isDestroyed()) sender.send("conversation:event", payload);
     },
@@ -215,10 +279,46 @@ export function registerConversationIpc({
   app?.once?.("before-quit", () => {
     call.dispose();
     chat.dispose();
+    agentHooks.dispose();
+    agentLifecycle.close();
   });
   ipcMain.handle("conversation:snapshot", (event) => {
     sender = event.sender;
     return reader.snapshot();
+  });
+  ipcMain.handle("conversation:select-attachments", async (event, value) => {
+    sender = event.sender;
+    if (typeof dialog?.showOpenDialog !== "function") throw new Error("当前环境无法选择本地附件。 ");
+    const { kind } = attachmentPickerValue(value);
+    const result = await dialog.showOpenDialog(getMainWindow?.(), {
+      title: kind === "image" ? "选择图片" : "选择文件",
+      properties: ["openFile", "multiSelections"],
+      filters: [kind === "image" ? IMAGE_ATTACHMENT_DIALOG_FILTER : FILE_ATTACHMENT_DIALOG_FILTER],
+    });
+    if (result.canceled || !Array.isArray(result.filePaths) || !result.filePaths.length) return { canceled: true, items: [] };
+    discardExpiredAttachmentSelections();
+    const inspected = await Promise.all(result.filePaths.slice(0, 24).map((source) => attachmentService.inspect({ kind, path: source })));
+    const items = inspected.map((item) => {
+      const selectionToken = randomUUID();
+      attachmentSelections.set(selectionToken, {
+        expiresAt: Date.now() + ATTACHMENT_SELECTION_TTL_MS,
+        media: item,
+      });
+      return {
+        fileName: item.fileName,
+        fileUrl: item.kind === "image" ? pathToFileURL(item.path).toString() : "",
+        kind: item.kind,
+        mimeType: item.mimeType,
+        selectionToken,
+        size: item.size,
+      };
+    });
+    return { canceled: false, items };
+  });
+  ipcMain.handle("conversation:discard-attachments", (_event, value) => {
+    const tokens = Array.isArray(plainObject(value).attachmentTokens) ? plainObject(value).attachmentTokens : [];
+    for (const token of tokens) attachmentSelections.delete(clean(token));
+    return { discarded: true };
   });
   ipcMain.handle("conversation:emoji-stickers", async (event) => {
     sender = event.sender;
@@ -273,6 +373,7 @@ export function registerConversationIpc({
     });
   });
   ipcMain.handle("conversation:search", (_event, query) => reader.search(query));
+  ipcMain.handle("conversation:context-trace", (_event, value) => reader.contextTrace(contextTraceValue(value)));
   ipcMain.handle("conversation:focus", (_event, value) => reader.focus(value));
   ipcMain.handle("conversation:open-media-directory", async (event, value) => {
     sender = event.sender;
@@ -281,6 +382,21 @@ export function registerConversationIpc({
     const error = await shell.openPath(media.directory);
     if (error) throw new Error(`无法打开联系人媒体目录：${error}`);
     return media;
+  });
+  ipcMain.handle("conversation:open-media-file", async (event, value) => {
+    sender = event.sender;
+    if (typeof shell?.openPath !== "function") throw new Error("当前环境无法打开本地文件。 ");
+    const fileUrl = String(value?.fileUrl || "").trim();
+    if (!fileUrl) throw new Error("缺少附件文件路径。 ");
+    let filePath;
+    try {
+      filePath = fileURLToPath(fileUrl);
+    } catch {
+      throw new Error("附件路径无效。 ");
+    }
+    const error = await shell.openPath(filePath);
+    if (error) throw new Error(`无法打开附件：${error}`);
+    return { opened: true };
   });
   ipcMain.handle("conversation:create", async (event) => {
     sender = event.sender;
@@ -306,10 +422,6 @@ export function registerConversationIpc({
     sender = event.sender;
     return reader.updateContactPresentation(contactPresentationValue(value));
   });
-  ipcMain.handle("conversation:update-contact-approval-mode", async (event, value) => {
-    sender = event.sender;
-    return reader.updateContactApprovalMode(contactApprovalModeValue(value));
-  });
   ipcMain.handle("conversation:update-contact-long-term-memory", async (event, value) => {
     sender = event.sender;
     const next = contactLongTermMemoryValue(value);
@@ -328,7 +440,20 @@ export function registerConversationIpc({
   });
   ipcMain.handle("conversation:send", async (event, value) => {
     sender = event.sender;
-    return chat.send(value);
+    const request = attachmentSendValue(value);
+    const media = consumeAttachmentSelections(request.attachmentTokens);
+    try {
+      const result = await chat.send({
+        content: request.content,
+        media,
+        mediaSource: "local",
+        queued: request.queued === true,
+      });
+      for (const token of request.attachmentTokens) attachmentSelections.delete(token);
+      return result;
+    } catch (error) {
+      throw error;
+    }
   });
   ipcMain.handle("conversation:stop", async (event, value) => {
     sender = event.sender;
@@ -368,5 +493,5 @@ export function registerConversationIpc({
     if (result?.stopped) callSender = null;
     return result;
   });
-  return { call, chat, reader, sessionSettings };
+  return { agentLifecycle, agentRuntime, attachmentService, call, chat, compactor, reader, sessionSettings };
 }

@@ -1,5 +1,5 @@
-# Device bridge
+# Device Bridge
 
-This package owns safe plans and gated execution boundaries for computer-camera and iPhone bridge requests.
+This package owns the computer-camera worker and its guarded lifecycle: prewarm, ready, capture, and explicit user-confirmed close.
 
-The bundled OpenCV worker receives only software-owned output/status paths and implements a persistent prewarm → ready → capture → user-confirmed close lifecycle. It accepts only a private, verified one-time authorization context. The iPhone boundary deliberately has no default HTTP path until a releasable Suzu Lives bridge protocol is verified. The package never reads external IMAP/Webhook files, starts a listener, or guesses an endpoint.
+The worker receives only software-owned output and status paths. It accepts a private, verified one-time authorization context and never guesses an endpoint, opens unrelated devices, or reads external mailbox/webhook files.

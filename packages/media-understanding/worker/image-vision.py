@@ -115,17 +115,18 @@ def as_bool(value: Any, default: bool) -> bool:
 
 def load_settings(path: Path) -> dict[str, Any]:
     raw = read_json(path)
-    provider = raw.get("openai") if isinstance(raw.get("openai"), dict) else {}
     vision = raw.get("vision") if isinstance(raw.get("vision"), dict) else {}
 
-    api_key = os.environ.get("VISION_API_KEY") or os.environ.get("OPENAI_API_KEY") or provider.get("api_key", "")
-    base_url = os.environ.get("VISION_BASE_URL") or os.environ.get("OPENAI_BASE_URL") or provider.get("base_url", "")
-    model = os.environ.get("VISION_MODEL") or vision.get("model") or provider.get("model") or "gpt-4o-mini"
+    api_key = os.environ.get("VISION_API_KEY", "")
+    base_url = os.environ.get("VISION_BASE_URL", "")
+    model = os.environ.get("VISION_MODEL", "")
 
     if not api_key:
-        raise VisionError("没有 API Key；请填写软件数据目录中的图像理解配置，或设置 VISION_API_KEY / OPENAI_API_KEY")
+        raise VisionError("没有 API Key；请在 设置 → API 为“理解图像”选择并配置 API")
     if not base_url:
-        raise VisionError("没有 base_url；请填写软件数据目录中的图像理解配置，或设置 VISION_BASE_URL / OPENAI_BASE_URL")
+        raise VisionError("没有 API 地址；请在 设置 → API 编辑“理解图像”所选连接")
+    if not model:
+        raise VisionError("没有模型；请在 设置 → API 编辑“理解图像”所选连接")
 
     detail = str(vision.get("detail", "auto")).lower()
     if detail not in {"auto", "low", "high"}:

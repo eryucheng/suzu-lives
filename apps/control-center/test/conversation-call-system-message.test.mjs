@@ -76,3 +76,75 @@ test("a skipped call clause uses the existing system-message row and honors its 
     else globalThis.window = priorWindow;
   }
 });
+
+test("a final call transcript appears immediately and is replaced by its durable system row", async () => {
+  const priorWindow = globalThis.window;
+  let conversationEvent = null;
+  let messages = [];
+  globalThis.window = {
+    clearInterval: () => {},
+    setInterval: () => 1,
+  };
+  const context = {
+    api: {
+      conversation: {
+        onEvent: (callback) => {
+          conversationEvent = callback;
+          return () => { conversationEvent = null; };
+        },
+        snapshot: async () => ({
+          activeContact: { agentId: "agent-suzu", id: "contact-suzu", name: "Suzu" },
+          activeSessionId: "session-suzu",
+          contacts: [{ agentId: "agent-suzu", id: "contact-suzu", name: "Suzu" }],
+          contactsRoot: "D:/suzu-data/contacts",
+          messages,
+          projectRoot: "D:/suzu-data/contacts/suzu",
+          sessions: [{ id: "session-suzu", title: "Suzu" }],
+          status: "ready",
+          version: "test-call-transcript",
+        }),
+      },
+    },
+    render: () => {},
+    state: {
+      settings: {
+        conversationPreferences: { system: true },
+      },
+    },
+  };
+
+  try {
+    startConversationPolling(context);
+    await flush();
+    conversationEvent({
+      callId: "call-suzu",
+      final: true,
+      projectRoot: "D:/suzu-data/contacts/suzu",
+      sessionId: "session-suzu",
+      text: "你好，能听见吗？",
+      timestamp: "2026-08-15T10:00:00.000Z",
+      type: "call-transcript",
+    });
+    assert.deepEqual(
+      conversationReactSnapshot(context).messageRows.filter((row) => row.kind === "system").map((row) => row.blocks[0].text),
+      ["通话 · 我：你好，能听见吗？"],
+    );
+
+    messages = [{
+      blocks: [{ kind: "text", text: "通话 · 我：你好，能听见吗？" }],
+      id: "stored-call-transcript",
+      kind: "system",
+      timestamp: "2026-08-15T10:00:00.000Z",
+    }];
+    conversationEvent({ kind: "call", sessionId: "session-suzu", type: "turn-complete" });
+    await flush();
+    assert.deepEqual(
+      conversationReactSnapshot(context).messageRows.filter((row) => row.kind === "system").map((row) => row.blocks[0].text),
+      ["通话 · 我：你好，能听见吗？"],
+    );
+  } finally {
+    stopConversationPolling();
+    if (priorWindow === undefined) delete globalThis.window;
+    else globalThis.window = priorWindow;
+  }
+});

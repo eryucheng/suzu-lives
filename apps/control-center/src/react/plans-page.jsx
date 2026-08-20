@@ -48,7 +48,9 @@ function scheduleTask(task) {
   const scope = isScript
     ? `系统脚本 · ${fileName(target.scriptPath)}`
     : isOperation
-      ? target.name === "traveling-merchant" ? "远行商人 · 已开启会话" : "软件内置操作"
+      ? target.name === "agent-journal"
+        ? "Agent 日记 · 已开启联系人"
+        : "软件内置操作"
       : target.contact?.name || "联系人会话";
   return {
     createdAt: dateTime(task?.createdAt),

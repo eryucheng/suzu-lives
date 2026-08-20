@@ -46,6 +46,7 @@ test("realtime call uses the configured contact voice and streams ASR audio", as
   const stoppedTurns = [];
   let chatSubscriber = null;
   let socket = null;
+  let socketUrl = "";
   let runtimeSeen = null;
   const chat = {
     sendToSession: async (value) => {
@@ -63,7 +64,12 @@ test("realtime call uses the configured contact voice and streams ASR audio", as
   };
   const service = createRealtimeVoiceCallService({
     chat,
-    connectionsService: { resolveDashScope: async () => ({ key: "dashscope-key", baseUrl: "https://dashscope.aliyuncs.com/api/v1" }) },
+    connectionsService: {
+      resolveNamedApiConnection: async (feature) => ({
+        "voice-message": { key: "voice-key", name: "我的语音", type: "generic-api", baseUrl: "https://tts.example.test/v1", model: "speech-2.8" },
+        "realtime-asr": { key: "asr-key", name: "我的实时识别", type: "dashscope", baseUrl: "https://regional-asr.example.test/api/v1", model: "qwen3-asr-custom-realtime" },
+      })[feature] || null,
+    },
     dataRootProvider: () => "D:/suzu-data",
     ledgerPathProvider: () => "D:/suzu-data/usage.json",
     appendLedger: async (ledgerPath, event) => ledgerEvents.push({ ledgerPath, event }),
@@ -82,7 +88,8 @@ test("realtime call uses the configured contact voice and streams ASR audio", as
       runtimeSeen = value.runtime;
       return { audio: Buffer.from("voice-bytes"), format: "mp3" };
     },
-    webSocketFactory: () => {
+    webSocketFactory: (url) => {
+      socketUrl = url;
       socket = new FakeSocket();
       return socket;
     },
@@ -97,6 +104,7 @@ test("realtime call uses the configured contact voice and streams ASR audio", as
   assert.deepEqual(service.pushAudio({ callId: started.callId, senderId: "renderer-1", audio: audio.buffer }), { accepted: true });
   assert.deepEqual(await service.commitAudio({ callId: started.callId, senderId: "renderer-1" }), { accepted: true, committed: true });
   assert.ok(socket);
+  assert.equal(socketUrl, "wss://regional-asr.example.test/api-ws/v1/realtime?model=qwen3-asr-custom-realtime&heartbeat=true");
   assert.equal(JSON.parse(socket.sent[0]).type, "session.update");
   assert.equal(JSON.parse(socket.sent[0]).session.turn_detection, null);
   assert.equal(JSON.parse(socket.sent[1]).type, "input_audio_buffer.append");
@@ -122,6 +130,8 @@ test("realtime call uses the configured contact voice and streams ASR audio", as
   assert.equal(ledgerEvents.length, 1);
   assert.equal(ledgerEvents[0].ledgerPath, "D:/suzu-data/usage.json");
   assert.equal(ledgerEvents[0].event.feature, "realtime-voice-call-asr");
+  assert.equal(ledgerEvents[0].event.provider, "我的实时识别");
+  assert.equal(ledgerEvents[0].event.model, "qwen3-asr-custom-realtime");
   assert.equal(ledgerEvents[0].event.units.inputAudioSeconds, audio.byteLength / 32_000);
 
   chatSubscriber({
@@ -164,7 +174,7 @@ test("realtime call uses the configured contact voice and streams ASR audio", as
   );
 });
 
-test("a connected call asks Claude for one greeting, speaks it, and lets the first utterance interrupt it", async () => {
+test("a connected call asks the Agent for one greeting, speaks it, and lets the first utterance interrupt it", async () => {
   const events = [];
   const sentTurns = [];
   const stoppedTurns = [];
@@ -186,7 +196,12 @@ test("a connected call asks Claude for one greeting, speaks it, and lets the fir
   };
   const service = createRealtimeVoiceCallService({
     chat,
-    connectionsService: { resolveDashScope: async () => ({ key: "dashscope-key", baseUrl: "https://dashscope.aliyuncs.com/api/v1" }) },
+    connectionsService: {
+      resolveNamedApiConnection: async (feature) => ({
+        "voice-message": { key: "voice-key", type: "generic-api", baseUrl: "https://tts.example.test/v1", model: "speech-2.8" },
+        "realtime-asr": { key: "asr-key", type: "dashscope", baseUrl: "https://dashscope.aliyuncs.com/api/v1", model: "qwen3-asr-flash-realtime" },
+      })[feature] || null,
+    },
     dataRootProvider: () => "D:/suzu-data",
     ledgerPathProvider: () => "D:/suzu-data/usage.json",
     onEvent: (event) => events.push(event),
@@ -261,7 +276,12 @@ test("call speech queues clauses so the next synthesis starts while the prior au
   };
   const service = createRealtimeVoiceCallService({
     chat,
-    connectionsService: { resolveDashScope: async () => ({ key: "dashscope-key" }) },
+    connectionsService: {
+      resolveNamedApiConnection: async (feature) => ({
+        "voice-message": { key: "voice-key", type: "dashscope", baseUrl: "https://dashscope.aliyuncs.com/api/v1", model: "cosyvoice-v3.5-plus" },
+        "realtime-asr": { key: "asr-key", type: "dashscope", baseUrl: "https://dashscope.aliyuncs.com/api/v1", model: "qwen3-asr-flash-realtime" },
+      })[feature] || null,
+    },
     dataRootProvider: () => "D:/suzu-data",
     ledgerPathProvider: () => "D:/suzu-data/usage.json",
     now: () => clock,
@@ -337,7 +357,12 @@ test("CosyVoice retries a rate limit and reports an exhausted clause as a chat s
   };
   const service = createRealtimeVoiceCallService({
     chat,
-    connectionsService: { resolveDashScope: async () => ({ key: "dashscope-key" }) },
+    connectionsService: {
+      resolveNamedApiConnection: async (feature) => ({
+        "voice-message": { key: "voice-key", type: "dashscope", baseUrl: "https://dashscope.aliyuncs.com/api/v1", model: "cosyvoice-v3.5-plus" },
+        "realtime-asr": { key: "asr-key", type: "dashscope", baseUrl: "https://dashscope.aliyuncs.com/api/v1", model: "qwen3-asr-flash-realtime" },
+      })[feature] || null,
+    },
     dataRootProvider: () => "D:/suzu-data",
     ledgerPathProvider: () => "D:/suzu-data/usage.json",
     now: () => clock,
@@ -386,6 +411,73 @@ test("CosyVoice retries a rate limit and reports an exhausted clause as a chat s
     ["通话系统：语音服务繁忙，已跳过这一句语音。"],
   );
   assert.equal(events.filter((event) => event.type === "call-audio-skip").length, 1);
+  await service.stop({ callId: started.callId, senderId: "renderer-1" });
+});
+
+test("a rejected TTS request reports a safe actionable call system message", async () => {
+  const events = [];
+  const sentTurns = [];
+  let chatSubscriber = null;
+  const chat = {
+    sendToSession: async (value) => {
+      sentTurns.push(value);
+      return { accepted: true, requestId: value.requestId, sessionId: value.sessionId };
+    },
+    stop: async () => ({ accepted: true, stopped: true }),
+    subscribe: (callback) => {
+      chatSubscriber = callback;
+      return () => { chatSubscriber = null; };
+    },
+  };
+  const service = createRealtimeVoiceCallService({
+    chat,
+    connectionsService: {
+      resolveNamedApiConnection: async (feature) => ({
+        "voice-message": { key: "voice-key", type: "generic-api", baseUrl: "https://tts.example.test/v1", model: "voice-model" },
+        "realtime-asr": { key: "asr-key", type: "dashscope", baseUrl: "https://dashscope.aliyuncs.com/api/v1", model: "qwen3-asr-flash-realtime" },
+      })[feature] || null,
+    },
+    dataRootProvider: () => "D:/suzu-data",
+    ledgerPathProvider: () => "D:/suzu-data/usage.json",
+    onEvent: (event) => events.push(event),
+    reader: {
+      snapshot: async () => ({ activeContact: { agentId: "agent-suzu", name: "Suzu" } }),
+      ensureActiveSession: async () => ({ id: "session-suzu", projectRoot: "D:/project", hasTranscript: true }),
+    },
+    resolveVoiceRuntime: ({ agentId }) => ({
+      agentId,
+      tts: { provider: "minimax", apiKey: "should-not-be-exposed", voiceId: "voice-suzu", model: "voice-model" },
+    }),
+    settingsService: { load: () => ({}) },
+    synthesizeVoice: async () => {
+      const error = new Error("OpenAI Compatible TTS HTTP 400：invalid voice");
+      error.code = "tts_http_error";
+      throw error;
+    },
+  });
+
+  const started = await service.start({ senderId: "renderer-1" });
+  await service.open({ callId: started.callId, senderId: "renderer-1" });
+  chatSubscriber({
+    type: "reply",
+    kind: "call-open",
+    requestId: sentTurns[0].requestId,
+    sessionId: "session-suzu",
+    projectRoot: "D:/project",
+    content: "这一句会失败。",
+  });
+  await waitFor(() => events.some((event) => event.type === "call-audio-skip"));
+  await waitFor(() => events.some((event) => event.type === "call-state" && event.state === "listening"));
+
+  assert.deepEqual(
+    events.filter((event) => event.type === "call-system-message").map((event) => event.message),
+    ["通话系统：语音服务拒绝了这句合成（HTTP 400），已跳过。请检查“语音消息”的模型、音色和接口类型。"],
+  );
+  assert.deepEqual(
+    events.filter((event) => event.type === "call-state").map((event) => [event.state, event.label]),
+    [["thinking", "正在接通…"], ["listening", "正在听你说…"]],
+  );
+  assert.equal(JSON.stringify(events), JSON.stringify(events).replaceAll("should-not-be-exposed", ""));
   await service.stop({ callId: started.callId, senderId: "renderer-1" });
 });
 

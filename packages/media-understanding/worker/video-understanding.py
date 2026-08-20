@@ -133,31 +133,21 @@ def as_bool(value: Any, default: bool) -> bool:
 
 def load_settings(path: Path, require_api_key: bool) -> dict[str, Any]:
     raw = read_json(path)
-    provider = raw.get("provider") if isinstance(raw.get("provider"), dict) else {}
     video = raw.get("video") if isinstance(raw.get("video"), dict) else {}
 
-    key_env = str(provider.get("api_key_env") or "DASHSCOPE_API_KEY")
-    api_key = (
-        os.environ.get("VIDEO_UNDERSTANDING_API_KEY")
-        or os.environ.get(key_env)
-        or provider.get("api_key", "")
-    )
-    base_url = (
-        os.environ.get("VIDEO_UNDERSTANDING_BASE_URL")
-        or provider.get("base_url")
-        or "https://dashscope.aliyuncs.com/compatible-mode/v1"
-    )
-    model = (
-        os.environ.get("VIDEO_UNDERSTANDING_MODEL")
-        or provider.get("model")
-        or "qwen3.5-omni-flash"
-    )
+    api_key = os.environ.get("VIDEO_UNDERSTANDING_API_KEY", "")
+    base_url = os.environ.get("VIDEO_UNDERSTANDING_BASE_URL", "")
+    model = os.environ.get("VIDEO_UNDERSTANDING_MODEL", "")
 
     if require_api_key and not api_key:
         raise VideoError(
             "api_key_missing",
-            f"没有 API Key；请填写 provider.api_key，或设置 {key_env} / VIDEO_UNDERSTANDING_API_KEY",
+            "没有 API Key；请在 设置 → API 为“理解视频”选择并配置 API",
         )
+    if require_api_key and not base_url:
+        raise VideoError("base_url_missing", "没有 API 地址；请在 设置 → API 编辑“理解视频”所选连接")
+    if require_api_key and not model:
+        raise VideoError("model_missing", "没有模型；请在 设置 → API 编辑“理解视频”所选连接")
 
     fps = as_float(video.get("fps"), 1.0, 0.1)
     if fps > 10:

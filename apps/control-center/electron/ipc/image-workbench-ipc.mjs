@@ -12,7 +12,7 @@ import {
 } from "@suzu-lives/visual-reference-library";
 
 function existsDirectory(value) { try { return Boolean(value && fs.statSync(value).isDirectory()); } catch { return false; } }
-function requireAgent(settings) { if (!settings.agentId || !settings.projectRoot || !existsDirectory(settings.projectRoot)) throw new Error("请先选择有效的 Claude 项目，再创建绘画候选。"); }
+function requireAgent(settings) { if (!settings.agentId || !settings.projectRoot || !existsDirectory(settings.projectRoot)) throw new Error("请先选择有效的 Suzu 联系人工作区，再创建绘画候选。"); }
 function valuesFor(settingsService) {
   const settings = settingsService.load();
   requireAgent(settings);
@@ -63,11 +63,35 @@ async function selectedReferences(libraries, values) {
 }
 export function imageUsageEvent(values, api, item) { return { agentId: values.settings.agentId, provider: item.input.backend === "comfyui" ? "本地 ComfyUI" : (api.provider || "OpenAI Compatible"), model: item.result.model, source: "图片生成", feature: item.input.backend === "comfyui" ? "image-workflow" : "image-" + item.result.mode, requestId: item.result.requestId, usage: item.result.usage, units: { imageRequests: 1, generatedImages: 1 }, metadata: { costSource: item.input.backend === "comfyui" ? "local-unpriced" : "provider-reported", size: item.input.size, referenceCount: item.referenceCount, backend: item.input.backend, workflow: item.result.workflow || "" } }; }
 
-export function registerImageWorkbenchIpc({ ipcMain, nativeImage, settingsService, connectionsService }) {
+export function registerImageWorkbenchIpc({
+  ipcMain,
+  nativeImage,
+  settingsService,
+  connectionsService,
+  recordCapabilityUsage = null,
+}) {
   ipcMain.handle("image-workbench:snapshot", () => snapshot(settingsService, connectionsService));
   ipcMain.handle("image-workbench:generate", async (_event, input) => {
     const values = valuesFor(settingsService); const api = await connectionsService.resolveImageApi(); const comfyui = await comfySettings(values.dataRoot); const references = await selectedReferences(values.libraries, input?.referenceIds || []);
-    await createCandidates({ root: values.root, connection: input?.backend === "api" ? api : comfyui, registry: comfyui.registry, input, references, onSuccess: async (item) => appendUsageEvent(values.ledgerPath, imageUsageEvent(values, api, item)) });
+    await createCandidates({
+      root: values.root,
+      connection: input?.backend === "api" ? api : comfyui,
+      registry: comfyui.registry,
+      input,
+      references,
+      onSuccess: async (item) => {
+        const event = imageUsageEvent(values, api, item);
+        if (typeof recordCapabilityUsage === "function") {
+          await recordCapabilityUsage({
+            capabilityId: "image-generation",
+            ledgerPath: values.ledgerPath,
+            event,
+          });
+          return;
+        }
+        await appendUsageEvent(values.ledgerPath, event);
+      },
+    });
     return snapshot(settingsService, connectionsService);
   });
   ipcMain.handle("image-workbench:thumbnail", async (_event, runId, candidateId) => { const values = valuesFor(settingsService); const image = nativeImage.createFromBuffer(await readCandidate(values.root, runId, candidateId)); if (image.isEmpty()) throw new Error("无法读取候选图片。"); return image.resize({ width: 600, height: 600, quality: "good" }).toDataURL(); });

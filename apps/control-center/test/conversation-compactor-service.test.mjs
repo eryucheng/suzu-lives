@@ -1,296 +1,148 @@
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { stableAgentId } from "@suzu-lives/agent-registry";
-import { listScheduleTasks } from "@suzu-lives/task-scheduler";
-import { createConversationCompactorService } from "../electron/services/conversation-compactor-service.mjs";
+import { DEFAULT_SUZU_COMPACTION_PROMPT } from "@suzu-lives/suzu-agent-runtime/companion-compaction-prompt";
+import {
+  createConversationCompactorService,
+} from "../electron/services/conversation-compactor-service.mjs";
 
-async function temporaryDirectory(prefix) {
-  return fs.mkdtemp(path.join(os.tmpdir(), prefix));
+async function temporaryRoot() {
+  const root = process.env.SUZU_LIVES_TEST_TEMP || "D:\\Temp";
+  await fs.mkdir(root, { recursive: true });
+  return fs.mkdtemp(path.join(root, "suzu-lives-agent-compactor-"));
 }
 
-test("conversation compactor keeps prompts and invocations isolated by contact plus Claude session", async () => {
-  const root = await temporaryDirectory("suzu-conversation-compactor-service-");
-  const dataRoot = path.join(root, "data");
-  const contacts = [
-    {
-      id: "contact-suzu",
-      name: "Suzu",
-      projectRoot: path.join(root, "contact-suzu"),
-      sessions: [{ id: "shared-session", title: "Suzu 的对话", preview: "", updatedAt: "2026-08-10T10:00:00.000Z" }],
-    },
-    {
-      id: "contact-work",
-      name: "工作",
-      projectRoot: path.join(root, "contact-work"),
-      sessions: [{ id: "shared-session", title: "工作的对话", preview: "", updatedAt: "2026-08-10T11:00:00.000Z" }],
-    },
-  ];
-  const calls = [];
-  const importCalls = [];
-  const reader = {
-    compactorSnapshot: async () => ({
-      status: "ready",
-      activeContact: { id: "contact-work", name: "工作" },
-      activeSessionId: "shared-session",
-      contacts,
-    }),
-    resolveCompactorSession: async ({ contactId }) => {
-      const contact = contacts.find((item) => item.id === contactId);
-      const sessionId = contact?.sessions[0]?.id;
-      if (!contact || !sessionId) throw new Error("会话不存在");
-      return {
-        id: sessionId,
-        projectRoot: contact.projectRoot,
-        transcriptPath: path.join(contact.projectRoot, `${sessionId}.jsonl`),
-        hasTranscript: true,
-        contact: { id: contact.id, name: contact.name },
-      };
-    },
-  };
-  const service = createConversationCompactorService({
-    createGeneratorImpl: () => async () => ({}),
-    importConversationHistoryImpl: async (input) => {
-      importCalls.push(input);
-      return { status: "imported" };
-    },
-    now: () => new Date("2026-08-10T12:00:00.000Z"),
-    reader,
-    runCompactionImpl: async (input) => { calls.push(input); return { status: "written" }; },
-    settingsService: {
-      load: () => ({ identity: { owner: { displayName: "我" } } }),
-      response: () => ({ dataRoot }),
-    },
-  });
-
-  await service.save({ contactId: "contact-suzu", prompt: "Suzu 会话的提示词" });
-  await service.save({ contactId: "contact-work", prompt: "工作会话的提示词" });
-  const suzuSnapshot = await service.snapshot({ contactId: "contact-suzu" });
-  const workSnapshot = await service.snapshot({ contactId: "contact-work" });
-  assert.deepEqual(suzuSnapshot.contacts.map((contact) => ({ id: contact.id, hasConversation: contact.hasConversation })), [
-    { id: "contact-suzu", hasConversation: true },
-    { id: "contact-work", hasConversation: true },
-  ]);
-  assert.equal(suzuSnapshot.selectedConversation.contactId, "contact-suzu");
-  assert.equal(Object.hasOwn(suzuSnapshot.selectedConversation, "id"), false);
-  assert.equal(Object.hasOwn(suzuSnapshot, "selectedSessionId"), false);
-  assert.equal(suzuSnapshot.settings.prompt, "Suzu 会话的提示词");
-  assert.equal(workSnapshot.settings.prompt, "工作会话的提示词");
-  assert.equal(workSnapshot.settings.automatic.tokenThreshold, 60_000);
-  assert.equal(workSnapshot.settings.automatic.retainTokens, 10_000);
-  assert.equal(workSnapshot.settings.manual.retainTokens, 10_000);
-
-  await service.run({ contactId: "contact-suzu", retainTokens: 3_200 });
-  await service.run({ contactId: "contact-work" });
-  assert.deepEqual(calls.map((input) => ({
-    memoryOwner: input.memoryOwner,
-    sessionId: input.sessionId,
-    systemPrompt: input.systemPrompt,
-    transcriptPath: input.transcriptPath,
-    strategy: input.strategy,
-    retainTokens: input.rules?.recentRawTokensToKeep,
-  })), [
-    {
-      memoryOwner: "Suzu",
-      sessionId: "shared-session",
-      systemPrompt: "Suzu 会话的提示词",
-      transcriptPath: path.join(contacts[0].projectRoot, "shared-session.jsonl"),
-      strategy: "token-tail",
-      retainTokens: 3_200,
-    },
-    {
-      memoryOwner: "工作",
-      sessionId: "shared-session",
-      systemPrompt: "工作会话的提示词",
-      transcriptPath: path.join(contacts[1].projectRoot, "shared-session.jsonl"),
-      strategy: "token-tail",
-      retainTokens: 10_000,
-    },
-  ]);
-
-  const suzuAgentId = stableAgentId(contacts[0].projectRoot);
-  const workAgentId = stableAgentId(contacts[1].projectRoot);
-  const suzuConfig = path.join(dataRoot, "agents", suzuAgentId, "conversations", "shared-session", "compactor.json");
-  const workConfig = path.join(dataRoot, "agents", workAgentId, "conversations", "shared-session", "compactor.json");
-  assert.equal(JSON.parse(await fs.readFile(suzuConfig, "utf8")).prompt, "Suzu 会话的提示词");
-  assert.equal(JSON.parse(await fs.readFile(workConfig, "utf8")).prompt, "工作会话的提示词");
-
-  const sourcePath = path.join(root, "older-suzu-history.jsonl");
-  await service.importHistory({ contactId: "contact-suzu", sourcePath });
-  assert.deepEqual(importCalls.map((input) => ({
-    sessionId: input.sessionId,
-    sourceTranscriptPath: input.sourceTranscriptPath,
-    targetProjectRoot: input.targetProjectRoot,
-    transcriptPath: input.transcriptPath,
-  })), [{
-    sessionId: "shared-session",
-    sourceTranscriptPath: sourcePath,
-    targetProjectRoot: contacts[0].projectRoot,
-    transcriptPath: path.join(contacts[0].projectRoot, "shared-session.jsonl"),
-  }]);
-});
-
-test("conversation compactor creates and removes only its own per-session automatic tasks", async () => {
-  const root = await temporaryDirectory("suzu-conversation-compactor-automatic-");
-  const dataRoot = path.join(root, "data");
+function fixture(root, { hasHistory = true } = {}) {
+  const projectRoot = path.join(root, "contact-suzu");
   const contact = {
     id: "contact-suzu",
     name: "Suzu",
-    projectRoot: path.join(root, "contact-suzu"),
-    sessions: [{ id: "session-suzu", title: "日常", preview: "", updatedAt: "2026-08-10T12:00:00.000Z" }],
+    projectRoot,
+    sessionId: "session-suzu",
   };
-  const calls = [];
-  await fs.mkdir(contact.projectRoot, { recursive: true });
-  await fs.writeFile(path.join(contact.projectRoot, "session-suzu.jsonl"), [
-    {
-      parentUuid: null,
-      sessionId: "session-suzu",
-      timestamp: "2026-08-10T08:00:00.000Z",
-      type: "user",
-      uuid: "old-user",
-      message: { role: "user", content: "较早的对话" },
-    },
-    {
-      parentUuid: "old-user",
-      sessionId: "session-suzu",
-      timestamp: "2026-08-10T08:01:00.000Z",
-      type: "assistant",
-      uuid: "old-agent",
-      message: {
-        role: "assistant",
-        content: [{ type: "text", text: "较早的回复" }],
-        usage: { input_tokens: 20_000 },
-      },
-    },
-    {
-      parentUuid: "old-agent",
-      sessionId: "session-suzu",
-      timestamp: "2026-08-10T11:00:00.000Z",
-      type: "user",
-      uuid: "recent-user",
-      message: { role: "user", content: "最近的对话" },
-    },
-    {
-      parentUuid: "recent-user",
-      sessionId: "session-suzu",
-      timestamp: "2026-08-10T11:01:00.000Z",
-      type: "assistant",
-      uuid: "recent-agent",
-      message: {
-        role: "assistant",
-        content: [{ type: "text", text: "最近的回复" }],
-        usage: { input_tokens: 20_000 },
-      },
-    },
-  ].map((entry) => JSON.stringify(entry)).join("\n"));
-  const resolve = async ({ contactId }) => {
-    assert.equal(contactId, contact.id);
-    const sessionId = contact.sessions[0].id;
-    return {
-      id: sessionId,
-      projectRoot: contact.projectRoot,
-      transcriptPath: path.join(contact.projectRoot, `${sessionId}.jsonl`),
-      hasTranscript: true,
-      contact: { id: contact.id, name: contact.name },
-    };
-  };
-  const service = createConversationCompactorService({
-    createGeneratorImpl: () => async () => ({}),
-    now: () => new Date("2026-08-10T12:00:00.000Z"),
-    reader: {
-      compactorSnapshot: async () => ({
+  const events = hasHistory ? [
+    { event: { type: "user/message", seq: 1, time: 1_000, surfaceOp: "append", data: { source: { kind: "user" }, content: [{ type: "text", text: "今天想一起玩游戏" }] } } },
+    { event: { type: "assistant/message", seq: 2, time: 2_000, surfaceOp: "append", data: { message: { content: [{ type: "text", text: "好呀，我们一起挑一个吧。" }] } } } },
+  ] : [];
+  const calls = { history: [], runCompaction: [] };
+  const reader = {
+    async compactorSnapshot() {
+      return {
         status: "ready",
-        activeContact: { id: contact.id, name: contact.name },
-        activeSessionId: contact.sessions[0].id,
-        contacts: [contact],
-      }),
-      resolveCompactorSession: resolve,
-      resolveCompactorSessionForRuntime: async ({ projectRoot, sessionId }) => {
-        assert.equal(projectRoot, contact.projectRoot);
-        return resolve({ contactId: contact.id });
-      },
+        activeContact: contact,
+        contacts: [{ ...contact, sessions: [{ id: contact.sessionId }] }],
+      };
     },
-    runCompactionImpl: async (input) => { calls.push(input); return { status: "written" }; },
-    settingsService: {
-      load: () => ({ identity: { owner: { displayName: "我" } } }),
-      response: () => ({ dataRoot }),
+    async resolveCompactorSession({ contactId }) {
+      assert.equal(contactId, contact.id);
+      return { contactId: contact.id, id: contact.sessionId, projectRoot };
     },
-  });
-  const scope = { contactId: contact.id };
-
-  await service.save({
-    ...scope,
-    automatic: {
-      enabled: true,
-      trigger: "time",
-      time: "08:30",
-      tokenThreshold: 16_000,
-      retainTokens: 1,
+    async resolveCompactorSessionForRuntime({ sessionId }) {
+      assert.equal(sessionId, contact.sessionId);
+      return { contactId: contact.id, id: contact.sessionId, projectRoot };
     },
-  });
-  let tasks = await listScheduleTasks({ dataRoot });
-  assert.equal(tasks.length, 1);
-  assert.deepEqual(tasks[0].target, {
-    type: "operation",
-    name: "conversation-compactor",
-    trigger: "time",
-    projectRoot: path.resolve(contact.projectRoot),
-    sessionId: contact.sessions[0].id,
-  });
-  assert.equal(tasks[0].cron, "30 8 * * *");
-
-  await service.save({
-    ...scope,
-    automatic: {
-      enabled: true,
-      trigger: "token",
-      time: "08:30",
-      tokenThreshold: 16_000,
-      retainTokens: 1,
+  };
+  const runtime = {
+    async history(value) {
+      calls.history.push(value);
+      return { events, hasMore: false };
     },
-  });
-  assert.deepEqual(await listScheduleTasks({ dataRoot }), []);
+    async runCompaction(value) {
+      calls.runCompaction.push(value);
+      events.push(
+        { event: { type: "compaction/start", seq: 3, time: 3_000, data: { compactionId: "compact-1", turn: null } } },
+        { event: { type: "compaction/summary", seq: 4, time: 4_000, data: {
+          compactionId: "compact-1",
+          summary: [{ type: "text", text: "我答应和用户一起挑游戏，用户今天想一起玩。" }],
+          shadowedSeqs: [1],
+          shadowedTokenCount: 120,
+        } } },
+        { event: { type: "user/message", seq: 5, time: 4_001, surfaceOp: { op: "replace", start: 1, end: 1 }, data: { source: { kind: "plugin" }, content: [{ type: "text", text: "model-only checkpoint" }] } } },
+        { event: { type: "compaction/end", seq: 6, time: 5_000, data: { compactionId: "compact-1", turn: null } } },
+      );
+      return { accepted: true, completed: true, compactionId: "compact-1" };
+    },
+  };
+  return { calls, contact, events, projectRoot, reader, runtime };
+}
 
-  const first = await service.enqueueTokenAuto({
-    projectRoot: contact.projectRoot,
-    sessionId: contact.sessions[0].id,
+test("Agent compactor keeps editable per-contact rewind settings and uses only native Agent calls", async () => {
+  const root = await temporaryRoot();
+  const fake = fixture(root);
+  await fs.mkdir(fake.projectRoot, { recursive: true });
+  const service = createConversationCompactorService({
+    reader: fake.reader,
+    runtime: fake.runtime,
+    now: () => new Date("2026-08-18T10:00:00.000Z"),
   });
-  const duplicate = await service.enqueueTokenAuto({
-    projectRoot: contact.projectRoot,
-    sessionId: contact.sessions[0].id,
-  });
-  assert.equal(first.scheduled, true);
-  assert.equal(duplicate.scheduled, false);
-  tasks = await listScheduleTasks({ dataRoot });
-  assert.equal(tasks.length, 1);
-  assert.equal(tasks[0].kind, "once");
-  assert.equal(tasks[0].target.trigger, "token");
 
-  await service.runScheduledAutomaticTask(tasks[0]);
-  assert.deepEqual(calls.map((input) => ({
-    memoryOwner: input.memoryOwner,
-    minimumContextTokens: input.minimumContextTokens,
-    retainTokens: input.rules?.recentRawTokensToKeep,
-    strategy: input.strategy,
-  })), [{
-    memoryOwner: "Suzu",
-    minimumContextTokens: 16_000,
-    retainTokens: 1,
-    strategy: "token-tail",
+  const initial = await service.snapshot({ contactId: fake.contact.id });
+  assert.equal(initial.runtime, "agent-core");
+  assert.equal(initial.settings.prompt, DEFAULT_SUZU_COMPACTION_PROMPT);
+  assert.deepEqual(initial.settings.automatic, { enabled: false, tokenThreshold: 15_000, retainTokens: 5_000 });
+  assert.deepEqual(initial.settings.manual, { retainTokens: 5_000 });
+  assert.equal(initial.selectedConversation.hasTranscript, true);
+
+  const saved = await service.save({
+    contactId: fake.contact.id,
+    prompt: "用温柔的第一人称保留关系、承诺和未完话题。",
+    automatic: { enabled: true, tokenThreshold: 18_000, retainTokens: 6_000 },
+    manual: { retainTokens: 4_000 },
+  });
+  assert.equal(saved.settings.prompt, "用温柔的第一人称保留关系、承诺和未完话题。");
+  assert.deepEqual(saved.settings.automatic, { enabled: true, tokenThreshold: 18_000, retainTokens: 6_000 });
+  assert.deepEqual(saved.settings.manual, { retainTokens: 4_000 });
+  const runtimeSettings = await service.settingsForRuntime({ sessionId: fake.contact.sessionId });
+  assert.equal(runtimeSettings.available, true);
+  assert.equal(runtimeSettings.prompt, saved.settings.prompt);
+  assert.deepEqual(runtimeSettings.manual, { retainTokens: 4_000 });
+
+  const completed = await service.run({ contactId: fake.contact.id, manual: { retainTokens: 3_000 } });
+  assert.deepEqual(fake.calls.runCompaction, [{
+    sessionId: fake.contact.sessionId,
+    contactId: fake.contact.id,
+    cwd: fake.projectRoot,
   }]);
+  assert.equal(completed.settings.manual.retainTokens, 3_000);
+  assert.equal(completed.lastRun.status, "completed");
+  assert.match(completed.latestSummary, /一起挑游戏/u);
+  assert.equal(completed.selectedConversation.hasTranscript, true, "model-only replacement does not erase raw transcript evidence");
+  const persisted = JSON.parse(await fs.readFile(path.join(fake.projectRoot, ".suzu-lives", "compactor.json"), "utf8"));
+  assert.equal(persisted.manual.retainTokens, 3_000);
+  assert.equal(persisted.automatic.tokenThreshold, 18_000);
+});
 
-  await service.save({
-    ...scope,
-    automatic: {
-      enabled: false,
-      trigger: "token",
-      time: "08:30",
-      tokenThreshold: 16_000,
-      retainTokens: 1,
-    },
-  });
-  assert.deepEqual(await listScheduleTasks({ dataRoot }), []);
+test("Agent compactor rejects an impossible automatic tail and never falls back to legacy history", async () => {
+  const root = await temporaryRoot();
+  const fake = fixture(root, { hasHistory: false });
+  await fs.mkdir(fake.projectRoot, { recursive: true });
+  const service = createConversationCompactorService({ reader: fake.reader, runtime: fake.runtime });
+  await assert.rejects(
+    service.save({ contactId: fake.contact.id, automatic: { enabled: true, tokenThreshold: 5_000, retainTokens: 5_000 } }),
+    (error) => error?.code === "INVALID_COMPACTOR_SETTING",
+  );
+  await assert.rejects(
+    service.run({ contactId: fake.contact.id }),
+    (error) => error?.code === "NO_COMPACTABLE_HISTORY",
+  );
+  assert.deepEqual(fake.calls.runCompaction, []);
+});
+
+test("Agent compactor refuses to report success for an accepted but unfinished native command", async () => {
+  const root = await temporaryRoot();
+  const fake = fixture(root);
+  await fs.mkdir(fake.projectRoot, { recursive: true });
+  fake.runtime.runCompaction = async (value) => {
+    fake.calls.runCompaction.push(value);
+    return { accepted: true, completed: false, reason: "NO_COMPACTABLE_HISTORY" };
+  };
+  const service = createConversationCompactorService({ reader: fake.reader, runtime: fake.runtime });
+
+  await assert.rejects(
+    service.run({ contactId: fake.contact.id }),
+    (error) => error?.code === "AGENT_COMPACTION_NOT_COMPLETED",
+  );
+  assert.equal(fake.calls.runCompaction.length, 1);
 });

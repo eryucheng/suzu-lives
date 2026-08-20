@@ -248,7 +248,7 @@ export function resolveAgentConversationDataRoot({
   return path.join(resolveAgentDataRoot({ dataRoot, projectRoot, agentId }), "conversations", session);
 }
 
-export function encodeClaudeProjectDirectory(projectRoot) {
+export function encodeProjectDirectory(projectRoot) {
   const root = normalizeProjectRoot(projectRoot);
   return root ? root.replace(/[^a-zA-Z0-9]/gu, "-") : "";
 }

@@ -1,0 +1,1 @@
+import{createRequire as e}from"node:module";e(import.meta.url);import{r as t}from"./lib-B4jo3z0c.mjs";function n(e){return e}var r=class extends Error{code;constructor(e,t,n){super(e,n),this.name=`AttachmentError`,this.code=t}},i=class extends t{constructor(e){super(e,`attachments`)}};export{n,i as r,r as t};

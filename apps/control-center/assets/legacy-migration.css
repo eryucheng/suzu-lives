@@ -1,0 +1,83 @@
+:root {
+  color-scheme: dark;
+  font-family: "Microsoft YaHei UI", "Microsoft YaHei", system-ui, sans-serif;
+  background: #0d1220;
+  color: #eef3ff;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  min-height: 100vh;
+  margin: 0;
+  background: radial-gradient(circle at 15% -20%, #334d83 0, transparent 42%), #0d1220;
+}
+
+.shell {
+  width: min(100%, 740px);
+  min-height: 100vh;
+  margin: 0 auto;
+  padding: 44px 48px 32px;
+}
+
+.eyebrow {
+  margin: 0 0 10px;
+  color: #9cb7ff;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: .08em;
+}
+
+h1, h2, p { margin-top: 0; }
+h1 { margin-bottom: 12px; font-size: 30px; letter-spacing: -.03em; }
+h2 { margin-bottom: 12px; font-size: 15px; }
+.lead { margin-bottom: 26px; color: #c6cfdf; line-height: 1.65; }
+
+.summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 18px;
+}
+
+.metric, .notice, .details, .result {
+  border: 1px solid #273149;
+  border-radius: 14px;
+  background: rgba(20, 29, 48, .9);
+}
+
+.metric { padding: 16px; }
+.metric strong { display: block; margin-bottom: 4px; font-size: 26px; }
+.metric span { color: #aebbd3; font-size: 13px; }
+
+.notice, .details, .result { padding: 18px 20px; margin-bottom: 16px; }
+.notice { background: rgba(29, 42, 70, .86); }
+.notice ul, .details ul { margin: 0; padding-left: 20px; color: #c6cfdf; line-height: 1.72; }
+.details li + li { margin-top: 6px; }
+.result { color: #d9e5ff; }
+.result.success { border-color: #3f9b74; background: rgba(19, 67, 51, .78); }
+.result.warning, .result.error { border-color: #ba8a45; background: rgba(79, 53, 23, .78); }
+.result p:last-child { margin-bottom: 0; }
+
+footer { display: flex; justify-content: flex-end; gap: 12px; padding-top: 8px; }
+button {
+  min-height: 40px;
+  padding: 0 18px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 700;
+}
+button:disabled { cursor: wait; opacity: .6; }
+.primary { background: #79a3ff; color: #0a1428; }
+.primary:hover:not(:disabled) { background: #9abaff; }
+.secondary { border-color: #46536b; background: transparent; color: #d8e1f3; }
+.secondary:hover:not(:disabled) { background: #1f2a40; }
+
+@media (max-width: 560px) {
+  .shell { padding: 28px 22px; }
+  .summary { grid-template-columns: 1fr; }
+  footer { flex-direction: column-reverse; }
+  button { width: 100%; }
+}

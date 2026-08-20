@@ -1,8 +1,14 @@
 import { state } from "./core/state.mjs";
-import { CLAUDE_CODE_API_PROVIDERS, loadClaudeCodeApi, loadApiServices, loadCapabilities } from "./features/agent/runtime.mjs";
-import { resolveOnboardingStep, shouldShowOnboarding } from "./features/onboarding/index.mjs";
+import { TEXT_MODEL_PROVIDERS, loadAgentRuntimeConfig, loadApiServices, loadCapabilities } from "./features/agent/runtime.mjs";
+import { hasPersonaContent, mainModelIsReady, resolveOnboardingStep, shouldShowOnboarding } from "./features/onboarding/index.mjs";
 import { conversationReactSnapshot, createConversationReactActions, isScheduledAgentReply, startConversationPolling, stopConversationPolling } from "./features/conversation/index.mjs";
 import { loadRelationshipFiles, selectRelationshipContact } from "./features/relationship-settings/index.mjs";
+import {
+  SUZU_ADMIN_TABS,
+  getDeferredCapabilityView,
+  normalizeSuzuNavigationView,
+  resolveSuzuRelationshipPage,
+} from "./core/chat-first.mjs";
 import { getAgentProfile, getIdentity } from "./core/identity.mjs";
 import { getSuzuSearchItem } from "./core/suzu-search.mjs";
 import { renderAppWorkspace, setGlobalNotice } from "./react/app-shell.jsx";
@@ -17,14 +23,13 @@ const CAPABILITY_SETTINGS_LABELS = Object.freeze({
   "image-vision": "图片理解设置",
   "phone-camera": "手机拍照设置",
   "proactive-contact": "主动关心设置",
-  "site-automation": "网页自动化设置",
+  "web-browser": "网页自动化设置",
   "time-awareness": "时间感知设置",
-  "traveling-merchant": "远行商人设置",
   "video-understanding": "视频理解设置",
   "voice-message": "语音设置",
 });
-const GLOBAL_NOTICE_TIMEOUT_MS = 6_000;
-const INCOMING_CONVERSATION_NOTICE_TIMEOUT_MS = 6_000;
+const GLOBAL_NOTICE_TIMEOUT_MS = 5_000;
+const INCOMING_CONVERSATION_NOTICE_TIMEOUT_MS = 5_000;
 
 let globalNoticeTimeout = null;
 let incomingConversationNoticeTimeout = null;
@@ -63,57 +68,66 @@ function applyTheme() {
 }
 
 function setView(view) {
-  if (!shellViews.has(view) && view !== "admin") return;
-  if (view === "relationships" && state.view === "relationships") {
-    stopConversationPolling();
-    state.relationshipPage = "overview";
+  const nextView = normalizeSuzuNavigationView(view);
+  if (nextView === "conversation") {
+    setRelationshipPage("conversation");
+    return;
+  }
+  if (nextView === "relationship-settings") {
+    setRelationshipPage("settings");
+    return;
+  }
+  if (nextView === "relationships") {
+    setRelationshipPage("overview");
+    return;
+  }
+
+  const unavailable = getDeferredCapabilityView(nextView);
+  if (unavailable) {
+    if (state.view === "relationships") stopConversationPolling();
+    state.view = nextView;
+    state.unavailableFeature = unavailable;
     render();
     return;
   }
-  if (view === "create" && state.view === "create") {
-    state.createPage = "overview";
-    render();
-    return;
-  }
-  if (view === "capabilities" && state.view === "capabilities") {
+
+  if (!shellViews.has(nextView) && nextView !== "admin") return;
+  if (state.view === "relationships" && nextView !== "relationships") stopConversationPolling();
+  state.view = nextView;
+  state.unavailableFeature = null;
+  // 侧边栏进入时回到该页面的首页，与 v1 行为一致。
+  if (nextView === "create") state.createPage = "overview";
+  if (nextView === "capabilities") {
     state.capabilityPage = "overview";
+    state.capabilityCategory = "";
     state.capabilitySelectedId = "";
-    state.siteAutomationSelectedSiteId = "";
-    render();
-    return;
-  }
-  const enteringRelationships = state.view !== "relationships" && view === "relationships";
-  const enteringCreate = state.view !== "create" && view === "create";
-  const enteringCapabilities = state.view !== "capabilities" && view === "capabilities";
-  if (state.view === "relationships" && view !== "relationships") stopConversationPolling();
-  state.view = view;
-  if (enteringRelationships) state.relationshipPage = "overview";
-  if (enteringCreate) state.createPage = "overview";
-  if (enteringCapabilities) {
-    state.capabilityPage = "overview";
-    state.capabilitySelectedId = "";
-    state.siteAutomationSelectedSiteId = "";
   }
   render();
-  if (view === "settings" && state.settingsTab === "privacy") void loadSettingsContacts();
-  if (view === "settings") void loadAppUpdateStatus();
-  if (view === "capabilities") loadCapabilities(context);
-  if (view === "plans") loadSchedules();
-  if (view === "today") refreshTodayCalendar();
-  if (view === "admin" && state.adminTab === "claude-code") loadClaudeCodeApi(context);
-  if (view === "admin" && state.adminTab === "api-services") loadApiServices(context);
+  if (nextView === "today") void refreshTodayCalendar();
+  if (nextView === "plans") void loadSchedules();
+  if (nextView === "capabilities") void loadCapabilities(context);
+  if (nextView === "settings" && state.settingsTab === "api") void loadApiServices(context);
+  if (nextView === "settings" && state.settingsTab === "main-model") void loadAgentRuntimeConfig(context);
+  if (nextView === "settings" && state.settingsTab === "privacy") void loadSettingsContacts();
+  if (nextView === "settings") void loadAppUpdateStatus();
+  if (nextView === "admin" && state.adminTab === "usage") void loadUsageLedger();
 }
 
 function setRelationshipPage(page) {
-  const nextPage = ["overview", "conversation", "memory", "settings", "compactor"].includes(page) ? page : "overview";
+  const resolution = resolveSuzuRelationshipPage(page);
+  const nextPage = resolution.page;
   stopConversationPolling();
+  state.view = "relationships";
   state.relationshipPage = nextPage;
+  state.unavailableFeature = resolution.unavailable;
   if (nextPage === "conversation") clearIncomingConversationNotice();
   render();
   if (nextPage === "conversation") startConversationPolling(context);
+  if (nextPage === "overview") void loadMemoryScope();
   if (nextPage === "settings") loadRelationshipFiles(context);
   if (nextPage === "memory") void loadMemoryScope();
   if (nextPage === "compactor") void loadConversationCompactor();
+  if (nextPage === "journal") void loadAgentJournal();
 }
 
 let memoryScopeRequest = 0;
@@ -154,27 +168,25 @@ async function setMemoryRecallEnabled(enabled) {
   return state.settings;
 }
 function setCreatePage(page) {
-  if (!["overview", "visual", "audio"].includes(page)) return;
+  if (!["overview", "visual"].includes(page)) return;
   state.createPage = page;
   render();
 }
 
 function setAdminTab(tab) {
-  state.adminTab = ["agent", "claude-code", "runtime", "api-services", "usage"].includes(tab) ? tab : "agent";
+  state.adminTab = SUZU_ADMIN_TABS.includes(tab) ? tab : "agent";
 }
 
 function setCapabilityPage(page, category = "", abilityId = "") {
   if (page === "overview") {
     state.capabilityPage = "overview";
     state.capabilitySelectedId = "";
-    state.siteAutomationSelectedSiteId = "";
     render();
     return;
   }
   if (page === "external") {
     state.capabilityPage = "external";
     state.capabilitySelectedId = "";
-    state.siteAutomationSelectedSiteId = "";
     render();
     return;
   }
@@ -182,13 +194,14 @@ function setCapabilityPage(page, category = "", abilityId = "") {
   if (!validCategories.has(category)) return;
   state.capabilityCategory = category;
   state.capabilitySelectedId = abilityId;
-  if (abilityId !== "site-automation") state.siteAutomationSelectedSiteId = "";
   state.capabilityPage = page === "detail" ? "detail" : "category";
   render();
 }
 
 function setSettingsTab(tab) {
-  state.settingsTab = ["general", "data", "privacy"].includes(tab) ? tab : "general";
+  state.settingsTab = ["general", "main-model", "api", "data", "privacy"].includes(tab) ? tab : "general";
+  if (state.settingsTab === "api" && state.view === "settings") void loadApiServices(context);
+  if (state.settingsTab === "main-model" && state.view === "settings") void loadAgentRuntimeConfig(context);
   if (state.settingsTab === "privacy") void loadSettingsContacts();
 }
 
@@ -199,8 +212,7 @@ function openSuzuSearchItem(value) {
   if (!view) return;
 
   if (view === "relationships") {
-    setView("relationships");
-    if (target.relationshipPage) setRelationshipPage(target.relationshipPage);
+    setRelationshipPage(target.relationshipPage || "conversation");
     return;
   }
   if (view === "settings") {
@@ -228,10 +240,59 @@ function openSuzuSearchItem(value) {
   setView(view);
 }
 
-function openOnboarding() {
-  state.onboardingOpen = true;
+function observeSoftwareAssistantActions() {
+  if (typeof api.softwareAssistant?.onEvent !== "function") return;
+  api.softwareAssistant.onEvent((event) => {
+    if (event?.type === "navigate") {
+      openSuzuSearchItem(event.destinationId);
+      return;
+    }
+    if (event?.type !== "theme-changed") return;
+    void api.settings.get()
+      .then((settings) => {
+        state.settings = settings;
+        applyTheme();
+        render();
+      })
+      .catch((error) => setNotice(`主题已保存，但界面未能立即刷新：${error?.message || error}`));
+  });
+}
+
+observeSoftwareAssistantActions();
+
+async function refreshOnboardingPersona() {
+  if (!String(state.settings?.projectRoot || "").trim() || typeof api.relationshipFiles?.snapshot !== "function") {
+    state.onboardingPersonaReady = false;
+    return false;
+  }
+  try {
+    state.onboardingPersonaReady = hasPersonaContent(await api.relationshipFiles.snapshot());
+  } catch {
+    state.onboardingPersonaReady = false;
+  }
+  return state.onboardingPersonaReady;
+}
+
+async function prepareOnboarding({ open = false, allowCompleted = false } = {}) {
+  if (!allowCompleted && !shouldShowOnboarding(state.settings)) {
+    state.onboardingOpen = false;
+    state.onboardingInitialized = true;
+    return false;
+  }
+  if (mainModelIsReady(state.agentRuntime) && String(state.settings?.projectRoot || "").trim()) {
+    await refreshOnboardingPersona();
+  } else {
+    state.onboardingPersonaReady = false;
+  }
   state.onboardingStep = resolveOnboardingStep(state);
   state.onboardingError = "";
+  state.onboardingInitialized = true;
+  if (open) state.onboardingOpen = true;
+  return true;
+}
+
+async function openOnboarding() {
+  await prepareOnboarding({ open: true, allowCompleted: true });
   render();
 }
 
@@ -242,7 +303,7 @@ function closeOnboarding() {
 }
 
 function setOnboardingStep(step) {
-  const next = ["text-model", "multimodal", "projects", "contact"].includes(step)
+  const next = ["main-model", "contact", "persona", "ready"].includes(step)
     ? step
     : resolveOnboardingStep(state);
   state.onboardingStep = next;
@@ -255,57 +316,56 @@ function setOnboardingError(error) {
   render();
 }
 
-async function continueOnboarding(step) {
-  if (state.onboardingStep === "multimodal" && step === "projects") {
-    try {
-      state.settings = await api.settings.update({ onboardingMultimodalCompleted: true });
-    } catch (error) {
-      setOnboardingError(error);
-      return;
-    }
+function continueOnboarding(step) {
+  if (step === "contact" && !mainModelIsReady(state.agentRuntime)) {
+    setOnboardingError("请先保存可用的主模型配置。");
+    return;
   }
   setOnboardingStep(step);
 }
 
-async function saveOnboardingTextModel({ apiKey = "", provider = "" } = {}) {
+async function saveOnboardingMainModel({ apiKey = "", baseUrl = "", model = "", protocol = "", provider = "" } = {}) {
   try {
-    state.claudeCodeApi = await api.agentRuntime.saveClaudeCodeApi({
-      provider,
+    state.agentRuntime = await api.agentRuntime.saveModelConfiguration({
       apiKey,
-      authMode: "auth-token",
-      skipOnboarding: true,
+      baseUrl,
+      model,
+      protocol,
+      provider,
     });
-    if (state.claudeCodeApi?.status !== "ready") throw new Error("文字模型还没有可用的 API Key。请填写后再保存。");
-    state.onboardingStep = "multimodal";
-    state.onboardingError = "";
-    render();
-  } catch (error) {
-    setOnboardingError(error);
-  }
-}
-
-function openOnboardingApiServices() {
-  state.onboardingOpen = false;
-  state.onboardingStep = "multimodal";
-  state.onboardingError = "";
-  setAdminTab("api-services");
-  setView("admin");
-}
-
-async function selectOnboardingContactsRoot() {
-  try {
-    const result = await api.settings.selectProject();
-    if (result?.canceled || !result?.settings) {
-      render();
-      return;
-    }
-    state.settings = { ...state.settings, ...result.settings };
+    if (!mainModelIsReady(state.agentRuntime)) throw new Error("主模型还没有可用的 API Key。请填写后再保存。");
     state.onboardingStep = "contact";
+    state.onboardingOpen = true;
     state.onboardingError = "";
     render();
+    return state.agentRuntime;
   } catch (error) {
     setOnboardingError(error);
+    return null;
   }
+}
+
+function openOnboardingContactCreate() {
+  state.onboardingOpen = false;
+  state.onboardingStep = "contact";
+  state.onboardingError = "";
+  setRelationshipPage("conversation");
+}
+
+function advanceOnboardingAfterContact() {
+  if (!shouldShowOnboarding(state.settings) || state.onboardingStep !== "contact") return;
+  state.onboardingPersonaReady = false;
+  state.onboardingStep = "persona";
+  state.onboardingOpen = true;
+  state.onboardingError = "";
+}
+
+function openOnboardingPersonaSetup() {
+  state.onboardingOpen = false;
+  state.onboardingStep = "persona";
+  state.relationshipFilePath = "persona.md";
+  state.onboardingError = "";
+  setRelationshipPage("settings");
 }
 
 async function completeOnboarding() {
@@ -313,20 +373,7 @@ async function completeOnboarding() {
     state.settings = await api.settings.update({ onboardingCompleted: true });
     state.onboardingOpen = false;
     state.onboardingError = "";
-    setView("relationships");
     setRelationshipPage("conversation");
-  } catch (error) {
-    setOnboardingError(error);
-  }
-}
-
-async function createOnboardingContact(name) {
-  const value = String(name || "").trim();
-  if (!value) return;
-  try {
-    await api.conversation.createContact({ name: value });
-    state.settings = await api.settings.get();
-    await completeOnboarding();
   } catch (error) {
     setOnboardingError(error);
   }
@@ -334,37 +381,38 @@ async function createOnboardingContact(name) {
 
 function onboardingWorkspace() {
   if (!state.onboardingOpen) return null;
-  const step = ["text-model", "multimodal", "projects", "contact"].includes(state.onboardingStep)
+  const step = ["main-model", "contact", "persona", "ready"].includes(state.onboardingStep)
     ? state.onboardingStep
     : resolveOnboardingStep(state);
-  const configuration = state.claudeCodeApi || {};
-  const providerId = CLAUDE_CODE_API_PROVIDERS[configuration.providerId] ? configuration.providerId : "deepseek";
-  const provider = CLAUDE_CODE_API_PROVIDERS[providerId];
-  const ready = configuration.status === "ready" && configuration.hasApiKey;
+  const configuration = state.agentRuntime || {};
+  const providerId = TEXT_MODEL_PROVIDERS[configuration.providerId] ? configuration.providerId : "deepseek";
+  const provider = TEXT_MODEL_PROVIDERS[providerId];
+  const ready = mainModelIsReady(configuration);
   return {
     actions: {
       back: setOnboardingStep,
       close: closeOnboarding,
       complete: completeOnboarding,
       continue: continueOnboarding,
-      createContact: createOnboardingContact,
-      openApiServices: openOnboardingApiServices,
-      saveTextModel: saveOnboardingTextModel,
-      selectContactsRoot: selectOnboardingContactsRoot,
+      openContactCreate: openOnboardingContactCreate,
+      openPersonaSetup: openOnboardingPersonaSetup,
+      saveMainModel: saveOnboardingMainModel,
     },
     snapshot: {
-      contactsRoot: String(state.settings?.contactsRoot || "").trim(),
       error: state.onboardingError,
-      hasContact: Boolean(String(state.settings?.projectRoot || "").trim()),
       step,
       textModel: {
-        copy: ready
-          ? `已配置 ${provider.label}。可以直接继续，或重新填写密钥来更新这个服务。`
-          : "保存后，Suzu 和这台电脑上新开的 Claude Code 终端会使用同一文字模型服务。",
+        baseUrl: String(configuration.baseUrl || provider.baseUrl || ""),
+        model: String(configuration.model || provider.model || ""),
         providerId,
-        providers: Object.entries(CLAUDE_CODE_API_PROVIDERS)
-          .filter(([id]) => id !== "custom")
-          .map(([id, item]) => ({ id, label: item.label })),
+        providers: Object.entries(TEXT_MODEL_PROVIDERS).map(([id, item]) => ({
+          baseUrl: item.baseUrl,
+          id,
+          label: item.label,
+          model: item.model,
+          protocol: item.protocol,
+        })),
+        protocol: String(configuration.protocol || provider.protocol || "anthropic-messages"),
         ready,
       },
     },
@@ -376,21 +424,6 @@ async function changeSettingsTheme(theme) {
   state.settings = await api.settings.update({ theme });
   applyTheme();
   render();
-}
-
-async function selectSettingsWorkspace() {
-  try {
-    const result = await api.settings.selectProject();
-    if (!result?.canceled && result?.settings) {
-      state.settings = { ...state.settings, ...result.settings };
-      await refreshData();
-      return;
-    }
-    render();
-  } catch (error) {
-    setNotice(`无法选择 Agent 工作目录：${error?.message || error}`);
-    render();
-  }
 }
 
 async function changeSettingsDataLocation() {
@@ -554,8 +587,7 @@ async function restoreHiddenContact(id) {
 function selectAdminTab(tab) {
   setAdminTab(tab);
   render();
-  if (tab === "claude-code") void loadClaudeCodeApi(context);
-  if (tab === "api-services") void loadApiServices(context);
+  if (state.adminTab === "usage") void loadUsageLedger();
 }
 
 async function saveAdminIdentity(changes) {
@@ -581,21 +613,21 @@ async function updateAdminSettings(patch) {
   return state.settings;
 }
 
-async function fetchAdminClaudeCodeModels(value) {
-  const result = await api.agentRuntime.fetchClaudeCodeModels(value);
-  state.claudeCodeModels = result?.models || [];
-  state.claudeCodeModelNotice = result?.message || "";
+async function fetchAdminAgentModels(value = {}) {
+  const result = await api.agentRuntime.fetchModels(value);
+  state.agentModels = result?.models || [];
+  state.agentModelNotice = result?.message || "";
   return result;
 }
 
-async function saveAdminClaudeCodeApi(value) {
-  state.claudeCodeApi = await api.agentRuntime.saveClaudeCodeApi(value);
-  state.claudeCodeModelNotice = state.claudeCodeApi.status === "ready"
-    ? "已保存。新开的 Claude Code 会话会使用这项服务。"
-    : "已保存首次确认设置；填写 API Key 后再保存服务。";
-  setNotice(state.claudeCodeModelNotice);
+async function saveAdminModelConfiguration(value) {
+  state.agentRuntime = await api.agentRuntime.saveModelConfiguration(value);
+  state.agentModelNotice = state.agentRuntime.status === "ready"
+    ? "已保存。新开的 Suzu 陪伴会话会使用这项服务。"
+    : "已保存设置；填写 API Key 后再保存服务。";
+  setNotice(state.agentModelNotice);
   render();
-  return state.claudeCodeApi;
+  return state.agentRuntime;
 }
 
 function openConversationFromAdmin() {
@@ -605,39 +637,21 @@ function openConversationFromAdmin() {
 
 async function continueAdminOnboarding() {
   state.settings = await api.settings.update({ onboardingMultimodalCompleted: true });
-  openOnboarding();
+  await openOnboarding();
 }
 
-async function saveAdminApiConnection(value) {
+async function saveApiConnection(value) {
   state.apiServices = await api.connections.saveNamedApiConnection(value);
-  if (state.apiServices.connections?.some((connection) => connection?.configured === true)) {
-    state.settings = await api.settings.update({ onboardingMultimodalCompleted: true });
-  }
   setNotice("API 已保存。");
   render();
   return state.apiServices;
 }
 
-async function removeAdminApiConnection(id) {
+async function removeApiConnection(id) {
   state.apiServices = await api.connections.removeNamedApiConnection(id);
   setNotice("API 已移除。");
   render();
   return state.apiServices;
-}
-
-async function bindAdminApiConnection(feature, connectionId) {
-  state.apiServices = await api.connections.bindNamedApiConnection(feature, connectionId);
-  setNotice("功能使用的 API 已更新。");
-  render();
-  return state.apiServices;
-}
-
-async function saveAdminComfyui(value) {
-  const comfy = await api.connections.saveComfyui(value);
-  state.apiServices = { ...(state.apiServices || {}), comfy };
-  setNotice("ComfyUI 设置已保存。");
-  render();
-  return comfy;
 }
 
 async function saveAdminPrice({ effectiveFrom, modelId, rates }) {
@@ -649,22 +663,6 @@ async function saveAdminPrice({ effectiveFrom, modelId, rates }) {
     ],
   });
   await refreshData();
-}
-
-async function createAdminPriceModel(value) {
-  const modelId = String(value?.modelId || "").trim().toLowerCase();
-  if (!modelId) throw new Error("请填写实际返回的模型标识。");
-  const existing = Array.isArray(state.settings?.customPriceModels) ? state.settings.customPriceModels : [];
-  if (existing.some((item) => String(item?.modelId || "").trim().toLowerCase() === modelId)) {
-    throw new Error("这个模型已经有自定义价格，可以直接在它的价格卡片中调整。");
-  }
-  const settings = await api.settings.update({ customPriceModels: [...existing, value] });
-  if (!settings.customPriceModels?.some((item) => item?.modelId === modelId)) {
-    throw new Error("模型标识或计费字段无效，也可能与内置价格表重复。");
-  }
-  state.settings = settings;
-  await refreshData();
-  setNotice("已添加自定义模型价格。");
 }
 
 async function resetAdminPrice(modelId) {
@@ -751,45 +749,38 @@ async function saveWechatSettings(value) {
   render();
 }
 
-async function saveSiteAutomationControl(value, successMessage) {
-  try {
-    const response = await api.capabilities.saveSettings("site-automation", value);
-    if (response?.ok) {
-      state.capabilitySnapshot = response.value;
-      setNotice(successMessage);
-    } else {
-      setNotice(response?.error?.message || "无法更新网页自动化设置。");
-    }
-  } catch (error) {
-    setNotice(error?.message || "无法更新网页自动化设置。");
-  }
-  render();
-}
-
-function openCapabilitySite(siteId) {
-  state.siteAutomationSelectedSiteId = String(siteId || "");
-  render();
-}
-
-function returnToCapabilitySites() {
-  state.siteAutomationSelectedSiteId = "";
-  render();
-}
-
 async function selectCapabilityApiBinding(bindingId, connectionId) {
   try {
     state.apiServices = await api.connections.bindNamedApiConnection(bindingId, connectionId);
     setNotice("功能使用的 API 已更新。");
+    render();
+    return state.apiServices;
   } catch (error) {
     setNotice(error?.message || "无法更新功能使用的 API。");
+    render();
+    throw error;
   }
-  render();
 }
 
-function openCapabilityApiServices() {
-  state.apiBindingPickerOpen = "";
-  setAdminTab("api-services");
-  setView("admin");
+async function createAdminPriceModel(value) {
+  const modelId = String(value?.modelId || "").trim().toLowerCase();
+  if (!modelId) throw new Error("请填写实际返回的模型标识。");
+  const existing = Array.isArray(state.settings?.customPriceModels) ? state.settings.customPriceModels : [];
+  if (existing.some((item) => String(item?.modelId || "").trim().toLowerCase() === modelId)) {
+    throw new Error("这个模型已经有自定义价格，可以直接在它的价格卡片中调整。");
+  }
+  const settings = await api.settings.update({ customPriceModels: [...existing, value] });
+  if (!settings.customPriceModels?.some((item) => item?.modelId === modelId)) {
+    throw new Error("模型标识或计费字段无效，也可能与内置价格表重复。");
+  }
+  state.settings = settings;
+  await refreshData();
+  setNotice("已添加自定义模型价格。");
+}
+
+function openApiConnectionsSettings() {
+  setSettingsTab("api");
+  setView("settings");
 }
 
 function openCapabilityCreatePage(page) {
@@ -805,7 +796,7 @@ async function importExternalCapability() {
     if (!response.value.canceled) {
       setNotice(response.value.created
         ? "外部能力清单已导入；尚未运行任何第三方代码。"
-        : "外部能力清单已更新；需要时可再次启用以更新当前联系人中的登记。");
+        : "外部能力清单已更新；需要时可再次启用以更新 Agent Core 登记。");
     }
   } catch (error) {
     setNotice(error?.message || "无法导入外部能力清单。");
@@ -819,8 +810,8 @@ async function setExternalCapabilityEnabled(id, enabled) {
     if (!response?.ok) throw response?.error || new Error("无法更新外部能力。");
     state.externalCapabilities = response.value.snapshot;
     setNotice(enabled
-      ? "外部能力已登记到当前联系人；这不会在 Suzu Lives 中运行第三方代码。"
-      : "外部能力已从当前联系人取消登记。");
+      ? "外部能力已登记到 Suzu Agent Core；下一次聊天会使用新配置。"
+      : "外部能力已从 Suzu Agent Core 取消登记。");
   } catch (error) {
     setNotice(error?.message || "无法更新外部能力。");
   }
@@ -839,17 +830,7 @@ async function removeExternalCapability(id) {
   render();
 }
 
-async function openTravelingMerchantPage() {
-  try {
-    const response = await api.capabilities.openTravelingMerchantPage();
-    setNotice(response?.ok ? "已打开远行商人当前读取网页。" : response?.error?.message || "无法打开远行商人网页。");
-  } catch (error) {
-    setNotice(error?.message || "无法打开远行商人网页。");
-  }
-  render();
-}
-
-const context = { api, applyTheme, loadClaudeCodeApi, loadApiServices, loadSchedules, openOnboarding, refreshData, refreshTodayCalendar, render, setAdminTab, setCapabilityPage, setCreatePage, setNotice, setRelationshipPage, setSettingsTab, setView, state };
+const context = { api, applyTheme, loadAgentRuntimeConfig, loadSchedules, onContactCreated: advanceOnboardingAfterContact, refreshData, refreshTodayCalendar, render, setAdminTab, setCapabilityPage, setCreatePage, setNotice, setRelationshipPage, setSettingsTab, setView, state };
 
 function conversationInterfaceIsOpen() {
   return state.view === "relationships" && state.relationshipPage === "conversation";
@@ -1097,6 +1078,15 @@ async function loadSchedules() {
   if (state.view === "plans") render();
 }
 
+async function loadUsageLedger() {
+  try {
+    state.data = await api.ledger.scan();
+  } catch (error) {
+    state.data = { status: "needs-project", warning: `无法读取费用统计：${error?.message || error}` };
+  }
+  if (state.view === "admin" && state.adminTab === "usage") render();
+}
+
 async function updateSchedule(request) {
   const result = await request();
   if (result?.snapshot) state.scheduleSnapshot = result.snapshot;
@@ -1122,6 +1112,13 @@ async function saveRelationshipFile({ content = "", path = "" } = {}) {
   state.relationshipFiles = snapshot;
   state.relationshipFilePath = filePath;
   state.relationshipFilesError = "";
+  const isPersona = filePath.replaceAll("\\", "/").toLowerCase() === "persona.md";
+  if (isPersona && String(content).trim() && shouldShowOnboarding(state.settings) && state.onboardingStep === "persona") {
+    state.onboardingPersonaReady = true;
+    state.onboardingStep = "ready";
+    state.onboardingOpen = true;
+    state.onboardingError = "";
+  }
   setNotice("已保存相处资料。");
   render();
   return snapshot;
@@ -1169,44 +1166,71 @@ async function loadConversationCompactor({ contactId = "" } = {}) {
   }
 }
 
-async function selectConversationCompactorContact(value = {}) {
-  return loadConversationCompactor({
-    contactId: String(value?.contactId || ""),
-  });
-}
-
-async function saveConversationCompactorSettings(value) {
-  const snapshot = await api.conversationCompactor.save(value);
-  state.conversationCompactorSnapshot = snapshot;
-  state.conversationCompactorLoading = false;
+async function saveConversationCompactorSettings(value = {}) {
+  state.conversationCompactorLoading = true;
   state.conversationCompactorError = "";
-  setNotice(Object.hasOwn(value || {}, "automatic") ? "这条会话的自动压缩设置已保存。" : "这条会话的摘要提示词已保存。 ");
   if (state.view === "relationships" && state.relationshipPage === "compactor") render();
-  return snapshot;
+  try {
+    const snapshot = await api.conversationCompactor.save(value);
+    state.conversationCompactorSnapshot = snapshot;
+    state.conversationCompactorLoading = false;
+    state.conversationCompactorError = "";
+    setNotice("压缩设置已保存。");
+    if (state.view === "relationships" && state.relationshipPage === "compactor") render();
+    return snapshot;
+  } catch (error) {
+    state.conversationCompactorLoading = false;
+    state.conversationCompactorError = error?.message || "无法保存压缩设置。";
+    if (state.view === "relationships" && state.relationshipPage === "compactor") render();
+    return null;
+  }
 }
 
-async function runConversationCompactor(value) {
-  const snapshot = await api.conversationCompactor.run(value);
-  state.conversationCompactorSnapshot = snapshot;
-  state.conversationCompactorLoading = false;
+async function runConversationCompactor(value = {}) {
+  state.conversationCompactorLoading = true;
   state.conversationCompactorError = "";
-  setNotice(snapshot?.lastRun?.status === "written" ? "这条会话已完成手动压缩。" : "这条会话没有可压缩的较早记录。 ");
   if (state.view === "relationships" && state.relationshipPage === "compactor") render();
-  return snapshot;
+  try {
+    const snapshot = await api.conversationCompactor.run(value);
+    state.conversationCompactorSnapshot = snapshot;
+    state.conversationCompactorLoading = false;
+    state.conversationCompactorError = "";
+    setNotice("已完成本次对话压缩。");
+    if (state.view === "relationships" && state.relationshipPage === "compactor") render();
+    return snapshot;
+  } catch (error) {
+    state.conversationCompactorLoading = false;
+    state.conversationCompactorError = error?.message || "无法压缩当前对话。";
+    if (state.view === "relationships" && state.relationshipPage === "compactor") render();
+    return null;
+  }
 }
 
-async function selectConversationCompactorImportJsonl() {
-  return api.conversationCompactor.selectImportJsonl();
+let agentJournalRequest = 0;
+
+async function loadAgentJournal({ contactId = "" } = {}) {
+  const request = ++agentJournalRequest;
+  state.agentJournalLoading = true;
+  state.agentJournalError = "";
+  if (state.view === "relationships" && state.relationshipPage === "journal") render();
+  try {
+    const snapshot = await api.agentJournal.snapshot({ contactId });
+    if (request !== agentJournalRequest) return null;
+    state.agentJournalSnapshot = snapshot;
+    state.agentJournalLoading = false;
+    if (state.view === "relationships" && state.relationshipPage === "journal") render();
+    return snapshot;
+  } catch (error) {
+    if (request !== agentJournalRequest) return null;
+    state.agentJournalLoading = false;
+    state.agentJournalError = error?.message || "无法读取 Agent 日记。";
+    if (state.view === "relationships" && state.relationshipPage === "journal") render();
+    return null;
+  }
 }
 
-async function importConversationCompactorJsonl(value) {
-  const snapshot = await api.conversationCompactor.importJsonl(value);
-  state.conversationCompactorSnapshot = snapshot;
-  state.conversationCompactorLoading = false;
-  state.conversationCompactorError = "";
-  setNotice("历史 JSONL 已替换当前联系人的会话记录，并完成会话绑定。 ");
-  if (state.view === "relationships" && state.relationshipPage === "compactor") render();
-  return snapshot;
+async function selectAgentJournalContact(value = {}) {
+  return loadAgentJournal({ contactId: String(value?.contactId || "") });
 }
 
 function currentGlobalNotice() {
@@ -1223,10 +1247,19 @@ function contentClassName() {
     state.view === "relationships" && state.relationshipPage === "settings" ? "content--relationship-settings" : "",
     state.view === "relationships" && state.relationshipPage === "compactor" ? "content--conversation-compactor" : "",
     state.view === "relationships" && state.relationshipPage === "memory" ? "content--memory" : "",
+    state.view === "relationships" && state.relationshipPage === "journal" ? "content--agent-journal" : "",
   ].filter(Boolean).join(" ");
 }
 
 function routeForCurrentView() {
+  const unavailable = state.unavailableFeature || getDeferredCapabilityView(state.view);
+  if (unavailable) {
+    return {
+      kind: "unavailable",
+      props: unavailable,
+    };
+  }
+
   if (state.view === "today") {
     return {
       kind: "today",
@@ -1261,26 +1294,10 @@ function routeForCurrentView() {
         props: { actions: { returnToOverview: () => setCreatePage("overview") }, api },
       };
     }
-    if (state.createPage === "audio") {
-      return {
-        kind: "create-audio",
-        props: {
-          actions: {
-            openApiServices: () => {
-              setAdminTab("api-services");
-              setView("admin");
-            },
-            returnToOverview: () => setCreatePage("overview"),
-          },
-          api,
-        },
-      };
-    }
     return {
       kind: "create",
       props: {
         actions: {
-          openAudio: () => setCreatePage("audio"),
           openVisual: () => setCreatePage("visual"),
         },
       },
@@ -1295,26 +1312,15 @@ function routeForCurrentView() {
           openCategory: (category) => setCapabilityPage("category", category),
           openDetail: (category, abilityId) => setCapabilityPage("detail", category, abilityId),
           openExternal: () => setCapabilityPage("external"),
-          openSite: openCapabilitySite,
-          openTravelingMerchantPage,
           openVisual: () => openCapabilityCreatePage("visual"),
-          openApiServices: openCapabilityApiServices,
+          openApiServices: openApiConnectionsSettings,
           returnToCategory: (category) => setCapabilityPage("category", category),
           returnToOverview: () => setCapabilityPage("overview"),
-          returnToSites: returnToCapabilitySites,
           setCapabilityActive,
           saveSettings: saveCapabilitySettings,
           setContactEnabled: setCapabilityContactEnabled,
           voiceDesign: api.voiceDesign,
           saveWechatSettings,
-          setSiteEnabled: (siteId, siteEnabled) => saveSiteAutomationControl(
-            { siteId, siteEnabled },
-            siteEnabled ? "这个网站已启用。" : "这个网站已关闭。",
-          ),
-          setSiteAction: (siteId, action, actionEnabled) => saveSiteAutomationControl(
-            { siteId, action, actionEnabled },
-            actionEnabled ? "网站动作已启用。" : "网站动作已关闭。",
-          ),
           selectApiBinding: selectCapabilityApiBinding,
           importExternal: importExternalCapability,
           setExternalEnabled: setExternalCapabilityEnabled,
@@ -1328,7 +1334,6 @@ function routeForCurrentView() {
           page: state.capabilityPage,
           selectedId: state.capabilitySelectedId,
           contactsSnapshot: state.companionContacts,
-          siteId: state.siteAutomationSelectedSiteId,
           wechatSnapshot: state.wechatSnapshot,
         },
       },
@@ -1345,13 +1350,16 @@ function routeForCurrentView() {
           checkForUpdate: checkAppUpdate,
           checkSystemStatus,
           downloadUpdate: downloadAppUpdate,
+          fetchModels: fetchAdminAgentModels,
           installUpdate: installAppUpdate,
+          openOnboarding,
           openReleaseAnnouncement,
           openDirectory: openSettingsDirectory,
-          openOnboarding,
+          removeApiConnection,
           removePreviousCopy: removeSettingsPreviousCopy,
           restoreHiddenContact,
-          selectWorkspace: selectSettingsWorkspace,
+          saveApiConnection,
+          saveModelConfiguration: saveAdminModelConfiguration,
           setTab: (tab) => {
             setSettingsTab(tab);
             render();
@@ -1362,6 +1370,10 @@ function routeForCurrentView() {
           contactsLoading: state.settingsContactsLoading,
           appUpdate: state.appUpdate,
           releaseAnnouncement: state.releaseAnnouncement,
+          apiServices: state.apiServices,
+          agentModelNotice: state.agentModelNotice,
+          agentModels: state.agentModels,
+          agentRuntime: state.agentRuntime,
           systemStatus: state.systemStatus,
           settings: state.settings,
           tab: state.settingsTab,
@@ -1390,26 +1402,15 @@ function routeForCurrentView() {
       kind: "admin",
       props: {
         actions: {
-          bindApi: bindAdminApiConnection,
-          continueOnboarding: continueAdminOnboarding,
           createPriceModel: createAdminPriceModel,
-          fetchClaudeCodeModels: fetchAdminClaudeCodeModels,
           openConversation: openConversationFromAdmin,
-          removeApiConnection: removeAdminApiConnection,
           resetPrice: resetAdminPrice,
-          saveApiConnection: saveAdminApiConnection,
-          saveClaudeCodeApi: saveAdminClaudeCodeApi,
-          saveComfyui: saveAdminComfyui,
           saveIdentity: saveAdminIdentity,
           savePrice: saveAdminPrice,
           setTab: selectAdminTab,
           updateSettings: updateAdminSettings,
         },
         snapshot: {
-          apiServices: state.apiServices,
-          claudeCodeApi: state.claudeCodeApi,
-          claudeCodeModelNotice: state.claudeCodeModelNotice,
-          claudeCodeModels: state.claudeCodeModels,
           data: state.data,
           settings: state.settings,
           tab: state.adminTab,
@@ -1461,15 +1462,29 @@ function routeForCurrentView() {
       props: {
         actions: {
           returnToOverview: () => setRelationshipPage("overview"),
-          importJsonl: importConversationCompactorJsonl,
           run: runConversationCompactor,
           save: saveConversationCompactorSettings,
-          selectImportJsonl: selectConversationCompactorImportJsonl,
-          selectContact: selectConversationCompactorContact,
+          selectContact: (contactId) => loadConversationCompactor({ contactId }),
         },
         error: state.conversationCompactorError,
         loading: state.conversationCompactorLoading,
         snapshot: state.conversationCompactorSnapshot,
+      },
+    };
+  }
+
+  if (state.view === "relationships" && state.relationshipPage === "journal") {
+    return {
+      kind: "agent-journal",
+      props: {
+        actions: {
+          refresh: loadAgentJournal,
+          returnToOverview: () => setRelationshipPage("overview"),
+          selectContact: selectAgentJournalContact,
+        },
+        error: state.agentJournalError,
+        loading: state.agentJournalLoading,
+        snapshot: state.agentJournalSnapshot,
       },
     };
   }
@@ -1479,8 +1494,10 @@ function routeForCurrentView() {
       kind: "memory",
       props: {
         actions: {
+          openApiServices: openApiConnectionsSettings,
           refreshStatus: refreshMemoryScope,
           returnToOverview: () => setRelationshipPage("overview"),
+          selectApiBinding: selectCapabilityApiBinding,
           selectContact: loadMemoryScope,
           setNotice,
           setRecallEnabled: setMemoryRecallEnabled,
@@ -1488,6 +1505,7 @@ function routeForCurrentView() {
         api,
         loading: state.memoryContactSwitching,
         snapshot: {
+          apiServices: state.apiServices,
           memory: state.memoryStatus,
           settings: state.settings,
         },
@@ -1501,6 +1519,7 @@ function routeForCurrentView() {
       actions: {
         openConversation: () => setRelationshipPage("conversation"),
         openCompactor: () => setRelationshipPage("compactor"),
+        openJournal: () => setRelationshipPage("journal"),
         openMemory: () => setRelationshipPage("memory"),
         openSettings: () => setRelationshipPage("settings"),
       },
@@ -1535,30 +1554,28 @@ async function refreshData() {
   try {
     state.settings = await api.settings.get();
     applyTheme();
-    const needsOnboardingApiSnapshot = state.settings?.onboardingCompleted !== true
-      && !String(state.settings?.contactsRoot || "").trim();
-    const apiServicesSnapshot = needsOnboardingApiSnapshot
-      ? api.connections.apiServicesSnapshot().catch(() => state.apiServices)
-      : Promise.resolve(state.apiServices);
+    // Keep boot focused on the chat vertical slice. Calendar, cost, memory,
+    // and multimodal connection snapshots remain stored locally, but are not
+    // read just to open a conversation.
+    state.data = null;
+    state.memoryStatus = null;
+    state.todayCalendar = null;
+    state.apiServices = null;
+    state.memoryContactId = "";
     const releaseAnnouncementSnapshot = typeof api.settings?.releaseAnnouncementStatus === "function"
       ? api.settings.releaseAnnouncementStatus().catch(() => null)
       : Promise.resolve(null);
-    [state.data, state.memoryStatus, state.todayCalendar, state.claudeCodeApi, state.apiServices, state.releaseAnnouncement] = await Promise.all([
-      api.ledger.scan(),
-      api.memory.status({ contactId: state.memoryContactId }),
-      api.todayCalendar.snapshot(),
-      api.agentRuntime.claudeCodeApiSnapshot().catch(() => null),
-      apiServicesSnapshot,
+    [state.agentRuntime, state.releaseAnnouncement] = await Promise.all([
+      api.agentRuntime.snapshot().catch(() => null),
       releaseAnnouncementSnapshot,
     ]);
     state.releaseAnnouncementOpen = state.releaseAnnouncement?.pending === true;
-    state.memoryContactId = String(state.memoryStatus?.selectedContactId || "");
-    if (!state.onboardingInitialized) {
-      state.onboardingInitialized = true;
-      if (shouldShowOnboarding(state.settings)) {
-        state.onboardingOpen = true;
-        state.onboardingStep = resolveOnboardingStep(state);
-      }
+    if (!state.onboardingInitialized) await prepareOnboarding({ open: true });
+    // The chat route is now the initial route rather than a route entered by
+    // clicking the old relationship overview, so start its data/event loop
+    // explicitly after the first bootstrap snapshot.
+    if (state.view === "relationships" && state.relationshipPage === "conversation") {
+      startConversationPolling(context);
     }
   } catch (error) {
     state.data = { status: "needs-project", warning: `读取失败：${error?.message || error}` };

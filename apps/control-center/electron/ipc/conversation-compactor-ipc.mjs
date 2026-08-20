@@ -17,57 +17,31 @@ function contactScope(value) {
 function settingsValue(value) {
   const source = plainObject(value);
   const scope = contactScope(source);
-  return {
-    ...scope,
-    ...(Object.hasOwn(source, "prompt") ? { prompt: source.prompt } : {}),
-    ...(Object.hasOwn(source, "manual") ? { manual: source.manual } : {}),
-    ...(Object.hasOwn(source, "automatic") ? { automatic: source.automatic } : {}),
-  };
+  const result = { ...scope };
+  if (Object.hasOwn(source, "prompt")) result.prompt = String(source.prompt ?? "");
+  if (Object.hasOwn(source, "automatic")) result.automatic = source.automatic;
+  if (Object.hasOwn(source, "manual")) result.manual = source.manual;
+  return result;
 }
 
 function runValue(value) {
   const source = plainObject(value);
   const scope = contactScope(source);
-  return {
-    ...scope,
-    ...(Object.hasOwn(source, "retainTokens") ? { retainTokens: source.retainTokens } : {}),
-  };
-}
-
-function importValue(value) {
-  const source = plainObject(value);
-  return {
-    ...contactScope(source),
-    sourcePath: clean(source.sourcePath),
-  };
+  const result = { ...scope };
+  if (Object.hasOwn(source, "manual")) result.manual = source.manual;
+  if (Object.hasOwn(source, "retainTokens")) result.retainTokens = source.retainTokens;
+  return result;
 }
 
 export function registerConversationCompactorIpc({
   ipcMain,
   compactorService,
-  dialog,
-  getMainWindow = () => null,
 } = {}) {
-  if (!ipcMain?.handle || !compactorService) {
+  if (!ipcMain?.handle || typeof compactorService?.snapshot !== "function"
+    || typeof compactorService?.save !== "function" || typeof compactorService?.run !== "function") {
     throw new Error("记忆压缩器 IPC 需要 ipcMain 和压缩服务。 ");
   }
   ipcMain.handle("conversation-compactor:snapshot", (_event, value) => compactorService.snapshot(contactScope(value)));
   ipcMain.handle("conversation-compactor:save", (_event, value) => compactorService.save(settingsValue(value)));
-  ipcMain.handle("conversation-compactor:check", (_event, value) => compactorService.check(runValue(value)));
   ipcMain.handle("conversation-compactor:run", (_event, value) => compactorService.run(runValue(value)));
-  ipcMain.handle("conversation-compactor:select-import-jsonl", async () => {
-    if (!dialog?.showOpenDialog) throw new Error("当前环境无法选择会话 JSONL 文件。 ");
-    const result = await dialog.showOpenDialog(getMainWindow(), {
-      title: "选择要导入的 Claude 会话 JSONL",
-      properties: ["openFile"],
-      filters: [{ name: "Claude 会话 JSONL", extensions: ["jsonl"] }],
-    });
-    return {
-      canceled: result.canceled === true,
-      sourcePath: clean(result.filePaths?.[0]),
-    };
-  });
-  ipcMain.handle("conversation-compactor:import-jsonl", (_event, value) => (
-    compactorService.importHistory(importValue(value))
-  ));
 }

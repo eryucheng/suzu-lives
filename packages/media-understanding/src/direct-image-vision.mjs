@@ -123,7 +123,7 @@ async function appendUsageEvents({ ledgerPath, agentId, usageEvents }) {
 /**
  * Runs the direct vision command without capability-registry or
  * authorization-token preconditions. The caller supplies only software-owned
- * data and ledger paths; the worker never sees a Claude project path.
+ * data and ledger paths; the worker never sees a contact project path.
  */
 export async function runDirectImageVision({
   dataRoot,

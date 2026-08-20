@@ -72,7 +72,7 @@ jobs:
           if ((Get-Content -Raw -LiteralPath (Join-Path $resourcesRoot "package-type")).Trim() -ne "nsis") {
             throw "NSIS 安装包的 package-type 标识不正确。"
           }
-          $installer = @(Get-ChildItem -LiteralPath $distRoot -File -Filter "Suzu-Lives-Console-*-win-x64.exe")
+          $installer = @(Get-ChildItem -LiteralPath $distRoot -File -Filter "Suzu-Lives-*-win-x64.exe")
           if ($installer.Count -ne 1) {
             throw "预期恰好一个 Windows x64 安装程序，实际找到 $($installer.Count) 个。"
           }
@@ -94,7 +94,7 @@ jobs:
           $privateKeyPath = Join-Path $env:RUNNER_TEMP "suzu-lives-release-signing.pem"
           try {
             [System.IO.File]::WriteAllText($privateKeyPath, $env:SUZU_RELEASE_SIGNING_PRIVATE_KEY, [System.Text.UTF8Encoding]::new($false))
-            $installer = @(Get-ChildItem -LiteralPath "apps/control-center/dist" -File -Filter "Suzu-Lives-Console-*-win-x64.exe")
+            $installer = @(Get-ChildItem -LiteralPath "apps/control-center/dist" -File -Filter "Suzu-Lives-*-win-x64.exe")
             if ($installer.Count -ne 1) { throw "未找到唯一的 Windows x64 安装程序。" }
             $env:SUZU_RELEASE_SIGNING_KEY = $privateKeyPath
             npm run sign:release -- --artifact $installer[0].FullName
@@ -111,7 +111,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $distRoot = Join-Path $PWD "apps/control-center/dist"
-          $installer = @(Get-ChildItem -LiteralPath $distRoot -File -Filter "Suzu-Lives-Console-*-win-x64.exe")
+          $installer = @(Get-ChildItem -LiteralPath $distRoot -File -Filter "Suzu-Lives-*-win-x64.exe")
           if ($installer.Count -ne 1) { throw "未找到唯一的 Windows x64 安装程序。" }
           $latest = Join-Path $distRoot "latest.yml"
           $signature = "$($installer[0].FullName).sig"

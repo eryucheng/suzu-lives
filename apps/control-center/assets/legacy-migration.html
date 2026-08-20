@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'; base-uri 'none'; form-action 'none'">
+    <title>Suzu Lives 数据迁移</title>
+    <link rel="stylesheet" href="legacy-migration.css">
+  </head>
+  <body>
+    <main class="shell" aria-labelledby="title">
+      <header>
+        <p class="eyebrow">Suzu Lives 0.2.0</p>
+        <h1 id="title">迁移旧版本地数据</h1>
+        <p id="lead" class="lead">正在检查此电脑上的 0.1.x Suzu Lives 数据…</p>
+      </header>
+
+      <section id="summary" class="summary" aria-live="polite"></section>
+
+      <section class="notice">
+        <h2>这次会做什么</h2>
+        <ul>
+          <li>把旧 Claude JSONL 对话转换为 Agent Core 原生会话，验证成功后才移除对应旧 JSONL。</li>
+          <li>保留兼容的长期记忆和联系人资料；只转换旧版专用的联系人入口、压缩器和连接登记。</li>
+          <li>不会读取、迁移或删除你的 Claude 登录状态，也不会碰不属于 Suzu 的项目或文件。</li>
+        </ul>
+      </section>
+
+      <section id="details" class="details" hidden>
+        <h2>检查结果</h2>
+        <ul id="detail-list"></ul>
+      </section>
+
+      <section id="result" class="result" hidden aria-live="polite"></section>
+
+      <footer>
+        <button id="close" class="secondary" type="button">暂不迁移并关闭</button>
+        <button id="migrate" class="primary" type="button" disabled>开始迁移</button>
+      </footer>
+    </main>
+    <script src="legacy-migration.js"></script>
+  </body>
+</html>

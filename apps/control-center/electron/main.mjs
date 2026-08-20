@@ -1,18 +1,14 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { app, BrowserWindow, ipcMain, Menu, safeStorage, screen } from "electron";
+import { app, BrowserWindow, ipcMain, Menu, screen } from "electron";
 import electronUpdater from "electron-updater";
 
-import { runSuzuLivesCli } from "@suzu-lives/claude-integration/agent-cli";
-import { asDashScopeImageConnection, createDashScopeConnectionService, createImageVisionCredentialService, createNamedApiConnectionService, createVideoUnderstandingCredentialService } from "@suzu-lives/service-connections";
 import { createSettingsService, registerIpcHandlers } from "./ipc/index.mjs";
-import { runMemoryRecallHookWorker } from "./hooks/memory-recall.mjs";
-import { runProjectHookCli } from "./hooks/runtime.mjs";
-import { applyFeatureConnectionOverrides } from "./services/connection-model-overrides.mjs";
+import { registerLegacyMigrationIpc } from "./ipc/legacy-migration-ipc.mjs";
 import { createAppUpdateService, scheduleAppUpdateChecks } from "./services/app-update.mjs";
-import { createReleaseAnnouncementService } from "./services/release-announcement.mjs";
 import { createDataStorageLocationService } from "./services/data-storage-location.mjs";
+import { createReleaseAnnouncementService } from "./services/release-announcement.mjs";
 import { resetRendererZoom } from "./services/renderer-zoom.mjs";
 import { windowSizeForDisplay } from "./services/window-default-size.mjs";
 import { applyWindowControl, windowControlState } from "./services/window-controls.mjs";
@@ -26,6 +22,7 @@ const RENDERER_ROOT = path.join(APP_ROOT, "renderer");
 const WINDOW_CHROME_HEIGHT = 64;
 const DEV_RENDERER_URL = String(process.env.SUZU_LIVES_RENDERER_URL || "").trim();
 const DEV_RENDERER_ORIGIN = "http://127.0.0.1:5173";
+const LEGACY_MIGRATION_MODE = process.argv.includes("--legacy-migration");
 
 // Keep Electron's own profile alongside Suzu's settings and operational data.
 // The separate Roaming locator only records this root so a later launch can find it.
@@ -147,60 +144,44 @@ function createWindow(settingsService) {
   });
 }
 
-const hookArgumentIndex = process.argv.indexOf("--suzu-lives-hook");
-const cliArgumentIndex = process.argv.indexOf("--suzu-lives-cli");
-const memoryHookWorkerArgumentIndex = process.argv.indexOf("--suzu-lives-memory-hook-worker");
-
-async function cliConnectionResolver({ kind, dataRoot }) {
-  const selected = await createNamedApiConnectionService({ dataRoot, safeStorage }).resolve(kind);
-  if (selected) return applyFeatureConnectionOverrides({ kind, dataRoot, connection: selected });
-  if (kind === "image-generation" || kind === "phone-camera") return asDashScopeImageConnection(await createDashScopeConnectionService({ dataRoot, safeStorage }).resolve());
-  if (kind === "voice-message") return createDashScopeConnectionService({ dataRoot, safeStorage }).resolve();
-  if (kind === "image-vision") return createImageVisionCredentialService({ dataRoot, safeStorage }).resolve();
-  if (kind === "video-understanding") return createVideoUnderstandingCredentialService({ dataRoot, safeStorage }).resolve();
-  return { key: "", source: "none" };
+function legacyMigrationRendererUrl() {
+  if (!trustedDevelopmentRendererUrl(DEV_RENDERER_URL)) return "";
+  const url = new URL(DEV_RENDERER_URL);
+  url.pathname = "/legacy-migration.html";
+  url.search = "";
+  return url.toString();
 }
 
-function quotedCommandPath(value) {
-  const source = String(value || "").trim();
-  if (!source || /[\r\n"]/u.test(source)) return "";
-  return `"${source}"`;
+function createLegacyMigrationWindow() {
+  mainWindow = new BrowserWindow({
+    width: 740,
+    height: 680,
+    minWidth: 620,
+    minHeight: 540,
+    show: false,
+    backgroundColor: "#0d1220",
+    icon: APP_ICON,
+    autoHideMenuBar: true,
+    title: "Suzu Lives 数据迁移",
+    webPreferences: {
+      preload: path.join(HERE, "legacy-migration-preload.cjs"),
+      contextIsolation: true,
+      nodeIntegration: false,
+      webSecurity: true,
+    },
+  });
+  const developmentUrl = legacyMigrationRendererUrl();
+  if (developmentUrl) mainWindow.loadURL(developmentUrl);
+  else mainWindow.loadFile(path.join(RENDERER_ROOT, "legacy-migration.html"));
+  mainWindow.once("ready-to-show", () => mainWindow?.show());
+  mainWindow.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+  mainWindow.webContents.on("will-navigate", (event) => event.preventDefault());
+  mainWindow.on("closed", () => {
+    mainWindow = null;
+  });
 }
 
-function conversationAttachmentCli() {
-  const executable = quotedCommandPath(app.isPackaged ? app.getPath("exe") : process.execPath);
-  if (!executable) return "";
-  if (app.isPackaged) return `${executable} --suzu-lives-cli`;
-  const appRoot = quotedCommandPath(APP_ROOT);
-  return appRoot ? `${executable} ${appRoot} --suzu-lives-cli` : "";
-}
-
-function claudeWorkspaceRoot() {
-  // Every Suzu persona gets the same software workspace, including future
-  // contacts.  In development that is the repository root; packaged builds
-  // retain the app's own root as their shared working area.
-  return app.isPackaged ? APP_ROOT : path.resolve(APP_ROOT, "..", "..");
-}
-
-if (memoryHookWorkerArgumentIndex !== -1) {
-  app.whenReady()
-    .then(() => runMemoryRecallHookWorker({
-      envelopePath: process.argv[memoryHookWorkerArgumentIndex + 1] || "",
-      safeStorage,
-    }))
-    .finally(() => app.quit());
-} else if (cliArgumentIndex !== -1) {
-  app.whenReady()
-    .then(() => runSuzuLivesCli({ args: process.argv.slice(cliArgumentIndex + 1), connectionResolver: cliConnectionResolver }))
-    .finally(() => app.exit(process.exitCode || 0));
-} else if (hookArgumentIndex !== -1) {
-  app.whenReady()
-    .then(() => runProjectHookCli({
-      args: process.argv.slice(hookArgumentIndex + 1),
-    }))
-    .finally(() => app.quit());
-} else {
-  const singleInstance = app.requestSingleInstanceLock();
+const singleInstance = app.requestSingleInstanceLock();
   if (!singleInstance) {
     app.quit();
   } else {
@@ -214,13 +195,26 @@ if (memoryHookWorkerArgumentIndex !== -1) {
     app.setAppUserModelId("com.suzulives.console");
     Menu.setApplicationMenu(null);
     const settingsService = createSettingsService({ app, dataStorageService });
+    if (LEGACY_MIGRATION_MODE) {
+      registerLegacyMigrationIpc({
+        app,
+        dataStorageService,
+        getMigrationWindow: () => mainWindow,
+        ipcMain,
+        settingsService,
+      });
+      createLegacyMigrationWindow();
+      app.on("activate", () => {
+        if (BrowserWindow.getAllWindows().length === 0) createLegacyMigrationWindow();
+      });
+      return;
+    }
     const appUpdateService = createAppUpdateService({ app, autoUpdater });
     const releaseAnnouncementService = createReleaseAnnouncementService({
       app,
       announcement: CURRENT_RELEASE_ANNOUNCEMENT,
       settingsService,
     });
-    const cliLauncherCommand = conversationAttachmentCli();
     registerIpcHandlers({
       app,
       appUpdateService,
@@ -228,9 +222,6 @@ if (memoryHookWorkerArgumentIndex !== -1) {
       getMainWindow: () => mainWindow,
       settingsService,
       dataStorageService,
-      wechatAttachmentCli: cliLauncherCommand,
-      cliLauncherCommand,
-      claudeWorkspaceDirectories: [claudeWorkspaceRoot()],
     });
     ipcMain.handle("window-chrome:apply-theme", (event, theme) => {
       if (event.sender !== mainWindow?.webContents) return false;
@@ -245,9 +236,11 @@ if (memoryHookWorkerArgumentIndex !== -1) {
       return applyWindowControl(mainWindow, action);
     });
     createWindow(settingsService);
-    const stopAppUpdateChecks = scheduleAppUpdateChecks({
-      checkForUpdates: () => appUpdateService.checkForUpdates(),
-    });
+    const stopAppUpdateChecks = app.isPackaged === true
+      ? scheduleAppUpdateChecks({
+        checkForUpdates: () => appUpdateService.checkForUpdates(),
+      })
+      : () => {};
     app.once("before-quit", stopAppUpdateChecks);
     app.on("activate", () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow(settingsService);
@@ -255,7 +248,6 @@ if (memoryHookWorkerArgumentIndex !== -1) {
   });
 
   app.on("window-all-closed", () => {
-    if (process.platform !== "darwin") app.quit();
+    if (LEGACY_MIGRATION_MODE || process.platform !== "darwin") app.quit();
   });
   }
-}

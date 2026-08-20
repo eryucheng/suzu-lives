@@ -1,39 +1,22 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
-import {
-  resolveAgentConversationDataRoot,
-  resolveAgentDataRoot,
-  stableAgentId,
-} from "@suzu-lives/agent-registry";
-import {
-  DEFAULT_COMPACTION_RULES,
-  chooseTokenTailCompactionPlan,
-  createClaudeCliGenerator,
-  importConversationHistory,
-  parseJsonlText,
-  reconstructLogicalContext,
-  runCompaction,
-} from "@suzu-lives/memory-compactor";
-import {
-  createScheduleTask,
-  listScheduleTasks,
-  removeScheduleTask,
-} from "@suzu-lives/task-scheduler";
+import { DEFAULT_SUZU_COMPACTION_PROMPT } from "@suzu-lives/suzu-agent-runtime/companion-compaction-prompt";
 
 const MAX_PROMPT_LENGTH = 24_000;
 const MAX_SUMMARY_LENGTH = 48_000;
-const MAX_WARNING_LENGTH = 600;
-const DEFAULT_AUTOMATIC_TIME = "09:00";
-const AUTOMATIC_TRIGGERS = new Set(["time", "token"]);
-const COMPACTOR_OPERATION = "conversation-compactor";
+const DEFAULT_TOKEN_THRESHOLD = 15_000;
+const DEFAULT_RETAIN_TOKENS = 5_000;
+const HISTORY_PAGE_SIZE = 600;
 
 export class ConversationCompactorError extends Error {
-  constructor(message) {
-    super(message);
+  constructor(message, { cause, code = "AGENT_CONVERSATION_COMPACTOR_ERROR" } = {}) {
+    super(message, cause ? { cause } : undefined);
     this.name = "ConversationCompactorError";
+    this.code = code;
   }
 }
+
 
 function clean(value) {
   return String(value ?? "").trim();
@@ -43,8 +26,9 @@ function plainObject(value) {
   return value && typeof value === "object" && !Array.isArray(value) ? value : {};
 }
 
-function isPlainObject(value) {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+function publicContact(value) {
+  const source = plainObject(value);
+  return { id: clean(source.id), name: clean(source.name) };
 }
 
 function timestamp(now) {
@@ -53,78 +37,47 @@ function timestamp(now) {
   return Number.isFinite(date.getTime()) ? date.toISOString() : new Date().toISOString();
 }
 
+function positiveInteger(value, label) {
+  const candidate = Number(value);
+  if (!Number.isSafeInteger(candidate) || candidate <= 0) {
+    throw new ConversationCompactorError(`${label}必须是大于 0 的整数。`, { code: "INVALID_COMPACTOR_SETTING" });
+  }
+  return candidate;
+}
+
+function storedPositiveInteger(value, fallback) {
+  const candidate = Number(value);
+  return Number.isSafeInteger(candidate) && candidate > 0 ? candidate : fallback;
+}
+
+function storedPrompt(value) {
+  return String(value ?? "").trim().slice(0, MAX_PROMPT_LENGTH);
+}
+
 function prompt(value) {
   const result = String(value ?? "").trim();
   if (result.length > MAX_PROMPT_LENGTH) {
-    throw new ConversationCompactorError(`压缩提示词不能超过 ${MAX_PROMPT_LENGTH} 个字符。`);
+    throw new ConversationCompactorError(`压缩提示词不能超过 ${MAX_PROMPT_LENGTH.toLocaleString("zh-CN")} 个字符。`, {
+      code: "PROMPT_TOO_LONG",
+    });
   }
   return result;
 }
 
-function storedPositiveInteger(value, fallback) {
-  const number = Number(value);
-  return Number.isSafeInteger(number) && number > 0 ? number : fallback;
-}
-
-function positiveInteger(value, label) {
-  const number = Number(value);
-  if (!Number.isSafeInteger(number) || number <= 0) {
-    throw new ConversationCompactorError(`${label}必须是大于 0 的整数。`);
-  }
-  return number;
-}
-
-function storedTime(value) {
-  const source = clean(value);
-  return /^(?:[01]\d|2[0-3]):[0-5]\d$/u.test(source) ? source : DEFAULT_AUTOMATIC_TIME;
-}
-
-function timeOfDay(value) {
-  const source = clean(value);
-  if (!/^(?:[01]\d|2[0-3]):[0-5]\d$/u.test(source)) {
-    throw new ConversationCompactorError("固定压缩时间无效。 ");
-  }
-  return source;
-}
-
-function storedTrigger(value) {
-  const source = clean(value).toLowerCase();
-  return AUTOMATIC_TRIGGERS.has(source) ? source : "token";
-}
-
-function automaticTrigger(value) {
-  const source = clean(value).toLowerCase();
-  if (!AUTOMATIC_TRIGGERS.has(source)) {
-    throw new ConversationCompactorError("自动压缩触发方式无效。 ");
-  }
-  return source;
-}
-
-function booleanSetting(value, label) {
-  if (typeof value !== "boolean") throw new ConversationCompactorError(`${label}无效。 `);
-  return value;
-}
-
-function normalizedSettings(value) {
+function normalizedSettings(value = {}) {
   const source = plainObject(value);
   const automatic = plainObject(source.automatic);
   const manual = plainObject(source.manual);
-  const defaultRetainTokens = DEFAULT_COMPACTION_RULES.recentRawTokensToKeep;
   return {
-    version: 2,
-    prompt: String(source.prompt ?? "").trim().slice(0, MAX_PROMPT_LENGTH),
+    version: 1,
+    prompt: storedPrompt(source.prompt),
     automatic: {
       enabled: automatic.enabled === true,
-      trigger: storedTrigger(automatic.trigger),
-      time: storedTime(automatic.time),
-      tokenThreshold: storedPositiveInteger(
-        automatic.tokenThreshold,
-        DEFAULT_COMPACTION_RULES.contextTokensTrigger,
-      ),
-      retainTokens: storedPositiveInteger(automatic.retainTokens, defaultRetainTokens),
+      tokenThreshold: storedPositiveInteger(automatic.tokenThreshold, DEFAULT_TOKEN_THRESHOLD),
+      retainTokens: storedPositiveInteger(automatic.retainTokens, DEFAULT_RETAIN_TOKENS),
     },
     manual: {
-      retainTokens: storedPositiveInteger(manual.retainTokens, defaultRetainTokens),
+      retainTokens: storedPositiveInteger(manual.retainTokens, DEFAULT_RETAIN_TOKENS),
     },
     updatedAt: clean(source.updatedAt).slice(0, 80),
   };
@@ -132,82 +85,67 @@ function normalizedSettings(value) {
 
 function submittedSettings(value, saved, now) {
   const source = plainObject(value);
-  let automatic = saved.automatic;
-  let manual = saved.manual;
+  let automatic = { ...normalizedSettings(saved).automatic };
+  let manual = { ...normalizedSettings(saved).manual };
   if (Object.hasOwn(source, "automatic")) {
-    if (!isPlainObject(source.automatic)) throw new ConversationCompactorError("自动压缩设置无效。 ");
+    if (!source.automatic || typeof source.automatic !== "object" || Array.isArray(source.automatic)) {
+      throw new ConversationCompactorError("自动压缩设置无效。", { code: "INVALID_COMPACTOR_SETTING" });
+    }
     const input = source.automatic;
     automatic = {
-      enabled: Object.hasOwn(input, "enabled") ? booleanSetting(input.enabled, "自动压缩开关") : saved.automatic.enabled,
-      trigger: Object.hasOwn(input, "trigger") ? automaticTrigger(input.trigger) : saved.automatic.trigger,
-      time: Object.hasOwn(input, "time") ? timeOfDay(input.time) : saved.automatic.time,
+      enabled: Object.hasOwn(input, "enabled") ? input.enabled === true : automatic.enabled,
       tokenThreshold: Object.hasOwn(input, "tokenThreshold")
         ? positiveInteger(input.tokenThreshold, "Token 触发阈值")
-        : saved.automatic.tokenThreshold,
+        : automatic.tokenThreshold,
       retainTokens: Object.hasOwn(input, "retainTokens")
         ? positiveInteger(input.retainTokens, "自动压缩保留 Token")
-        : saved.automatic.retainTokens,
+        : automatic.retainTokens,
     };
   }
   if (Object.hasOwn(source, "manual")) {
-    if (!isPlainObject(source.manual)) throw new ConversationCompactorError("手动压缩设置无效。 ");
+    if (!source.manual || typeof source.manual !== "object" || Array.isArray(source.manual)) {
+      throw new ConversationCompactorError("手动压缩设置无效。", { code: "INVALID_COMPACTOR_SETTING" });
+    }
     const input = source.manual;
     manual = {
       retainTokens: Object.hasOwn(input, "retainTokens")
         ? positiveInteger(input.retainTokens, "手动压缩保留 Token")
-        : saved.manual.retainTokens,
+        : manual.retainTokens,
     };
   }
+  if (automatic.retainTokens >= automatic.tokenThreshold) {
+    throw new ConversationCompactorError("自动压缩保留 Token 必须小于触发阈值。", { code: "INVALID_COMPACTOR_SETTING" });
+  }
   return {
-    version: 2,
-    prompt: Object.hasOwn(source, "prompt") ? prompt(source.prompt) : saved.prompt,
+    version: 1,
+    prompt: Object.hasOwn(source, "prompt") ? prompt(source.prompt) : storedPrompt(saved.prompt),
     automatic,
     manual,
     updatedAt: timestamp(now),
   };
 }
 
-async function readJson(fsOps, target) {
+function displaySettings(value) {
+  const saved = normalizedSettings(value);
+  return {
+    ...saved,
+    prompt: saved.prompt || DEFAULT_SUZU_COMPACTION_PROMPT,
+  };
+}
+
+function settingsPath(session) {
+  const root = clean(session?.projectRoot);
+  if (!root || !path.isAbsolute(root)) {
+    throw new ConversationCompactorError("无法确认这位联系人的 Agent 工作目录。", { code: "WORKSPACE_REQUIRED" });
+  }
+  return path.join(path.resolve(root), ".suzu-lives", "compactor.json");
+}
+
+async function readSettings(fsOps, target) {
   try {
     return normalizedSettings(JSON.parse(await fsOps.readFile(target, "utf8")));
   } catch {
     return normalizedSettings();
-  }
-}
-
-async function readText(fsOps, target, maximum = MAX_SUMMARY_LENGTH) {
-  try {
-    const value = await fsOps.readFile(target, "utf8");
-    const source = String(value || "").trim();
-    return source.length > maximum ? `${source.slice(0, maximum)}…` : source;
-  } catch {
-    return "";
-  }
-}
-
-async function readReport(fsOps, target) {
-  try {
-    const source = plainObject(JSON.parse(await fsOps.readFile(target, "utf8")));
-    const status = clean(source.status);
-    if (!status) return null;
-    const warnings = Array.isArray(source.warnings)
-      ? source.warnings.map((item) => clean(item).slice(0, MAX_WARNING_LENGTH)).filter(Boolean).slice(0, 8)
-      : [];
-    return {
-      status,
-      mode: clean(source.mode),
-      reason: clean(source.reason),
-      checkedAt: clean(source.checkedAt),
-      writtenAt: clean(source.writtenAt),
-      currentTokens: Number.isFinite(Number(source.currentTokens)) ? Number(source.currentTokens) : 0,
-      messagesToCompact: Number.isFinite(Number(source.messagesToCompact)) ? Number(source.messagesToCompact) : 0,
-      messagesCompacted: Number.isFinite(Number(source.messagesCompacted)) ? Number(source.messagesCompacted) : 0,
-      summaryChars: Number.isFinite(Number(source.summaryChars)) ? Number(source.summaryChars) : 0,
-      sourceFileName: clean(source.sourceFileName),
-      warnings,
-    };
-  } catch {
-    return null;
   }
 }
 
@@ -223,392 +161,293 @@ async function writeJsonAtomic(fsOps, target, value) {
   }
 }
 
-function dataRootFor(settingsService) {
-  const settings = settingsService.load() || {};
-  const dataRoot = clean(settingsService.response(settings)?.dataRoot);
-  if (!dataRoot || !path.isAbsolute(dataRoot)) {
-    throw new ConversationCompactorError("无法定位 Suzu Lives 软件数据目录。 ");
-  }
-  return { dataRoot: path.resolve(dataRoot), settings };
+function eventFor(entry) {
+  return plainObject(plainObject(entry).event);
 }
 
-function projectScopeKey(value) {
-  const source = clean(value);
-  if (!source || !path.isAbsolute(source)) return "";
-  const resolved = path.resolve(source);
-  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+function summaryText(value) {
+  const text = (Array.isArray(value) ? value : [])
+    .filter((block) => plainObject(block).type === "text")
+    .map((block) => String(plainObject(block).text ?? ""))
+    .filter(Boolean)
+    .join("\n")
+    .trim();
+  return text.length > MAX_SUMMARY_LENGTH ? `${text.slice(0, MAX_SUMMARY_LENGTH)}…` : text;
 }
 
-function sessionPaths(dataRoot, session) {
-  const projectRoot = clean(session?.projectRoot);
-  const sessionId = clean(session?.id);
-  const agentId = stableAgentId(projectRoot);
-  if (!agentId || !sessionId) {
-    throw new ConversationCompactorError("Claude 会话或项目目录无效。 ");
-  }
-  try {
-    const conversationDirectory = resolveAgentConversationDataRoot({ dataRoot, projectRoot, sessionId });
-    const agentDirectory = resolveAgentDataRoot({ dataRoot, agentId });
-    const workDirectory = path.join(agentDirectory, "memory", "compactor", "sessions", sessionId, "work");
-    return {
-      agentId,
-      configPath: path.join(conversationDirectory, "compactor.json"),
-      latestSummaryPath: path.join(workDirectory, "latest-summary.md"),
-      reportPath: path.join(workDirectory, "last-run.json"),
-    };
-  } catch {
-    throw new ConversationCompactorError("Claude 会话或项目目录无效。 ");
-  }
+function isoTime(value) {
+  const number = Number(value);
+  return Number.isFinite(number) && number >= 0 ? new Date(number).toISOString() : "";
 }
 
-function publicSession(value) {
-  const source = plainObject(value);
+function isRawConversationEvent(event) {
+  const source = plainObject(event);
+  if (source.surfaceOp !== "append") return false;
+  if (source.type === "assistant/message") {
+    return Array.isArray(plainObject(source.data).message?.content)
+      && plainObject(source.data).message.content.length > 0;
+  }
+  if (source.type !== "user/message") return false;
+  const data = plainObject(source.data);
+  const nested = plainObject(data.message);
+  const message = Object.keys(nested).length ? nested : data;
+  return clean(plainObject(message.source).kind) === "user";
+}
+
+function compactionDiagnostics(entries) {
+  const attempts = new Map();
+  let latest = null;
+  let latestSummary = "";
+  let rawMessages = 0;
+  for (const entry of Array.isArray(entries) ? entries : []) {
+    const event = eventFor(entry);
+    if (isRawConversationEvent(event)) rawMessages += 1;
+    const data = plainObject(event.data);
+    const compactionId = clean(data.compactionId);
+    if (event.type === "compaction/start" && compactionId) {
+      const record = {
+        compactionId,
+        status: "running",
+        startedAt: isoTime(event.time),
+        completedAt: "",
+        messagesCompacted: 0,
+        shadowedTokenCount: 0,
+        error: "",
+      };
+      attempts.set(compactionId, record);
+      latest = record;
+      continue;
+    }
+    if (event.type === "compaction/summary" && compactionId) {
+      const record = attempts.get(compactionId) || {
+        compactionId,
+        status: "running",
+        startedAt: "",
+        completedAt: "",
+        messagesCompacted: 0,
+        shadowedTokenCount: 0,
+        error: "",
+      };
+      record.messagesCompacted = Array.isArray(data.shadowedSeqs) ? data.shadowedSeqs.length : 0;
+      record.shadowedTokenCount = Number(data.shadowedTokenCount) || 0;
+      attempts.set(compactionId, record);
+      latest = record;
+      latestSummary = summaryText(data.summary) || latestSummary;
+      continue;
+    }
+    if (event.type === "compaction/end" && compactionId) {
+      const record = attempts.get(compactionId) || {
+        compactionId,
+        status: "running",
+        startedAt: "",
+        completedAt: "",
+        messagesCompacted: 0,
+        shadowedTokenCount: 0,
+        error: "",
+      };
+      record.error = clean(data.error);
+      record.status = record.error ? "failed" : "completed";
+      record.completedAt = isoTime(event.time);
+      attempts.set(compactionId, record);
+      latest = record;
+    }
+  }
   return {
-    id: clean(source.id),
-    title: clean(source.title) || "未命名对话",
-    preview: clean(source.preview),
-    updatedAt: clean(source.updatedAt),
-    draft: source.draft === true,
+    hasTranscript: rawMessages > 0,
+    latestSummary,
+    lastRun: latest ? { ...latest } : null,
   };
-}
-
-function publicContact(value) {
-  const source = plainObject(value);
-  return {
-    id: clean(source.id),
-    name: clean(source.name),
-  };
-}
-
-function dailyCron(value) {
-  const [hours, minutes] = timeOfDay(value).split(":").map(Number);
-  return `${minutes} ${hours} * * *`;
 }
 
 function scopeKey(scope) {
-  return `${projectScopeKey(scope?.session?.projectRoot)}\u0000${clean(scope?.session?.id)}`;
-}
-
-function isCompactorTaskForScope(task, scope) {
-  const target = plainObject(task?.target);
-  return task?.source === "system"
-    && target.type === "operation"
-    && target.name === COMPACTOR_OPERATION
-    && clean(target.sessionId) === clean(scope?.session?.id)
-    && projectScopeKey(target.projectRoot) === projectScopeKey(scope?.session?.projectRoot);
+  const root = clean(scope?.session?.projectRoot).replaceAll("\\", "/").toLowerCase();
+  return `${root}\u0000${clean(scope?.session?.id)}`;
 }
 
 /**
- * Owns the desktop-only settings and diagnostics around the existing
- * memory-compactor. Prompts, automatic rules, reports, and backups are all
- * scoped to one contact plus one native Claude session.
+ * Desktop settings and diagnostics for Suzu's native Agent Core compaction module.
+ * The service deliberately does not read, import, or mutate external transcripts.
  */
 export function createConversationCompactorService({
-  createGeneratorImpl = createClaudeCliGenerator,
-  createScheduleTaskImpl = createScheduleTask,
-  fsOps = fs,
-  importConversationHistoryImpl = importConversationHistory,
-  listScheduleTasksImpl = listScheduleTasks,
-  now = () => new Date(),
   reader,
-  removeScheduleTaskImpl = removeScheduleTask,
-  runCompactionImpl = runCompaction,
-  settingsService,
+  runtime,
+  fsOps = fs,
+  now = () => new Date(),
 } = {}) {
-  if (!reader?.compactorSnapshot || !reader?.resolveCompactorSession) {
-    throw new ConversationCompactorError("记忆压缩器需要原生 Claude 会话读取服务。 ");
+  if (typeof reader?.compactorSnapshot !== "function"
+    || typeof reader?.resolveCompactorSession !== "function"
+    || typeof reader?.resolveCompactorSessionForRuntime !== "function") {
+    throw new ConversationCompactorError("Agent 记忆压缩器需要联系人会话读取服务。", { code: "READER_REQUIRED" });
   }
-  if (!settingsService?.load || !settingsService?.response) {
-    throw new ConversationCompactorError("记忆压缩器需要软件设置服务。 ");
+  if (typeof runtime?.history !== "function" || typeof runtime?.runCompaction !== "function") {
+    throw new ConversationCompactorError("Agent 记忆压缩器需要原生会话运行时。", { code: "RUNTIME_REQUIRED" });
   }
-  if (typeof runCompactionImpl !== "function") {
-    throw new ConversationCompactorError("记忆压缩器没有可用的压缩执行器。 ");
-  }
-  if (typeof importConversationHistoryImpl !== "function") {
-    throw new ConversationCompactorError("记忆压缩器没有可用的历史导入器。 ");
+  if (!fsOps?.mkdir || !fsOps?.readFile || !fsOps?.rename || !fsOps?.unlink || !fsOps?.writeFile) {
+    throw new ConversationCompactorError("Agent 记忆压缩器文件接口无效。", { code: "FILESYSTEM_REQUIRED" });
   }
 
   const activeRuns = new Map();
 
-  const selectedSession = async ({ contactId = "" } = {}) => {
+  const selectedScope = async ({ contactId = "" } = {}) => {
     const source = await reader.compactorSnapshot();
     const catalog = (Array.isArray(source?.contacts) ? source.contacts : [])
       .map((contact) => ({
         ...publicContact(contact),
-        sessions: (Array.isArray(contact?.sessions) ? contact.sessions : [])
-          .map(publicSession)
-          .filter((item) => item.id),
+        sessions: Array.isArray(contact?.sessions) ? contact.sessions : [],
       }))
       .filter((contact) => contact.id);
-    const contacts = catalog.map(({ id, name, sessions }) => ({
-      id,
-      name,
-      hasConversation: sessions.length > 0,
-    }));
-    const requestedContactId = clean(contactId);
-    const activeContactId = clean(source?.activeContact?.id);
-    const selectedCatalogContact = catalog.find((contact) => contact.id === requestedContactId)
-      || catalog.find((contact) => contact.id === activeContactId)
+    const requested = clean(contactId);
+    const active = clean(source?.activeContact?.id);
+    const contact = catalog.find((item) => item.id === requested)
+      || catalog.find((item) => item.id === active)
       || catalog[0]
       || null;
-    const selectedContact = publicContact(selectedCatalogContact);
-    const selected = selectedCatalogContact?.sessions[0] || null;
-    return { contacts, selected, selectedContact, source };
-  };
-
-  const scopeFromSession = (session) => {
-    const { dataRoot, settings } = dataRootFor(settingsService);
-    const paths = sessionPaths(dataRoot, session);
-    return { dataRoot, paths, session, settings };
-  };
-
-  const scopeFor = async ({ contactId } = {}) => (
-    scopeFromSession(await reader.resolveCompactorSession({ contactId }))
-  );
-
-  const scopeForRuntime = async ({ sessionId, projectRoot } = {}) => {
-    if (typeof reader.resolveCompactorSessionForRuntime !== "function") {
-      throw new ConversationCompactorError("记忆压缩器无法验证自动任务会话范围。 ");
-    }
-    return scopeFromSession(await reader.resolveCompactorSessionForRuntime({ sessionId, projectRoot }));
-  };
-
-  const runScoped = (scope, operation) => {
-    const key = scopeKey(scope);
-    if (!key) throw new ConversationCompactorError("Claude 会话或项目目录无效。 ");
-    const previous = activeRuns.get(key) || Promise.resolve();
-    const next = previous.catch(() => undefined).then(operation);
-    activeRuns.set(key, next);
-    return next.finally(() => {
-      if (activeRuns.get(key) === next) activeRuns.delete(key);
-    });
-  };
-
-  const reconcileAutomaticSchedule = async (scope, settings) => {
-    const tasks = await listScheduleTasksImpl({ dataRoot: scope.dataRoot });
-    const related = tasks.filter((task) => isCompactorTaskForScope(task, scope));
-    const automatic = settings.automatic;
-    const wantedCron = automatic.enabled && automatic.trigger === "time"
-      ? dailyCron(automatic.time)
-      : "";
-    let kept = null;
-    for (const task of related) {
-      const retain = wantedCron
-        && !kept
-        && task.kind === "cron"
-        && task.enabled === true
-        && task.target.trigger === "time"
-        && task.cron === wantedCron;
-      if (retain) {
-        kept = task;
-      } else {
-        await removeScheduleTaskImpl({ dataRoot: scope.dataRoot, id: task.id });
-      }
-    }
-    if (!wantedCron || kept) return kept;
-    const contactName = clean(scope.session.contact?.name) || "联系人";
-    return createScheduleTaskImpl({
-      dataRoot: scope.dataRoot,
-      cron: wantedCron,
-      description: `自动压缩：${contactName}`,
-      exec: COMPACTOR_OPERATION,
-      operationTrigger: "time",
-      projectRoot: scope.session.projectRoot,
-      sessionId: scope.session.id,
-      source: "system",
-    });
-  };
-
-  const compactionInput = ({ dryRun, minimumContextTokens = 0, retainTokens, saved, scope }) => {
-    const contactName = clean(scope.session.contact?.name) || "联系人";
-    const userName = clean(scope.settings?.identity?.owner?.displayName) || "我";
-    const input = {
-      agentId: scope.paths.agentId,
-      dryRun: dryRun === true,
-      memoryOwner: contactName,
-      minimumContextTokens,
-      rules: { recentRawTokensToKeep: retainTokens },
-      sessionId: scope.session.id,
-      softwareDataDirectory: scope.dataRoot,
-      strategy: "token-tail",
-      transcriptPath: scope.session.transcriptPath,
-      userName,
-    };
-    if (dryRun !== true) {
-      input.generator = createGeneratorImpl();
-      if (saved.prompt) input.systemPrompt = saved.prompt;
-    }
-    return input;
-  };
-
-  const importHistoryInput = ({ scope, sourcePath }) => ({
-      agentId: scope.paths.agentId,
-      sessionId: scope.session.id,
-      softwareDataDirectory: scope.dataRoot,
-      sourceTranscriptPath: sourcePath,
-      targetProjectRoot: scope.session.projectRoot,
-      transcriptPath: scope.session.transcriptPath,
-  });
-
-  const runWithSettings = async ({ dryRun = false, minimumContextTokens = 0, retainTokens, saved, scope }) => {
-    if (scope.session.hasTranscript !== true) {
-      throw new ConversationCompactorError("当前会话还没有可压缩的聊天记录。 ");
-    }
-    return runCompactionImpl(compactionInput({
-      dryRun,
-      minimumContextTokens,
-      retainTokens,
-      saved,
-      scope,
+    const contacts = catalog.map((item) => ({
+      id: item.id,
+      name: item.name,
+      hasConversation: item.sessions.length > 0,
     }));
+    if (!contact) return { contacts, contact: null, session: null, source };
+    const session = await reader.resolveCompactorSession({ contactId: contact.id });
+    return { contacts, contact: publicContact(contact), session, source };
+  };
+
+  const historyFor = async (scope) => {
+    try {
+      return await runtime.history({
+        sessionId: scope.session.id,
+        contactId: scope.contact.id,
+        cwd: scope.session.projectRoot,
+        maxMessages: HISTORY_PAGE_SIZE,
+      });
+    } catch (error) {
+      return { events: [], hasMore: false, error: clean(error?.message) || "无法读取 Agent 会话历史。" };
+    }
   };
 
   const snapshot = async ({ contactId = "" } = {}) => {
-    const { contacts, selected, selectedContact, source } = await selectedSession({ contactId });
-    const activeContact = publicContact(source?.activeContact);
-    if (!selected) {
+    const selected = await selectedScope({ contactId });
+    const activeContact = publicContact(selected.source?.activeContact);
+    if (!selected.session || !selected.contact) {
       return {
-        status: clean(source?.status) || "missing",
+        status: clean(selected.source?.status) || "missing",
+        runtime: "agent-core",
         activeContact,
-        contacts,
-        selectedContactId: selectedContact?.id || "",
-        selectedContact: selectedContact || null,
+        contacts: selected.contacts,
+        selectedContactId: "",
+        selectedContact: null,
         selectedConversation: null,
-        settings: normalizedSettings(),
+        settings: displaySettings(),
         lastRun: null,
         latestSummary: "",
       };
     }
-    const scope = await scopeFor({ contactId: selectedContact.id });
-    const [settings, lastRun, latestSummary] = await Promise.all([
-      readJson(fsOps, scope.paths.configPath),
-      readReport(fsOps, scope.paths.reportPath),
-      readText(fsOps, scope.paths.latestSummaryPath),
+    const configPath = settingsPath(selected.session);
+    const [settings, history] = await Promise.all([
+      readSettings(fsOps, configPath),
+      historyFor(selected),
     ]);
+    const diagnostics = compactionDiagnostics(history.events);
     return {
-      status: clean(source?.status) || "ready",
+      status: clean(selected.source?.status) || "ready",
+      runtime: "agent-core",
       activeContact,
-      contacts,
-      selectedContactId: selectedContact.id,
-      selectedContact,
+      contacts: selected.contacts,
+      selectedContactId: selected.contact.id,
+      selectedContact: selected.contact,
       selectedConversation: {
-        contactId: selectedContact.id,
-        contactName: selectedContact.name,
-        title: selected.title || "固定 Claude 对话",
-        hasTranscript: scope.session.hasTranscript === true,
+        contactId: selected.contact.id,
+        contactName: selected.contact.name || "联系人",
+        title: "固定对话",
+        hasTranscript: diagnostics.hasTranscript,
       },
-      settings,
-      lastRun,
-      latestSummary,
+      settings: displaySettings(settings),
+      lastRun: diagnostics.lastRun,
+      latestSummary: diagnostics.latestSummary,
+      ...(clean(history.error) ? { historyError: clean(history.error) } : {}),
     };
   };
 
-  const save = async ({ contactId, ...value } = {}) => {
-    const scope = await scopeFor({ contactId });
-    const saved = await readJson(fsOps, scope.paths.configPath);
-    const entry = submittedSettings(value, saved, now);
-    await writeJsonAtomic(fsOps, scope.paths.configPath, entry);
-    await reconcileAutomaticSchedule(scope, entry);
-    return snapshot({ contactId: scope.session.contact?.id });
+  const scopeFor = async ({ contactId = "" } = {}) => {
+    const selected = await selectedScope({ contactId });
+    if (!selected.session || !selected.contact) {
+      throw new ConversationCompactorError("请先选择要整理对话的联系人。", { code: "CONTACT_REQUIRED" });
+    }
+    return selected;
   };
 
-  const runManual = async ({ contactId, retainTokens } = {}, { dryRun = false } = {}) => {
+  const queueRun = (scope, operation) => {
+    const key = scopeKey(scope);
+    const previous = activeRuns.get(key) || Promise.resolve();
+    const current = previous.catch(() => undefined).then(operation);
+    activeRuns.set(key, current);
+    return current.finally(() => {
+      if (activeRuns.get(key) === current) activeRuns.delete(key);
+    });
+  };
+
+  const save = async ({ contactId = "", ...value } = {}) => {
     const scope = await scopeFor({ contactId });
-    const saved = await readJson(fsOps, scope.paths.configPath);
-    const nextRetainTokens = retainTokens === undefined
-      ? saved.manual.retainTokens
-      : positiveInteger(retainTokens, "手动压缩保留 Token");
-    if (nextRetainTokens !== saved.manual.retainTokens) {
-      await writeJsonAtomic(fsOps, scope.paths.configPath, {
-        ...saved,
-        manual: { retainTokens: nextRetainTokens },
-        updatedAt: timestamp(now),
+    const configPath = settingsPath(scope.session);
+    const saved = await readSettings(fsOps, configPath);
+    const next = submittedSettings(value, saved, now);
+    await writeJsonAtomic(fsOps, configPath, next);
+    return snapshot({ contactId: scope.contact.id });
+  };
+
+  const run = async ({ contactId = "", manual, retainTokens } = {}) => {
+    const scope = await scopeFor({ contactId });
+    const before = await historyFor(scope);
+    const beforeDiagnostics = compactionDiagnostics(before.events);
+    if (!beforeDiagnostics.hasTranscript) {
+      throw new ConversationCompactorError("当前会话还没有可压缩的聊天记录。", { code: "NO_COMPACTABLE_HISTORY" });
+    }
+    const configPath = settingsPath(scope.session);
+    const saved = await readSettings(fsOps, configPath);
+    const manualPatch = manual === undefined && retainTokens === undefined
+      ? undefined
+      : manual === undefined
+        ? { retainTokens }
+        : manual;
+    const next = manualPatch === undefined
+      ? saved
+      : submittedSettings({ manual: manualPatch }, saved, now);
+    if (next !== saved) await writeJsonAtomic(fsOps, configPath, next);
+    const result = await queueRun(scope, async () => runtime.runCompaction({
+      sessionId: scope.session.id,
+      contactId: scope.contact.id,
+      cwd: scope.session.projectRoot,
+    }));
+    if (plainObject(result).completed !== true || !clean(result.compactionId)) {
+      throw new ConversationCompactorError("Suzu Agent 没有写入可确认的压缩记录；当前对话可能没有可压缩的旧内容。", {
+        code: "AGENT_COMPACTION_NOT_COMPLETED",
       });
     }
-    await runScoped(scope, () => runWithSettings({
-      dryRun,
-      retainTokens: nextRetainTokens,
-      saved,
-      scope,
-    }));
-    return snapshot({ contactId: scope.session.contact?.id });
+    const completed = await snapshot({ contactId: scope.contact.id });
+    const lastRun = plainObject(completed.lastRun);
+    if (lastRun.status !== "completed" || clean(lastRun.compactionId) !== clean(result.compactionId)) {
+      throw new ConversationCompactorError("Suzu Agent 已返回压缩完成，但会话历史中没有对应的已完成记录。", {
+        code: "AGENT_COMPACTION_RECORD_MISSING",
+      });
+    }
+    return completed;
   };
 
-  const importHistory = async ({ contactId, sourcePath } = {}) => {
-    const source = clean(sourcePath);
-    if (!source || path.extname(source).toLowerCase() !== ".jsonl") {
-      throw new ConversationCompactorError("请选择 Claude 会话 JSONL 文件。 ");
-    }
-    const scope = await scopeFor({ contactId });
-    if (scope.session.hasTranscript !== true) {
-      throw new ConversationCompactorError("先在当前联系人对话中发送一条消息，再导入历史 JSONL。 ");
-    }
-    await runScoped(scope, () => importConversationHistoryImpl(importHistoryInput({
-      scope,
-      sourcePath: path.resolve(source),
-    })));
-    return snapshot({ contactId: scope.session.contact?.id });
+  const settingsForRuntime = async ({ sessionId, projectRoot = "" } = {}) => {
+    const session = await reader.resolveCompactorSessionForRuntime({ sessionId, projectRoot });
+    const settings = await readSettings(fsOps, settingsPath(session));
+    return {
+      available: true,
+      prompt: settings.prompt || DEFAULT_SUZU_COMPACTION_PROMPT,
+      automatic: { ...settings.automatic },
+      manual: { ...settings.manual },
+    };
   };
 
-  const enqueueTokenAuto = async ({ sessionId, projectRoot } = {}) => {
-    const scope = await scopeForRuntime({ sessionId, projectRoot });
-    const saved = await readJson(fsOps, scope.paths.configPath);
-    if (!saved.automatic.enabled || saved.automatic.trigger !== "token" || scope.session.hasTranscript !== true) {
-      return { scheduled: false };
-    }
-    const transcript = await fsOps.readFile(scope.session.transcriptPath, "utf8");
-    const context = reconstructLogicalContext(parseJsonlText(transcript, scope.session.transcriptPath));
-    const plan = chooseTokenTailCompactionPlan(context, {
-      minimumContextTokens: saved.automatic.tokenThreshold,
-      recentRawTokensToKeep: saved.automatic.retainTokens,
-    });
-    if (plan.action !== "compact") return { scheduled: false };
-    const tasks = await listScheduleTasksImpl({ dataRoot: scope.dataRoot });
-    if (tasks.some((task) => isCompactorTaskForScope(task, scope) && task.target.trigger === "token")) {
-      return { scheduled: false };
-    }
-    const task = await createScheduleTaskImpl({
-      dataRoot: scope.dataRoot,
-      delay: "1s",
-      description: `自动压缩：${clean(scope.session.contact?.name) || "联系人"}`,
-      exec: COMPACTOR_OPERATION,
-      operationTrigger: "token",
-      projectRoot: scope.session.projectRoot,
-      sessionId: scope.session.id,
-      source: "system",
-    });
-    return { scheduled: true, taskId: task.id };
-  };
-
-  const runScheduledAutomaticTask = async (task) => {
-    const target = plainObject(task?.target);
-    if (target.type !== "operation" || target.name !== COMPACTOR_OPERATION) {
-      throw new ConversationCompactorError("自动压缩任务无效。 ");
-    }
-    const trigger = automaticTrigger(target.trigger);
-    const scope = await scopeForRuntime({
-      projectRoot: target.projectRoot,
-      sessionId: target.sessionId,
-    });
-    const saved = await readJson(fsOps, scope.paths.configPath);
-    if (!saved.automatic.enabled || saved.automatic.trigger !== trigger) {
-      return { status: "skipped", reason: "自动压缩设置已变更。" };
-    }
-    return runScoped(scope, () => runWithSettings({
-      minimumContextTokens: trigger === "token" ? saved.automatic.tokenThreshold : 0,
-      retainTokens: saved.automatic.retainTokens,
-      saved,
-      scope,
-    }));
-  };
-
-  return {
-    check: (value = {}) => runManual(value, { dryRun: true }),
-    enqueueTokenAuto,
-    importHistory,
-    run: (value = {}) => runManual(value),
-    runScheduledAutomaticTask,
+  return Object.freeze({
+    run,
     save,
+    settingsForRuntime,
     snapshot,
-  };
+  });
 }

@@ -1,15 +1,13 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 
 import { normalizeAgentId, resolveAgentDataRoot } from "@suzu-lives/agent-registry";
-import { claudeProjectDirectoryCandidates } from "./conversation-reader.mjs";
-import { DEFAULT_CLAUDE_PERMISSION_MODE, isClaudePermissionMode, normalizeClaudePermissionMode } from "./claude-permission-mode.mjs";
 
-const CONTACT_FILE = "CLAUDE.md";
+const CONTACT_FILE = "SUZU.md";
 const CONTACT_METADATA_DIRECTORY = ".suzu-lives";
 const CONTACT_METADATA_FILE = "contact.json";
+export const MANAGED_CONTACTS_DIRECTORY = "contacts";
 const USER_PROFILE_FILE = "user.md";
 const OWNER_PROFILE_TITLE_SUFFIX = "的核心档案";
 const CONTACT_ID_PATTERN = /^contact-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/iu;
@@ -143,7 +141,6 @@ async function contactMetadata(fsOps, projectRoot) {
       pinned: raw.pinned === true,
       unread: storedUnreadCount > 0,
       unreadCount: storedUnreadCount,
-      approvalMode: normalizeClaudePermissionMode(raw.approvalMode),
       longTermMemoryEnabled: raw.longTermMemoryEnabled !== false,
     };
   } catch {
@@ -166,7 +163,8 @@ async function contactAt(fsOps, root, value) {
   if (stat.isSymbolicLink() || !stat.isDirectory()) return null;
   const realProjectRoot = await fsOps.realpath(projectRoot);
   if (!samePath(path.dirname(realProjectRoot), root)) return null;
-  if (!(await ordinaryFile(fsOps, path.join(realProjectRoot, CONTACT_FILE)))) return null;
+  const hasSuzuInstructions = await ordinaryFile(fsOps, path.join(realProjectRoot, CONTACT_FILE));
+  if (!hasSuzuInstructions) return null;
   const metadata = await contactMetadata(fsOps, realProjectRoot);
   if (!metadata || metadata.id !== id) return null;
   return {
@@ -178,7 +176,6 @@ async function contactAt(fsOps, root, value) {
     hidden: metadata.hidden,
     muted: metadata.muted,
     pinned: metadata.pinned,
-    approvalMode: metadata.approvalMode,
     longTermMemoryEnabled: metadata.longTermMemoryEnabled,
     sessionId: metadata.sessionId,
     unread: metadata.unread,
@@ -225,10 +222,9 @@ function updatedOwnerProfileTitle(content, { previousName, name } = {}) {
   return `${bom}${nextTitle}${body.slice(previousTitle.length)}`;
 }
 
-function contactMetadataText({ id, name, createdAt, sessionId = "", agentId, hidden = false, muted = false, pinned = false, unreadCount: count = 0, approvalMode = DEFAULT_CLAUDE_PERMISSION_MODE, longTermMemoryEnabled = true } = {}) {
+function contactMetadataText({ id, name, createdAt, sessionId = "", agentId, hidden = false, muted = false, pinned = false, unreadCount: count = 0, longTermMemoryEnabled = true } = {}) {
   const storageIdentity = normalizeAgentId(agentId);
   if (!storageIdentity) throw new ContactProjectsError("联系人固定存储身份无效。 ");
-  const normalizedApprovalMode = normalizeClaudePermissionMode(approvalMode);
   const normalizedUnreadCount = unreadCount(count);
   return `${JSON.stringify({
     version: 1,
@@ -241,22 +237,20 @@ function contactMetadataText({ id, name, createdAt, sessionId = "", agentId, hid
     ...(pinned === true ? { pinned: true } : {}),
     ...(normalizedUnreadCount > 0 ? { unreadCount: normalizedUnreadCount } : {}),
     ...(muted === true ? { muted: true } : {}),
-    ...(normalizedApprovalMode !== DEFAULT_CLAUDE_PERMISSION_MODE ? { approvalMode: normalizedApprovalMode } : {}),
     ...(longTermMemoryEnabled === false ? { longTermMemoryEnabled: false } : {}),
   }, null, 2)}\n`;
 }
 
 /**
- * Owns the contact catalogue below a user-selected root. A contact's visible
- * remark is project metadata; its Claude project folder is a generated ID so
- * duplicate remarks cannot share a native Claude history directory.
+ * Owns the contact catalogue below Suzu's managed contacts root. A contact's
+ * visible remark is product metadata; its generated workspace ID keeps
+ * duplicate remarks from sharing a Suzu runtime session.
  */
 export function createContactProjectsService({
   settingsService,
-  ensureClaudeProjectSettings = null,
+  ensureContactProjectSettings = null,
   fsOps = fs,
   dataRoot = "",
-  homeDirectory = os.homedir(),
   onBeforeRemove = null,
   createContactId = () => `contact-${randomUUID()}`,
   createSessionId = randomUUID,
@@ -264,12 +258,6 @@ export function createContactProjectsService({
   if (!settingsService?.load || !settingsService?.save) {
     throw new ContactProjectsError("联系人项目服务需要软件设置服务。 ");
   }
-
-  const contactsRoot = async () => {
-    const configured = clean(settingsService.load()?.contactsRoot);
-    if (!configured) throw new ContactProjectsError("请先在设置中选择联系人项目目录。 ");
-    return ordinaryDirectory(fsOps, configured, "联系人项目目录不存在或不是普通文件夹。 ");
-  };
 
   const ownedDataRoot = () => {
     const direct = clean(dataRoot);
@@ -281,31 +269,36 @@ export function createContactProjectsService({
     return reported && path.isAbsolute(reported) ? path.resolve(reported) : "";
   };
 
+  const managedContactsRoot = () => {
+    const root = ownedDataRoot();
+    return root ? path.join(root, MANAGED_CONTACTS_DIRECTORY) : "";
+  };
+
+  const contactsRoot = async ({ persistManagedDefault = false } = {}) => {
+    const settings = settingsService.load();
+    const configured = clean(settings?.contactsRoot);
+    const managed = !configured ? managedContactsRoot() : "";
+    const selected = configured || managed;
+    if (!selected) throw new ContactProjectsError("软件数据目录尚未准备好。 ");
+    if (managed) {
+      try {
+        await fsOps.mkdir(managed, { recursive: true });
+      } catch (error) {
+        throw new ContactProjectsError(`无法创建默认联系人项目目录：${clean(error?.message) || "未知错误"}`);
+      }
+    }
+    const root = await ordinaryDirectory(fsOps, selected, "联系人项目目录不存在或不是普通文件夹。 ");
+    if (managed && persistManagedDefault) {
+      settingsService.save({ ...settings, contactsRoot: root });
+    }
+    return root;
+  };
+
   const removableContactDataDirectories = async (contact) => {
     const directories = [];
     const add = (directory) => {
       if (directory && !directories.some((item) => samePath(item, directory))) directories.push(directory);
     };
-    const home = path.resolve(clean(homeDirectory) || os.homedir());
-    const claudeProjectsRoot = path.join(home, ".claude", "projects");
-    for (const candidate of claudeProjectDirectoryCandidates({
-      projectRoot: contact.projectRoot,
-      homeDirectory: home,
-    })) {
-      if (!samePath(path.dirname(candidate), claudeProjectsRoot)) {
-        throw new ContactProjectsError("联系人 Claude 聊天记录目录无效。 ");
-      }
-      const childName = path.basename(candidate);
-      // One historical lookup variant retains the Windows drive colon. It
-      // cannot name a directory on Windows, so it can never contain data.
-      if (process.platform === "win32" && childName.includes(":")) continue;
-      add(await ownedDirectoryIfPresent(
-        fsOps,
-        claudeProjectsRoot,
-        childName,
-        "联系人 Claude 聊天记录目录不可安全删除。 ",
-      ));
-    }
     const root = ownedDataRoot();
     if (root) {
       add(await ownedDirectoryIfPresent(
@@ -334,20 +327,20 @@ export function createContactProjectsService({
   };
 
   const ensureProjectSettings = async (projectRoot, options = {}) => {
-    if (typeof ensureClaudeProjectSettings !== "function") return { status: "not-configured" };
+    if (typeof ensureContactProjectSettings !== "function") return { status: "not-configured" };
     try {
-      return await ensureClaudeProjectSettings({ projectRoot, ...options });
+      return await ensureContactProjectSettings({ projectRoot, ...options });
     } catch (error) {
-      throw new ContactProjectsError(`无法写入联系人 Claude 项目设置：${clean(error?.message) || "未知错误"}`);
+      throw new ContactProjectsError(`无法写入联系人工作区设置：${clean(error?.message) || "未知错误"}`);
     }
   };
 
-  const syncClaudeProjectSettings = async (options = {}) => {
+  const syncContactProjectSettings = async (options = {}) => {
     const configured = clean(settingsService.load()?.contactsRoot);
-    if (!configured) return { status: "not-configured", contacts: [], errors: [] };
-    const root = await contactsRoot();
+    if (!configured && !managedContactsRoot()) return { status: "not-configured", contacts: [], errors: [] };
+    const root = await contactsRoot({ persistManagedDefault: !configured });
     const contacts = await list(root);
-    if (typeof ensureClaudeProjectSettings !== "function") return { status: "not-configured", contacts: [], errors: [] };
+    if (typeof ensureContactProjectSettings !== "function") return { status: "not-configured", contacts: [], errors: [] };
     const results = [];
     const errors = [];
     for (const contact of contacts) {
@@ -366,12 +359,12 @@ export function createContactProjectsService({
     if (!previousTitle || !nextTitle || previousTitle === nextTitle) {
       return { status: "unchanged", contacts: [], errors: [] };
     }
-    if (!clean(settingsService.load()?.contactsRoot)) {
+    if (!clean(settingsService.load()?.contactsRoot) && !managedContactsRoot()) {
       return { status: "not-configured", contacts: [], errors: [] };
     }
     let contacts;
     try {
-      contacts = await list(await contactsRoot());
+      contacts = await list(await contactsRoot({ persistManagedDefault: !clean(settingsService.load()?.contactsRoot) }));
     } catch (error) {
       return {
         status: "partial",
@@ -399,32 +392,25 @@ export function createContactProjectsService({
 
   const snapshot = async () => {
     const settings = settingsService.load();
-    if (!clean(settings.contactsRoot)) {
+    if (!clean(settings.contactsRoot) && !managedContactsRoot()) {
       return { status: "needs-root", contactsRoot: "", contacts: [], activeContact: null, preferredContact: null };
     }
-    const root = await contactsRoot();
+    const root = await contactsRoot({ persistManagedDefault: !clean(settings.contactsRoot) });
+    const currentSettings = clean(settings.contactsRoot) ? settings : settingsService.load();
     const contacts = await list(root);
-    const selectedRoot = clean(settings.projectRoot);
+    const selectedRoot = clean(currentSettings.projectRoot);
     const activeContact = selectedRoot
       ? contacts.find((contact) => samePath(contact.projectRoot, selectedRoot)) || null
       : null;
-    const preferredContact = contacts.find((contact) => contact.id === clean(settings.preferredContactId))
+    const preferredContact = contacts.find((contact) => contact.id === clean(currentSettings.preferredContactId))
       || firstCreatedContact(contacts);
     return { status: "ready", contactsRoot: root, contacts, activeContact, preferredContact };
-  };
-
-  const selectRoot = async (directory) => {
-    const root = await ordinaryDirectory(fsOps, directory, "选择的联系人项目目录不可用。 ");
-    const settings = settingsService.load();
-    settingsService.save({ ...settings, contactsRoot: root, preferredContactId: "", projectRoot: "" });
-    await syncClaudeProjectSettings();
-    return snapshot();
   };
 
   const select = async ({ id } = {}) => {
     const root = await contactsRoot();
     const contact = await contactAt(fsOps, root, id);
-    if (!contact) throw new ContactProjectsError("所选联系人不存在或不是由 Suzu 创建的 Claude 项目。 ");
+    if (!contact) throw new ContactProjectsError("所选联系人不存在或不是由 Suzu 创建的联系人工作区。 ");
     await ensureProjectSettings(contact.projectRoot);
     const settings = settingsService.load();
     settingsService.save({ ...settings, projectRoot: contact.projectRoot });
@@ -434,7 +420,7 @@ export function createContactProjectsService({
   const setPreferred = async ({ id } = {}) => {
     const root = await contactsRoot();
     const contact = await contactAt(fsOps, root, id);
-    if (!contact) throw new ContactProjectsError("所选联系人不存在或不是由 Suzu 创建的 Claude 项目。 ");
+    if (!contact) throw new ContactProjectsError("所选联系人不存在或不是由 Suzu 创建的联系人工作区。 ");
     const settings = settingsService.load();
     settingsService.save({ ...settings, preferredContactId: contact.id });
     return snapshot();
@@ -443,7 +429,7 @@ export function createContactProjectsService({
   const rename = async ({ id, name } = {}) => {
     const root = await contactsRoot();
     const contact = await contactAt(fsOps, root, id);
-    if (!contact) throw new ContactProjectsError("所选联系人不存在或不是由 Suzu 创建的 Claude 项目。 ");
+    if (!contact) throw new ContactProjectsError("所选联系人不存在或不是由 Suzu 创建的联系人工作区。 ");
     const normalizedName = normalizeContactName(name);
     if (contact.name === normalizedName) return snapshot();
     try {
@@ -457,7 +443,6 @@ export function createContactProjectsService({
         muted: contact.muted,
         pinned: contact.pinned,
         unreadCount: contact.unreadCount,
-        approvalMode: contact.approvalMode,
         longTermMemoryEnabled: contact.longTermMemoryEnabled,
       }));
     } catch (error) {
@@ -470,7 +455,7 @@ export function createContactProjectsService({
     const source = value && typeof value === "object" && !Array.isArray(value) ? value : {};
     const root = await contactsRoot();
     const contact = await contactAt(fsOps, root, source.id);
-    if (!contact) throw new ContactProjectsError("所选联系人不存在或不是由 Suzu 创建的 Claude 项目。 ");
+    if (!contact) throw new ContactProjectsError("所选联系人不存在或不是由 Suzu 创建的联系人工作区。 ");
     const patch = {};
     if (Object.hasOwn(source, "unread")) throw new ContactProjectsError("联系人未读状态请使用 unreadCount。 ");
     for (const key of ["pinned", "muted", "hidden"]) {
@@ -511,7 +496,6 @@ export function createContactProjectsService({
         sessionId: contact.sessionId,
         agentId: contact.agentId,
         ...next,
-        approvalMode: contact.approvalMode,
         longTermMemoryEnabled: contact.longTermMemoryEnabled,
       }));
     } catch (error) {
@@ -520,38 +504,11 @@ export function createContactProjectsService({
     return snapshot();
   };
 
-  const updateApprovalMode = async ({ id, approvalMode } = {}) => {
-    if (!isClaudePermissionMode(approvalMode)) throw new ContactProjectsError("联系人审批模式无效。 ");
-    const root = await contactsRoot();
-    const contact = await contactAt(fsOps, root, id);
-    if (!contact) throw new ContactProjectsError("所选联系人不存在或不是由 Suzu 创建的 Claude 项目。 ");
-    const nextApprovalMode = normalizeClaudePermissionMode(approvalMode);
-    if (nextApprovalMode === contact.approvalMode) return snapshot();
-    try {
-      await writeTextAtomic(fsOps, path.join(contact.projectRoot, CONTACT_METADATA_DIRECTORY, CONTACT_METADATA_FILE), contactMetadataText({
-        id: contact.id,
-        name: contact.name,
-        createdAt: contact.createdAt,
-        sessionId: contact.sessionId,
-        agentId: contact.agentId,
-        hidden: contact.hidden,
-        muted: contact.muted,
-        pinned: contact.pinned,
-        unreadCount: contact.unreadCount,
-        approvalMode: nextApprovalMode,
-        longTermMemoryEnabled: contact.longTermMemoryEnabled,
-      }));
-    } catch (error) {
-      throw new ContactProjectsError(`无法更新联系人审批模式：${clean(error?.message) || "未知错误"}`);
-    }
-    return snapshot();
-  };
-
   const updateLongTermMemoryEnabled = async ({ id, enabled } = {}) => {
     if (typeof enabled !== "boolean") throw new ContactProjectsError("联系人长期记忆开关无效。 ");
     const root = await contactsRoot();
     const contact = await contactAt(fsOps, root, id);
-    if (!contact) throw new ContactProjectsError("所选联系人不存在或不是由 Suzu 创建的 Claude 项目。 ");
+    if (!contact) throw new ContactProjectsError("所选联系人不存在或不是由 Suzu 创建的联系人工作区。 ");
     if (enabled === contact.longTermMemoryEnabled) return snapshot();
     try {
       await writeTextAtomic(fsOps, path.join(contact.projectRoot, CONTACT_METADATA_DIRECTORY, CONTACT_METADATA_FILE), contactMetadataText({
@@ -564,7 +521,6 @@ export function createContactProjectsService({
         muted: contact.muted,
         pinned: contact.pinned,
         unreadCount: contact.unreadCount,
-        approvalMode: contact.approvalMode,
         longTermMemoryEnabled: enabled,
       }));
     } catch (error) {
@@ -577,7 +533,7 @@ export function createContactProjectsService({
     if (confirmed !== true) throw new ContactProjectsError("删除联系人需要明确确认。 ");
     const root = await contactsRoot();
     const contact = await contactAt(fsOps, root, id);
-    if (!contact) throw new ContactProjectsError("所选联系人不存在或不是由 Suzu 创建的 Claude 项目。 ");
+    if (!contact) throw new ContactProjectsError("所选联系人不存在或不是由 Suzu 创建的联系人工作区。 ");
     const ownedDataDirectories = await removableContactDataDirectories(contact);
     if (typeof onBeforeRemove === "function") {
       try {
@@ -617,7 +573,7 @@ export function createContactProjectsService({
         break;
       }
     }
-    if (!sessionId) throw new ContactProjectsError("无法生成联系人 Claude 会话标识。 ");
+    if (!sessionId) throw new ContactProjectsError("无法生成联系人会话标识。 ");
     let id = "";
     let projectRoot = "";
     for (let attempt = 0; attempt < 5; attempt += 1) {
@@ -637,7 +593,7 @@ export function createContactProjectsService({
     try {
       await writeTextAtomic(fsOps, path.join(projectRoot, CONTACT_FILE), "");
     } catch (error) {
-      throw new ContactProjectsError(`无法初始化 CLAUDE.md：${clean(error?.message) || "未知错误"}`);
+      throw new ContactProjectsError(`无法初始化 SUZU.md：${clean(error?.message) || "未知错误"}`);
     }
     try {
       await writeTextAtomic(fsOps, path.join(projectRoot, CONTACT_METADATA_DIRECTORY, CONTACT_METADATA_FILE), contactMetadataText({
@@ -663,5 +619,5 @@ export function createContactProjectsService({
     };
   };
 
-  return { create, remove, rename, select, selectRoot, setPreferred, snapshot, syncClaudeProjectSettings, syncOwnerProfileTitle, updateApprovalMode, updateLongTermMemoryEnabled, updatePresentation };
+  return { create, remove, rename, select, setPreferred, snapshot, syncContactProjectSettings, syncOwnerProfileTitle, updateLongTermMemoryEnabled, updatePresentation };
 }

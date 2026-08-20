@@ -47,7 +47,7 @@ export function promptWithReferenceRoles(prompt, references) {
 }
 export function validateApiConnection(value = {}) {
   const baseUrl = clean(value.baseUrl).replace(/\/+$/u, "");
-  if (!baseUrl) throw new ImageWorkbenchError("请先在 管理 → API 与服务 配置图像 API 地址。");
+  if (!baseUrl) throw new ImageWorkbenchError("请先在 设置 → API 为“生图”选择并配置 API 地址。");
   let parsed; try { parsed = new URL(baseUrl); } catch { throw new ImageWorkbenchError("图像 API 地址必须是 HTTP(S) URL。"); }
   if (!["http:", "https:"].includes(parsed.protocol)) throw new ImageWorkbenchError("图像 API 地址必须是 HTTP(S) URL。");
   const model = clean(value.model); if (!model) throw new ImageWorkbenchError("请配置图像模型。");
@@ -152,7 +152,7 @@ const DASHSCOPE_IMAGE_ENDPOINT = "/services/aigc/multimodal-generation/generatio
 
 function dashscopeImageConnection(value = {}) {
   const baseUrl = clean(value.baseUrl).replace(/\/+$/u, "");
-  if (!baseUrl) throw new ImageWorkbenchError("请先在管理 → API 配置阿里百炼 Key。 ");
+  if (!baseUrl) throw new ImageWorkbenchError("请先在 设置 → API 为“生图”选择并配置阿里百炼连接。 ");
   let parsed;
   try { parsed = new URL(baseUrl); } catch { throw new ImageWorkbenchError("阿里百炼地址必须是 HTTP(S) URL。 "); }
   if (!["http:", "https:"].includes(parsed.protocol)) throw new ImageWorkbenchError("阿里百炼地址必须是 HTTP(S) URL。 ");
@@ -176,14 +176,15 @@ async function dashscopeImage({ connection, input, references, fetchImpl, imageD
   if (references.length > 9) throw new ImageWorkbenchError("带参考图的阿里百炼生成最多支持 9 张参考图。 ");
   const prompt = input.includeReferencePrompt ? promptWithReferenceRoles(input.prompt, references) : input.prompt;
   const withReferences = references.length > 0;
+  const selectedModel = clean(connection.model);
   const body = withReferences
     ? {
-      model: "wan2.7-image",
+      model: selectedModel || "wan2.7-image",
       input: { messages: [{ role: "user", content: [...references.map((reference) => ({ image: dashscopeReferenceDataUrl(reference) })), { text: prompt }] }] },
       parameters: { size: "2K", n: 1, watermark: false },
     }
     : {
-      model: "z-image-turbo",
+      model: selectedModel || "z-image-turbo",
       input: { messages: [{ role: "user", content: [{ text: prompt }] }] },
       parameters: { prompt_extend: false, size: input.size.replace("x", "*") },
     };
@@ -258,7 +259,7 @@ async function comfyImage({ connection, input, references, registry, fetchImpl }
 }
 async function writeRun(root, record) { await fs.mkdir(safeRoot(root), { recursive: true }); await fs.appendFile(safeFile(root, "runs.jsonl"), JSON.stringify(record) + "\n", "utf8"); }
 export async function createCandidates({ root, connection, registry, input: rawInput, references: rawReferences = [], maxReferences = 12, fetchImpl = fetch, imageDownloader = downloadImageUrl, onSuccess = async () => {} }) {
-  const input = validateInput(rawInput); const references = validateReferences(rawReferences, { maxReferences }); if (!clean(connection?.apiKey) && input.backend === "api") throw new ImageWorkbenchError("请先在管理 → API 配置阿里百炼 Key。 ");
+  const input = validateInput(rawInput); const references = validateReferences(rawReferences, { maxReferences }); if (!clean(connection?.apiKey) && input.backend === "api") throw new ImageWorkbenchError("请先在 设置 → API 为“生图”选择并配置 API。 ");
   const runId = randomUUID(); const record = { id: runId, createdAt: new Date().toISOString(), prompt: input.prompt, backend: input.backend, workflow: input.workflow, size: input.size, countRequested: input.count, references: references.map(({ id, role, description, filename }) => ({ id, role, description, filename })), candidates: [], status: "running", note: "人工候选批次；尚未写入视觉参考库。" }; await writeRun(root, record);
   try { for (let index = 0; index < input.count; index += 1) { const result = input.backend === "api" ? (clean(connection?.type).toLowerCase() === "dashscope" ? await dashscopeImage({ connection, input, references, fetchImpl, imageDownloader }) : await apiImage({ connection, input, references, fetchImpl, imageDownloader })) : await comfyImage({ connection, input: { ...input, seed: input.seed === null ? null : input.seed + index }, references, registry, fetchImpl }); const name = "candidate-" + runId + "-" + String(index + 1).padStart(2, "0") + imageExtension(result.image); await fs.writeFile(safeFile(root, name), result.image, { flag: "wx" }); const candidate = { id: runId + "-" + (index + 1), file: name, backend: input.backend, model: result.model, requestId: result.requestId, seed: result.seed ?? null, mode: result.mode, workflow: result.workflow || "", createdAt: new Date().toISOString() }; record.candidates.push(candidate); await onSuccess({ candidate, result, input, referenceCount: references.length }); } record.status = "complete"; }
   catch (error) { record.status = record.candidates.length ? "partial" : "failed"; record.error = error?.message || String(error); throw error; }

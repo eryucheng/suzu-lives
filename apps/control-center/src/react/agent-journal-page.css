@@ -1,0 +1,143 @@
+.agent-journal-react-page {
+  display:grid;
+  width:100%;
+  min-width:0;
+  max-width:1280px;
+  gap:clamp(18px,2cqw,28px);
+  margin:0 auto;
+}
+
+.agent-journal-header-actions {
+  display:flex;
+  flex-wrap:wrap;
+  justify-content:flex-end;
+  gap:10px;
+}
+
+.agent-journal-page-error { margin:0; }
+
+.agent-journal-loading {
+  min-height:260px;
+  padding:28px;
+}
+
+.agent-journal-workspace {
+  display:grid;
+  grid-template-columns:minmax(210px,.34fr) minmax(0,1fr);
+  gap:var(--space-lg);
+  align-items:start;
+}
+
+.agent-journal-contact-rail {
+  display:grid;
+  gap:14px;
+  padding:16px;
+}
+
+.agent-journal-contact-rail__heading {
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:12px;
+  padding:3px 4px 9px;
+}
+
+.agent-journal-contact-rail__heading div { display:grid; gap:2px; }
+.agent-journal-contact-rail__heading span,
+.agent-journal-main__header > div > span,
+.agent-journal-entry header span {
+  color:var(--accent2);
+  font-size:var(--font-size-xs);
+  font-weight:var(--font-weight-bold);
+  letter-spacing:1.35px;
+}
+
+.agent-journal-contact-rail__heading strong { color:var(--text); font-size:var(--font-size-lg); }
+.agent-journal-contact-rail__heading b {
+  display:grid;
+  min-width:28px;
+  height:28px;
+  place-items:center;
+  border-radius:999px;
+  color:var(--accent);
+  background:color-mix(in srgb, var(--accent) 11%, transparent);
+  font-size:var(--font-size-sm);
+}
+
+.agent-journal-contact-list { display:grid; gap:7px; }
+
+.agent-journal-contact {
+  display:grid;
+  width:100%;
+  gap:4px;
+  padding:12px;
+  border:1px solid transparent;
+  border-radius:var(--radius-md);
+  color:var(--text);
+  background:transparent;
+  text-align:left;
+  cursor:pointer;
+  font:inherit;
+  transition:background .16s ease, border-color .16s ease;
+}
+
+.agent-journal-contact:hover:not(:disabled),
+.agent-journal-contact.selected {
+  border-color:color-mix(in srgb, var(--accent) 28%, var(--glass-border));
+  background:color-mix(in srgb, var(--accent) 9%, transparent);
+}
+
+.agent-journal-contact:focus-visible { outline:3px solid color-mix(in srgb, var(--accent2) 35%, transparent); outline-offset:2px; }
+.agent-journal-contact:disabled { cursor:wait; opacity:.62; }
+.agent-journal-contact strong { font-size:var(--font-size-md); font-weight:var(--font-weight-semibold); }
+.agent-journal-contact span { color:var(--text-secondary); font-size:var(--font-size-xs); }
+
+.agent-journal-main {
+  display:grid;
+  min-height:460px;
+  gap:22px;
+  padding:clamp(20px,3cqw,32px);
+}
+
+.agent-journal-main__header {
+  display:flex;
+  align-items:flex-start;
+  justify-content:space-between;
+  gap:16px;
+  padding-bottom:20px;
+  border-bottom:1px solid var(--glass-border);
+}
+
+.agent-journal-main__header > div { display:grid; gap:6px; }
+.agent-journal-main__header h2 { margin:0; color:var(--text); font-size:clamp(24px,3.3cqw,34px); letter-spacing:-.65px; }
+.agent-journal-main__header p { max-width:680px; margin:0; color:var(--text-secondary); font-size:var(--font-size-sm); line-height:1.65; }
+
+.agent-journal-entry-list { display:grid; gap:14px; }
+
+.agent-journal-entry {
+  display:grid;
+  gap:12px;
+  padding:18px 19px;
+  border:1px solid color-mix(in srgb, var(--glass-border) 88%, transparent);
+  border-radius:var(--radius-lg);
+  background:color-mix(in srgb, var(--panel) 69%, transparent);
+}
+
+.agent-journal-entry header { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; }
+.agent-journal-entry header > div { display:grid; gap:4px; }
+.agent-journal-entry h3 { margin:0; color:var(--text); font-size:var(--font-size-lg); font-weight:var(--font-weight-semibold); }
+.agent-journal-entry time { color:var(--text-secondary); font-size:var(--font-size-xs); white-space:nowrap; }
+.agent-journal-entry p { margin:0; color:var(--text); font-size:var(--font-size-md); line-height:1.8; white-space:pre-wrap; }
+
+@media (max-width:820px) {
+  .agent-journal-workspace { grid-template-columns:minmax(0,1fr); }
+  .agent-journal-contact-rail { padding:12px; }
+  .agent-journal-contact-list { grid-template-columns:repeat(auto-fit,minmax(154px,1fr)); }
+}
+
+@media (max-width:560px) {
+  .agent-journal-header-actions { justify-content:flex-start; }
+  .agent-journal-main { padding:20px; }
+  .agent-journal-main__header { display:grid; }
+  .agent-journal-entry header { display:grid; }
+}

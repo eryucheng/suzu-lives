@@ -22,7 +22,6 @@ contextBridge.exposeInMainWorld("suzuConsole", {
     downloadUpdate: () => ipcRenderer.invoke("settings:download-update"),
     installUpdate: () => ipcRenderer.invoke("settings:install-update"),
     systemStatus: () => ipcRenderer.invoke("settings:system-status"),
-    selectProject: () => ipcRenderer.invoke("settings:select-project"),
     changeDataLocation: () => ipcRenderer.invoke("settings:change-data-location"),
     removePreviousDataCopy: () => ipcRenderer.invoke("settings:remove-previous-data-copy"),
     update: (patch) => ipcRenderer.invoke("settings:update", patch),
@@ -42,7 +41,6 @@ contextBridge.exposeInMainWorld("suzuConsole", {
     register: (id) => ipcRenderer.invoke("capabilities:register", id),
     setActive: (id, enabled) => ipcRenderer.invoke("capabilities:set-active", { id, enabled }),
     saveSettings: (id, value) => ipcRenderer.invoke("capabilities:save-settings", { id, value }),
-    openTravelingMerchantPage: () => ipcRenderer.invoke("capabilities:open-traveling-merchant-page"),
   },
   externalCapabilities: {
     snapshot: () => ipcRenderer.invoke("external-capabilities:snapshot"),
@@ -51,24 +49,29 @@ contextBridge.exposeInMainWorld("suzuConsole", {
     remove: (id, confirmed = false) => ipcRenderer.invoke("external-capabilities:remove", { id, confirmed }),
   },
   agentRuntime: {
-    claudeCodeApiSnapshot: () => ipcRenderer.invoke("agent-runtime:claude-code-api-snapshot"),
-    saveClaudeCodeApi: (value) => ipcRenderer.invoke("agent-runtime:save-claude-code-api", value),
-    fetchClaudeCodeModels: (value) => ipcRenderer.invoke("agent-runtime:fetch-claude-code-models", value),
+    snapshot: () => ipcRenderer.invoke("agent-runtime:snapshot"),
+    saveModelConfiguration: (value) => ipcRenderer.invoke("agent-runtime:save-model-configuration", value),
+    fetchModels: (value = {}) => ipcRenderer.invoke("agent-runtime:fetch-models", value),
   },
   conversation: {
     snapshot: () => ipcRenderer.invoke("conversation:snapshot"),
     search: (query) => ipcRenderer.invoke("conversation:search", query),
+    contextTrace: (value) => ipcRenderer.invoke("conversation:context-trace", value),
     focus: (value) => ipcRenderer.invoke("conversation:focus", value),
     openMediaDirectory: (value) => ipcRenderer.invoke("conversation:open-media-directory", value),
+    openMediaFile: (value) => ipcRenderer.invoke("conversation:open-media-file", value),
     create: () => ipcRenderer.invoke("conversation:create"),
     createContact: (value) => ipcRenderer.invoke("conversation:create-contact", value),
     renameContact: (value) => ipcRenderer.invoke("conversation:rename-contact", value),
     selectContact: (value) => ipcRenderer.invoke("conversation:select-contact", value),
     setPreferredContact: (value) => ipcRenderer.invoke("conversation:set-preferred-contact", value),
     updateContactPresentation: (value) => ipcRenderer.invoke("conversation:update-contact-presentation", value),
-    updateContactApprovalMode: (value) => ipcRenderer.invoke("conversation:update-contact-approval-mode", value),
     updateContactLongTermMemoryEnabled: (value) => ipcRenderer.invoke("conversation:update-contact-long-term-memory", value),
     removeContact: (value) => ipcRenderer.invoke("conversation:remove-contact", value),
+    attachments: {
+      select: (value) => ipcRenderer.invoke("conversation:select-attachments", value),
+      discard: (value) => ipcRenderer.invoke("conversation:discard-attachments", value),
+    },
     emojiStickers: {
       snapshot: () => ipcRenderer.invoke("conversation:emoji-stickers"),
       select: () => ipcRenderer.invoke("conversation:select-emoji-sticker"),
@@ -95,12 +98,23 @@ contextBridge.exposeInMainWorld("suzuConsole", {
     },
   },
   conversationCompactor: {
+    run: (value = {}) => ipcRenderer.invoke("conversation-compactor:run", value),
+    save: (value = {}) => ipcRenderer.invoke("conversation-compactor:save", value),
     snapshot: (value = {}) => ipcRenderer.invoke("conversation-compactor:snapshot", value),
-    save: (value) => ipcRenderer.invoke("conversation-compactor:save", value),
-    check: (value) => ipcRenderer.invoke("conversation-compactor:check", value),
-    run: (value) => ipcRenderer.invoke("conversation-compactor:run", value),
-    selectImportJsonl: () => ipcRenderer.invoke("conversation-compactor:select-import-jsonl"),
-    importJsonl: (value) => ipcRenderer.invoke("conversation-compactor:import-jsonl", value),
+  },
+  softwareAssistant: {
+    snapshot: () => ipcRenderer.invoke("software-assistant:snapshot"),
+    send: (value) => ipcRenderer.invoke("software-assistant:send", value),
+    stop: (value = {}) => ipcRenderer.invoke("software-assistant:stop", value),
+    onEvent: (callback) => {
+      if (typeof callback !== "function") return () => {};
+      const listener = (_event, payload) => callback(payload);
+      ipcRenderer.on("software-assistant:event", listener);
+      return () => ipcRenderer.removeListener("software-assistant:event", listener);
+    },
+  },
+  agentJournal: {
+    snapshot: (value = {}) => ipcRenderer.invoke("agent-journal:snapshot", value),
   },
   schedule: {
     snapshot: () => ipcRenderer.invoke("schedule:snapshot"),
@@ -128,9 +142,6 @@ contextBridge.exposeInMainWorld("suzuConsole", {
     create: (value) => ipcRenderer.invoke("relationship-files:create", value),
   },
   connections: {
-    dashScopeSnapshot: () => ipcRenderer.invoke("connections:dashscope-snapshot"),
-    saveDashScope: (value) => ipcRenderer.invoke("connections:save-dashscope", value),
-    clearDashScope: () => ipcRenderer.invoke("connections:clear-dashscope"),
     comfyuiSnapshot: () => ipcRenderer.invoke("connections:comfyui-snapshot"),
     saveComfyui: (value) => ipcRenderer.invoke("connections:save-comfyui", value),
     apiServicesSnapshot: () => ipcRenderer.invoke("connections:api-services-snapshot"),
@@ -155,14 +166,9 @@ contextBridge.exposeInMainWorld("suzuConsole", {
   },
   voiceDesign: {
     snapshot: () => ipcRenderer.invoke("voice-design:snapshot"),
-    saveSettings: (value) => ipcRenderer.invoke("voice-design:save-settings", value),
+    deleteCustomVoice: (value) => ipcRenderer.invoke("voice-design:delete-custom-voice", value),
     saveCustomAudio: (value) => ipcRenderer.invoke("voice-design:save-custom-audio", value),
     saveContactVoice: (value) => ipcRenderer.invoke("voice-design:save-contact-voice", value),
-    create: (value) => ipcRenderer.invoke("voice-design:create", value),
-    renameCandidate: (value) => ipcRenderer.invoke("voice-design:rename-candidate", value),
-    retainCandidate: (id) => ipcRenderer.invoke("voice-design:retain-candidate", id),
-    deleteCandidate: (id) => ipcRenderer.invoke("voice-design:delete-candidate", id),
-    preview: (id) => ipcRenderer.invoke("voice-design:preview", id),
   },
   memory: {
     status: (scope = {}) => ipcRenderer.invoke("memory:status", scope),

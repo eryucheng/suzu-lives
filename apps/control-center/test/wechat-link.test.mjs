@@ -67,7 +67,7 @@ test("WeChat approval prompts stay separate from tool delivery and accept a scop
   const projectRoot = path.join(root, "project");
   await fs.mkdir(projectRoot, { recursive: true });
   const approvalResponses = [];
-  const deliveredToClaude = [];
+  const deliveredToSession = [];
   const outgoing = [];
   const chatSubscribers = new Set();
   let releaseConfirmation = null;
@@ -80,7 +80,7 @@ test("WeChat approval prompts stay separate from tool delivery and accept a scop
   const approvalReplies = new Promise((resolve) => { releaseApprovalReplies = resolve; });
   let approvalPending = true;
   const chat = {
-    sendToSession: async (value) => { deliveredToClaude.push(value); return { accepted: true }; },
+    sendToSession: async (value) => { deliveredToSession.push(value); return { accepted: true }; },
     respondPermissionForSession: (value) => {
       if (!approvalPending) return { accepted: false, reason: "no-pending-permission" };
       approvalPending = false;
@@ -191,15 +191,15 @@ test("WeChat approval prompts stay separate from tool delivery and accept a scop
   await waitFor(() => outgoing.length === 4, "微信审批处理结果没有回传");
   assert.equal(outgoing[2].msg.item_list[0].text_item.text, "已允许工具权限：Bash。");
   assert.equal(outgoing[3].msg.item_list[0].text_item.text, "当前没有等待确认的工具请求。");
-  assert.deepEqual(deliveredToClaude, []);
+  assert.deepEqual(deliveredToSession, []);
   service.dispose();
 });
 
-test("WeChat links persist a contact scope and relay through its fixed Claude session", async () => {
+test("WeChat links persist a contact scope and relay through its fixed DSH session", async () => {
   const root = await temporaryDirectory("suzu-wechat-link-");
   const projectRoot = path.join(root, "project");
   await fs.mkdir(projectRoot, { recursive: true });
-  const deliveredToClaude = [];
+  const deliveredToSession = [];
   const outgoing = [];
   const uploadRequests = [];
   const uploadedBodies = [];
@@ -208,9 +208,9 @@ test("WeChat links persist a contact scope and relay through its fixed Claude se
   const confirmation = new Promise((resolve) => { releaseConfirmation = resolve; });
   let getUpdates = 0;
   const chat = {
-    sendToSession: async (value) => { deliveredToClaude.push(value); return { accepted: true }; },
+    sendToSession: async (value) => { deliveredToSession.push(value); return { accepted: true }; },
     steer: async () => ({ accepted: true, message: "引导已送达。" }),
-    stop: () => ({ accepted: true, stopped: false, message: "当前联系人没有正在执行的 Claude Code 任务。" }),
+    stop: () => ({ accepted: true, stopped: false, message: "当前联系人没有正在执行的 DSH 任务。" }),
     subscribe: (listener) => {
       chatSubscribers.add(listener);
       return () => chatSubscribers.delete(listener);
@@ -283,8 +283,8 @@ test("WeChat links persist a contact scope and relay through its fixed Claude se
   const pending = await service.begin({ contactId: "contact-suzu" });
   assert.match(pending.pendingQr?.imageDataUrl || "", /^data:image\/png;base64,/u);
   releaseConfirmation();
-  await waitFor(() => deliveredToClaude.length === 1, "微信入站消息没有进入 Claude 会话队列");
-  assert.deepEqual(deliveredToClaude[0], {
+  await waitFor(() => deliveredToSession.length === 1, "微信入站消息没有进入 DSH 会话队列");
+  assert.deepEqual(deliveredToSession[0], {
     content: "从微信发来的文字",
     sessionId: "session-1",
     projectRoot,
@@ -311,7 +311,7 @@ test("WeChat links persist a contact scope and relay through its fixed Claude se
     projectRoot,
     content: "工具前的说明\n\n分开的一段",
   });
-  await waitFor(() => outgoing.length === 2, "Claude 回复没有按段发回微信");
+  await waitFor(() => outgoing.length === 2, "DSH 回复没有按段发回微信");
   assert.deepEqual(outgoing.map((item) => item.msg.item_list[0].text_item.text), ["工具前的说明", "分开的一段"]);
   assert.ok(outgoing.every((item) => item.msg.context_token === "context-1"));
 
@@ -380,11 +380,11 @@ test("WeChat links persist a contact scope and relay through its fixed Claude se
   service.dispose();
 });
 
-test("WeChat images and files enter the bound Claude session while only supplied voice text is kept", async () => {
+test("WeChat images and files enter the bound DSH session while only supplied voice text is kept", async () => {
   const root = await temporaryDirectory("suzu-wechat-inbound-media-");
   const projectRoot = path.join(root, "project");
   await fs.mkdir(projectRoot, { recursive: true });
-  const deliveredToClaude = [];
+  const deliveredToSession = [];
   const chatSubscribers = new Set();
   const downloads = [];
   const mediaKey = Buffer.from("1234567890abcdef", "utf8");
@@ -394,7 +394,7 @@ test("WeChat images and files enter the bound Claude session while only supplied
   const confirmation = new Promise((resolve) => { releaseConfirmation = resolve; });
   let getUpdates = 0;
   const chat = {
-    sendToSession: async (value) => { deliveredToClaude.push(value); return { accepted: true }; },
+    sendToSession: async (value) => { deliveredToSession.push(value); return { accepted: true }; },
     steer: async () => ({ accepted: true }),
     stop: () => ({ accepted: true }),
     subscribe: (listener) => {
@@ -465,19 +465,19 @@ test("WeChat images and files enter the bound Claude session while only supplied
   const pending = await service.begin({ contactId: "contact-media" });
   assert.match(pending.pendingQr?.imageDataUrl || "", /^data:image\/png;base64,/u);
   releaseConfirmation();
-  await waitFor(() => deliveredToClaude.length === 1, "微信媒体没有进入 Claude 会话队列");
-  assert.equal(deliveredToClaude[0].content, "微信已经转写的语音");
-  assert.equal(deliveredToClaude[0].media.length, 2);
+  await waitFor(() => deliveredToSession.length === 1, "微信媒体没有进入 DSH 会话队列");
+  assert.equal(deliveredToSession[0].content, "微信已经转写的语音");
+  assert.equal(deliveredToSession[0].media.length, 2);
   assert.deepEqual(downloads, ["image-query", "file-query"]);
-  assert.equal(deliveredToClaude[0].media[0].kind, "image");
-  assert.equal(deliveredToClaude[0].media[0].mimeType, "image/png");
-  assert.equal(deliveredToClaude[0].media[1].fileName, "微信文件.txt");
+  assert.equal(deliveredToSession[0].media[0].kind, "image");
+  assert.equal(deliveredToSession[0].media[0].mimeType, "image/png");
+  assert.equal(deliveredToSession[0].media[1].fileName, "微信文件.txt");
   assert.equal(
-    path.dirname(path.dirname(deliveredToClaude[0].media[0].path)),
+    path.dirname(path.dirname(deliveredToSession[0].media[0].path)),
     path.join(root, "agents", stableAgentId(projectRoot), "conversations", "session-media", "inbound"),
   );
-  assert.deepEqual(await fs.readFile(deliveredToClaude[0].media[0].path), image);
-  assert.deepEqual(await fs.readFile(deliveredToClaude[0].media[1].path), file);
+  assert.deepEqual(await fs.readFile(deliveredToSession[0].media[0].path), image);
+  assert.deepEqual(await fs.readFile(deliveredToSession[0].media[1].path), file);
   service.dispose();
 });
 

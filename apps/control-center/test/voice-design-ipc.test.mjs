@@ -5,179 +5,233 @@ import path from "node:path";
 import test from "node:test";
 
 import { resolveAgentDataRoot } from "@suzu-lives/agent-registry";
-import { createVoiceCandidates, retainVoiceCandidate } from "@suzu-lives/voice-design";
 
 import { registerVoiceDesignIpc } from "../electron/ipc/voice-design-ipc.mjs";
 
-const voiceConfig = {
-  baseUrl: "https://example.test/api/v1",
-  designModel: "qwen-voice-design",
-  targetModel: "qwen3-tts-vd-2026-01-26",
-  namePrefix: "suzu",
-  language: "zh",
-  sampleRate: 24000,
-  responseFormat: "wav",
-};
-
-test("voice design deletion keeps the current contact from losing its configured candidate", async () => {
-  const dataRoot = await fs.mkdtemp(path.join(os.tmpdir(), "suzu-voice-design-ipc-data-"));
-  const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "suzu-voice-design-ipc-project-"));
-  const settings = { agentId: "agent-voice-delete", projectRoot };
-  const agentRoot = resolveAgentDataRoot({ dataRoot, agentId: settings.agentId });
-  const root = path.join(agentRoot, "voice-design");
-  const [candidate] = await createVoiceCandidates({
-    root,
-    config: voiceConfig,
-    input: { voicePrompt: "温和自然", previewText: "你好，这是试听。", count: 1 },
-    apiKey: "test-key",
-    fetchImpl: async () => ({ ok: true, json: async () => ({ output: { voice: "voice-current", preview_audio: { data: Buffer.from("preview").toString("base64") } } }) }),
-  });
-  const contactConfigPath = path.join(agentRoot, "voice-message", "config.json");
-  await fs.mkdir(path.dirname(contactConfigPath), { recursive: true });
-  await fs.writeFile(contactConfigPath, JSON.stringify({ voiceId: candidate.voiceId }), "utf8");
-
-  const handlers = new Map();
-  registerVoiceDesignIpc({
-    ipcMain: { handle: (channel, callback) => handlers.set(channel, callback) },
-    settingsService: {
-      load: () => settings,
-      response: () => ({ dataRoot }),
-      usageLedgerPath: () => path.join(dataRoot, "cost-ledger", "events.jsonl"),
-    },
-    connectionsService: { dashScopeSnapshot: async () => ({ configured: true, credentialStatus: "ready" }) },
-  });
-
-  const remove = handlers.get("voice-design:delete-candidate");
-  await assert.rejects(remove(null, candidate.id), /正在被联系人使用/u);
-
-  await fs.writeFile(contactConfigPath, JSON.stringify({ voiceId: "voice-other" }), "utf8");
-  const snapshot = await remove(null, candidate.id);
-  assert.deepEqual(snapshot.candidates, []);
-});
-
-test("custom audio keeps provider keys locally while exposing MiniMax and Alibaba cloning choices without keys", async () => {
+test("custom audio keeps only adapter parameters and uses the selected shared API", async () => {
   const dataRoot = await fs.mkdtemp(path.join(os.tmpdir(), "suzu-custom-audio-ipc-data-"));
   const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "suzu-custom-audio-ipc-project-"));
   const settings = { agentId: "agent-custom-audio", projectRoot };
-  const agentRoot = resolveAgentDataRoot({ dataRoot, agentId: settings.agentId });
   const handlers = new Map();
   registerVoiceDesignIpc({
     ipcMain: { handle: (channel, callback) => handlers.set(channel, callback) },
     settingsService: {
       load: () => settings,
       response: () => ({ dataRoot }),
-      usageLedgerPath: () => path.join(dataRoot, "cost-ledger", "events.jsonl"),
     },
-    connectionsService: { dashScopeSnapshot: async () => ({ configured: true, credentialStatus: "ready" }) },
+    connectionsService: {
+      resolveNamedApiConnection: async () => ({
+        key: "shared-openai-key",
+        name: "我的 TTS",
+        type: "openai-compatible",
+        baseUrl: "https://tts.example.test/v1",
+        model: "tts-1",
+      }),
+    },
   });
 
   const snapshot = await handlers.get("voice-design:save-custom-audio")(null, {
     name: "Suzu 电话声",
-    provider: "minimax",
-    voiceId: "minimax-voice-id",
-    apiKey: "development-only-minimax-key",
+    adapter: "openai-speech",
+    model: "tts-1",
+    voiceId: "nova",
   });
   assert.equal(snapshot.customVoices.length, 1);
-  assert.equal(snapshot.customVoices[0].provider, "minimax");
-  assert.equal(JSON.stringify(snapshot).includes("development-only-minimax-key"), false);
+  assert.equal(snapshot.customVoices[0].adapter, "openai-speech");
+  assert.equal(JSON.stringify(snapshot).includes("shared-openai-key"), false);
   const stored = JSON.parse(await fs.readFile(path.join(dataRoot, "voice-message", "custom-voices.json"), "utf8"));
-  assert.equal(stored.voices[0].apiKey, "development-only-minimax-key");
-
-  const cosyvoiceSnapshot = await handlers.get("voice-design:save-custom-audio")(null, {
-    name: "Suzu 复刻声",
-    provider: "cosyvoice",
-    voiceId: "cosyvoice-v3.5-plus-suzu-voice",
-    apiKey: "development-only-bailian-key",
-  });
-  const cosyvoice = cosyvoiceSnapshot.customVoices.find((voice) => voice.provider === "cosyvoice");
-  assert.ok(cosyvoice);
-  assert.equal(cosyvoice.model, "cosyvoice-v3.5-plus");
-  assert.equal(JSON.stringify(cosyvoiceSnapshot).includes("development-only-bailian-key"), false);
-  const cosyvoiceStored = JSON.parse(await fs.readFile(path.join(dataRoot, "voice-message", "custom-voices.json"), "utf8"));
-  assert.equal(cosyvoiceStored.voices[0].apiKey, "development-only-bailian-key");
+  assert.equal(stored.schemaVersion, 2);
+  assert.equal(stored.voices[0].apiKey, undefined);
+  assert.equal(stored.voices[0].adapter, "openai-speech");
+  await assert.rejects(
+    () => handlers.get("voice-design:save-custom-audio")(null, {
+      name: "不兼容的 MiniMax",
+      adapter: "minimax-speech",
+      voiceId: "minimax-voice-id",
+    }),
+    /不能使用当前选择的 API/u,
+  );
 });
 
-test("contact voice configuration lists every contact and writes the selected source to the chosen contact only", async () => {
+test("a DashScope CosyVoice sound saved through the old OpenAI default is stored with the DashScope adapter", async () => {
+  const dataRoot = await fs.mkdtemp(path.join(os.tmpdir(), "suzu-dashscope-cosyvoice-auto-adapter-data-"));
+  const handlers = new Map();
+  registerVoiceDesignIpc({
+    ipcMain: { handle: (channel, callback) => handlers.set(channel, callback) },
+    settingsService: {
+      load: () => ({ agentId: "", projectRoot: "" }),
+      response: () => ({ dataRoot }),
+    },
+    connectionsService: {
+      resolveNamedApiConnection: async () => ({
+        key: "shared-dashscope-key",
+        name: "百炼 TTS",
+        type: "tts-api",
+        baseUrl: "https://dashscope.aliyuncs.com/api/v1",
+        model: "",
+      }),
+    },
+  });
+
+  const snapshot = await handlers.get("voice-design:save-custom-audio")(null, {
+    name: "Suzu 百炼电话声",
+    adapter: "openai-speech",
+    model: "cosyvoice-v3.5-plus",
+    voiceId: "cosyvoice-v3.5-plus-bailian-suzu",
+  });
+  assert.equal(snapshot.customVoices[0].adapter, "dashscope-cosyvoice");
+  const stored = JSON.parse(await fs.readFile(path.join(dataRoot, "voice-message", "custom-voices.json"), "utf8"));
+  assert.equal(stored.voices[0].adapter, "dashscope-cosyvoice");
+  assert.equal(JSON.stringify(stored).includes("shared-dashscope-key"), false);
+});
+
+test("contact voice configuration lists every contact and writes the selected custom voice to the chosen contact only", async () => {
   const dataRoot = await fs.mkdtemp(path.join(os.tmpdir(), "suzu-contact-voice-library-data-"));
   const source = { id: "contact-source", name: "Suzu", agentId: "agent-source-contact" };
   const target = { id: "contact-target", name: "小林", agentId: "agent-target-contact" };
-  const sourceRoot = resolveAgentDataRoot({ dataRoot, agentId: source.agentId });
   const targetRoot = resolveAgentDataRoot({ dataRoot, agentId: target.agentId });
-  const [candidate] = await createVoiceCandidates({
-    root: path.join(sourceRoot, "voice-design"),
-    config: voiceConfig,
-    input: { voicePrompt: "自然亲切", previewText: "你好，这是试听。", count: 1 },
-    apiKey: "test-key",
-    fetchImpl: async () => ({ ok: true, json: async () => ({ output: { voice: "voice-library", preview_audio: { data: Buffer.from("preview").toString("base64") } } }) }),
-  });
-  await retainVoiceCandidate(path.join(sourceRoot, "voice-design"), candidate.id);
   const settings = { agentId: "", projectRoot: "" };
   const handlers = new Map();
+  let selectedVoiceConnection = {
+    key: "shared-minimax-key",
+    name: "MiniMax 语音",
+    type: "generic-api",
+    baseUrl: "https://api.minimax.io/v1",
+    model: "speech-2.8-hd",
+  };
   registerVoiceDesignIpc({
     ipcMain: { handle: (channel, callback) => handlers.set(channel, callback) },
     settingsService: {
       load: () => settings,
       response: () => ({ dataRoot }),
-      usageLedgerPath: () => path.join(dataRoot, "cost-ledger", "events.jsonl"),
     },
-    connectionsService: { dashScopeSnapshot: async () => ({ configured: true, credentialStatus: "ready" }) },
+    connectionsService: {
+      resolveNamedApiConnection: async () => selectedVoiceConnection,
+    },
     contactProjectsService: { snapshot: async () => ({ contacts: [source, target] }) },
   });
 
   const initial = await handlers.get("voice-design:snapshot")();
-  assert.equal(initial.status, "needs-project");
+  assert.equal(initial.status, "ready");
   assert.deepEqual(initial.contacts.map((contact) => contact.name), ["Suzu", "小林"]);
-  const qwen = initial.assignableVoices.find((voice) => voice.provider === "qwen" && voice.voiceId === candidate.voiceId);
-  assert.ok(qwen);
-
-  const afterQwen = await handlers.get("voice-design:save-contact-voice")(null, {
-    contactId: target.id,
-    provider: "qwen",
-    voiceId: qwen.voiceId,
-    sourceContactId: qwen.sourceContactId,
-    sourceCandidateId: qwen.sourceCandidateId,
-  });
-  const targetContact = afterQwen.contacts.find((contact) => contact.id === target.id);
-  assert.equal(targetContact.voiceId, candidate.voiceId);
-  assert.equal(JSON.parse(await fs.readFile(path.join(targetRoot, "voice-message", "config.json"), "utf8")).sourceAgentId, source.agentId);
+  assert.deepEqual(initial.assignableVoices, []);
 
   const afterCustom = await handlers.get("voice-design:save-custom-audio")(null, {
     name: "电话声",
-    provider: "minimax",
+    adapter: "minimax-speech",
+    model: "speech-2.8-hd",
     voiceId: "minimax-voice-library",
-    apiKey: "plain-development-key",
   });
-  const minimax = afterCustom.assignableVoices.find((voice) => voice.provider === "minimax");
+  const minimax = afterCustom.assignableVoices.find((voice) => voice.adapter === "minimax-speech");
   assert.ok(minimax);
-  assert.equal(JSON.stringify(afterCustom).includes("plain-development-key"), false);
+  assert.equal(minimax.source, "global");
+  assert.equal(JSON.stringify(afterCustom).includes("shared-minimax-key"), false);
   await handlers.get("voice-design:save-contact-voice")(null, {
     contactId: target.id,
-    provider: "minimax",
+    adapter: "minimax-speech",
     voiceId: minimax.voiceId,
     customVoiceId: minimax.id,
     sourceContactId: minimax.sourceContactId,
   });
   const targetConfig = JSON.parse(await fs.readFile(path.join(targetRoot, "voice-message", "config.json"), "utf8"));
+  assert.equal(targetConfig.adapter, "minimax-speech");
   assert.equal(targetConfig.customVoiceSource, "global");
   assert.equal(targetConfig.customVoiceId, minimax.id);
 
+  const sourceConfig = await fs.readFile(path.join(resolveAgentDataRoot({ dataRoot, agentId: source.agentId }), "voice-message", "config.json"), "utf8").catch(() => "");
+  assert.equal(sourceConfig, "");
+
+  selectedVoiceConnection = {
+    key: "shared-dashscope-key",
+    name: "百炼语音",
+    type: "dashscope",
+    baseUrl: "https://dashscope.aliyuncs.com/api/v1",
+    model: "cosyvoice-v3.5-plus",
+  };
   const afterAlibabaClone = await handlers.get("voice-design:save-custom-audio")(null, {
-    name: "Suzu 百炼复刻",
-    provider: "cosyvoice",
+    name: "Suzu 复刻",
+    adapter: "dashscope-cosyvoice",
     voiceId: "cosyvoice-v3.5-plus-suzu-voice",
-    apiKey: "plain-bailian-development-key",
   });
-  const cosyvoiceClone = afterAlibabaClone.assignableVoices.find((voice) => voice.provider === "cosyvoice" && voice.id);
+  const cosyvoiceClone = afterAlibabaClone.assignableVoices.find((voice) => voice.adapter === "dashscope-cosyvoice" && voice.id);
   assert.ok(cosyvoiceClone);
   await handlers.get("voice-design:save-contact-voice")(null, {
     contactId: target.id,
-    provider: "cosyvoice",
+    adapter: "dashscope-cosyvoice",
     voiceId: cosyvoiceClone.voiceId,
     customVoiceId: cosyvoiceClone.id,
     sourceContactId: cosyvoiceClone.sourceContactId,
   });
   const cosyvoiceCloneConfig = JSON.parse(await fs.readFile(path.join(targetRoot, "voice-message", "config.json"), "utf8"));
-  assert.equal(cosyvoiceCloneConfig.provider, "cosyvoice");
+  assert.equal(cosyvoiceCloneConfig.adapter, "dashscope-cosyvoice");
   assert.equal(cosyvoiceCloneConfig.customVoiceSource, "global");
   assert.equal(cosyvoiceCloneConfig.customVoiceId, cosyvoiceClone.id);
+});
+
+test("custom voice deletion refuses in-use voices and removes unused ones", async () => {
+  const dataRoot = await fs.mkdtemp(path.join(os.tmpdir(), "suzu-delete-voice-ipc-data-"));
+  const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "suzu-delete-voice-ipc-project-"));
+  const settings = { agentId: "", projectRoot: "" };
+  const contact = { id: "contact-voice", name: "小张", agentId: "agent-voice" };
+  const contactRoot = resolveAgentDataRoot({ dataRoot, agentId: contact.agentId });
+  const handlers = new Map();
+  registerVoiceDesignIpc({
+    ipcMain: { handle: (channel, callback) => handlers.set(channel, callback) },
+    settingsService: {
+      load: () => settings,
+      response: () => ({ dataRoot }),
+    },
+    connectionsService: {
+      resolveNamedApiConnection: async () => ({
+        key: "shared-minimax-key",
+        name: "MiniMax 语音",
+        type: "generic-api",
+        baseUrl: "https://api.minimax.io/v1",
+        model: "speech-2.8-hd",
+      }),
+    },
+    contactProjectsService: { snapshot: async () => ({ contacts: [contact] }) },
+  });
+
+  const afterCustom = await handlers.get("voice-design:save-custom-audio")(null, {
+    name: "电话声",
+    adapter: "minimax-speech",
+    model: "speech-2.8-hd",
+    voiceId: "minimax-voice-delete",
+  });
+  const voice = afterCustom.assignableVoices[0];
+  assert.ok(voice);
+
+  await handlers.get("voice-design:save-contact-voice")(null, {
+    contactId: contact.id,
+    adapter: "minimax-speech",
+    voiceId: voice.voiceId,
+    customVoiceId: voice.id,
+    sourceContactId: voice.sourceContactId,
+  });
+  await assert.rejects(
+    () => handlers.get("voice-design:delete-custom-voice")(null, { id: voice.id, source: voice.source, sourceContactId: voice.sourceContactId }),
+    /正在供/u,
+  );
+
+  const replacement = await handlers.get("voice-design:save-custom-audio")(null, {
+    name: "备用声音",
+    adapter: "minimax-speech",
+    model: "speech-2.8-hd",
+    voiceId: "minimax-voice-other",
+  });
+  const replacementVoice = replacement.assignableVoices.find((item) => item.voiceId === "minimax-voice-other");
+  assert.ok(replacementVoice);
+  await handlers.get("voice-design:save-contact-voice")(null, {
+    contactId: contact.id,
+    adapter: "minimax-speech",
+    voiceId: replacementVoice.voiceId,
+    customVoiceId: replacementVoice.id,
+    sourceContactId: replacementVoice.sourceContactId,
+  });
+
+  const afterDelete = await handlers.get("voice-design:delete-custom-voice")(null, { id: voice.id, source: voice.source, sourceContactId: voice.sourceContactId });
+  assert.equal(afterDelete.customVoices.find((item) => item.id === voice.id), undefined);
+  const contactConfig = JSON.parse(await fs.readFile(path.join(contactRoot, "voice-message", "config.json"), "utf8"));
+  assert.equal(contactConfig.customVoiceId, replacementVoice.id);
 });

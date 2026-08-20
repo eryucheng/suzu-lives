@@ -11,7 +11,7 @@ async function temporaryDirectory(prefix) {
   return fs.mkdtemp(path.join(os.tmpdir(), prefix));
 }
 
-test("contact media stays isolated even when Claude session ids match", async () => {
+test("contact media stays isolated even when session ids match", async () => {
   const root = await temporaryDirectory("suzu-session-settings-");
   const firstProject = path.join(root, "first-project");
   const secondProject = path.join(root, "second-project");

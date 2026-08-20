@@ -69,6 +69,7 @@ test("voice call UI and lifecycle live in React rather than conversation DOM bin
   assert.match(page, /conversation-call-dialing__screen/u);
   assert.match(callProvider, /dialing: true/u);
   assert.match(callProvider, /event\.type === "call-audio"[\s\S]*?dialing: false/u);
+  assert.match(callProvider, /event\.type === "call-audio-skip"[\s\S]*?dialing: false/u);
   assert.doesNotMatch(page, /call\.transcript/u);
   assert.doesNotMatch(page, /你说/u);
   assert.doesNotMatch(page, /ConversationCallDialog/u);

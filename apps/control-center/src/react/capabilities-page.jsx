@@ -137,7 +137,6 @@ export function CapabilitiesPage({ actions = {}, snapshot = {} }) {
         capability={capability}
         categoryId={capabilityCategory(capability)}
         contactsSnapshot={snapshot.contactsSnapshot}
-        siteId={snapshot.siteId}
         wechatSnapshot={snapshot.wechatSnapshot}
       />
     );

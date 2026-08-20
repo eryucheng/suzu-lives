@@ -18,6 +18,8 @@ import { parseSuzuConversationCommand } from "../../../shared/conversation-comma
 export { parseSuzuConversationCommand } from "../../../shared/conversation-command.mjs";
 
 const viewState = {
+  attachments: [],
+  attachmentPicking: false,
   avatarCrop: null,
   busySessions: new Set(),
   transientSystemMessages: [],
@@ -31,6 +33,7 @@ const viewState = {
   focus: null,
   lastVersion: null,
   liveReplies: new Map(),
+  liveTools: [],
   listScrollTop: 0,
   loading: false,
   menuOpen: false,
@@ -63,8 +66,10 @@ const viewState = {
 
 const TRANSCRIPT_MATCH_GRACE_MS = 5_000;
 
-const defaults = { attachments: false, tools: false, thinking: false, system: false, tokens: false, timeDisplay: "center" };
-const CLAUDE_APPROVAL_MODES = new Set(["default", "acceptEdits", "plan", "bypassPermissions"]);
+// Direct terminal work should be inspectable in the normal chat flow.  Other
+// optional diagnostic blocks remain opt-in, but tool calls/results are shown
+// unless the user explicitly hides them.
+const defaults = { attachments: false, tools: true, thinking: false, system: false, tokens: false, timeDisplay: "center" };
 const CENTER_TIME_GAP_MS = 5 * 60 * 1_000;
 
 function preferences(settings) {
@@ -120,12 +125,43 @@ function messageText(message) {
     .join("\n");
 }
 
-function messageMatches(items, kind, content, localTimestamp) {
+function hasDisplayableBlock(message) {
+  return (message?.blocks || []).some((block) => clean(block?.text || block?.detail || block?.summary));
+}
+
+function mediaSignature(value) {
+  const source = value && typeof value === "object" ? value : {};
+  const kind = clean(source.mediaKind === "sticker" ? "image" : source.mediaKind || source.kind).toLowerCase();
+  const fileName = clean(source.fileName).toLowerCase();
+  const size = Number(source.size);
+  return kind && fileName && Number.isSafeInteger(size) && size > 0 ? `${kind}\u0000${fileName}\u0000${size}` : "";
+}
+
+function sameMedia(items, expected) {
+  const requested = (Array.isArray(expected) ? expected : []).map(mediaSignature).filter(Boolean);
+  if (!requested.length) return true;
+  const available = new Map();
+  for (const block of Array.isArray(items) ? items : []) {
+    const signature = mediaSignature(block);
+    if (signature) available.set(signature, (available.get(signature) || 0) + 1);
+  }
+  return requested.every((signature) => {
+    const remaining = Number(available.get(signature)) || 0;
+    if (remaining < 1) return false;
+    available.set(signature, remaining - 1);
+    return true;
+  });
+}
+
+function messageMatches(items, kind, content, localTimestamp, media = []) {
   const target = clean(content);
-  if (!target) return false;
+  const expectedMedia = Array.isArray(media) ? media : [];
+  if (!target && !expectedMedia.length) return false;
   const localTime = Date.parse(localTimestamp);
   return (items || []).some((item) => {
-    if (item.kind !== kind || messageText(item) !== target) return false;
+    if (item.kind !== kind) return false;
+    if (target && messageText(item) !== target) return false;
+    if (!sameMedia(item.blocks, expectedMedia)) return false;
     if (!Number.isFinite(localTime)) return true;
     const transcriptTime = Date.parse(item.timestamp);
     return Number.isFinite(transcriptTime) && transcriptTime >= localTime - TRANSCRIPT_MATCH_GRACE_MS;
@@ -162,11 +198,6 @@ function timeOfDay(date) {
 
 function timeDisplay(prefs) {
   return prefs?.timeDisplay === "bubble" ? "bubble" : "center";
-}
-
-function approvalMode(value) {
-  const mode = clean(value);
-  return CLAUDE_APPROVAL_MODES.has(mode) ? mode : "acceptEdits";
 }
 
 function longTermMemoryEnabled(value) {
@@ -225,11 +256,50 @@ function insertLiveReplyAtTimestamp(items, reply) {
     : [...items.slice(0, index), reply, ...items.slice(index)];
 }
 
-export function mergeConversationMessages(items, pendingItems = [], liveReplyItems = new Map(), activeSessionId = "", transientSystemMessages = []) {
+function liveReplySentences(item) {
+  const recorded = Array.isArray(item?.sentences)
+    ? item.sentences.map((value) => String(value ?? "")).filter((value) => clean(value))
+    : [];
+  if (recorded.length) return recorded;
+  const fallback = String(item?.content ?? "");
+  return clean(fallback) ? [fallback] : [];
+}
+
+function liveReplyValues(value) {
+  return value instanceof Map ? [...value.values()] : Array.isArray(value) ? value : [];
+}
+
+export function companionPeerLabel(contactName, activeSessionId = "", liveReplyItems = new Map()) {
+  const peer = clean(contactName) || "未选择联系人";
+  const sessionId = clean(activeSessionId);
+  if (!sessionId) return peer;
+  const isThinking = liveReplyValues(liveReplyItems).some((item) => (
+    clean(item?.sessionId) === sessionId
+    && item?.done !== true
+    && item?.phase === "thinking"
+  ));
+  return isThinking ? "对方正在输入中..." : peer;
+}
+
+function liveReplyMessages(item) {
+  const id = clean(item?.requestId) || "reply";
+  return liveReplySentences(item).map((text, index) => ({
+    id: `reply-${id}-sentence-${index + 1}`,
+    kind: "assistant",
+    sourceMessageId: `reply-${id}`,
+    // A bubble only enters this projection after a whole sentence is ready,
+    // so it must never use the token-streaming visual treatment.
+    streaming: false,
+    timestamp: item.timestamp,
+    blocks: [{ kind: "text", text }],
+  }));
+}
+
+export function mergeConversationMessages(items, pendingItems = [], liveReplyItems = new Map(), activeSessionId = "", transientSystemMessages = [], transientToolMessages = []) {
   const source = Array.isArray(items) ? items : [];
   const sessionId = clean(activeSessionId);
   const pending = (Array.isArray(pendingItems) ? pendingItems : [])
-    .filter((item) => item.sessionId === sessionId && !messageMatches(source, "user", item.content, item.timestamp))
+    .filter((item) => item.sessionId === sessionId && !messageMatches(source, "user", item.content, item.timestamp, item.media))
     .map((item) => ({
       id: item.id,
       kind: "user",
@@ -239,23 +309,38 @@ export function mergeConversationMessages(items, pendingItems = [], liveReplyIte
       queuePosition: item.queuePosition,
       steering: item.steering,
       timestamp: item.timestamp,
-      blocks: [{ kind: "text", text: item.content }],
+      blocks: [
+        ...(clean(item.content) ? [{ kind: "text", text: item.content }] : []),
+        ...(Array.isArray(item.media) ? item.media.map((media) => ({
+          kind: "media",
+          mediaKind: clean(media?.mediaSource) === "sticker" && clean(media?.kind) === "image" ? "sticker" : clean(media?.kind) || "file",
+          fileName: clean(media?.fileName),
+          fileUrl: clean(media?.fileUrl),
+          size: Number(media?.size) || 0,
+          ...(clean(media?.mediaSource) ? { mediaSource: clean(media.mediaSource) } : {}),
+        })).filter((media) => media.fileName && media.fileUrl && media.size > 0) : []),
+      ],
     }));
-  const replyValues = liveReplyItems instanceof Map
-    ? [...liveReplyItems.values()]
-    : Array.isArray(liveReplyItems) ? liveReplyItems : [];
+  const replyValues = liveReplyValues(liveReplyItems);
   const liveReplies = replyValues
-    .filter((item) => item.sessionId === sessionId && item.content && !messageMatches(source, "assistant", item.content, item.timestamp))
-    .map((item) => ({
-      id: `reply-${item.requestId}`,
-      kind: "assistant",
-      streaming: !item.done,
-      timestamp: item.timestamp,
-      blocks: [{ kind: "text", text: item.content }],
-    }));
-  const localSystemMessages = (Array.isArray(transientSystemMessages) ? transientSystemMessages : [])
-    .filter((item) => item?.kind === "system" && clean(item.sessionId) === sessionId && messageText(item));
-  const appended = [...source, ...pending, ...localSystemMessages];
+    .filter((item) => (
+      item.sessionId === sessionId
+      && (!clean(item.content) || !messageMatches(source, "assistant", item.content, item.timestamp))
+    ))
+    .flatMap(liveReplyMessages);
+  const localMessages = [
+    ...(Array.isArray(transientSystemMessages) ? transientSystemMessages : []),
+    ...(Array.isArray(transientToolMessages) ? transientToolMessages : []),
+  ].filter((item) => (
+    ["assistant", "system"].includes(item?.kind)
+      && clean(item.sessionId) === sessionId
+      && hasDisplayableBlock(item)
+      // A finalized call transcript first appears immediately as a local
+      // system row, then arrives durably from Agent Core.  Retire only that
+      // exact local duplicate once the stored conversation has caught up.
+      && (item.kind !== "system" || !messageMatches(source, "system", messageText(item), item.timestamp))
+  ));
+  const appended = [...source, ...pending, ...localMessages];
   // Source rows are already in the transcript's append order.  Preserve that
   // order for special turns such as calls; only place a local unfinished reply
   // back between normal chronological rows so a later message can push it up.
@@ -271,6 +356,7 @@ function displayedMessages(items) {
     viewState.liveReplies,
     clean(viewState.snapshot?.activeSessionId),
     viewState.transientSystemMessages,
+    viewState.liveTools,
   );
 }
 
@@ -286,11 +372,104 @@ export function filterConversationItems(items, configuredPreferences = {}) {
   });
 }
 
-function splitTextOnBlankLines(value) {
-  const normalized = String(value ?? "").replace(/\r\n?/gu, "\n");
-  const pieces = normalized.split(/\n(?:[ \t]*\n)+/gu).map((part) => part.replace(/^\n+|\n+$/gu, ""));
-  const nonEmpty = pieces.filter((part) => part.trim());
-  return nonEmpty.length ? nonEmpty : [normalized];
+function sentenceBoundaryEnd(text, index) {
+  const character = text[index];
+  if (character === "\n") {
+    const blankLine = text.slice(index).match(/^\n[ \t]*\n+/u);
+    return blankLine ? index + blankLine[0].length : 0;
+  }
+
+  let end = 0;
+  if ("。！？!?…".includes(character)) {
+    end = index + 1;
+  } else if (character === ".") {
+    if (text.startsWith("...", index)) {
+      const next = text[index + 3] || "";
+      if (!next || /\s/u.test(next) || "\"”’）)]}".includes(next)) end = index + 3;
+    } else {
+      const next = text[index + 1] || "";
+      if (!next || /\s/u.test(next) || "\"”’）)]}".includes(next)) end = index + 1;
+    }
+  }
+  if (!end) return 0;
+
+  while (text[end] && "。！？!?…".includes(text[end])) end += 1;
+  while (text[end] && "\"'”’）)]}".includes(text[end])) end += 1;
+  return end;
+}
+
+/**
+ * Turn a companion reply into durable chat bubbles without exposing a token
+ * stream.  Until `final` is set, trailing unfinished text stays in
+ * `remainder` and therefore never reaches the renderer.
+ */
+export function splitCompanionReplyBuffer(value, { final = false } = {}) {
+  const text = String(value ?? "").replace(/\r\n?/gu, "\n");
+  const sentences = [];
+  let start = 0;
+  let inCodeFence = false;
+
+  for (let index = 0; index < text.length; index += 1) {
+    if (text.startsWith("```", index)) {
+      inCodeFence = !inCodeFence;
+      index += 2;
+      continue;
+    }
+    if (inCodeFence) continue;
+    const end = sentenceBoundaryEnd(text, index);
+    if (!end) continue;
+    const sentence = text.slice(start, text[index] === "\n" ? index : end).trim();
+    if (sentence) sentences.push(sentence);
+    start = end;
+    index = end - 1;
+  }
+
+  const remainder = text.slice(start);
+  if (final && remainder.trim()) sentences.push(remainder.trim());
+  return { remainder: final ? "" : remainder, sentences };
+}
+
+function mergeLiveReplyContent(previous, next) {
+  const current = String(previous ?? "");
+  const candidate = String(next ?? "");
+  if (!candidate) return current;
+  if (!current || candidate.startsWith(current)) return candidate;
+  if (current.startsWith(candidate)) return current;
+  return `${current}${candidate}`;
+}
+
+function liveReplyTimestamp(previous, event) {
+  return clean(previous?.timestamp) || clean(event?.timestamp) || new Date().toISOString();
+}
+
+function projectedLiveReply(previous, event, { final = false } = {}) {
+  const content = mergeLiveReplyContent(previous?.content, event?.content);
+  const delivery = splitCompanionReplyBuffer(content, { final });
+  const previousCount = Array.isArray(previous?.sentences) ? previous.sentences.length : 0;
+  const deliveredNewSentence = delivery.sentences.length > previousCount;
+  return {
+    ...previous,
+    content,
+    done: final,
+    phase: final ? "idle" : deliveredNewSentence ? "delivering" : previous?.phase === "thinking" ? "thinking" : "thinking",
+    remainder: delivery.remainder,
+    requestId: clean(event?.requestId) || clean(previous?.requestId),
+    sentences: delivery.sentences,
+    sessionId: clean(event?.sessionId) || clean(previous?.sessionId),
+    timestamp: liveReplyTimestamp(previous, event),
+  };
+}
+
+function finishedLiveReply(reply) {
+  if (!reply) return null;
+  const delivery = splitCompanionReplyBuffer(reply.content, { final: true });
+  return {
+    ...reply,
+    done: true,
+    phase: "idle",
+    remainder: delivery.remainder,
+    sentences: delivery.sentences,
+  };
 }
 
 export function splitAssistantMessageOnBlankLines(message) {
@@ -302,7 +481,7 @@ export function splitAssistantMessageOnBlankLines(message) {
       segments.at(-1).push(item);
       continue;
     }
-    const parts = splitTextOnBlankLines(item.text);
+    const parts = splitCompanionReplyBuffer(item.text, { final: true }).sentences;
     segments.at(-1).push(parts.length ? { ...item, text: parts[0] } : item);
     if (parts.length < 2) continue;
     split = true;
@@ -495,8 +674,8 @@ function currentPayload() {
 function conversationInfo(payload) {
   if (viewState.error) return viewState.error;
   if (viewState.mode === "focus") return "已定位到搜索结果附近的聊天记录。";
-  if (payload?.status === "missing") return "请先在设置中选择 Agent 工作目录，再新建一个联系人。";
-  return `本机 Claude Code · ${payload?.fileName || "新对话"} · ${payload?.scannedRecords || 0} 条记录`;
+  if (payload?.status === "missing") return "软件数据目录尚未准备好，请稍后重试。";
+  return `本机 Suzu Agent Core · ${payload?.fileName || "新对话"} · ${payload?.scannedRecords || 0} 条记录`;
 }
 
 function renderKeepingConversationScroll(context) {
@@ -681,7 +860,6 @@ function sessionSettingsSnapshot(context, selected, prefs) {
       system: "显示系统消息",
       tokens: "显示 Token 用量",
     }).map(([key, label]) => ({ checked: Boolean(prefs[key]), key, label })),
-    approvalMode: approvalMode(contact?.approvalMode),
     longTermMemoryEnabled: longTermMemoryEnabled(contact?.longTermMemoryEnabled),
     removeContactAvatar: Boolean(agent.avatarDataUrl),
     sessionId,
@@ -784,7 +962,8 @@ export function conversationReactSnapshot(context) {
   const contacts = snapshot.contacts || [];
   const activeContact = snapshot.activeContact || null;
   const hasContactsRoot = Boolean(clean(snapshot.contactsRoot || context.state.settings?.contactsRoot));
-  const peer = clean(activeContact?.name) || "未选择联系人";
+  const contactPeer = clean(activeContact?.name) || "未选择联系人";
+  const peer = companionPeerLabel(contactPeer, clean(snapshot.activeSessionId), viewState.liveReplies);
   const callAvailable = ready && Boolean(clean(activeContact?.agentId));
   const preferredContactId = clean(snapshot.preferredContactId);
   const allContactRows = contacts.map((contact) => {
@@ -825,11 +1004,13 @@ export function conversationReactSnapshot(context) {
     call: {
       available: callAvailable,
       contact: {
-        avatar: avatarPayload(agent, peer),
-        name: peer,
+        avatar: avatarPayload(agent, contactPeer),
+        name: contactPeer,
       },
     },
     composer: {
+      attachments: viewState.attachments,
+      attachmentPicking: viewState.attachmentPicking,
       busy: viewState.busySessions.has(clean(snapshot.activeSessionId)),
       draft: viewState.draft,
       emojiOpen: viewState.emojiOpen,
@@ -856,7 +1037,7 @@ export function conversationReactSnapshot(context) {
     permissions: permissionPromptSnapshot(clean(snapshot.activeSessionId)),
     rosterEmpty: hasContactsRoot
       ? contacts.length ? "所有联系人都已隐藏。可在“设置 > 隐私”中恢复。" : "还没有联系人。点击右上角“＋”创建。"
-      : "请先到“设置”选择 Agent 工作目录。",
+      : "软件数据目录尚未准备好，请稍后重试。",
     search: conversationSearchSnapshot(),
     searchOpen: viewState.searchOpen,
     sessionSettings: sessionSettingsSnapshot(context, selected, prefs),
@@ -940,6 +1121,33 @@ async function markOpenedContactRead(context) {
 }
 
 function handleConversationEvent(context, event) {
+  if (event?.type === "call-transcript" && event?.final === true) {
+    const activeSessionId = clean(viewState.snapshot?.activeSessionId);
+    const activeProjectRoot = clean(viewState.snapshot?.projectRoot);
+    const sessionId = clean(event?.sessionId);
+    const transcript = clean(event?.text);
+    if (!sessionId || sessionId !== activeSessionId || !transcript) return;
+    if (activeProjectRoot && clean(event?.projectRoot) && !sameProjectRoot(activeProjectRoot, event.projectRoot)) return;
+    const timestamp = clean(event?.timestamp) || new Date().toISOString();
+    const id = [
+      "call-transcript",
+      clean(event?.callId) || "call",
+      timestamp,
+      transcript,
+    ].join("\u0000");
+    if (viewState.transientSystemMessages.some((item) => item.id === id)) return;
+    viewState.transientSystemMessages.push({
+      blocks: [{ kind: "text", text: `通话 · 我：${transcript}` }],
+      id,
+      kind: "system",
+      sessionId,
+      timestamp,
+    });
+    if (!viewState.shouldStickToLatest) viewState.unread = true;
+    scheduleScrollToLatest();
+    context.render();
+    return;
+  }
   if (event?.type === "call-system-message") {
     const activeSessionId = clean(viewState.snapshot?.activeSessionId);
     const activeProjectRoot = clean(viewState.snapshot?.projectRoot);
@@ -967,7 +1175,7 @@ function handleConversationEvent(context, event) {
     return;
   }
   // The call sheet owns its own listening/thinking/speaking state.  Do not
-  // leak Claude's internal turn labels into the text composer while a voice
+  // leak the runtime's internal turn labels into the text composer while a voice
   // turn is running; refresh the normal history after it settles instead.
   if (["call", "call-open"].includes(event?.kind)) {
     if (["turn-complete", "turn-stopped", "error"].includes(event.type)) void load(context, true);
@@ -977,7 +1185,6 @@ function handleConversationEvent(context, event) {
   if (activeProjectRoot && clean(event?.projectRoot) && !sameProjectRoot(activeProjectRoot, event.projectRoot)) return;
   const requestId = clean(event?.requestId);
   const sessionId = clean(event?.sessionId);
-  const internalSystemTurn = event?.displayAsSystem === true;
   if (event?.type === "queue" && sessionId) {
     const positions = new Map((Array.isArray(event.items) ? event.items : [])
       .map((item) => [clean(item?.requestId), Number(item?.position) || 0])
@@ -1006,6 +1213,27 @@ function handleConversationEvent(context, event) {
     context.render();
     return;
   }
+  if (event?.type === "tool" && requestId && sessionId) {
+    const content = clean(event.content);
+    if (!content) return;
+    const phase = clean(event.phase);
+    const toolName = clean(event.toolName) || "Agent 工具";
+    const isStart = phase === "started";
+    viewState.liveTools.push({
+      blocks: [isStart
+        ? { kind: "tool_use", name: toolName, summary: content.slice(0, 80), detail: content }
+        : { kind: "tool_result", error: phase === "failed", summary: content.slice(0, 80), detail: content }],
+      id: `live-tool-${requestId}-${viewState.liveTools.length + 1}`,
+      kind: "assistant",
+      requestId,
+      sessionId,
+      timestamp: clean(event.timestamp) || new Date().toISOString(),
+    });
+    if (!viewState.shouldStickToLatest) viewState.unread = true;
+    scheduleScrollToLatest();
+    context.render();
+    return;
+  }
   if (event?.type === "turn-start" && requestId && sessionId) {
     viewState.pending = viewState.pending.map((item) => (
       item.requestId === requestId
@@ -1016,18 +1244,32 @@ function handleConversationEvent(context, event) {
     context.render();
     return;
   }
+  if (event?.type === "thinking" && requestId && sessionId) {
+    const previous = viewState.liveReplies.get(requestId);
+    if (previous?.done) return;
+    viewState.liveReplies.set(requestId, {
+      ...previous,
+      content: String(previous?.content ?? ""),
+      done: false,
+      phase: "thinking",
+      remainder: String(previous?.remainder ?? ""),
+      requestId,
+      sentences: Array.isArray(previous?.sentences) ? previous.sentences : [],
+      sessionId,
+      timestamp: liveReplyTimestamp(previous, event),
+    });
+    context.render();
+    return;
+  }
   if (event?.type === "error" && requestId) {
     if (sessionId) viewState.busySessions.delete(sessionId);
     viewState.permissions.forEach((item, id) => {
       if (item.sessionId === sessionId) viewState.permissions.delete(id);
     });
-    if (internalSystemTurn) {
-      context.render();
-      void load(context, true);
-      return;
-    }
+    const reply = viewState.liveReplies.get(requestId);
+    if (reply) viewState.liveReplies.set(requestId, { ...reply, done: true, phase: "idle" });
     viewState.notice = "";
-    viewState.error = `Claude Code 没有完成这次回复：${event.message || "未知错误"}`;
+    viewState.error = `Suzu Agent 没有完成这次回复：${event.message || "未知错误"}`;
     context.render();
     void load(context, true);
     return;
@@ -1038,38 +1280,30 @@ function handleConversationEvent(context, event) {
       if (item.sessionId === sessionId) viewState.permissions.delete(id);
     });
     const reply = viewState.liveReplies.get(requestId);
-    if (reply) viewState.liveReplies.set(requestId, { ...reply, done: true });
-    if (internalSystemTurn) {
-      context.render();
-      load(context, true);
-      return;
-    }
+    if (reply) viewState.liveReplies.set(requestId, { ...reply, done: true, phase: "idle" });
     viewState.error = "";
-    viewState.notice = clean(event.message) || "已停止当前 Claude Code 任务。";
+    viewState.notice = clean(event.message) || "已停止当前 Suzu Agent 任务。";
     context.render();
     load(context, true);
     return;
   }
   if (event?.type === "turn-complete" && requestId && sessionId) {
     viewState.busySessions.delete(sessionId);
+    const reply = finishedLiveReply(viewState.liveReplies.get(requestId));
+    if (reply) viewState.liveReplies.set(requestId, reply);
     context.render();
-    load(context, true);
+    void load(context, true).finally(() => {
+      viewState.liveTools = viewState.liveTools.filter((item) => item.requestId !== requestId);
+      context.render();
+    });
     return;
   }
   if (!requestId || !sessionId) return;
   if (event.type === "reply" || event.type === "reply-stream") {
-    if (internalSystemTurn) {
-      if (event.type === "reply" || event.done === true) void load(context, true);
-      return;
-    }
     const previous = viewState.liveReplies.get(requestId);
-    viewState.liveReplies.set(requestId, {
-      content: clean(event.content) || previous?.content || "",
-      done: event.type === "reply" || event.done === true,
-      requestId,
-      sessionId,
-      timestamp: event.timestamp || previous?.timestamp || new Date().toISOString(),
-    });
+    viewState.liveReplies.set(requestId, projectedLiveReply(previous, event, {
+      final: event.type === "reply" || event.done === true,
+    }));
     if (!viewState.shouldStickToLatest) viewState.unread = true;
     scheduleScrollToLatest();
     context.render();
@@ -1080,6 +1314,7 @@ function handleConversationEvent(context, event) {
 export function startConversationPolling(context) {
   stopConversationPolling();
   viewState.transientSystemMessages.length = 0;
+  viewState.liveTools = [];
   viewState.shouldStickToLatest = true;
   void load(context, true).then(() => markOpenedContactRead(context));
   if (typeof context.api.conversation.onEvent === "function") {
@@ -1128,8 +1363,14 @@ export function dismissConversationOverlays(target = viewState) {
 
 async function sendMessage(context) {
   const raw = clean(viewState.draft);
-  if (!raw || viewState.sending) return;
-  const command = parseSuzuConversationCommand(raw);
+  const selectedAttachments = Array.isArray(viewState.attachments) ? viewState.attachments : [];
+  if ((!raw && !selectedAttachments.length) || viewState.sending) return;
+  const command = raw ? parseSuzuConversationCommand(raw) : { action: "message", content: "" };
+  if (selectedAttachments.length && command.action !== "message") {
+    viewState.error = "图片和文件只能作为普通消息发送。";
+    context.render();
+    return;
+  }
   if (command.action === "notice") {
     viewState.draft = "";
     viewState.error = "";
@@ -1144,7 +1385,7 @@ async function sendMessage(context) {
     if (!sessionId) {
       viewState.draft = "";
       viewState.error = "";
-      viewState.notice = "当前没有可停止的 Claude 回复。";
+      viewState.notice = "当前没有可停止的 Suzu Agent 回复。";
       focusComposer();
       context.render();
       return;
@@ -1157,7 +1398,7 @@ async function sendMessage(context) {
     context.render();
     try {
       const result = await context.api.conversation.stop({ sessionId, projectRoot: clean(viewState.snapshot?.projectRoot) });
-      viewState.notice = clean(result?.message) || "正在停止当前 Claude Code 任务。";
+      viewState.notice = clean(result?.message) || "正在停止当前 Suzu Agent 任务。";
     } catch (error) {
       viewState.error = `无法停止任务：${error?.message || error}`;
     } finally {
@@ -1171,6 +1412,7 @@ async function sendMessage(context) {
   const pending = {
     accepted: false,
     content,
+    media: selectedAttachments,
     id: `pending-${Date.now()}-${Math.random().toString(36).slice(2)}`,
     queued: false,
     queuePosition: 0,
@@ -1194,13 +1436,19 @@ async function sendMessage(context) {
   try {
     const result = command.action === "steer"
       ? await context.api.conversation.steer({ content })
-      : await context.api.conversation.send({ content });
+      : await context.api.conversation.send({
+        content,
+        attachmentTokens: selectedAttachments.map((item) => clean(item?.selectionToken)).filter(Boolean),
+        queued: command.action === "queue",
+      });
     pending.accepted = true;
     pending.queued = result?.queued === true;
     pending.queuePosition = Number(result?.queuePosition) || 0;
     pending.steering = command.action === "steer" && result?.delivered === true;
     pending.requestId = clean(result?.requestId);
     pending.sessionId = clean(result?.sessionId);
+    if (Array.isArray(result?.media) && result.media.length) pending.media = result.media;
+    viewState.attachments = [];
     if (pending.sessionId) viewState.busySessions.add(pending.sessionId);
     if (command.action === "steer") viewState.notice = clean(result?.message);
     viewState.sending = false;
@@ -1386,8 +1634,11 @@ async function openConversationMediaPreviewForItem(context, value = {}) {
 
 function resetConversationForContactChange() {
   resetSessionSettings();
+  viewState.attachments = [];
+  viewState.attachmentPicking = false;
   viewState.contactContextMenu = null;
   viewState.transientSystemMessages.length = 0;
+  viewState.liveTools = [];
   viewState.pending = [];
   viewState.liveReplies.clear();
   viewState.permissions.clear();
@@ -1458,6 +1709,11 @@ export function createConversationReactActions(context) {
         viewState.snapshot = await context.api.conversation.createContact({ name: value });
         viewState.lastVersion = viewState.snapshot.version;
         if (context.api.settings?.get) context.state.settings = await context.api.settings.get();
+        try {
+          await context.onContactCreated?.(viewState.snapshot?.activeContact || null);
+        } catch {
+          // Creating a contact must stay usable even if an optional guide cannot advance.
+        }
         viewState.contactCreateOpen = false;
         resetConversationForContactChange();
         viewState.sending = false;
@@ -1530,6 +1786,16 @@ export function createConversationReactActions(context) {
         context.render();
       }
     },
+    openMediaFile: async (block) => {
+      const fileUrl = clean(block?.fileUrl);
+      if (!fileUrl || !context.api.conversation.openMediaFile) return;
+      try {
+        await context.api.conversation.openMediaFile({ fileUrl });
+      } catch (error) {
+        viewState.error = `无法打开附件：${error?.message || error}`;
+        context.render();
+      }
+    },
     openMediaPreview: (item) => void openConversationMediaPreviewForItem(context, item),
     openSessionSettings: async () => {
       viewState.menuOpen = false;
@@ -1552,6 +1818,16 @@ export function createConversationReactActions(context) {
       context.render();
     },
     refresh: () => void load(context, true),
+    removeComposerAttachment: (selectionToken) => {
+      const token = clean(selectionToken);
+      if (!token) return;
+      const removed = viewState.attachments.filter((item) => clean(item?.selectionToken) === token);
+      if (!removed.length) return;
+      viewState.attachments = viewState.attachments.filter((item) => clean(item?.selectionToken) !== token);
+      const discard = context.api.conversation.attachments?.discard;
+      if (typeof discard === "function") void discard({ attachmentTokens: removed.map((item) => item.selectionToken) }).catch(() => undefined);
+      context.render();
+    },
     removeContactAvatar: async () => {
       try {
         await saveCurrentContactAvatar(context, "");
@@ -1690,6 +1966,40 @@ export function createConversationReactActions(context) {
         context.render();
       }
     },
+    selectComposerAttachments: async (kind) => {
+      const attachmentKind = clean(kind).toLowerCase();
+      if (!new Set(["file", "image"]).has(attachmentKind) || viewState.sending || viewState.attachmentPicking || !context.api.conversation.attachments?.select) return;
+      viewState.attachmentPicking = true;
+      viewState.error = "";
+      context.render();
+      try {
+        const result = await context.api.conversation.attachments.select({ kind: attachmentKind });
+        if (!result?.canceled) {
+          const selected = (Array.isArray(result?.items) ? result.items : []).flatMap((item) => {
+            const token = clean(item?.selectionToken);
+            const fileName = clean(item?.fileName);
+            const itemKind = clean(item?.kind).toLowerCase();
+            const size = Number(item?.size);
+            if (!token || !fileName || !new Set(["file", "image"]).has(itemKind) || !Number.isSafeInteger(size) || size <= 0) return [];
+            return [{
+              fileName,
+              fileUrl: clean(item?.fileUrl),
+              kind: itemKind,
+              mimeType: clean(item?.mimeType),
+              selectionToken: token,
+              size,
+            }];
+          });
+          const existing = new Set(viewState.attachments.map((item) => clean(item?.selectionToken)));
+          viewState.attachments = [...viewState.attachments, ...selected.filter((item) => !existing.has(item.selectionToken))].slice(0, 24);
+        }
+      } catch (error) {
+        viewState.error = `无法选择附件：${error?.message || error}`;
+      } finally {
+        viewState.attachmentPicking = false;
+        context.render();
+      }
+    },
     selectSearchCategory: (category) => {
       const next = searchCategoryInfo(category).id;
       viewState.searchCategory = next;
@@ -1709,23 +2019,6 @@ export function createConversationReactActions(context) {
       void runConversationSearchForQuery(context, next, viewState.searchQuery);
     },
     setAvatarCropZoom: zoomConversationAvatarCrop,
-    setApprovalMode: async (value) => {
-      const contactId = clean(viewState.snapshot?.activeContact?.id);
-      const mode = approvalMode(value);
-      if (!contactId || viewState.sending || !context.api.conversation.updateContactApprovalMode) return;
-      viewState.sending = true;
-      context.render();
-      try {
-        viewState.snapshot = await context.api.conversation.updateContactApprovalMode({ id: contactId, approvalMode: mode });
-        viewState.lastVersion = viewState.snapshot.version;
-        viewState.error = "";
-      } catch (error) {
-        viewState.error = `无法更新联系人审批模式：${error?.message || error}`;
-      } finally {
-        viewState.sending = false;
-        context.render();
-      }
-    },
     setLongTermMemoryEnabled: async (enabled) => {
       const contactId = clean(viewState.snapshot?.activeContact?.id);
       if (!contactId || viewState.sending || !context.api.conversation.updateContactLongTermMemoryEnabled) return;
@@ -1870,7 +2163,7 @@ export function createConversationReactActions(context) {
     disconnectWechat: async (contactId) => {
       const id = clean(contactId);
       if (!id || !context.api.wechat?.disconnect) return;
-      if (!window.confirm("断开后，这个微信账号将不再进入当前联系人的固定 Claude 对话。确定断开吗？")) return;
+      if (!window.confirm("断开后，这个微信账号将不再进入当前联系人的固定 Suzu 对话。确定断开吗？")) return;
       try {
         viewState.wechatSnapshot = await context.api.wechat.disconnect({ contactId: id, confirmed: true });
         viewState.error = "";

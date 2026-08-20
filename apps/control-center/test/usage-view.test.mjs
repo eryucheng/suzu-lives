@@ -9,7 +9,7 @@ test("费用统计范围默认折叠，按需展开后才查看来源", () => {
   const data = {
     status: "ready",
     summary: { today: { amountCny: 1, requestCount: 1 }, month: { amountCny: 2, requestCount: 2 }, conversations: [] },
-    sources: [{ name: "Claude Code", detail: "本机账单记录", tracked: true, status: "ready" }],
+    sources: [{ name: "DSH", detail: "本机账单记录", tracked: true, status: "ready" }],
     events: [],
     scannedAt: "2026-08-02T00:00:00.000Z",
     priceCatalog: { models: [] },

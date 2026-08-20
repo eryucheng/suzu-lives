@@ -26,7 +26,7 @@ export function CreatePage({ actions = {} }) {
         {CREATE_SPACES.map((space) => (
           <CreateSpaceCard
             key={space.id}
-            onOpen={space.id === "visual" ? actions.openVisual : actions.openAudio}
+            onOpen={actions.openVisual}
             space={space}
           />
         ))}

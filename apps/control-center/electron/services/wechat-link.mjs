@@ -46,10 +46,10 @@ function wechatPermissionDecision(value) {
 }
 
 function permissionNotice(event = {}) {
-  const toolName = clean(event.toolName) || "Claude Code 工具";
+  const toolName = clean(event.toolName) || "Agent Core 工具";
   const preview = clean(event.preview).slice(0, 1_200);
   return [
-    `Claude Code 正在等待工具权限：${toolName}`,
+    `Agent Core 正在等待工具权限：${toolName}`,
     preview ? `操作摘要：${preview}` : "",
     "回复“允许”或“拒绝”处理。",
   ].filter(Boolean).join("\n");
@@ -169,7 +169,7 @@ function inboundCdnUrl(encryptedQueryParam) {
 
 function normalizedSessionId(value) {
   const id = clean(value);
-  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u.test(id)) throw new WeChatLinkError("Claude 会话标识无效。");
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u.test(id)) throw new WeChatLinkError("Agent Core 会话标识无效。");
   return id;
 }
 
@@ -367,7 +367,7 @@ export function createWeChatLinkService({
   reader,
   sleepImpl = sleep,
 } = {}) {
-  if (!chat?.sendToSession || !chat?.steer || !chat?.stop || !chat?.subscribe) throw new WeChatLinkError("微信连接需要本机 Claude 会话服务。");
+  if (!chat?.sendToSession || !chat?.steer || !chat?.stop || !chat?.subscribe) throw new WeChatLinkError("微信连接需要本机 Agent Core 会话服务。");
   if (!reader?.resolveContactSession || !reader?.contactIdForSession) throw new WeChatLinkError("微信连接需要联系人会话读取服务。");
   if (!clean(dataRoot) || !path.isAbsolute(clean(dataRoot))) throw new WeChatLinkError("无法定位 Suzu Lives 软件数据目录。");
   if (typeof fetchImpl !== "function") throw new WeChatLinkError("当前运行环境无法访问微信 iLink 服务。");
@@ -763,7 +763,7 @@ export function createWeChatLinkService({
         });
         if (result?.accepted) {
           const action = result.behavior === "allow" ? "已允许" : "已拒绝";
-          await commandResponse(link, `${action}工具权限：${clean(result.toolName) || "Claude Code 工具"}。`, contextToken);
+          await commandResponse(link, `${action}工具权限：${clean(result.toolName) || "Agent Core 工具"}。`, contextToken);
         } else if (result?.reason === "multiple-pending-permissions") {
           await commandResponse(link, "当前有多条等待确认的工具请求，请回到桌面端分别处理。", contextToken);
         } else {
@@ -773,7 +773,7 @@ export function createWeChatLinkService({
         await commandResponse(link, command.message, contextToken);
       } else if (command.action === "stop") {
         const result = chat.stop({ sessionId: session.id, projectRoot: session.projectRoot });
-        await commandResponse(link, clean(result?.message) || "正在停止当前 Claude Code 任务。", contextToken);
+        await commandResponse(link, clean(result?.message) || "正在停止当前 Agent Core 任务。", contextToken);
       } else if (command.action === "steer") {
         const result = await chat.steer({
           content: command.content,

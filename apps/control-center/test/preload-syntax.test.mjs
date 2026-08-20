@@ -71,19 +71,15 @@ test("Electron preload exposes the memory bridge", async () => {
   assert.equal(typeof bridge?.conversation?.call?.stop, "function");
   assert.equal(typeof bridge?.conversation?.renameContact, "function");
   assert.equal(typeof bridge?.conversation?.updateContactPresentation, "function");
-  assert.equal(typeof bridge?.conversation?.updateContactApprovalMode, "function");
+  assert.equal(typeof bridge?.conversation?.updateContactApprovalMode, "undefined");
   assert.equal(typeof bridge?.conversation?.updateContactLongTermMemoryEnabled, "function");
   assert.equal(typeof bridge?.conversation?.removeContact, "function");
   assert.equal(typeof bridge?.conversation?.emojiStickers?.snapshot, "function");
   assert.equal(typeof bridge?.conversation?.emojiStickers?.select, "function");
   assert.equal(typeof bridge?.conversation?.emojiStickers?.add, "function");
   assert.equal(typeof bridge?.conversation?.emojiStickers?.send, "function");
+  assert.equal(typeof bridge?.agentRuntime?.snapshot, "function");
   assert.equal(typeof bridge?.conversationCompactor?.snapshot, "function");
-  assert.equal(typeof bridge?.conversationCompactor?.save, "function");
-  assert.equal(typeof bridge?.conversationCompactor?.check, "function");
-  assert.equal(typeof bridge?.conversationCompactor?.run, "function");
-  assert.equal(typeof bridge?.conversationCompactor?.selectImportJsonl, "function");
-  assert.equal(typeof bridge?.conversationCompactor?.importJsonl, "function");
   assert.equal(typeof bridge?.capabilities?.companionTargets, "function");
   assert.equal(typeof bridge?.wechat?.begin, "function");
   assert.equal(typeof bridge?.wechat?.saveSettings, "function");
@@ -116,9 +112,9 @@ test("Electron preload exposes the memory bridge", async () => {
   assert.equal(calls[10].channel, "external-capabilities:import");
   assert.equal(calls[11].channel, "external-capabilities:set-enabled");
   assert.deepEqual(JSON.parse(JSON.stringify(calls[11].args[0])), { id: "sample.capability", enabled: true });
-  await bridge.voiceDesign.saveContactVoice({ contactId: "contact-suzu", provider: "qwen", voiceId: "voice-kept" });
+  await bridge.voiceDesign.saveContactVoice({ contactId: "contact-suzu", adapter: "dashscope-qwen", voiceId: "voice-kept" });
   assert.equal(calls[12].channel, "voice-design:save-contact-voice");
-  assert.deepEqual(JSON.parse(JSON.stringify(calls[12].args[0])), { contactId: "contact-suzu", provider: "qwen", voiceId: "voice-kept" });
+  assert.deepEqual(JSON.parse(JSON.stringify(calls[12].args[0])), { contactId: "contact-suzu", adapter: "dashscope-qwen", voiceId: "voice-kept" });
   await bridge.capabilities.companionTargets();
   assert.equal(calls[13].channel, "capabilities:companion-targets");
   await bridge.conversation.renameContact({ id: "contact-suzu", name: "新备注" });
@@ -127,9 +123,6 @@ test("Electron preload exposes the memory bridge", async () => {
   await bridge.conversation.updateContactPresentation({ id: "contact-suzu", pinned: true });
   assert.equal(calls.at(-1).channel, "conversation:update-contact-presentation");
   assert.deepEqual(JSON.parse(JSON.stringify(calls.at(-1).args[0])), { id: "contact-suzu", pinned: true });
-  await bridge.conversation.updateContactApprovalMode({ id: "contact-suzu", approvalMode: "plan" });
-  assert.equal(calls.at(-1).channel, "conversation:update-contact-approval-mode");
-  assert.deepEqual(JSON.parse(JSON.stringify(calls.at(-1).args[0])), { id: "contact-suzu", approvalMode: "plan" });
   await bridge.conversation.updateContactLongTermMemoryEnabled({ id: "contact-suzu", enabled: false });
   assert.equal(calls.at(-1).channel, "conversation:update-contact-long-term-memory");
   assert.deepEqual(JSON.parse(JSON.stringify(calls.at(-1).args[0])), { id: "contact-suzu", enabled: false });
@@ -180,19 +173,7 @@ test("Electron preload exposes the memory bridge", async () => {
     sourcePath: "C:/tmp/memory-backup.db",
   });
   await bridge.conversationCompactor.snapshot({ contactId: "contact-suzu" });
-  await bridge.conversationCompactor.save({ contactId: "contact-suzu", prompt: "联系人专属提示词" });
-  await bridge.conversationCompactor.check({ contactId: "contact-suzu" });
-  await bridge.conversationCompactor.run({ contactId: "contact-suzu" });
-  await bridge.conversationCompactor.selectImportJsonl();
-  await bridge.conversationCompactor.importJsonl({ contactId: "contact-suzu", sourcePath: "C:/tmp/history.jsonl" });
-  assert.deepEqual(calls.slice(-6).map((call) => call.channel), [
-    "conversation-compactor:snapshot",
-    "conversation-compactor:save",
-    "conversation-compactor:check",
-    "conversation-compactor:run",
-    "conversation-compactor:select-import-jsonl",
-    "conversation-compactor:import-jsonl",
-  ]);
+  assert.equal(calls.at(-1).channel, "conversation-compactor:snapshot");
   await bridge.windowChrome.state();
   await bridge.windowChrome.control("toggle-maximize");
   assert.deepEqual(calls.slice(-2).map((call) => call.channel), [

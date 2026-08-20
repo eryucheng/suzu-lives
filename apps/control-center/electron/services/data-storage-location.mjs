@@ -9,6 +9,8 @@ import {
   writeSuzuLivesDataRootLocator,
   writeSuzuLivesDataRootRedirect,
 } from "@suzu-lives/agent-registry";
+import { MANAGED_CONTACTS_DIRECTORY } from "./contact-projects.mjs";
+import { relocateAgentWorkspaceStorageSync } from "./agent-session-storage.mjs";
 
 const DATA_ROOT_FOLDER_NAME = "Suzu Lives";
 const TRANSIENT_PROFILE_ENTRIES = new Set(["SingletonCookie", "SingletonLock", "SingletonSocket"]);
@@ -85,7 +87,15 @@ export function validateDataRootMigration({ sourceRoot, targetRoot } = {}) {
 }
 
 function shouldCopy(sourcePath) {
-  return !TRANSIENT_PROFILE_ENTRIES.has(path.basename(sourcePath));
+  const base = path.basename(sourcePath);
+  if (TRANSIENT_PROFILE_ENTRIES.has(base)) return false;
+  // Windows 上创建符号链接需要开发者模式或管理员权限；跳过符号链接，
+  // 避免迁移因为一个 EPERM 中断导致整个数据位置切换失败。
+  try {
+    return !fs.lstatSync(sourcePath).isSymbolicLink();
+  } catch {
+    return false;
+  }
 }
 
 function copyDataRoot(sourceRoot, targetRoot) {
@@ -97,6 +107,153 @@ function copyDataRoot(sourceRoot, targetRoot) {
     filter: shouldCopy,
   });
   if (!isDirectory(targetRoot)) throw migrationError("数据复制未完成，未切换到新位置。");
+  relocateManagedContactWorkspaces({ sourceRoot, targetRoot });
+}
+
+function rebaseContainedPath({ sourceRoot, targetRoot, value }) {
+  const source = absolutePath(sourceRoot);
+  const target = absolutePath(targetRoot);
+  const candidate = absolutePath(value);
+  if (!source || !target || !candidate) return "";
+  if (pathsMatch(source, candidate)) return target;
+  if (!isInside(source, candidate)) return "";
+  return path.join(target, path.relative(source, candidate));
+}
+
+function readJsonFile(filePath, fallback = null) {
+  try {
+    return JSON.parse(fs.readFileSync(filePath, "utf8").replace(/^\uFEFF/u, ""));
+  } catch {
+    return fallback;
+  }
+}
+
+function writeJsonFileAtomic(filePath, value) {
+  const temporary = `${filePath}.suzu-data-root-migration-${process.pid}-${Date.now()}.tmp`;
+  try {
+    fs.writeFileSync(temporary, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+    fs.renameSync(temporary, filePath);
+  } catch (error) {
+    try { fs.rmSync(temporary, { force: true }); } catch { /* Best effort only. */ }
+    throw migrationError(`无法更新迁移后的联系人目录引用：${error?.message || String(error)}`);
+  }
+}
+
+function rebaseProjectRootFields(value, { sourceRoot, targetRoot }) {
+  if (Array.isArray(value)) {
+    let changed = false;
+    const next = value.map((entry) => {
+      const rewritten = rebaseProjectRootFields(entry, { sourceRoot, targetRoot });
+      changed ||= rewritten.changed;
+      return rewritten.value;
+    });
+    return { changed, value: changed ? next : value };
+  }
+  if (!value || typeof value !== "object") return { changed: false, value };
+  let changed = false;
+  const next = {};
+  for (const [key, entry] of Object.entries(value)) {
+    if (key === "projectRoot" && typeof entry === "string") {
+      const rebased = rebaseContainedPath({ sourceRoot, targetRoot, value: entry });
+      next[key] = rebased || entry;
+      changed ||= Boolean(rebased && !pathsMatch(rebased, entry));
+      continue;
+    }
+    const rewritten = rebaseProjectRootFields(entry, { sourceRoot, targetRoot });
+    next[key] = rewritten.value;
+    changed ||= rewritten.changed;
+  }
+  return { changed, value: changed ? next : value };
+}
+
+function rewriteScheduleProjectRoots({ targetRoot, sourceContactsRoot, targetContactsRoot }) {
+  for (const relativeDirectory of [
+    path.join("automation", "schedule", "tasks"),
+    path.join("automation", "schedule", "history"),
+  ]) {
+    const directory = path.join(targetRoot, relativeDirectory);
+    let entries;
+    try {
+      entries = fs.readdirSync(directory, { withFileTypes: true });
+    } catch (error) {
+      if (error?.code === "ENOENT") continue;
+      throw migrationError(`无法读取自动任务目录：${error?.message || String(error)}`);
+    }
+    for (const entry of entries) {
+      if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
+      const filePath = path.join(directory, entry.name);
+      const document = readJsonFile(filePath);
+      if (!document || typeof document !== "object" || Array.isArray(document)) continue;
+      const rewritten = rebaseProjectRootFields(document, {
+        sourceRoot: sourceContactsRoot,
+        targetRoot: targetContactsRoot,
+      });
+      if (rewritten.changed) writeJsonFileAtomic(filePath, rewritten.value);
+    }
+  }
+}
+
+/**
+ * The managed default contact root moves together with the application data
+ * root. Agent Core treats an absolute cwd as session identity, so after copying we
+ * also rebind its session headers, storage directories, and workspace index
+ * before the new root becomes active.
+ */
+function relocateManagedContactWorkspaces({ sourceRoot, targetRoot }) {
+  const sourceContactsRoot = path.join(sourceRoot, MANAGED_CONTACTS_DIRECTORY);
+  const targetContactsRoot = path.join(targetRoot, MANAGED_CONTACTS_DIRECTORY);
+  const settingsPath = path.join(targetRoot, "settings.json");
+  const settings = readJsonFile(settingsPath, {});
+  if (!settings || typeof settings !== "object" || Array.isArray(settings)) return;
+  const configuredContactsRoot = absolutePath(settings.contactsRoot);
+  // An absent root is the new product default. An arbitrary external root is
+  // deliberately left alone: that user chose to keep workspaces outside the
+  // software data folder, so copying app data must not claim them.
+  if (configuredContactsRoot && !pathsMatch(configuredContactsRoot, sourceContactsRoot)) return;
+
+  try {
+    fs.mkdirSync(targetContactsRoot, { recursive: true });
+  } catch (error) {
+    throw migrationError(`无法创建迁移后的默认联系人目录：${error?.message || String(error)}`);
+  }
+  let entries;
+  try {
+    entries = fs.readdirSync(targetContactsRoot, { withFileTypes: true });
+  } catch (error) {
+    if (error?.code === "ENOENT") entries = [];
+    else throw migrationError(`无法读取迁移后的联系人目录：${error?.message || String(error)}`);
+  }
+  const runtimeHome = path.join(targetRoot, "agent-runtime", "core");
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const targetProjectRoot = path.join(targetContactsRoot, entry.name);
+    try {
+      const stat = fs.lstatSync(targetProjectRoot);
+      if (stat.isSymbolicLink() || !stat.isDirectory()) continue;
+    } catch {
+      continue;
+    }
+    relocateAgentWorkspaceStorageSync({
+      runtimeHome,
+      sourceProjectRoot: path.join(sourceContactsRoot, entry.name),
+      targetProjectRoot,
+    });
+  }
+
+  const rebasedProjectRoot = rebaseContainedPath({
+    sourceRoot: sourceContactsRoot,
+    targetRoot: targetContactsRoot,
+    value: settings.projectRoot,
+  });
+  const nextSettings = {
+    ...settings,
+    contactsRoot: targetContactsRoot,
+    ...(rebasedProjectRoot ? { projectRoot: rebasedProjectRoot } : {}),
+  };
+  const settingsChanged = !pathsMatch(configuredContactsRoot || sourceContactsRoot, targetContactsRoot)
+    || Boolean(rebasedProjectRoot && !pathsMatch(settings.projectRoot, rebasedProjectRoot));
+  rewriteScheduleProjectRoots({ targetRoot, sourceContactsRoot, targetContactsRoot });
+  if (settingsChanged) writeJsonFileAtomic(settingsPath, nextSettings);
 }
 
 function migrationSnapshot(locator, dataRoot, startupMigration) {

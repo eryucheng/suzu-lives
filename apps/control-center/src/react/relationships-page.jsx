@@ -3,14 +3,11 @@ import { GlassPanel, PageHeader, Status } from "suzu-design-system";
 import "./relationships-page.css";
 
 function RelationshipCard({ ariaLabel, children, className = "", onOpen }) {
-  const content = onOpen ? (
-    <button aria-label={ariaLabel} className="relationships-card__action" onClick={onOpen} type="button">
-      {children}
-    </button>
-  ) : <div className="relationships-card__static">{children}</div>;
   return (
     <GlassPanel as="article" className={`relationships-card ${className}`.trim()} intensity="soft">
-      {content}
+      <button aria-label={ariaLabel} className="relationships-card__action" onClick={onOpen} type="button">
+        {children}
+      </button>
     </GlassPanel>
   );
 }
@@ -25,7 +22,7 @@ export function RelationshipsPage({ actions = {}, snapshot = {} }) {
 
       <section aria-label="关系功能" className="relationships-overview">
         <RelationshipCard
-          ariaLabel="打开对话：查看并继续当前 Claude 会话"
+          ariaLabel="打开对话：查看并继续当前会话"
           className="relationships-card--conversation"
           onOpen={actions.openConversation}
         >
@@ -39,7 +36,7 @@ export function RelationshipsPage({ actions = {}, snapshot = {} }) {
         </RelationshipCard>
 
         <RelationshipCard
-          ariaLabel="打开记忆压缩器：按会话整理 Claude 上下文"
+          ariaLabel="打开记忆压缩器：按会话整理上下文"
           className="relationships-card--compactor"
           onOpen={actions.openCompactor}
         >
@@ -69,15 +66,18 @@ export function RelationshipsPage({ actions = {}, snapshot = {} }) {
           <div className="relationships-card__secondary-head">
             <div><span className="relationships-card__eyebrow">RELATIONSHIP SETUP</span><h2>相处设定</h2></div>
           </div>
-          <p className="relationships-card__description">管理 CLAUDE.md、persona.md、user.md 与引用的 Markdown 文件。</p>
+          <p className="relationships-card__description">管理 SUZU.md、persona.md、user.md 与引用的 Markdown 文件。</p>
         </RelationshipCard>
 
-        <RelationshipCard className="relationships-card--people">
+        <RelationshipCard
+          ariaLabel="查看日记：按联系人浏览 Agent 写下的每日回顾"
+          className="relationships-card--journal"
+          onOpen={actions.openJournal}
+        >
           <div className="relationships-card__secondary-head">
-            <div><span className="relationships-card__eyebrow">PEOPLE &amp; PLACES</span><h2>人物与地点</h2></div>
-            <Status label="还没有资料" tone="muted" />
+            <div><span className="relationships-card__eyebrow">AGENT JOURNAL</span><h2>查看日记</h2></div>
           </div>
-          <p className="relationships-card__description">重要关系的时间线</p>
+          <p className="relationships-card__description">按联系人浏览 Agent 写下的每日回顾。</p>
         </RelationshipCard>
       </section>
     </div>

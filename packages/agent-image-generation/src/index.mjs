@@ -4,7 +4,6 @@ import path from "node:path";
 import { resolveAgentDataRoot, resolveSuzuLivesDataRoot } from "@suzu-lives/agent-registry";
 import { appendUsageEvent } from "@suzu-lives/cost-ledger";
 import { createCandidates, ImageWorkbenchError, validateComfyRegistry } from "@suzu-lives/image-workbench";
-import { asDashScopeImageConnection, createDashScopeConnectionService } from "@suzu-lives/service-connections";
 import { inspectImage } from "@suzu-lives/visual-reference-library";
 
 export class AgentImageGenerationError extends Error {}
@@ -99,6 +98,18 @@ function usageEvent({ agentId, connection, item }) {
   return { agentId, provider: local ? "本地 ComfyUI" : (connection.provider || "OpenAI Compatible"), model: item.result.model, source: "图片生成", feature: local ? "image-workflow" : "image-" + item.result.mode, requestId: item.result.requestId, usage: item.result.usage, units: { imageRequests: 1, generatedImages: 1 }, metadata: { costSource: local ? "local-unpriced" : "provider-reported", size: item.input.size, referenceCount: item.referenceCount, backend: item.input.backend, workflow: item.result.workflow || "", agentInvocation: true } };
 }
 
+async function selectedImageConnection(connectionResolver, context) {
+  if (typeof connectionResolver !== "function") {
+    throw new AgentImageGenerationError("图片生成必须由软件在 设置 → API 中选定的“生图”连接提供。 ");
+  }
+  const selected = await connectionResolver(context);
+  const apiKey = clean(selected?.apiKey || selected?.key);
+  if (!apiKey) {
+    throw new AgentImageGenerationError("“生图”API 尚未配置可用 Key；请前往 设置 → API 重新选择或保存。 ");
+  }
+  return { ...plainObject(selected), apiKey, key: apiKey };
+}
+
 export async function runAgentImageGeneration({
   agentRoot,
   agentId = "",
@@ -114,7 +125,7 @@ export async function runAgentImageGeneration({
   if (!["api", "comfyui"].includes(backend)) throw new AgentImageGenerationError("--backend 必须是 api 或 comfyui。 ");
   const references = await loadReferences(options.refs || []); const outputRoot = safeChild(root, options.out || loaded.config.outputDirectory, "--out"); let connection; let registry = { version: 1, workflows: {} }; let workflow = clean(options.workflow);
   if (backend === "api") {
-    connection = connectionResolver ? await connectionResolver({ dataRoot, environment }) : asDashScopeImageConnection(await createDashScopeConnectionService({ dataRoot, safeStorage: { isEncryptionAvailable: () => false }, environment }).resolve());
+    connection = await selectedImageConnection(connectionResolver, { dataRoot, environment });
   } else {
     const loadedRegistry = await loadComfyRegistry({ dataRoot, configPath: loaded.path, registryPath: loaded.config.comfyui.registry }); registry = loadedRegistry.registry; connection = { baseUrl: loaded.config.comfyui.baseUrl, timeoutMs: loaded.config.comfyui.timeoutMs, pollIntervalMs: loaded.config.comfyui.pollIntervalMs }; workflow ||= loaded.config.comfyui.defaultWorkflow;
   }

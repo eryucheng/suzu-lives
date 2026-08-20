@@ -2,10 +2,14 @@ import { useState } from "react";
 import { Button, GlassPanel, PageHeader, Status, Tabs } from "suzu-design-system";
 
 import { sortSystemStatusSections } from "./system-status-order.mjs";
+import { ApiConnectionsSettings } from "./api-connections-ui.jsx";
+import { AgentModelSettings } from "./admin-page.jsx";
 import "./settings-page.css";
 
 const SETTINGS_TABS = [
   { label: "常规", value: "general" },
+  { label: "主模型", value: "main-model" },
+  { label: "API", value: "api" },
   { label: "数据", value: "data" },
   { label: "隐私", value: "privacy" },
 ];
@@ -54,10 +58,10 @@ function SoftwareUpdate({ onCheckForUpdate, onDownloadUpdate, onInstallUpdate, o
   const presentation = {
     available: { action: onDownloadUpdate, button: "下载更新", label: "可更新", tone: "success" },
     current: { action: onCheckForUpdate, button: "检查更新", label: "已是最新", tone: "success" },
-    development: { action: onCheckForUpdate, button: "检查更新", label: "开发构建", tone: "muted" },
+    development: { action: null, button: "开发版不检查", label: "开发构建", tone: "muted" },
     downloaded: { action: onInstallUpdate, button: "重启并安装", label: "等待安装", tone: "success" },
     error: { action: onCheckForUpdate, button: "重新检查", label: "暂时不可用", tone: "warning" },
-    manual: { action: onCheckForUpdate, button: "检查更新", label: "手动更新", tone: "muted" },
+    manual: { action: null, button: "当前构建不支持", label: "手动更新", tone: "muted" },
     ready: { action: onCheckForUpdate, button: "检查更新", label: "可检查", tone: "muted" },
     unavailable: { action: onCheckForUpdate, button: "重新检查", label: "暂未发布", tone: "warning" },
   }[status] || { action: onCheckForUpdate, button: "检查更新", label: "未检查", tone: "muted" };
@@ -80,7 +84,7 @@ function SoftwareUpdate({ onCheckForUpdate, onDownloadUpdate, onInstallUpdate, o
         </div>
         <div className="settings-card__actions">
           {releaseAnnouncement?.announcement ? <Button className="settings-action-button" disabled={Boolean(pending)} onClick={onOpenReleaseAnnouncement} size="md" variant="secondary">查看本次公告</Button> : null}
-          <Button className="settings-action-button" disabled={Boolean(pending)} onClick={presentation.action} size="md" variant="secondary">{busyLabel}</Button>
+          <Button className="settings-action-button" disabled={Boolean(pending) || !presentation.action} onClick={presentation.action || undefined} size="md" variant="secondary">{busyLabel}</Button>
         </div>
       </div>
     </SettingCard>
@@ -88,23 +92,9 @@ function SoftwareUpdate({ onCheckForUpdate, onDownloadUpdate, onInstallUpdate, o
 }
 
 function GeneralSettings({ appUpdate, onCheckForUpdate, onDownloadUpdate, onInstallUpdate, onOpenOnboarding, onOpenReleaseAnnouncement, onThemeChange, pending, releaseAnnouncement, settings }) {
-  const completed = settings.onboardingCompleted === true;
   const theme = settings.theme === "dark" ? "dark" : "light";
   return (
     <div className="settings-card-stack">
-      <SettingCard>
-        <div className="settings-card__layout">
-          <div className="settings-card__copy">
-            <div className="settings-card__meta"><span className="settings-card__eyebrow">SETUP</span><Status label={completed ? "已完成" : "待完成"} tone={completed ? "success" : "warning"} /></div>
-            <h2>首次设置</h2>
-            <p>{completed ? "已经完成初次设置；需要时可以重新查看文字模型、多模态 API 和联系人步骤。" : "还没有完成初次设置；可以继续配置文字模型并创建联系人。"}</p>
-          </div>
-          <div className="settings-card__actions">
-            <Button className="settings-action-button" disabled={pending} onClick={onOpenOnboarding} size="md" variant="secondary">打开引导</Button>
-          </div>
-        </div>
-      </SettingCard>
-
       <SoftwareUpdate
         onCheckForUpdate={onCheckForUpdate}
         onDownloadUpdate={onDownloadUpdate}
@@ -114,6 +104,19 @@ function GeneralSettings({ appUpdate, onCheckForUpdate, onDownloadUpdate, onInst
         releaseAnnouncement={releaseAnnouncement}
         update={appUpdate}
       />
+
+      <SettingCard>
+        <div className="settings-card__layout">
+          <div className="settings-card__copy">
+            <span className="settings-card__eyebrow">GETTING STARTED</span>
+            <h2>首次引导</h2>
+            <p>如果此前选择了“稍后设置”，可以从这里继续完成主模型、联系人和人设配置。</p>
+          </div>
+          <div className="settings-card__actions">
+            <Button className="settings-action-button" disabled={Boolean(pending) || !onOpenOnboarding} onClick={onOpenOnboarding} size="md" variant="secondary">打开首次引导</Button>
+          </div>
+        </div>
+      </SettingCard>
 
       <SettingCard>
         <div className="settings-card__layout">
@@ -135,7 +138,7 @@ function GeneralSettings({ appUpdate, onCheckForUpdate, onDownloadUpdate, onInst
 function systemStatusPresentation(snapshot) {
   if (cleanText(snapshot?.error)) return { label: "检查失败", tone: "danger", detail: cleanText(snapshot.error) };
   const summary = snapshot?.summary || null;
-  if (!summary) return { label: "尚未检查", tone: "muted", detail: "检查会读取 Suzu 数据、联系人项目和本机 Claude 配置；不会修改或执行任何文件。" };
+  if (!summary) return { label: "尚未检查", tone: "muted", detail: "检查会读取 Suzu 数据、联系人工作区和本机 Agent Core；不会修改或执行任何文件。" };
   if (summary.status === "error") return { label: "发现异常", tone: "danger", detail: `发现 ${summary.errors} 项异常和 ${summary.warnings} 项需要确认的内容。` };
   if (summary.status === "warning") return { label: "需要确认", tone: "warning", detail: `发现 ${summary.warnings} 项需要确认的内容。` };
   return { label: "状态正常", tone: "success", detail: "没有发现受管文件的读取或结构异常。" };
@@ -229,29 +232,16 @@ function SystemStatusCheck({ onCheck, pending, snapshot }) {
   );
 }
 
-function DataSettings({ onChangeDataLocation, onCheckSystemStatus, onOpenDirectory, onRemovePreviousCopy, onSelectWorkspace, pending, settings, systemStatus }) {
+function DataSettings({ onChangeDataLocation, onCheckSystemStatus, onOpenDirectory, onRemovePreviousCopy, pending, settings, systemStatus }) {
   const storage = settings.dataStorage || {};
-  const workspacePath = cleanText(settings.contactsRoot);
   const currentDataPath = cleanText(storage.dataRoot || settings.dataRoot);
   const previousDataPath = cleanText(storage.previousDataRoot);
   const failedMigration = storage.failedMigration;
-  const workspaceValue = dataPath(workspacePath, "尚未选择");
   const storageValue = dataPath(currentDataPath, "等待初始化");
-  const hasWorkspace = Boolean(workspacePath);
   const hasDataStorage = Boolean(currentDataPath && currentDataPath !== "等待初始化");
 
   return (
     <div className="settings-card-stack">
-      <DirectoryCard
-        action="WORKSPACE"
-        configured={hasWorkspace}
-        description="新建联系人时，Suzu 会在这个目录下自动创建独立 Claude 项目。"
-        onOpen={() => onOpenDirectory(workspacePath)}
-        onSelect={onSelectWorkspace}
-        pending={pending === "workspace"}
-        title="Agent 工作目录"
-        value={workspaceValue}
-      />
       <DirectoryCard
         action="STORAGE"
         configured={hasDataStorage}
@@ -344,19 +334,36 @@ export function SettingsPage({ actions = {}, snapshot = {} }) {
 
   return (
     <div className="settings-react-page">
-      <PageHeader eyebrow="SETTINGS" subtitle="调整软件外观、数据存储与联系人隐私。" title="设置" />
+      <PageHeader eyebrow="SETTINGS" subtitle="调整软件外观、API 连接、数据存储与联系人隐私。" title="设置" />
       <Tabs active={tab} className="settings-page-tabs" items={SETTINGS_TABS} onChange={actions.setTab} size="md" />
-      <section className="settings-page-body" aria-label={tab === "data" ? "数据设置" : tab === "privacy" ? "隐私设置" : "常规设置"}>
+      <section className="settings-page-body" aria-label={tab === "api" ? "API 设置" : tab === "main-model" ? "主模型设置" : tab === "data" ? "数据设置" : tab === "privacy" ? "隐私设置" : "常规设置"}>
         {tab === "data" ? (
           <DataSettings
             onChangeDataLocation={() => run("data-location", actions.changeDataLocation)}
             onCheckSystemStatus={() => run("system-status", actions.checkSystemStatus)}
             onOpenDirectory={(path) => run("open-directory", () => actions.openDirectory?.(path))}
             onRemovePreviousCopy={() => run("old-copy", actions.removePreviousCopy)}
-            onSelectWorkspace={() => run("workspace", actions.selectWorkspace)}
             pending={pending}
             settings={settings}
             systemStatus={snapshot.systemStatus}
+          />
+        ) : tab === "main-model" ? (
+          <AgentModelSettings
+            actions={{
+              fetchModels: actions.fetchModels,
+              saveModelConfiguration: actions.saveModelConfiguration,
+            }}
+            config={snapshot.agentRuntime || {}}
+            initialModels={snapshot.agentModels}
+            initialNotice={snapshot.agentModelNotice}
+          />
+        ) : tab === "api" ? (
+          <ApiConnectionsSettings
+            actions={{
+              removeApiConnection: actions.removeApiConnection,
+              saveApiConnection: actions.saveApiConnection,
+            }}
+            snapshot={snapshot.apiServices}
           />
         ) : tab === "privacy" ? (
           <PrivacySettings
@@ -371,7 +378,7 @@ export function SettingsPage({ actions = {}, snapshot = {} }) {
             onCheckForUpdate={() => run("check-update", actions.checkForUpdate)}
             onDownloadUpdate={() => run("download-update", actions.downloadUpdate)}
             onInstallUpdate={() => run("install-update", actions.installUpdate)}
-            onOpenOnboarding={() => run("onboarding", actions.openOnboarding)}
+            onOpenOnboarding={actions.openOnboarding}
             onOpenReleaseAnnouncement={() => run("release-announcement", actions.openReleaseAnnouncement)}
             onThemeChange={(theme) => run("theme", () => actions.changeTheme?.(theme))}
             pending={pending}

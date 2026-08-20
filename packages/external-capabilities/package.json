@@ -7,9 +7,6 @@
   "scripts": {
     "test": "node --test test/*.test.mjs"
   },
-  "dependencies": {
-    "@suzu-lives/claude-integration": "0.1.0"
-  },
   "files": [
     "src/**/*"
   ]

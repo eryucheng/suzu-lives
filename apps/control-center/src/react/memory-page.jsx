@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Banner, Button, Dialog, Empty, GlassPanel, Input, PageHeader, Select, Status, Switch, Tabs, Textarea } from "suzu-design-system";
 
+import { API_BINDINGS } from "../features/agent/runtime.mjs";
 import { createMemoryBrainView } from "../features/memory-brain/brain-view.mjs";
+import { ApiConnectionPicker } from "./api-connections-ui.jsx";
 
 import "./memory-page.css";
 
@@ -236,11 +238,14 @@ function RecallTest({ api, contactId, disabled, onError, onSuccess }) {
 
 function MemoryOverview({ api, contactId, memory, onError, onSuccess }) {
   const ready = memory?.status === "ready";
+  const embeddingReady = memory?.embeddingConfigured === true;
+  const statusLabel = !ready ? "尚未建立" : embeddingReady ? "缓存可用" : "向量未配置";
+  const statusTone = !ready || !embeddingReady ? "warning" : "success";
   return <section className="memory-overview">
     <article className="memory-status-card">
       <div className="memory-status-head">
         <div><span className="eyebrow">MEMORY GRAPH</span><h2>记忆缓存</h2></div>
-        <Status label={ready ? "缓存可用" : "尚未建立"} tone={ready ? "success" : "warning"} />
+        <Status label={statusLabel} tone={statusTone} />
       </div>
       <div className="memory-metrics">
         <div><strong>{numberText(memory?.memories)}</strong><span>记忆节点</span></div>
@@ -248,9 +253,9 @@ function MemoryOverview({ api, contactId, memory, onError, onSuccess }) {
         <div><strong>{numberText(memory?.embeddings)}</strong><span>向量</span></div>
       </div>
       <p>{ready ? <>
-        当前向量模型：{memory?.embeddingModel || "未配置查询模型"}<br />
+        当前向量模型：{memory?.embeddingModel || "未配置"}{embeddingReady ? "" : "；未配置向量 API 时检索会降级为词面匹配"}<br />
         自动整理模型：{memory?.generationConfigured
-          ? `${memory?.generationModel || "当前 Claude Code 主模型"}（已配置）`
+          ? `${memory?.generationModel || "当前主模型"}（已配置）`
           : "未配置；新的记忆会保留为待整理"}
       </> : "记忆数据库尚未准备好；聊天和缓存不会写进仓库。"}</p>
     </article>
@@ -1162,9 +1167,20 @@ export function MemoryPage({ actions = {}, api, loading = false, snapshot = {} }
     if (loading || (!ready && nextView !== "brain")) return;
     setView(nextView);
   };
+  const apiConnections = Array.isArray(snapshot?.apiServices?.connections) ? snapshot.apiServices.connections : [];
+  const apiBindings = snapshot?.apiServices?.bindings && typeof snapshot.apiServices.bindings === "object" ? snapshot.apiServices.bindings : {};
+  const memoryEmbeddingTypes = API_BINDINGS.find((item) => item.id === "memory-embedding")?.types || [];
+  const memoryEmbeddingConnections = apiConnections.filter((item) => memoryEmbeddingTypes.includes(item.type));
   const headerActions = <div className="memory-page-actions">
     <Button aria-expanded={contactPickerOpen} aria-haspopup="dialog" className={`memory-contact-picker-trigger${contactPickerOpen ? " is-active" : ""}`} disabled={!contacts.length || loading || contactPending} onClick={() => setContactPickerOpen((current) => !current)} type="button" variant="secondary">联系人：{contactName(selectedContact)}</Button>
     <Button disabled={!contactId || loading || importing} onClick={() => setImportDialogOpen(true)} type="button" variant="secondary">{importing ? "正在导入…" : "导入记忆"}</Button>
+    <ApiConnectionPicker
+      connections={memoryEmbeddingConnections}
+      onManage={actions.openApiServices}
+      onSelect={(connectionId) => actions.selectApiBinding?.("memory-embedding", connectionId)}
+      selectedId={apiBindings["memory-embedding"] || ""}
+      title="为记忆向量选择 API"
+    />
     <div className="memory-recall-control"><span id="memoryRecallLabel">记忆召回</span><Switch aria-labelledby="memoryRecallLabel" checked={recallEnabled} disabled={loading} onChange={(event) => void setRecallEnabled(event.target.checked)} /></div>
     <Tabs active={visibleView} className="memory-view-tabs" items={MEMORY_VIEW_TABS} onChange={selectView} size="sm" />
     <Button onClick={actions.returnToOverview} type="button" variant="secondary">返回关系</Button>

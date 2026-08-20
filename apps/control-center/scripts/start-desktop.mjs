@@ -5,12 +5,15 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { createDesktopStartupDiagnostics } from "./desktop-startup-diagnostics.mjs";
+
 const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const rendererPort = 5173;
 const rendererUrl = `http://127.0.0.1:${rendererPort}`;
 const require = createRequire(import.meta.url);
 const viteCliPath = path.resolve(path.dirname(require.resolve("vite")), "..", "..", "bin", "vite.js");
 const electronCliPath = require.resolve("electron/cli.js");
+const startupDiagnostics = createDesktopStartupDiagnostics();
 
 function delay(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
@@ -33,6 +36,7 @@ async function rendererIsReady(url) {
 async function waitForRenderer({ rendererUrl, viteProcess }) {
   const deadline = Date.now() + 20_000;
   while (Date.now() < deadline) {
+    if (viteProcess.launchError) throw viteProcess.launchError;
     if (viteProcess.exitCode !== null) {
       throw new Error(`Vite 提前退出（${viteProcess.exitCode ?? "未知错误"}）。`);
     }
@@ -46,6 +50,29 @@ function stop(process) {
   if (process && process.exitCode === null && !process.killed) process.kill();
 }
 
+function errorDetails(error) {
+  return {
+    message: String(error?.message || error || "未知错误"),
+    ...(error?.code ? { code: String(error.code) } : {}),
+  };
+}
+
+function forwardOutput(child, label) {
+  const streams = [
+    [child?.stdout, process.stdout, "stdout"],
+    [child?.stderr, process.stderr, "stderr"],
+  ];
+  for (const [stream, destination, kind] of streams) {
+    if (!stream) continue;
+    stream.setEncoding?.("utf8");
+    stream.on("data", (chunk) => {
+      const output = String(chunk);
+      startupDiagnostics.recordOutput(`${label}.${kind}`, output);
+      destination.write(output);
+    });
+  }
+}
+
 async function ensureRuntimeFiles() {
   await Promise.all([
     fs.access(viteCliPath),
@@ -54,6 +81,7 @@ async function ensureRuntimeFiles() {
 }
 
 async function main() {
+  startupDiagnostics.record("launcher.start", { appRoot, rendererPort });
   await ensureRuntimeFiles();
   let stopping = false;
   let electronProcess = null;
@@ -65,7 +93,13 @@ async function main() {
   ], {
     cwd: appRoot,
     env: process.env,
-    stdio: "inherit",
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  startupDiagnostics.record("vite.spawned", { pid: viteProcess.pid || null });
+  forwardOutput(viteProcess, "vite");
+  viteProcess.once("error", (error) => {
+    viteProcess.launchError = error;
+    startupDiagnostics.record("vite.spawn-failed", errorDetails(error));
   });
 
   const stopAll = () => {
@@ -78,6 +112,7 @@ async function main() {
   process.once("SIGTERM", stopAll);
 
   viteProcess.once("exit", (code, signal) => {
+    startupDiagnostics.record("vite.exit", { code, signal: signal || null });
     if (stopping) return;
     stopping = true;
     console.error(`本地界面服务已退出（${signal || code || "未知原因"}）。`);
@@ -93,18 +128,26 @@ async function main() {
         ...process.env,
         SUZU_LIVES_RENDERER_URL: rendererUrl,
       },
-      stdio: "inherit",
+      stdio: ["ignore", "pipe", "pipe"],
     });
-    await new Promise((resolve, reject) => {
+    startupDiagnostics.record("electron.spawned", { pid: electronProcess.pid || null });
+    forwardOutput(electronProcess, "electron");
+    const exitCode = await new Promise((resolve, reject) => {
       electronProcess.once("error", reject);
       electronProcess.once("exit", (code) => resolve(code));
     });
+    startupDiagnostics.record("electron.exit", { code: exitCode });
+    if (Number.isInteger(exitCode) && exitCode !== 0) process.exitCode = exitCode;
   } finally {
     stopAll();
+    startupDiagnostics.record("launcher.stop", { exitCode: process.exitCode || 0 });
+    await startupDiagnostics.flush();
   }
 }
 
-main().catch((error) => {
+main().catch(async (error) => {
+  startupDiagnostics.record("launcher.failed", errorDetails(error));
+  await startupDiagnostics.flush();
   console.error(`无法启动 Suzu Lives：${error?.message || error}`);
   process.exitCode = 1;
 });

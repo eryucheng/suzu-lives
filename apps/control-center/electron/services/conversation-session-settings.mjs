@@ -26,7 +26,7 @@ function sessionDirectory(dataRoot, session) {
   }
 }
 
-/** Local media lives below the owning Agent and Claude session. */
+/** Local media lives below the owning Agent and Agent Core session. */
 export function createConversationSessionSettingsService({
   dataRoot,
   fsOps = fs,

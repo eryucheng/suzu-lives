@@ -677,3 +677,29 @@
     padding: 21px 17px;
   }
 }
+
+/* 语音消息设置：TTS / ASR 两个 API 抽屉并排一行 */
+.voice-binding-pair {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-lg);
+  max-width: 720px;
+}
+
+.voice-binding-pair__item {
+  display: grid;
+  min-width: 0;
+  align-content: start;
+  gap: 7px;
+}
+
+.voice-binding-pair__label {
+  color: var(--text-secondary);
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+}
+
+.voice-binding-pair__item .api-connection-picker,
+.voice-binding-pair__item .api-connection-picker > * {
+  width: 100%;
+}

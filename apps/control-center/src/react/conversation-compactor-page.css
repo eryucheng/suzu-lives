@@ -223,6 +223,7 @@
 
 .conversation-compactor-automatic-fields { display:grid; gap:var(--space-sm); }
 .conversation-compactor-automatic-fields > p { color:var(--text-muted); font-size:var(--font-size-xs); }
+.conversation-compactor-number-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:var(--space-sm); }
 .conversation-compactor-field { display:grid; min-width:0; gap:7px; }
 .conversation-compactor-field [class*="input"],
 .conversation-compactor-field input { width:100%; box-sizing:border-box; }
@@ -262,6 +263,11 @@
 .conversation-compactor-prompt-field textarea { min-height:132px; box-sizing:border-box; resize:vertical; border-color:var(--border); background:var(--panel-soft); color:var(--text); font-size:var(--font-size-lg); line-height:1.65; }
 .conversation-compactor-prompt-field textarea::placeholder { color:var(--text-muted); opacity:1; }
 .conversation-compactor-run-button { min-width:102px; }
+
+@media (max-width:980px) {
+  .conversation-compactor-workspace { grid-template-columns:1fr; }
+  .conversation-compactor-session-rail { max-height:240px; }
+}
 
 @media (prefers-reduced-motion:reduce) {
   .conversation-compactor-contact-button,

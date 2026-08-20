@@ -12,6 +12,8 @@
 
 .onboarding-dialog {
   width: min(660px, 100%);
+  max-height: calc(100vh - 28px);
+  overflow: auto;
   border: 1px solid color-mix(in srgb, var(--accent) 42%, var(--line));
   border-radius: 20px;
   background: linear-gradient(145deg, color-mix(in srgb, var(--panel) 97%, #222943), var(--panel));
@@ -114,6 +116,10 @@
   padding: 21px;
 }
 
+.onboarding-body--model {
+  min-height: 0;
+}
+
 .onboarding-body h2 {
   margin: 6px 0 0;
   font-size: 18px;
@@ -143,6 +149,20 @@
 .onboarding-form input,
 .onboarding-form .onboarding-provider-select {
   width: 100%;
+}
+
+.onboarding-model-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.onboarding-model-grid > label {
+  min-width: 0;
+}
+
+.onboarding-model-grid__wide {
+  grid-column: 1 / -1;
 }
 
 .onboarding-hint {
@@ -218,5 +238,7 @@
   .onboarding-overlay { padding: 12px; }
   .onboarding-dialog { padding: 18px; }
   .onboarding-steps { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .onboarding-model-grid { grid-template-columns: 1fr; }
+  .onboarding-model-grid__wide { grid-column: auto; }
   .onboarding-capability-list { display: grid; grid-template-columns: 1fr; }
 }

@@ -33,9 +33,9 @@ test("capability inner pages reuse every existing save and switch boundary", asy
     "ImageVisionSettings",
     "VideoUnderstandingSettings",
     "VoiceMessageSettings",
-    "SiteAutomationOverview",
+    "WebBrowserSettings",
+    "AgentJournalSettings",
     "ProactiveContactSettings",
-    "TravelingMerchantSettings",
   ]) {
     assert.match(detail, new RegExp(`function ${setting}`, "u"));
   }
@@ -45,10 +45,15 @@ test("capability inner pages reuse every existing save and switch boundary", asy
   assert.match(detail, /actions\.setContactEnabled/u);
   assert.match(detail, /在哪些联系人中启用/u);
   assert.match(detail, /label="自动链式唤醒"/u);
+  assert.match(detail, /每天写日记/u);
+  assert.match(detail, /agent-journal/u);
   assert.match(detail, /autoMaintain: enabled/u);
   assert.match(detail, /contact\.name/u);
   assert.doesNotMatch(detail, /session\.title/u);
-  assert.match(detail, /actions\.setSiteAction/u);
+  assert.match(detail, /网页自动化/u);
+  assert.match(detail, /执行页面脚本/u);
+  assert.doesNotMatch(detail, /setSiteAction/u);
+  assert.doesNotMatch(detail, /TravelingMerchantSettings/u);
   assert.match(detail, /actions\.selectApiBinding/u);
   assert.doesNotMatch(overview, /当前联系人|联系人项目/u);
   assert.doesNotMatch(detail, /当前联系人|联系人项目/u);
@@ -61,5 +66,5 @@ test("capability inner pages reuse every existing save and switch boundary", asy
   assert.match(app, /api\.externalCapabilities\.setEnabled/u);
   assert.match(app, /api\.externalCapabilities\.remove/u);
   assert.match(app, /api\.connections\.bindNamedApiConnection/u);
-  assert.match(app, /api\.capabilities\.openTravelingMerchantPage/u);
+  assert.doesNotMatch(app, /api\.capabilities\.openTravelingMerchantPage/u);
 });

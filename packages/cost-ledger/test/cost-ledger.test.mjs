@@ -43,6 +43,26 @@ test("uses DeepSeek native cache hit and miss fields when present", () => {
   assert.equal(result.units.inputCachedTokens, 1_000_000);
 });
 
+test("normalizes public DSH camel-case token usage for the active DeepSeek price", () => {
+  const result = calculateCost({
+    model: "deepseek-v4-flash",
+    timestamp: "2026-08-17T01:00:00.000Z",
+    usage: {
+      inputTokens: 1_000_000,
+      cacheReadTokens: 1_000_000,
+      cacheWriteTokens: 100_000,
+      outputTokens: 1_000_000,
+    },
+  });
+  assert.equal(result.status, "estimated");
+  assert.deepEqual(result.units, {
+    inputUncachedTokens: 1_100_000,
+    inputCachedTokens: 1_000_000,
+    outputTextTokens: 1_000_000,
+  });
+  assert.ok(result.amountCny > 0);
+});
+
 test("uses the official DeepSeek V4 peak and off-peak rates from their effective time", () => {
   const usage = {
     prompt_cache_miss_tokens: 1_000_000,

@@ -4,7 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { createSettingsService, normalizeClaudeProjectDefaults, normalizeClaudeRuntimeFeatures, normalizeClaudeToolPermissions, normalizeConversationPreferences, normalizeMemoryRecallEnabled, normalizeOnboardingCompleted, normalizeOnboardingMultimodalCompleted, normalizeReleaseAnnouncementState, registerSettingsIpc } from "../electron/ipc/settings-ipc.mjs";
+import { createSettingsService, normalizeConversationPreferences, normalizeMemoryRecallEnabled, normalizeOnboardingCompleted, normalizeOnboardingMultimodalCompleted, registerSettingsIpc } from "../electron/ipc/settings-ipc.mjs";
+import { createContactProjectsService } from "../electron/services/contact-projects.mjs";
 import { renderManagedAgentRuntimeSettings, renderSettings } from "../src/features/settings/index.mjs";
 
 test("new installations default to the light theme while preserving an explicit dark preference", () => {
@@ -17,34 +18,28 @@ test("new installations default to the light theme while preserving an explicit 
   assert.equal(settings.load().theme, "dark");
 });
 
-test("settings persist user-created price models and later price revisions for them", () => {
-  const userData = fs.mkdtempSync(path.join(os.tmpdir(), "suzu-settings-custom-price-"));
-  const app = { getPath: () => userData };
-  const settings = createSettingsService({ app });
-  settings.save({
-    customPriceModels: [{
-      modelId: "openai/gpt-4.1-mini",
-      label: "GPT-4.1 mini",
-      provider: "OpenAI",
-      effectiveFrom: "2026-08-17T00:00:00.000Z",
-      rateDefinitions: {
-        inputTokens: { label: "输入", unitLabel: "元 / 百万 Token", per: 1_000_000 },
-        outputTextTokens: { label: "输出", unitLabel: "元 / 百万 Token", per: 1_000_000 },
-      },
-      rates: { inputTokens: 2, outputTextTokens: 8 },
-    }],
-    priceRevisions: [{
-      modelId: "openai/gpt-4.1-mini",
-      effectiveFrom: "2026-08-18T00:00:00.000Z",
-      rates: { inputTokens: 3, outputTextTokens: 9 },
-    }],
+test("the first settings snapshot materializes the managed contacts directory", async () => {
+  const userData = fs.mkdtempSync(path.join(os.tmpdir(), "suzu-settings-managed-contacts-"));
+  const app = { getPath: () => userData, relaunch: () => {}, exit: () => {} };
+  const settingsService = createSettingsService({ app });
+  const contactProjectsService = createContactProjectsService({ settingsService });
+  const handlers = new Map();
+  registerSettingsIpc({
+    app,
+    contactProjectsService,
+    dataStorageService: null,
+    dialog: { showOpenDialog: async () => ({ canceled: true }), showMessageBox: async () => ({ response: 1 }) },
+    getMainWindow: () => null,
+    ipcMain: { handle: (name, handler) => handlers.set(name, handler) },
+    shell: { showItemInFolder: () => {}, openPath: () => {} },
+    settingsService,
   });
 
-  const loaded = settings.load();
-  assert.equal(loaded.customPriceModels.length, 1);
-  assert.equal(loaded.customPriceModels[0].modelId, "openai/gpt-4.1-mini");
-  assert.equal(loaded.priceRevisions.length, 1);
-  assert.equal(loaded.priceRevisions[0].modelId, "openai/gpt-4.1-mini");
+  const snapshot = await handlers.get("settings:get")();
+  const contactsRoot = path.join(userData, "contacts");
+  assert.equal(snapshot.contactsRoot, contactsRoot);
+  assert.equal(settingsService.load().contactsRoot, contactsRoot);
+  assert.equal(fs.statSync(contactsRoot).isDirectory(), true);
 });
 
 test("data settings show one unified storage location and a migration action", () => {
@@ -63,9 +58,7 @@ test("data settings show one unified storage location and a migration action", (
   assert.match(html, /更换位置/u);
   assert.match(html, /旧位置的安全副本/u);
   assert.match(html, /data-remove-previous-data-copy/u);
-  assert.match(html, /Agent 工作目录/u);
-  assert.match(html, /data-select-contact-projects-root/u);
-  assert.match(html, /D:\/Agents/u);
+  assert.doesNotMatch(html, /联系人工作目录|data-select-contact-projects-root|D:\/Agents/u);
   assert.doesNotMatch(html, /设置文件/u);
 });
 
@@ -73,21 +66,21 @@ test("software settings keeps only application controls", () => {
   const html = renderSettings({
     state: { settingsTab: "general", settings: { contactsRoot: "D:/Agents" } },
   });
-  assert.match(html, /首次设置/u);
   assert.match(html, /外观/u);
-  assert.doesNotMatch(html, /Agent 工作目录|Claude 工具权限|Claude 内建能力|记忆召回/u);
+  assert.doesNotMatch(html, /首次设置|data-open-onboarding|Agent 工作目录|记忆召回/u);
 });
 
-test("management runtime settings keeps only default Claude rules", () => {
+test("management runtime settings describes DSH companion's direct local capabilities", () => {
   const html = renderManagedAgentRuntimeSettings({
-    state: { settings: { contactsRoot: "D:/Agents", claudeToolPermissions: { read: true, webFetch: false, webSearch: true }, claudeRuntimeFeatures: { subagents: true }, memoryRecallEnabled: false } },
+    state: { settings: { contactsRoot: "D:/Agents", memoryRecallEnabled: false } },
   });
-  assert.doesNotMatch(html, /Agent 工作目录|data-select-contact-projects-root|D:\/Agents/u);
-  assert.match(html, /Claude 工具权限|Claude 内建能力/u);
+  assert.doesNotMatch(html, /联系人工作目录|data-select-contact-projects-root|D:\/Agents/u);
+  assert.match(html, /陪伴运行能力|DSH|PowerShell|浏览器/u);
+  assert.doesNotMatch(html, /data-external-agent-/u);
   assert.doesNotMatch(html, /记忆召回/u);
 });
 
-test("first-run setup completion is persisted as a strict boolean and can be reopened from settings", () => {
+test("legacy onboarding completion flags remain compatible while the guide is hidden", () => {
   assert.equal(normalizeOnboardingCompleted(true), true);
   assert.equal(normalizeOnboardingCompleted(false), false);
   assert.equal(normalizeOnboardingCompleted("true"), false);
@@ -97,9 +90,7 @@ test("first-run setup completion is persisted as a strict boolean and can be reo
   const html = renderSettings({
     state: { settingsTab: "general", settings: { onboardingCompleted: false } },
   });
-  assert.match(html, /首次设置/u);
-  assert.match(html, /data-open-onboarding/u);
-  assert.match(html, /待完成/u);
+  assert.doesNotMatch(html, /首次设置|data-open-onboarding|待完成/u);
 });
 
 test("memory recall remains default-on after leaving runtime management", () => {
@@ -112,114 +103,34 @@ test("memory recall remains default-on after leaving runtime management", () => 
   assert.doesNotMatch(html, /记忆召回|data-memory-recall-toggle/u);
 });
 
-test("release announcement state only retains the two version markers", () => {
-  assert.deepEqual(normalizeReleaseAnnouncementState({
-    lastAcknowledgedVersion: " 1.2.0 ",
-    lastStartedVersion: "1.2.0",
-    oldAnnouncements: ["ignored"],
-  }), {
-    lastAcknowledgedVersion: "1.2.0",
-    lastStartedVersion: "1.2.0",
-  });
+test("unknown runtime switches are ignored by the DSH settings model", () => {
+  const userData = fs.mkdtempSync(path.join(os.tmpdir(), "suzu-settings-dsh-migration-"));
+  try {
+    fs.writeFileSync(path.join(userData, "settings.json"), JSON.stringify({
+      externalProjectDefaults: { allowedTools: ["Bash(*)"] },
+      externalRuntimeFeatures: { bash: true },
+      externalToolPermissions: { read: true },
+      theme: "dark",
+    }));
+    const settings = createSettingsService({ app: { getPath: () => userData } });
+    const snapshot = settings.load();
+    assert.equal(snapshot.theme, "dark");
+    assert.equal(Object.hasOwn(snapshot, "externalProjectDefaults"), false);
+    assert.equal(Object.hasOwn(snapshot, "externalRuntimeFeatures"), false);
+    assert.equal(Object.hasOwn(snapshot, "externalToolPermissions"), false);
+    assert.deepEqual(settings.safePatch({ externalToolPermissions: { read: true } }), {});
+  } finally {
+    fs.rmSync(userData, { recursive: true, force: true });
+  }
 });
 
-test("Claude read and web permissions are default-on and shown in runtime management", () => {
-  assert.deepEqual(normalizeClaudeToolPermissions(), { read: true, webFetch: true, webSearch: true });
-  assert.deepEqual(normalizeClaudeToolPermissions({ webFetch: false }), { read: true, webFetch: false, webSearch: true });
-  const html = renderManagedAgentRuntimeSettings({
-    state: { settingsTab: "general", settings: { claudeToolPermissions: { read: true, webFetch: false, webSearch: true } } },
-  });
-  assert.match(html, /Claude 工具权限/u);
-  assert.match(html, /data-claude-tool-permission="read"/u);
-  assert.match(html, /data-claude-tool-permission="webFetch"/u);
-  assert.match(html, /允许网页搜索/u);
-});
-
-test("shared Claude project defaults normalize the contact-wide tool and network rules", () => {
-  assert.deepEqual(normalizeClaudeProjectDefaults(), {
-    allowedTools: [],
-    deniedTools: [],
-    skipWebFetchPreflight: true,
-  });
-  assert.deepEqual(normalizeClaudeProjectDefaults({
-    allowedTools: "Bash(git status:*)\nBash(git status:*)",
-    deniedTools: "Read(./.env)\nRead(./.env)\nBash(rm:*)",
-    skipWebFetchPreflight: false,
-  }), {
-    allowedTools: ["Bash(git status:*)"],
-    deniedTools: ["Read(./.env)", "Bash(rm:*)"],
-    skipWebFetchPreflight: false,
-  });
-});
-
-test("Claude runtime features are default-off and exposed in runtime management", () => {
-  assert.deepEqual(normalizeClaudeRuntimeFeatures(), {
-    bash: true,
-    edit: true,
-    glob: true,
-    grep: true,
-    subagents: false,
-    taskList: false,
-    backgroundTasks: false,
-    nativeCron: false,
-    askUserQuestion: false,
-    write: true,
-  });
-  assert.deepEqual(normalizeClaudeRuntimeFeatures({ bash: false, glob: false, subagents: true, nativeCron: true }), {
-    bash: false,
-    edit: true,
-    glob: false,
-    grep: true,
-    subagents: true,
-    taskList: false,
-    backgroundTasks: false,
-    nativeCron: true,
-    askUserQuestion: false,
-    write: true,
-  });
-  const html = renderManagedAgentRuntimeSettings({
-    state: { settingsTab: "general", settings: { claudeRuntimeFeatures: { subagents: true } } },
-  });
-  assert.match(html, /Claude 内建能力/u);
-  assert.match(html, /data-claude-runtime-feature="subagents" checked/u);
-  assert.match(html, /data-claude-runtime-feature="taskList"/u);
-  assert.match(html, /data-claude-runtime-feature="backgroundTasks"/u);
-  assert.match(html, /data-claude-runtime-feature="nativeCron"/u);
-  assert.match(html, /data-claude-runtime-feature="askUserQuestion"/u);
-});
-
-test("changing Claude tool permissions syncs the contact projects", async () => {
-  const handlers = new Map();
-  const syncCalls = [];
-  let stored = { claudeToolPermissions: { read: true, webFetch: true, webSearch: true } };
-  registerSettingsIpc({
-    app: { relaunch: () => {}, exit: () => {} },
-    contactProjectsService: { syncClaudeProjectSettings: async () => { syncCalls.push(true); } },
-    dataStorageService: null,
-    dialog: { showOpenDialog: async () => ({ canceled: true }), showMessageBox: async () => ({ response: 1 }) },
-    getMainWindow: () => null,
-    ipcMain: { handle: (name, handler) => handlers.set(name, handler) },
-    shell: { showItemInFolder: () => {}, openPath: () => {} },
-    settingsService: {
-      load: () => stored,
-      safePatch: (value) => ({ claudeToolPermissions: normalizeClaudeToolPermissions(value.claudeToolPermissions) }),
-      save: (next) => { stored = next; return stored; },
-      response: (settings) => settings,
-    },
-  });
-
-  const result = await handlers.get("settings:update")(null, { claudeToolPermissions: { webFetch: false } });
-  assert.deepEqual(result.claudeToolPermissions, { read: true, webFetch: false, webSearch: true });
-  assert.deepEqual(syncCalls, [true]);
-});
-
-test("changing memory recall synchronizes only its project Hook registration", async () => {
+test("changing memory recall updates the independently mounted runtime Hook", async () => {
   const handlers = new Map();
   const updates = [];
   let stored = { memoryRecallEnabled: true };
   registerSettingsIpc({
     app: { relaunch: () => {}, exit: () => {} },
-    contactProjectsService: { syncClaudeProjectSettings: async () => {} },
+    contactProjectsService: {},
     dataStorageService: null,
     dialog: { showOpenDialog: async () => ({ canceled: true }), showMessageBox: async () => ({ response: 1 }) },
     getMainWindow: () => null,
@@ -238,35 +149,6 @@ test("changing memory recall synchronizes only its project Hook registration", a
   assert.deepEqual(updates, [{ enabled: false }]);
 });
 
-test("changing shared Claude project defaults syncs the contact projects", async () => {
-  const handlers = new Map();
-  const syncCalls = [];
-  let stored = {};
-  registerSettingsIpc({
-    app: { relaunch: () => {}, exit: () => {} },
-    contactProjectsService: { syncClaudeProjectSettings: async () => { syncCalls.push(true); } },
-    dataStorageService: null,
-    dialog: { showOpenDialog: async () => ({ canceled: true }), showMessageBox: async () => ({ response: 1 }) },
-    getMainWindow: () => null,
-    ipcMain: { handle: (name, handler) => handlers.set(name, handler) },
-    shell: { showItemInFolder: () => {}, openPath: () => {} },
-    settingsService: {
-      load: () => stored,
-      safePatch: (value) => ({ claudeProjectDefaults: normalizeClaudeProjectDefaults(value.claudeProjectDefaults) }),
-      save: (next) => { stored = next; return stored; },
-      response: (settings) => settings,
-    },
-  });
-
-  const result = await handlers.get("settings:update")(null, { claudeProjectDefaults: { skipWebFetchPreflight: false } });
-  assert.deepEqual(result.claudeProjectDefaults, {
-    allowedTools: [],
-    deniedTools: [],
-    skipWebFetchPreflight: false,
-  });
-  assert.deepEqual(syncCalls, [true]);
-});
-
 test("changing the owner display name syncs managed user profile titles", async () => {
   const handlers = new Map();
   const titleSyncCalls = [];
@@ -274,7 +156,6 @@ test("changing the owner display name syncs managed user profile titles", async 
   registerSettingsIpc({
     app: { relaunch: () => {}, exit: () => {} },
     contactProjectsService: {
-      syncClaudeProjectSettings: async () => {},
       syncOwnerProfileTitle: async (value) => {
         titleSyncCalls.push(value);
         return { status: "synced", contacts: [{ id: "contact-1" }], errors: [] };
@@ -405,36 +286,6 @@ test("settings update IPC delegates the check, download, and install actions to 
   assert.deepEqual(await handlers.get("settings:download-update")(), { status: "downloaded" });
   assert.deepEqual(await handlers.get("settings:install-update")(), { status: "installing" });
   assert.deepEqual(calls, ["check", "download", "install"]);
-});
-
-test("settings release announcement IPC delegates status and acknowledgement", async () => {
-  const handlers = new Map();
-  const calls = [];
-  const releaseAnnouncementService = {
-    acknowledge: () => {
-      calls.push("acknowledge");
-      return { pending: false };
-    },
-    status: () => {
-      calls.push("status");
-      return { pending: true };
-    },
-  };
-  registerSettingsIpc({
-    app: { relaunch: () => {}, exit: () => {} },
-    contactProjectsService: {},
-    dataStorageService: null,
-    dialog: { showOpenDialog: async () => ({ canceled: true }), showMessageBox: async () => ({ response: 1 }) },
-    getMainWindow: () => null,
-    ipcMain: { handle: (name, handler) => handlers.set(name, handler) },
-    releaseAnnouncementService,
-    shell: { showItemInFolder: () => {}, openPath: () => {} },
-    settingsService: { load: () => ({}), save: (next) => next, response: () => ({}) },
-  });
-
-  assert.deepEqual(await handlers.get("settings:release-announcement-status")(), { pending: true });
-  assert.deepEqual(await handlers.get("settings:acknowledge-release-announcement")(), { pending: false });
-  assert.deepEqual(calls, ["status", "acknowledge"]);
 });
 
 test("system status IPC delegates only to the read-only status service", async () => {

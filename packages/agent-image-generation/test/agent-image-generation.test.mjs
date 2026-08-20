@@ -32,6 +32,14 @@ test("API failures do not fall back, and a generated image stays in the local co
   assert.equal(result.sent, false); assert.equal(await fs.stat(result.path).then((value) => value.isFile()), true);
 });
 
+test("API generation requires the connection selected by the software", async () => {
+  const values = await fixture();
+  await assert.rejects(
+    () => runAgentImageGeneration({ agentRoot: values.agentRoot, dataRoot: values.dataRoot, options: { prompt: "不读取旧环境变量" } }),
+    /设置 → API/u,
+  );
+});
+
 test("image generation stays on the local conversation delivery path", async () => {
   const values = await fixture(); const configDirectory = path.join(values.agentRoot, "image-generation"); await fs.mkdir(configDirectory, { recursive: true });
   await fs.writeFile(path.join(configDirectory, "config.json"), JSON.stringify({ delivery: { command: "fixture-external-delivery", session_key_env: "FIXTURE_IMAGE_SESSION" } }));

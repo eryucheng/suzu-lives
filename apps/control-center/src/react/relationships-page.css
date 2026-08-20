@@ -57,7 +57,7 @@
 }
 
 .relationships-card--settings,
-.relationships-card--people {
+.relationships-card--journal {
   background:radial-gradient(circle at 92% 10%, color-mix(in srgb, var(--accent2) 12%, transparent), transparent 28%), var(--glass-bg);
 }
 
@@ -90,9 +90,16 @@
 .relationships-card--compactor .relationships-card__action,
 .relationships-card--memory .relationships-card__action,
 .relationships-card--settings .relationships-card__action,
-.relationships-card--people .relationships-card__static {
+.relationships-card--journal .relationships-card__action {
   justify-content:space-between;
   padding:18px 20px;
+}
+
+.relationships-card--journal {
+  background:
+    radial-gradient(circle at 85% 5%, color-mix(in srgb, var(--accent2) 18%, transparent), transparent 34%),
+    radial-gradient(circle at 12% 102%, color-mix(in srgb, var(--accent) 12%, transparent), transparent 38%),
+    var(--glass-bg);
 }
 
 .relationships-card__topline,

@@ -1,0 +1,126 @@
+# Product-owned Agent Core preset for Suzu's companion runtime.
+#
+# The companion includes a direct terminal, filesystem, and background-job
+# layer: those are its basic hands, needed for ordinary requests such as
+# creating a folder.  Product-specific abilities (calendar, browser, voice,
+# vision, game control, third-party services, and so on) are separate modules
+# and are never enabled merely because their source code exists in Suzu.
+- id: suzu-persona
+  name: '@suzu-lives/suzu-agent-runtime/core/persona'
+  config:
+    text: |-
+      You are a personal AI companion.
+      The user-managed SUZU.md instruction hierarchy is the source of truth
+      for your name, character, relationship, and way of speaking. Do not
+      override it with a product-default persona. Stay honest about what you
+      can and cannot do, and respect the user's consent and privacy.
+      When the user asks for an optional product ability such as understanding
+      an attached image or video, generating an image, or sending a voice
+      message, first call suzu_capability_catalog. Only use an action the
+      catalog currently returns for this contact; otherwise say plainly that
+      the relevant ability is not enabled instead of pretending it ran.
+    complete: true
+    includeRuntimeContext: false
+
+# The selected upstream instruction module resolves its fixed global AGENTS.md
+# entry and then walks this session's project directory from broad to specific.
+# Suzu mirrors the user-editable global SUZU.md into that private bridge entry;
+# only SUZU.md is considered inside a contact/project tree.  This is context
+# loading only: it does not add a model-facing filesystem or coding tool.
+- id: agent-instructions
+  name: '@suzu-lives/suzu-agent-runtime/core/agent-instructions'
+  config:
+    maxBytes: 32768
+    maxSourceBytes: 16384
+    instructionFileCandidates:
+      - SUZU.md
+    localInstructionFileCandidates: []
+
+# This static product plugin is the real bridge for two lifecycle seams that
+# the Web stream cannot recreate afterwards: model-context injection immediately
+# before a step, and a decision immediately before a tool body runs.
+- id: lifecycle-bridge
+  name: '@suzu-lives/suzu-agent-runtime/lifecycle-bridge'
+  config:
+    timeoutMs: 5000
+
+# This generic Agent Core tool is the empty routing seam for separately installed
+# product abilities.  It can expose only actions that a connected capability
+# module has declared; by itself it grants the model no calendar, browser,
+# voice, visual, or external-service action.
+- id: capability-bridge
+  name: '@suzu-lives/suzu-agent-runtime/capability-bridge'
+  config:
+    # Image workflows and video understanding may legitimately take several
+    # minutes. Their own product settings still control request timeouts; the
+    # bridge merely must not cut an installed action off first.
+    timeoutMs: 3600000
+
+# A private bridge for product-maintained structured work such as extracting
+# long-term memory after a reply.  It calls the current Agent Core model inside
+# this process, so its credential never has to be copied into a second client.
+- id: structured-generator
+  name: '@suzu-lives/suzu-agent-runtime/structured-generator'
+  config:
+    timeoutMs: 120000
+    maxOutputTokens: 8192
+
+# ── conversation compaction ──────────────────────────────────────────────
+
+# This is a product-owned Agent Core component, not the old JSONL compactor.  It
+# reads per-contact settings through the owned child-process bridge and writes
+# the kernel's native append-only compaction events.  Its manual `/compact` path keeps
+# Suzu's configured recent raw-message tail instead of summarizing everything.
+- id: companion-compaction
+  name: cordis:group
+  group: true
+  isolate:
+    compaction: true
+  config:
+    - id: suzu-companion-compaction
+      name: '@suzu-lives/suzu-agent-runtime/companion-compaction'
+      config:
+        auto: true
+        thresholdRatio: 0.8
+        retainTokens: 5000
+        maxTokens: 8192
+        compactionRetries: 1
+        maxOverflowRetries: 1
+    - id: command-compact
+      name: '@suzu-lives/suzu-agent-runtime/core/command-compact'
+
+# ── core local execution ──────────────────────────────────────────────────
+
+# These maintained execution tools are the companion's basic local actuator layer,
+# not optional Suzu product abilities.  PowerShell is used on Windows and
+# Bash elsewhere; direct file and job tools keep normal workspace work fast.
+- id: tool-bash
+  name: '@suzu-lives/suzu-agent-runtime/core/terminal-bash'
+  disabled: !!js process.platform === 'win32'
+
+- id: tool-pwsh
+  name: '@suzu-lives/suzu-agent-runtime/core/terminal-pwsh'
+  disabled: !!js process.platform !== 'win32'
+
+- id: tool-fs
+  name: '@suzu-lives/suzu-agent-runtime/core/filesystem'
+
+- id: tool-fs-search
+  name: '@suzu-lives/suzu-agent-runtime/core/filesystem-search'
+  config:
+    sampleOverCapGlobResults: false
+
+- id: tool-jobs
+  name: '@suzu-lives/suzu-agent-runtime/core/background-jobs'
+
+# ── skills ─────────────────────────────────────────────────────────────────
+
+# External Skills are materialized only after the user imports and enables a
+# local `suzu-capability.json`. These two maintained Agent Core rows merely provide
+# the normal skill catalog/loader seam; without an installed Skill they expose
+# no third-party instruction or executable.
+- id: skill-filesystem
+  name: '@suzu-lives/suzu-agent-runtime/core/skill-filesystem'
+
+- id: tool-skill
+  name: '@suzu-lives/suzu-agent-runtime/core/skill-tool'

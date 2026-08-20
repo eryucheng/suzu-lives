@@ -1,1084 +1,1277 @@
 import assert from "node:assert/strict";
-import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { PassThrough } from "node:stream";
 import test from "node:test";
 
+import { createSuzuAgentLifecycle } from "@suzu-lives/agent-lifecycle";
+import { createCapabilityRegistry, createCapabilityRuntime } from "../electron/services/capability-registry.mjs";
+import { createConversationChatService } from "../electron/services/conversation-chat.mjs";
+import { createConversationAttachmentService } from "../electron/services/conversation-attachment-service.mjs";
 import {
-  claudeAllowedTools,
-  claudeAllowedToolsForWorkspace,
-  claudeCliArguments,
-  claudeCliEnvironment,
-  createConversationChatService,
-  scheduleSystemPrompt,
-} from "../electron/services/conversation-chat.mjs";
+  createConversationReader,
+  conversationContextRecords,
+  conversationDisplayMessages,
+} from "../electron/services/conversation-reader.mjs";
+import { resolveSuzuAgentRuntimePaths } from "../electron/services/suzu-agent-runtime.mjs";
+import { SUZU_SOFTWARE_ASSISTANT_SESSION_ID } from "../electron/services/software-assistant-service.mjs";
 
-async function temporaryDirectory(prefix) {
-  return fs.mkdtemp(path.join(os.tmpdir(), prefix));
+async function temporaryRoot() {
+  const root = process.env.SUZU_LIVES_TEST_TEMP || "D:\\Temp";
+  await fs.mkdir(root, { recursive: true });
+  return fs.mkdtemp(path.join(root, "suzu-lives-agent-core-chat-"));
 }
 
 async function flush() {
-  await new Promise((resolve) => setTimeout(resolve, 0));
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
 }
 
-async function wait(milliseconds) {
-  await new Promise((resolve) => setTimeout(resolve, milliseconds));
+async function waitFor(check, attempts = 50) {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const value = check();
+    if (value) return value;
+    await flush();
+    await new Promise((resolve) => setTimeout(resolve, 1));
+  }
+  throw new Error("等待异步 Agent Core 桥接结果超时。 ");
 }
 
-class FakeChild extends EventEmitter {
-  constructor() {
-    super();
-    this.stdin = new PassThrough();
-    this.stdout = new PassThrough();
-    this.stderr = new PassThrough();
-    this.input = "";
-    this.killed = false;
-    this.stdin.on("data", (chunk) => { this.input += chunk.toString("utf8"); });
-  }
-
-  emitJson(value) {
-    this.stdout.write(`${JSON.stringify(value)}\n`);
-  }
-
-  kill() {
-    this.killed = true;
-    return true;
-  }
-
-  close(code = 0, signal = null) {
-    this.stdout.end();
-    this.stderr.end();
-    this.emit("close", code, signal);
-  }
-}
-
-test("Claude Code stream arguments create or resume only the selected native session", () => {
-  assert.deepEqual(claudeCliArguments({ sessionId: "new-session", hasTranscript: false }), [
-    "-p",
-    "--input-format", "stream-json",
-    "--output-format", "stream-json",
-    "--verbose",
-    "--include-partial-messages",
-    "--permission-prompt-tool", "stdio",
-    "--replay-user-messages",
-    "--permission-mode", "acceptEdits",
-    "--disallowed-tools", "Agent,TodoWrite,AskUserQuestion",
-    "--session-id", "new-session",
-  ]);
-  assert.deepEqual(claudeCliArguments({ sessionId: "saved-session", hasTranscript: true }).slice(-2), ["--resume", "saved-session"]);
-  const manual = claudeCliArguments({ sessionId: "manual-session", permissionMode: "default" });
-  const planned = claudeCliArguments({ sessionId: "plan-session", permissionMode: "plan" });
-  const bypassed = claudeCliArguments({ sessionId: "bypass-session", permissionMode: "bypassPermissions" });
-  assert.equal(manual[manual.indexOf("--permission-mode") + 1], "default");
-  assert.equal(planned[planned.indexOf("--permission-mode") + 1], "plan");
-  assert.equal(bypassed[bypassed.indexOf("--permission-mode") + 1], "bypassPermissions");
-  assert.deepEqual(claudeAllowedTools({ read: true, webFetch: false, webSearch: true }), ["Read", "WebSearch"]);
-  const allowed = claudeCliArguments({ sessionId: "allowed-tools", allowedTools: claudeAllowedToolsForWorkspace({ read: true, webFetch: true, webSearch: false }, { suzuCliCommand: "suzu-lives" }), workspaceDirectories: ["D:/Suzu/workspace"] });
-  assert.match(allowed[allowed.indexOf("--allowed-tools") + 1], /^Read,WebFetch,/u);
-  assert.equal(allowed[allowed.indexOf("--permission-mode") + 1], "acceptEdits");
-  assert.equal(allowed[allowed.indexOf("--add-dir") + 1], path.resolve("D:/Suzu/workspace"));
-  assert.ok(allowed[allowed.indexOf("--allowed-tools") + 1].includes("Bash(suzu-lives *)"));
-});
-
-test("Claude runtime feature settings remove only disabled built-in tools and background features", () => {
-  const enabled = {
-    subagents: true,
-    taskList: true,
-    backgroundTasks: true,
-    nativeCron: true,
-    askUserQuestion: true,
+function createFakeRuntime({ history = { events: [], hasMore: false } } = {}) {
+  const listeners = new Set();
+  const calls = {
+    cancelTurn: [],
+    ensureSession: [],
+    history: [],
+    respondLifecycleRequest: [],
+    resolveApproval: [],
+    sendTurn: [],
+    close: 0,
   };
-  assert.equal(claudeCliArguments({ sessionId: "enabled", claudeRuntimeFeatures: enabled }).includes("--disallowed-tools"), false);
-  assert.deepEqual(claudeCliEnvironment({ claudeRuntimeFeatures: enabled, baseEnv: { KEEP: "yes" } }), {
-    KEEP: "yes",
-  });
-  assert.deepEqual(claudeCliEnvironment({ baseEnv: { KEEP: "yes" } }), {
-    KEEP: "yes",
-    CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1",
-    CLAUDE_CODE_DISABLE_CRON: "1",
-  });
-  const restricted = claudeCliArguments({
-    sessionId: "restricted",
-    claudeRuntimeFeatures: { bash: false, edit: false, glob: false, grep: false, write: false },
-    claudeToolPermissions: { read: false, webFetch: false, webSearch: false },
-  });
-  assert.equal(restricted[restricted.indexOf("--disallowed-tools") + 1], "Read,Glob,Grep,Edit,Write,Bash,WebFetch,WebSearch,Agent,TodoWrite,AskUserQuestion");
-});
-
-test("schedule prompt keeps Agent scheduling scoped to proactive contact", () => {
-  const proactiveOnly = scheduleSystemPrompt({
-    conversationAdd: "suzu-lives schedule add --contact-id contact-suzu",
-    list: "suzu-lives schedule list",
-    remove: "suzu-lives schedule remove <任务ID>",
-    proactiveChainPrompt: "用我的链式提示",
-    proactiveFollowUpPrompt: "用我的回访提示",
-  });
-  assert.match(proactiveOnly, /用我的链式提示/u);
-  assert.match(proactiveOnly, /用我的回访提示/u);
-  assert.doesNotMatch(proactiveOnly, /远行商人/u);
-
-  const planning = scheduleSystemPrompt({
-    conversationAdd: "suzu-lives schedule add --contact-id contact-suzu",
-    proactivePlanning: true,
-    proactiveChainDescription: "链式主动关心",
-    proactiveChainTaskPrompt: "执行一次主动关心判断。",
-  });
-  assert.match(planning, /内部安排阶段/u);
-  assert.match(planning, /必须且只能创建一条/u);
-  assert.match(planning, /--desc "链式主动关心"/u);
-  assert.match(planning, /执行一次主动关心判断/u);
-
-  const merchantOnly = scheduleSystemPrompt({
-    operationAdd: "suzu-lives schedule add",
-    list: "suzu-lives schedule list",
-    remove: "suzu-lives schedule remove <任务ID>",
-  });
-  assert.equal(merchantOnly, "");
-});
-
-test("chat starts the local Claude CLI and forwards its stream", async () => {
-  const root = await temporaryDirectory("suzu-direct-chat-");
-  const projectRoot = path.join(root, "project");
-  const workspaceDirectory = path.join(root, "suzu-workspace");
-  const homeDirectory = path.join(root, "home");
-  const commandPath = path.join(homeDirectory, ".local", "bin", "claude.exe");
-  await fs.mkdir(projectRoot, { recursive: true });
-  await fs.mkdir(workspaceDirectory, { recursive: true });
-  await fs.mkdir(path.dirname(commandPath), { recursive: true });
-  await fs.writeFile(commandPath, "fixture");
-  const events = [];
-  const spawned = [];
-  const service = createConversationChatService({
-    agentAttachmentCommand: () => '"Suzu Lives Console.exe" --suzu-lives-cli conversation-attachment',
-    agentScheduleCommand: () => ({
-      conversationAdd: '"Suzu Lives Console.exe" --suzu-lives-cli schedule add --data-root "D:\\\\suzu" --contact-id "contact-suzu"',
-      list: '"Suzu Lives Console.exe" --suzu-lives-cli schedule list --data-root "D:\\\\suzu"',
-      remove: '"Suzu Lives Console.exe" --suzu-lives-cli schedule remove',
-    }),
-    claudeWorkspaceDirectories: [workspaceDirectory],
-    settingsService: { load: () => ({ projectRoot }) },
-    reader: {
-      contactIdForSession: async ({ sessionId, projectRoot: sessionProjectRoot }) => (
-        sessionId === "session-1" && sessionProjectRoot === projectRoot ? "contact-suzu" : ""
-      ),
-      ensureActiveSession: async () => ({ id: "session-1", projectRoot, hasTranscript: false, approvalMode: "plan" }),
+  return {
+    calls,
+    emit(event) {
+      for (const listener of listeners) listener(event);
     },
-    homeDirectory,
-    suzuCliCommand: '"Suzu Lives Console.exe" --suzu-lives-cli',
-    spawnImpl: (command, args, options) => {
-      const child = new FakeChild();
-      spawned.push({ command, args, options, child });
-      return child;
+    async ensureSession(value) {
+      calls.ensureSession.push(value);
+      return { sessionId: value.sessionId, runtimeSessionId: value.sessionId, created: true };
+    },
+    async sendTurn(value) {
+      calls.sendTurn.push(value);
+      return { accepted: true, turnId: value.turnId, queued: true };
+    },
+    async cancelTurn(value) {
+      calls.cancelTurn.push(value);
+      return { accepted: true };
+    },
+    async resolveApproval(value) {
+      calls.resolveApproval.push(value);
+      return { accepted: true };
+    },
+    async respondLifecycleRequest(value) {
+      calls.respondLifecycleRequest.push(value);
+      return true;
+    },
+    async history(value) {
+      calls.history.push(value);
+      return history;
+    },
+    subscribe(listener) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    async close() { calls.close += 1; },
+  };
+}
+
+function fakeReader(projectRoot) {
+  return {
+    async ensureActiveSession() {
+      return { id: "contact-session", projectRoot, hasTranscript: false, approvalMode: "default" };
+    },
+    async contactIdForSession() { return "contact-suzu"; },
+  };
+}
+
+test("Agent Core chat keeps Suzu's queue, stream, memory, and terminal event contract", async () => {
+  const root = await temporaryRoot();
+  const projectRoot = path.join(root, "contact");
+  await fs.mkdir(projectRoot, { recursive: true });
+  const runtime = createFakeRuntime();
+  const events = [];
+  const memoryCalls = [];
+  const chat = createConversationChatService({
+    settingsService: { load: () => ({}) },
+    reader: fakeReader(projectRoot),
+    runtime,
+    memoryRuntime: {
+      async prepareTurn(value) { memoryCalls.push({ type: "prepare", value }); return { id: "memory-1" }; },
+      async completeTurn(turn, value) { memoryCalls.push({ type: "complete", turn, value }); },
+      async abortTurn(turn) { memoryCalls.push({ type: "abort", turn }); },
     },
     onEvent: (event) => events.push(event),
   });
 
-  const result = await service.send({ content: "直接聊天" });
-  assert.equal(result.accepted, true);
-  assert.equal(result.sessionId, "session-1");
-  assert.equal(spawned.length, 1);
-  assert.equal(spawned[0].command, commandPath);
-  assert.equal(spawned[0].options.cwd, projectRoot);
-  assert.equal(spawned[0].options.windowsHide, true);
-  assert.ok(spawned[0].args.includes("--session-id"));
-  assert.match(spawned[0].args[spawned[0].args.indexOf("--allowed-tools") + 1], /^Read,WebFetch,WebSearch,/u);
-  assert.ok(spawned[0].args[spawned[0].args.indexOf("--allowed-tools") + 1].includes('Bash("Suzu Lives Console.exe" --suzu-lives-cli *)'));
-  assert.equal(spawned[0].args[spawned[0].args.indexOf("--permission-mode") + 1], "plan");
-  assert.equal(spawned[0].args[spawned[0].args.indexOf("--add-dir") + 1], workspaceDirectory);
-  assert.ok(spawned[0].args.includes("--disallowed-tools"));
-  assert.equal(spawned[0].args[spawned[0].args.indexOf("--disallowed-tools") + 1], "Agent,TodoWrite,AskUserQuestion");
-  assert.equal(spawned[0].options.env.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS, "1");
-  assert.equal(spawned[0].options.env.CLAUDE_CODE_DISABLE_CRON, "1");
-  const attachmentPromptIndex = spawned[0].args.indexOf("--append-system-prompt");
-  assert.ok(attachmentPromptIndex >= 0);
-  assert.match(spawned[0].args[attachmentPromptIndex + 1], /conversation-attachment --image/u);
-  assert.match(spawned[0].args[attachmentPromptIndex + 1], /conversation-attachment --audio/u);
-  assert.match(spawned[0].args[attachmentPromptIndex + 1], /schedule add --data-root/u);
+  const accepted = await chat.send({ content: "你好" });
+  assert.equal(accepted.accepted, true);
+  assert.equal(accepted.queued, false);
+  assert.deepEqual(runtime.calls.ensureSession[0], {
+    sessionId: "contact-session",
+    contactId: "contact-suzu",
+    cwd: projectRoot,
+  });
+  assert.deepEqual(runtime.calls.sendTurn[0], {
+    sessionId: "contact-session",
+    turnId: accepted.requestId,
+    input: "你好",
+    placement: "queue",
+  });
+  assert.equal(events.find((event) => event.type === "turn-start")?.requestId, accepted.requestId);
+
+  runtime.emit({ type: "turn-started", sessionId: "contact-session", turnId: accepted.requestId });
+  runtime.emit({ type: "assistant-reasoning-delta", sessionId: "contact-session", turnId: accepted.requestId, text: "先想一想" });
+  runtime.emit({ type: "assistant-delta", sessionId: "contact-session", turnId: accepted.requestId, text: "你" });
+  runtime.emit({ type: "assistant-completed", sessionId: "contact-session", turnId: accepted.requestId, text: "你好，我在。" });
   await flush();
-  assert.deepEqual(JSON.parse(spawned[0].child.input.trim()), {
-    type: "user",
-    message: { role: "user", content: "直接聊天" },
+
+  assert.equal(events.find((event) => event.type === "reply-stream")?.content, "你");
+  assert.equal(events.find((event) => event.type === "thinking")?.requestId, accepted.requestId);
+  assert.equal(events.find((event) => event.type === "thinking")?.sessionId, "contact-session");
+  assert.equal(events.find((event) => event.type === "reply" && event.done)?.content, "你好，我在。");
+  assert.equal(events.find((event) => event.type === "agent-reply")?.content, "你好，我在。");
+  assert.equal(events.find((event) => event.type === "turn-complete")?.requestId, accepted.requestId);
+  assert.deepEqual(memoryCalls.map((item) => item.type), ["prepare", "complete"]);
+  assert.equal(memoryCalls[1].value.assistantText, "你好，我在。");
+  chat.dispose();
+});
+
+test("Agent Core chat keeps an internal journal turn system-marked and local-only", async () => {
+  const root = await temporaryRoot();
+  const projectRoot = path.join(root, "contact");
+  await fs.mkdir(projectRoot, { recursive: true });
+  const runtime = createFakeRuntime();
+  const events = [];
+  const chat = createConversationChatService({
+    settingsService: { load: () => ({}) },
+    reader: fakeReader(projectRoot),
+    runtime,
+    onEvent: (event) => events.push(event),
   });
 
-  spawned[0].child.emitJson({ type: "system", subtype: "init", slash_commands: ["/compact", { name: "/goal" }] });
-  spawned[0].child.emitJson({ type: "assistant", message: { stop_reason: "tool_use", content: [
-    { type: "thinking", thinking: "先检查当前项目。" },
-    { type: "text", text: "先核对当前状态。" },
-    { type: "tool_use", name: "Read", input: { file_path: "CLAUDE.md" } },
-  ] } });
-  spawned[0].child.emitJson({ type: "assistant", message: { stop_reason: "end_turn", content: [
-    { type: "text", text: "我在。" },
-  ] } });
-  spawned[0].child.emitJson({ type: "user", message: { content: [{
-    type: "tool_result",
-    content: JSON.stringify({
-      status: "ok",
-      type: "suzu-conversation-attachment",
-      receiptId: "attachment-receipt-1",
-      items: [
-        { kind: "file", path: path.join(projectRoot, "report.txt"), fileName: "report.txt", size: 12 },
-        { kind: "audio", path: path.join(projectRoot, "voice.mp3"), fileName: "voice.mp3", size: 24 },
-      ],
-    }),
-  }] } });
-  spawned[0].child.emitJson({ type: "user", message: { content: [{
-    type: "tool_result",
-    content: JSON.stringify({
-      schemaVersion: 1,
-      status: "ok",
-      capabilityId: "voice-call",
-      action: "request",
-      result: { type: "suzu-voice-call-request", reason: "想听听你的声音" },
-    }),
-  }] } });
-  spawned[0].child.emitJson({ type: "result", result: "我在。", session_id: "session-1", usage: { input_tokens: 3, output_tokens: 2 } });
-  spawned[0].child.close();
+  const accepted = await chat.sendToSession({
+    content: "<suzu-schedule-task>\\n日记\\n</suzu-schedule-task>",
+    contactId: "contact-suzu",
+    sessionId: "contact-session",
+    projectRoot,
+    kind: "schedule",
+    requestId: "journal-turn",
+    scheduleSource: "agent-journal",
+    displayAsSystem: true,
+    deliverToWechat: false,
+  });
+  runtime.emit({ type: "turn-started", sessionId: "contact-session", turnId: accepted.requestId });
+  runtime.emit({ type: "assistant-delta", sessionId: "contact-session", turnId: accepted.requestId, text: "今天和你一起完成了同步。" });
+  runtime.emit({ type: "assistant-completed", sessionId: "contact-session", turnId: accepted.requestId, text: "今天和你一起完成了同步。" });
   await flush();
-  assert.equal(events.find((event) => event.type === "reply-stream")?.content, "我在。");
-  assert.deepEqual(events.filter((event) => event.type === "agent-reply").map((event) => event.content), ["我在。"]);
-  assert.equal(events.find((event) => event.type === "agent-reply")?.deliverToWechat, false);
-  assert.equal(events.some((event) => event.type === "reply-stream" && event.content.includes("先核对当前状态。")), false);
-  assert.equal(events.some((event) => event.type === "agent-reply" && event.content.includes("先核对当前状态。")), false);
-  assert.equal(events.find((event) => event.type === "reply")?.done, true);
-  assert.equal(events.find((event) => event.type === "turn-complete")?.sessionId, "session-1");
-  assert.equal(events.find((event) => event.type === "reply")?.projectRoot, projectRoot);
-  assert.match(events.find((event) => event.type === "thinking")?.content || "", /先检查/u);
-  assert.match(events.filter((event) => event.type === "thinking").map((event) => event.content).join("\n"), /先核对当前状态/u);
-  assert.match(events.find((event) => event.type === "tool")?.content || "", /Read/u);
-  assert.match(events.find((event) => event.type === "usage")?.content || "", /合计 5/u);
-  assert.deepEqual(events.find((event) => event.type === "slash-commands")?.commands, ["/compact", "/goal"]);
-  assert.deepEqual(events.find((event) => event.type === "agent-media")?.media, [{
+
+  assert.equal(events.some((event) => event.type === "reply" || event.type === "reply-stream"), false);
+  const agentReply = events.find((event) => event.type === "agent-reply");
+  assert.equal(agentReply?.requestId, "journal-turn");
+  assert.equal(agentReply?.sessionId, "contact-session");
+  assert.equal(agentReply?.projectRoot, projectRoot);
+  assert.equal(agentReply?.kind, "schedule");
+  assert.equal(agentReply?.content, "今天和你一起完成了同步。");
+  assert.equal(agentReply?.contactId, "contact-suzu");
+  assert.equal(agentReply?.displayAsSystem, true);
+  assert.equal(agentReply?.deliverToWechat, false);
+  assert.ok(agentReply?.timestamp);
+  assert.equal(events.find((event) => event.type === "turn-complete")?.displayAsSystem, true);
+  assert.equal(events.find((event) => event.type === "turn-complete")?.deliverToWechat, false);
+  chat.dispose();
+});
+
+test("Agent Core chat emits one formal lifecycle and answers real bridge requests", async () => {
+  const root = await temporaryRoot();
+  const projectRoot = path.join(root, "contact");
+  await fs.mkdir(projectRoot, { recursive: true });
+  const runtime = createFakeRuntime();
+  const events = [];
+  const received = [];
+  const compactorCalls = [];
+  const lifecycle = createSuzuAgentLifecycle();
+  lifecycle.on("ContextCollect", (payload) => {
+    received.push(["ContextCollect", payload.turnId, payload.coreTurn, payload.step]);
+    return { id: "future-memory", kind: "memory", text: "这是未来记忆 Hook 的输出" };
+  }, { id: "future-memory" });
+  lifecycle.on("DynamicContextCollect", (payload) => {
+    received.push(["DynamicContextCollect", payload.turnId, payload.coreTurn, payload.step]);
+    return { id: "current-time", kind: "time-awareness", text: "你知道现在是10月1日 星期二 10:00。" };
+  }, { id: "time-awareness" });
+  lifecycle.on("TurnStarting", (payload) => {
+    received.push(["TurnStarting", payload.userText]);
+  }, { id: "turn-starting" });
+  lifecycle.on("PreToolUse", (payload) => {
+    received.push(["PreToolUse", payload.toolName]);
+    return { kind: "allow" };
+  }, { id: "tool-policy" });
+  for (const event of ["UserPromptSubmit", "TurnQueued", "ContactActivated", "SessionStart", "TurnStarted", "ContextInjected", "DynamicContextInjected", "DynamicContextExpired", "AssistantDelta", "ToolStarted", "PostToolUse", "PreCompact", "PostCompact", "Stop"]) {
+    lifecycle.on(event, (payload) => received.push([event, payload.toolName || payload.delta || payload.assistantText || payload.sessionId]), { id: event });
+  }
+  const chat = createConversationChatService({
+    settingsService: { load: () => ({}) },
+    reader: fakeReader(projectRoot),
+    runtime,
+    lifecycle,
+    compactor: {
+      async settingsForRuntime(value) {
+        compactorCalls.push(value);
+        return {
+          available: true,
+          prompt: "自定义摘要提示词",
+          automatic: { enabled: true, tokenThreshold: 15_000, retainTokens: 5_000 },
+          manual: { retainTokens: 5_000 },
+        };
+      },
+    },
+    onEvent: (event) => events.push(event),
+  });
+
+  const accepted = await chat.send({ content: "只把这句话交给模型" });
+  assert.equal(runtime.calls.sendTurn[0].input, "只把这句话交给模型");
+  runtime.emit({ type: "turn-started", sessionId: "contact-session", turnId: accepted.requestId });
+  runtime.emit({
+    type: "lifecycle-request",
+    requestId: "context-1",
+    lifecycleEvent: "ContextCollect",
+    data: { sessionId: "contact-session", coreTurn: 1, step: 1 },
+  });
+  await flush();
+  assert.equal(runtime.calls.respondLifecycleRequest[0].requestId, "context-1");
+  assert.equal(runtime.calls.respondLifecycleRequest[0].result.blocks[0].id, "future-memory");
+  runtime.emit({
+    type: "lifecycle-event",
+    lifecycleEvent: "ContextInjected",
+    data: {
+      sessionId: "contact-session",
+      coreTurn: 1,
+      step: 1,
+      blocks: runtime.calls.respondLifecycleRequest[0].result.blocks,
+    },
+  });
+  runtime.emit({
+    type: "lifecycle-request",
+    requestId: "dynamic-context-1",
+    lifecycleEvent: "DynamicContextCollect",
+    data: { sessionId: "contact-session", coreTurn: 1, step: 1 },
+  });
+  await flush();
+  assert.equal(runtime.calls.respondLifecycleRequest[1].requestId, "dynamic-context-1");
+  assert.equal(runtime.calls.respondLifecycleRequest[1].result.blocks[0].id, "current-time");
+  runtime.emit({
+    type: "lifecycle-event",
+    lifecycleEvent: "DynamicContextInjected",
+    data: {
+      sessionId: "contact-session",
+      coreTurn: 1,
+      step: 1,
+      blocks: runtime.calls.respondLifecycleRequest[1].result.blocks,
+    },
+  });
+  runtime.emit({
+    type: "lifecycle-event",
+    lifecycleEvent: "DynamicContextExpired",
+    data: {
+      sessionId: "contact-session",
+      coreTurn: 1,
+      step: 1,
+      blocks: runtime.calls.respondLifecycleRequest[1].result.blocks,
+    },
+  });
+  runtime.emit({
+    type: "lifecycle-request",
+    requestId: "tool-1",
+    lifecycleEvent: "PreToolUse",
+    data: { sessionId: "contact-session", callId: "call-1", toolName: "future-capability", arguments: { value: 1 } },
+  });
+  await flush();
+  assert.deepEqual(runtime.calls.respondLifecycleRequest[2], {
+    requestId: "tool-1",
+    result: { decision: { kind: "allow" } },
+  });
+  runtime.emit({
+    type: "lifecycle-request",
+    requestId: "compaction-settings-1",
+    lifecycleEvent: "CompactionSettings",
+    data: { sessionId: "contact-session" },
+  });
+  await flush();
+  assert.deepEqual(compactorCalls, [{ sessionId: "contact-session", projectRoot: "" }]);
+  assert.deepEqual(runtime.calls.respondLifecycleRequest[3], {
+    requestId: "compaction-settings-1",
+    result: {
+      available: true,
+      prompt: "自定义摘要提示词",
+      automatic: { enabled: true, tokenThreshold: 15_000, retainTokens: 5_000 },
+      manual: { retainTokens: 5_000 },
+    },
+  });
+  runtime.emit({ type: "compaction-started", sessionId: "contact-session", turnId: accepted.requestId, data: { compactionId: "compact-1", coreTurn: 1 } });
+  runtime.emit({ type: "compaction-completed", sessionId: "contact-session", turnId: accepted.requestId, data: { compactionId: "compact-1", coreTurn: 1 } });
+  runtime.emit({ type: "assistant-delta", sessionId: "contact-session", turnId: accepted.requestId, text: "收到" });
+  runtime.emit({ type: "tool-started", sessionId: "contact-session", turnId: accepted.requestId, toolName: "future-capability", data: { callId: "call-1" } });
+  runtime.emit({ type: "tool-completed", sessionId: "contact-session", turnId: accepted.requestId, toolName: "future-capability", data: { callId: "call-1" } });
+  runtime.emit({ type: "assistant-completed", sessionId: "contact-session", turnId: accepted.requestId, text: "收到啦" });
+  await flush();
+
+  assert.ok(received.some(([event, value]) => event === "TurnStarting" && value === "只把这句话交给模型"));
+  assert.ok(received.some(([event]) => event === "UserPromptSubmit"));
+  assert.ok(received.some(([event]) => event === "TurnQueued"));
+  assert.ok(received.some(([event]) => event === "ContactActivated"));
+  assert.ok(received.some(([event]) => event === "SessionStart"));
+  assert.ok(received.some(([event]) => event === "ContextCollect"));
+  assert.ok(received.some(([event]) => event === "ContextInjected"));
+  assert.ok(received.some(([event]) => event === "DynamicContextCollect"));
+  assert.ok(received.some(([event]) => event === "DynamicContextInjected"));
+  assert.ok(received.some(([event]) => event === "DynamicContextExpired"));
+  assert.ok(received.some(([event, value]) => event === "PreToolUse" && value === "future-capability"));
+  assert.ok(received.some(([event, value]) => event === "AssistantDelta" && value === "收到"));
+  assert.ok(received.some(([event, value]) => event === "ToolStarted" && value === "future-capability"));
+  assert.ok(received.some(([event, value]) => event === "PostToolUse" && value === "future-capability"));
+  assert.ok(received.some(([event]) => event === "PreCompact"));
+  assert.ok(received.some(([event]) => event === "PostCompact"));
+  assert.ok(received.some(([event, value]) => event === "Stop" && value === "收到啦"));
+  const toolEvent = events.find((event) => event.type === "tool" && event.phase === "started");
+  assert.equal(toolEvent?.requestId, accepted.requestId);
+  assert.equal(toolEvent?.toolName, "future-capability");
+  assert.equal(toolEvent?.content, "工具调用：future-capability");
+  chat.dispose();
+  lifecycle.close();
+});
+
+test("contact chat leaves the built-in software assistant lifecycle to its isolated service", async () => {
+  const root = await temporaryRoot();
+  const projectRoot = path.join(root, "contact");
+  await fs.mkdir(projectRoot, { recursive: true });
+  const runtime = createFakeRuntime();
+  const chat = createConversationChatService({
+    settingsService: { load: () => ({}) },
+    reader: fakeReader(projectRoot),
+    runtime,
+  });
+
+  runtime.emit({
+    type: "lifecycle-request",
+    requestId: "software-context-1",
+    lifecycleEvent: "ContextCollect",
+    data: { sessionId: SUZU_SOFTWARE_ASSISTANT_SESSION_ID, coreTurn: 1, step: 1 },
+  });
+  await flush();
+  assert.deepEqual(runtime.calls.respondLifecycleRequest, []);
+  chat.dispose();
+});
+
+test("Agent Core chat answers capability catalog and action bridge requests through the product runtime", async () => {
+  const root = await temporaryRoot();
+  const projectRoot = path.join(root, "contact");
+  await fs.mkdir(projectRoot, { recursive: true });
+  const runtime = createFakeRuntime();
+  const calls = [];
+  const capabilityRuntime = {
+    availableActions(context) {
+      calls.push({ type: "catalog", context });
+      return [{
+        capabilityId: "daily-note",
+        action: "create",
+        actionDescription: "写一条今日记录。",
+      }];
+    },
+    async invoke(context) {
+      calls.push({ type: "invoke", context });
+      return { status: "completed", value: { entryId: "entry-1" } };
+    },
+  };
+  const chat = createConversationChatService({
+    settingsService: { load: () => ({}) },
+    reader: fakeReader(projectRoot),
+    runtime,
+    capabilityRuntime,
+  });
+
+  const accepted = await chat.send({ content: "记一下今天的事" });
+  runtime.emit({ type: "turn-started", sessionId: "contact-session", turnId: accepted.requestId });
+  runtime.emit({
+    type: "lifecycle-request",
+    requestId: "capability-catalog-1",
+    lifecycleEvent: "CapabilityCatalog",
+    data: { sessionId: "contact-session", coreTurn: 7, step: 2 },
+  });
+  await flush();
+  assert.deepEqual(runtime.calls.respondLifecycleRequest.at(-1), {
+    requestId: "capability-catalog-1",
+    result: {
+      actions: [{
+        capabilityId: "daily-note",
+        action: "create",
+        actionDescription: "写一条今日记录。",
+      }],
+    },
+  });
+  runtime.emit({
+    type: "lifecycle-request",
+    requestId: "capability-execute-1",
+    lifecycleEvent: "CapabilityExecute",
+    data: {
+      sessionId: "contact-session",
+      coreTurn: 7,
+      step: 2,
+      capabilityId: "daily-note",
+      action: "create",
+      input: { text: "今天和 Suzu 散步了。" },
+    },
+  });
+  await flush();
+  assert.deepEqual(runtime.calls.respondLifecycleRequest.at(-1), {
+    requestId: "capability-execute-1",
+    result: { status: "completed", value: { entryId: "entry-1" } },
+  });
+  assert.deepEqual(calls, [
+    {
+      type: "catalog",
+      context: {
+        contactId: "contact-suzu",
+        coreTurn: 7,
+        projectRoot,
+        sessionId: "contact-session",
+        step: 2,
+        turnId: accepted.requestId,
+      },
+    },
+    {
+      type: "invoke",
+      context: {
+        action: "create",
+        capabilityId: "daily-note",
+        contactId: "contact-suzu",
+        coreTurn: 7,
+        input: { text: "今天和 Suzu 散步了。" },
+        projectRoot,
+        sessionId: "contact-session",
+        step: 2,
+        turnId: accepted.requestId,
+      },
+    },
+  ]);
+  runtime.emit({ type: "assistant-completed", sessionId: "contact-session", turnId: accepted.requestId, text: "已经记下啦。" });
+  await flush();
+  chat.dispose();
+});
+
+test("Agent Core capability bridge gives Agent-created files the durable chat-attachment receipt", async () => {
+  const root = await temporaryRoot();
+  const dataRoot = path.join(root, "data");
+  const projectRoot = path.join(root, "contact");
+  const generatedFile = path.join(projectRoot, "agent-report.txt");
+  await fs.mkdir(projectRoot, { recursive: true });
+  await fs.writeFile(generatedFile, "这是 Suzu 写好的报告。", "utf8");
+  const attachmentService = createConversationAttachmentService({ dataRoot });
+  const capabilityRuntime = createCapabilityRuntime({
+    registry: createCapabilityRegistry(),
+    adapters: {
+      "conversation-attachment": ({ context }) => attachmentService.deliver({
+        input: context.input,
+        projectRoot: context.projectRoot,
+        sessionId: context.sessionId,
+      }),
+    },
+  });
+  const runtime = createFakeRuntime();
+  const chat = createConversationChatService({
+    settingsService: { load: () => ({}) },
+    reader: fakeReader(projectRoot),
+    runtime,
+    capabilityRuntime,
+  });
+
+  const accepted = await chat.send({ content: "把报告发给我" });
+  runtime.emit({ type: "turn-started", sessionId: "contact-session", turnId: accepted.requestId });
+  runtime.emit({
+    type: "lifecycle-request",
+    requestId: "attachment-catalog",
+    lifecycleEvent: "CapabilityCatalog",
+    data: { sessionId: "contact-session", coreTurn: 2, step: 3 },
+  });
+  await flush();
+  assert.deepEqual(runtime.calls.respondLifecycleRequest.at(-1), {
+    requestId: "attachment-catalog",
+    result: {
+      actions: [{
+        capabilityId: "conversation-attachment",
+        capabilityName: "聊天附件交付",
+        capabilityDescription: "将 Agent 已生成的本地图片、音频或文件作为聊天附件交付给用户。",
+        resourceId: "agent-delivery",
+        resourceKind: "runtime",
+        driver: "conversation-attachment",
+        action: "deliver",
+        actionDescription: "将已生成或已确认的本机绝对路径交付到当前聊天。input 必须是 { items: [{ path: \"绝对路径\", kind: \"image\" | \"audio\" | \"file\" }] }；图片支持 AVIF/BMP/GIF/HEIC/ICO/JPG/PNG/SVG/TIFF/WebP，音频仅支持 MP3。",
+        actionName: "发送聊天附件",
+      }],
+    },
+  });
+  runtime.emit({
+    type: "lifecycle-request",
+    requestId: "attachment-deliver",
+    lifecycleEvent: "CapabilityExecute",
+    data: {
+      sessionId: "contact-session",
+      coreTurn: 2,
+      step: 3,
+      capabilityId: "conversation-attachment",
+      action: "deliver",
+      input: { items: [{ kind: "file", path: generatedFile }] },
+    },
+  });
+  const delivered = await waitFor(() => runtime.calls.respondLifecycleRequest.find((item) => item.requestId === "attachment-deliver"));
+  assert.equal(delivered.requestId, "attachment-deliver");
+  assert.equal(delivered.result.status, "completed");
+  assert.equal(delivered.result.value.type, "suzu-conversation-attachment");
+  assert.equal(delivered.result.value.items[0].kind, "file");
+  assert.match(delivered.result.value.items[0].path, /[\\/]attachments[\\/]/u);
+  assert.equal(await fs.readFile(delivered.result.value.items[0].path, "utf8"), "这是 Suzu 写好的报告。");
+  chat.dispose();
+});
+
+test("Agent Core forwards a completed attachment receipt to the existing linked-transport event exactly once", async () => {
+  const root = await temporaryRoot();
+  const projectRoot = path.join(root, "contact");
+  const cachedFile = path.join(root, "data", "agents", "agent-suzu", "conversations", "contact-session", "attachments", "report.txt");
+  await fs.mkdir(projectRoot, { recursive: true });
+  const runtime = createFakeRuntime();
+  const events = [];
+  const chat = createConversationChatService({
+    settingsService: { load: () => ({}) },
+    reader: fakeReader(projectRoot),
+    runtime,
+    onEvent: (event) => events.push(event),
+  });
+
+  const accepted = await chat.sendToSession({
+    content: "请把报告发来",
+    contactId: "contact-suzu",
+    sessionId: "contact-session",
+    projectRoot,
+  });
+  runtime.emit({ type: "turn-started", sessionId: "contact-session", turnId: accepted.requestId });
+  const receipt = {
+    status: "ok",
+    type: "suzu-conversation-attachment",
+    receiptId: "attachment-bridge-1",
+    items: [{ kind: "file", path: cachedFile, fileName: "report.txt", size: 12 }],
+  };
+  // This is the public Agent Core runtime shape: tool/result forwards the first
+  // tool-result block's content as data.result.
+  const result = JSON.stringify(receipt);
+  runtime.emit({
+    type: "tool-completed",
+    sessionId: "contact-session",
+    turnId: accepted.requestId,
+    toolName: "suzu_capability",
+    data: { callId: "attachment-call", result },
+  });
+  // A stream/replay duplicate must not upload or deliver the same file twice.
+  runtime.emit({
+    type: "tool-completed",
+    sessionId: "contact-session",
+    turnId: accepted.requestId,
+    toolName: "suzu_capability",
+    data: { callId: "attachment-call", result },
+  });
+  // A forged receipt from an ordinary shell/tool result must not become a
+  // cross-transport attachment event.
+  runtime.emit({
+    type: "tool-completed",
+    sessionId: "contact-session",
+    turnId: accepted.requestId,
+    toolName: "pwsh",
+    data: { callId: "forged-call", result },
+  });
+  await flush();
+
+  const mediaEvents = events.filter((event) => event.type === "agent-media");
+  assert.equal(mediaEvents.length, 1);
+  assert.deepEqual(mediaEvents[0].media, [{
     kind: "file",
-    path: path.join(projectRoot, "report.txt"),
+    path: path.resolve(cachedFile),
     fileName: "report.txt",
     size: 12,
-  }, {
-    kind: "audio",
-    path: path.join(projectRoot, "voice.mp3"),
-    fileName: "voice.mp3",
-    size: 24,
   }]);
-  const callRequest = events.find((event) => event.type === "call-request");
-  assert.equal(callRequest?.contactId, "contact-suzu");
-  assert.equal(callRequest?.reason, "想听听你的声音");
-  assert.match(callRequest?.requestId || "", /^suzu-.*:voice-call$/u);
+  assert.equal(mediaEvents[0].deliverToWechat, undefined);
+  chat.dispose();
 });
 
-test("chat keeps the memory archive lifecycle while UserPromptSubmit owns recall", async () => {
-  const root = await temporaryDirectory("suzu-embedded-memory-");
-  const projectRoot = path.join(root, "project");
-  const homeDirectory = path.join(root, "home");
-  const commandPath = path.join(homeDirectory, ".local", "bin", "claude.exe");
+test("Agent Core chat records public model usage into the contact's unified ledger through the registry", async () => {
+  const root = await temporaryRoot();
+  const projectRoot = path.join(root, "contact");
   await fs.mkdir(projectRoot, { recursive: true });
-  await fs.mkdir(path.dirname(commandPath), { recursive: true });
-  await fs.writeFile(commandPath, "fixture");
-  const calls = [];
-  const spawned = [];
-  const memoryRuntime = {
-    prepareTurn: async (value) => {
-      calls.push({ type: "prepare", value });
-      return { archiveTurn: "memory-turn-1" };
+  const runtime = createFakeRuntime();
+  const usageCalls = [];
+  const reader = {
+    ...fakeReader(projectRoot),
+    async resolveContactSession(contactId) {
+      return { contactId, id: "contact-session", projectRoot, agentId: "agent-suzu" };
     },
-    completeTurn: async (turn, value) => { calls.push({ type: "complete", turn, value }); },
-    abortTurn: async (turn) => { calls.push({ type: "abort", turn }); },
+    async resolveCompactorSessionForRuntime({ sessionId }) {
+      return { contactId: "contact-suzu", id: sessionId, projectRoot, agentId: "agent-suzu" };
+    },
   };
-  const service = createConversationChatService({
-    homeDirectory,
-    memoryRuntime,
-    reader: { ensureActiveSession: async () => ({ id: "session-memory", projectRoot, hasTranscript: false }) },
-    settingsService: { load: () => ({ projectRoot }) },
-    spawnImpl: (_command, args, options) => {
-      const child = new FakeChild();
-      spawned.push({ args, child, options });
-      return child;
+  const chat = createConversationChatService({
+    settingsService: {
+      load: () => ({ dataRoot: root }),
+      usageLedgerPath: ({ agentId, projectRoot: scope }) => path.join(scope, agentId, "ledger.jsonl"),
     },
-  });
-
-  await service.send({ content: "记得我们上次聊的事情吗？" });
-  assert.equal(calls[0]?.type, "prepare");
-  assert.equal(calls[0]?.value.userText, "记得我们上次聊的事情吗？");
-  assert.equal(spawned[0].args.some((value) => String(value).includes("suzu-long-term-memory")), false);
-
-  spawned[0].child.emitJson({ type: "result", result: "我记得。" });
-  spawned[0].child.close();
-  await flush();
-  await flush();
-  const completed = calls.find((item) => item.type === "complete");
-  assert.equal(completed?.turn?.archiveTurn, "memory-turn-1");
-  assert.equal(completed?.value?.assistantText, "我记得。");
-  assert.equal(calls.some((item) => item.type === "abort"), false);
-});
-
-test("live chat renders long-term-memory Hook context as a system message", async () => {
-  const root = await temporaryDirectory("suzu-memory-hook-context-");
-  const projectRoot = path.join(root, "project");
-  const homeDirectory = path.join(root, "home");
-  const commandPath = path.join(homeDirectory, ".local", "bin", "claude.exe");
-  await fs.mkdir(projectRoot, { recursive: true });
-  await fs.mkdir(path.dirname(commandPath), { recursive: true });
-  await fs.writeFile(commandPath, "fixture");
-  const events = [];
-  const spawned = [];
-  const service = createConversationChatService({
-    homeDirectory,
-    onEvent: (event) => events.push(event),
-    reader: { ensureActiveSession: async () => ({ id: "memory-context-session", projectRoot, hasTranscript: false }) },
-    settingsService: { load: () => ({ projectRoot }) },
-    spawnImpl: () => {
-      const child = new FakeChild();
-      spawned.push(child);
-      return child;
-    },
-  });
-
-  await service.send({ content: "还记得我们上次去的地方吗？" });
-  spawned[0].emitJson({
-    type: "hook_additional_context",
-    attachment: { content: "内部说明\n<suzu-long-term-memory>私有回忆</suzu-long-term-memory>" },
-  });
-  await flush();
-  assert.equal(events.some((event) => event.type === "attachment" && /私有回忆/u.test(event.content || "")), false);
-  assert.equal(events.some((event) => event.type === "system" && event.content === "记忆召回\n私有回忆"), true);
-  spawned[0].emitJson({ type: "result", result: "记得。" });
-  spawned[0].close();
-  service.dispose();
-});
-
-test("iPhone feedback is archived by embedded memory without treating scheduled prompts as user memory", async () => {
-  const root = await temporaryDirectory("suzu-embedded-memory-sources-");
-  const projectRoot = path.join(root, "project");
-  const homeDirectory = path.join(root, "home");
-  const commandPath = path.join(homeDirectory, ".local", "bin", "claude.exe");
-  await fs.mkdir(projectRoot, { recursive: true });
-  await fs.mkdir(path.dirname(commandPath), { recursive: true });
-  await fs.writeFile(commandPath, "fixture");
-  const prepared = [];
-  const spawned = [];
-  const service = createConversationChatService({
-    homeDirectory,
-    memoryRuntime: {
-      prepareTurn: async (value) => {
-        prepared.push(value);
-        return { archiveTurn: "iphone-feedback" };
+    reader,
+    runtime,
+    capabilityRuntime: {
+      async recordUsage(value) {
+        usageCalls.push(value);
+        return [{ status: "completed" }];
       },
-      completeTurn: async () => undefined,
-      abortTurn: async () => undefined,
-    },
-    reader: { ensureActiveSession: async () => ({ id: "session-sources", projectRoot, hasTranscript: false }) },
-    settingsService: { load: () => ({ projectRoot }) },
-    spawnImpl: (_command, args, options) => {
-      const child = new FakeChild();
-      spawned.push({ args, child, options });
-      return child;
     },
   });
 
-  await service.sendToSession({
-    content: "这是 iPhone 反馈。",
-    sessionId: "session-sources",
-    projectRoot,
-    kind: "iphone-feedback",
+  const accepted = await chat.send({ content: "你好" });
+  runtime.emit({ type: "turn-started", sessionId: "contact-session", turnId: accepted.requestId });
+  runtime.emit({ type: "tool-started", sessionId: "contact-session", turnId: accepted.requestId, toolName: "calendar" });
+  runtime.emit({
+    type: "model-usage",
+    runtimeSessionId: "contact-session",
+    turnId: accepted.requestId,
+    data: {
+      coreSequence: 4,
+      coreTime: 1_000,
+      purpose: "agent-step",
+      provider: "DeepSeek",
+      model: "deepseek-v4-flash",
+      usage: { inputTokens: 100, cacheReadTokens: 20, outputTokens: 30 },
+      coreTurn: 1,
+      step: 1,
+    },
   });
-  assert.equal(prepared.length, 1);
-  spawned[0].child.emitJson({ type: "result", result: "收到反馈。" });
-  spawned[0].child.close();
+  runtime.emit({ type: "assistant-completed", sessionId: "contact-session", turnId: accepted.requestId, text: "你好呀。" });
   await flush();
 
-  await service.sendToSession({
-    content: "<suzu-schedule-task>内部任务</suzu-schedule-task>",
-    sessionId: "session-sources",
-    projectRoot,
-    hasTranscript: true,
-    kind: "schedule",
+  runtime.emit({
+    type: "model-usage",
+    runtimeSessionId: "contact-session",
+    data: {
+      coreSequence: 9,
+      coreTime: 2_000,
+      purpose: "compaction",
+      provider: "DeepSeek",
+      model: "deepseek-v4-flash",
+      usage: { inputTokens: 80, outputTokens: 10 },
+      compactionId: "compact-1",
+      coreTurn: 1,
+    },
   });
-  assert.equal(prepared.length, 1);
-  spawned[1].child.close();
   await flush();
+
+  assert.equal(usageCalls.length, 2);
+  assert.equal(usageCalls[0].capabilityId, "conversation-model");
+  assert.equal(usageCalls[0].ledgerPath, path.join(projectRoot, "agent-suzu", "ledger.jsonl"));
+  assert.deepEqual(usageCalls[0].event, {
+    id: "agent-core:contact-session:4",
+    timestamp: "1970-01-01T00:00:01.000Z",
+    agentId: "agent-suzu",
+    provider: "DeepSeek",
+    model: "deepseek-v4-flash",
+    source: "Suzu 对话",
+    feature: "agent-chat",
+    requestId: "agent-core:contact-session:4",
+    usage: { inputTokens: 100, cacheReadTokens: 20, outputTokens: 30 },
+    units: { inputUncachedTokens: 100, inputCachedTokens: 20, outputTextTokens: 30 },
+    metadata: {
+      runtime: "agent-core",
+      purpose: "agent-step",
+      sessionId: "contact-session",
+      coreSequence: 4,
+      coreTurn: 1,
+      step: 1,
+      turnId: accepted.requestId,
+      turnPrompt: "你好",
+      toolNames: ["calendar"],
+      cacheReadTokens: 20,
+    },
+  });
+  assert.equal(usageCalls[1].event.feature, "agent-compaction");
+  assert.equal(usageCalls[1].event.metadata.compactionId, "compact-1");
+  chat.dispose();
 });
 
-test("scheduled turns hide NO_REPLY and deliver a visible answer only after completion", async () => {
-  const root = await temporaryDirectory("suzu-scheduled-chat-");
-  const projectRoot = path.join(root, "project");
-  const homeDirectory = path.join(root, "home");
-  const commandPath = path.join(homeDirectory, ".local", "bin", "claude.exe");
+test("Agent Core chat cancels only a running public turn and removes product-queued work locally", async () => {
+  const root = await temporaryRoot();
+  const projectRoot = path.join(root, "contact");
   await fs.mkdir(projectRoot, { recursive: true });
-  await fs.mkdir(path.dirname(commandPath), { recursive: true });
-  await fs.writeFile(commandPath, "fixture");
+  const runtime = createFakeRuntime();
   const events = [];
-  const spawned = [];
-  const service = createConversationChatService({
-    settingsService: { load: () => ({ projectRoot }) },
-    reader: { ensureActiveSession: async () => ({ id: "unused", projectRoot, hasTranscript: false }) },
-    homeDirectory,
-    spawnImpl: () => {
-      const child = new FakeChild();
-      spawned.push(child);
-      return child;
-    },
+  const lifecycleEvents = [];
+  const lifecycle = createSuzuAgentLifecycle();
+  lifecycle.on("StopRequested", (payload) => lifecycleEvents.push(["StopRequested", payload.turnId, payload.reason]), { id: "stop-requested" });
+  lifecycle.on("Stop", (payload) => lifecycleEvents.push(["Stop", payload.turnId, payload.outcome]), { id: "stop" });
+  const chat = createConversationChatService({ settingsService: { load: () => ({}) }, reader: fakeReader(projectRoot), runtime, lifecycle, onEvent: (event) => events.push(event) });
+
+  const first = await chat.send({ content: "第一条" });
+  const second = await chat.send({ content: "第二条" });
+  assert.equal(second.queued, true);
+  const removed = await chat.stop({ sessionId: "contact-session", projectRoot, requestId: second.requestId });
+  assert.equal(removed.stopped, true);
+  assert.equal(runtime.calls.sendTurn.length, 1);
+  assert.match(events.find((event) => event.requestId === second.requestId && event.type === "turn-stopped")?.message || "", /队列/u);
+
+  const stopping = await chat.stop({ sessionId: "contact-session", projectRoot, requestId: first.requestId });
+  assert.equal(stopping.stopped, true);
+  assert.equal(runtime.calls.cancelTurn.length, 0);
+  runtime.emit({ type: "turn-started", sessionId: "contact-session", turnId: first.requestId });
+  await flush();
+  assert.deepEqual(runtime.calls.cancelTurn, [{ sessionId: "contact-session", turnId: first.requestId }]);
+  runtime.emit({ type: "turn-cancelled", sessionId: "contact-session", turnId: first.requestId });
+  await flush();
+  assert.equal(events.find((event) => event.requestId === first.requestId && event.type === "turn-stopped")?.message, "已停止当前 Agent 任务。");
+  assert.deepEqual(lifecycleEvents, [
+    ["StopRequested", second.requestId, "removed-from-queue"],
+    ["StopRequested", first.requestId, "user"],
+    ["Stop", first.requestId, "cancelled"],
+  ]);
+  chat.dispose();
+  lifecycle.close();
+});
+
+test("Agent Core chat bridges tool approvals and sends image attachments through the native input contract", async () => {
+  const root = await temporaryRoot();
+  const projectRoot = path.join(root, "contact");
+  const image = path.join(root, "reference.png");
+  await fs.mkdir(projectRoot, { recursive: true });
+  await fs.writeFile(image, Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl+jh0AAAAASUVORK5CYII=", "base64"));
+  const runtime = createFakeRuntime();
+  const events = [];
+  const lifecycleEvents = [];
+  const lifecycle = createSuzuAgentLifecycle();
+  lifecycle.on("PermissionRequest", (payload) => lifecycleEvents.push(["PermissionRequest", payload.approvalId, payload.toolName]), { id: "permission-request" });
+  lifecycle.on("PermissionResolved", (payload) => lifecycleEvents.push(["PermissionResolved", payload.approvalId, payload.behavior]), { id: "permission-resolved" });
+  const chat = createConversationChatService({
+    attachmentService: createConversationAttachmentService({ dataRoot: path.join(root, "data") }),
+    settingsService: { load: () => ({}) },
+    reader: fakeReader(projectRoot),
+    runtime,
+    lifecycle,
     onEvent: (event) => events.push(event),
   });
-
-  await service.sendToSession({
-    content: "<suzu-schedule-task>\\n检查回访是否需要回复\\n</suzu-schedule-task>",
-    sessionId: "scheduled-session",
-    projectRoot,
-    hasTranscript: true,
-    kind: "schedule",
+  const accepted = await chat.send({ content: "整理文件", media: [{ kind: "image", path: image }] });
+  assert.deepEqual(runtime.calls.sendTurn[0].input.map((part) => part.type), ["text", "text", "image"]);
+  runtime.emit({ type: "turn-started", sessionId: "contact-session", turnId: accepted.requestId });
+  runtime.emit({
+    type: "tool-approval-requested",
+    sessionId: "contact-session",
+    turnId: accepted.requestId,
+    approvalId: "approval-7",
+    toolName: "filesystem",
+    data: { reason: "需要写入文件" },
   });
-  spawned[0].emitJson({ type: "assistant", message: { content: [{ type: "text", text: "NO_REPLY" }] } });
-  spawned[0].emitJson({ type: "result", result: "NO_REPLY" });
-  spawned[0].close();
   await flush();
-  assert.deepEqual(events.filter((event) => event.type === "agent-reply"), []);
-  assert.deepEqual(events.filter((event) => event.type === "reply"), []);
-
-  await service.sendToSession({
-    content: "<suzu-schedule-task>\\n自然回访\\n</suzu-schedule-task>",
-    contactId: "contact-a1b2c3d4-1111-2222-3333-444444444444",
-    sessionId: "scheduled-session",
-    projectRoot,
-    hasTranscript: true,
-    kind: "schedule",
-  });
-  spawned[1].emitJson({ type: "assistant", message: { content: [{ type: "text", text: "你那边现在怎么样？" }] } });
-  spawned[1].emitJson({ type: "result", result: "你那边现在怎么样？" });
-  spawned[1].close();
+  const permission = events.find((event) => event.type === "permission");
+  assert.equal(permission.toolName, "filesystem");
+  assert.match(permission.preview, /写入/u);
+  await chat.respondPermission({ requestId: permission.requestId, behavior: "allow" });
   await flush();
-  assert.deepEqual(events.filter((event) => event.type === "agent-reply").map((event) => event.content), ["你那边现在怎么样？"]);
-  assert.equal(events.filter((event) => event.type === "agent-reply").at(-1)?.contactId, "contact-a1b2c3d4-1111-2222-3333-444444444444");
-  assert.equal(events.filter((event) => event.type === "agent-reply").at(-1)?.deliverToWechat, true);
-  assert.equal(events.filter((event) => event.type === "reply").at(-1)?.done, true);
-  service.dispose();
+  assert.deepEqual(runtime.calls.resolveApproval, [{
+    sessionId: "contact-session",
+    approvalId: "approval-7",
+    decision: "allowed-once",
+  }]);
+  assert.deepEqual(lifecycleEvents, [
+    ["PermissionRequest", "approval-7", "filesystem"],
+    ["PermissionResolved", "approval-7", "allow"],
+  ]);
+  chat.dispose();
+  lifecycle.close();
 });
 
-test("a WeChat image and file become one native Claude multimodal user message", async () => {
-  const root = await temporaryDirectory("suzu-wechat-inbound-chat-");
-  const projectRoot = path.join(root, "project");
-  const homeDirectory = path.join(root, "home");
-  const commandPath = path.join(homeDirectory, ".local", "bin", "claude.exe");
-  const imagePath = path.join(root, "inbound-image.png");
-  const filePath = path.join(root, "inbound-file.txt");
-  await Promise.all([
-    fs.mkdir(projectRoot, { recursive: true }),
-    fs.mkdir(path.dirname(commandPath), { recursive: true }),
-  ]);
-  await fs.writeFile(commandPath, "fixture");
-  const spawned = [];
-  const service = createConversationChatService({
-    settingsService: { load: () => ({ projectRoot }) },
-    reader: { ensureActiveSession: async () => ({ id: "unused", projectRoot, hasTranscript: false }) },
-    homeDirectory,
-    spawnImpl: () => {
-      const child = new FakeChild();
-      spawned.push(child);
-      return child;
-    },
-  });
-
-  await service.sendToSession({
-    content: "这是微信带来的附件",
-    sessionId: "wechat-session",
-    projectRoot,
-    hasTranscript: true,
-    media: [
-      { kind: "image", path: imagePath, fileName: "photo.png", mimeType: "image/png", data: Buffer.from([0x89, 0x50, 0x4e, 0x47]) },
-      { kind: "file", path: filePath, fileName: "report.txt", data: Buffer.from("文件内容") },
+test("Agent Core reader renders the full append-only human transcript after model-surface replacement, searches, and focuses", async () => {
+  const projectRoot = "D:\\Contacts\\suzu";
+  const history = {
+    events: [
+      { event: { type: "user/message", seq: 1, time: 1_000, surfaceOp: "append", data: { id: "user-1", source: { kind: "user" }, content: [{ type: "text", text: "旧问题" }] } } },
+      { event: { type: "assistant/message", seq: 2, time: 2_000, surfaceOp: "append", data: { message: { id: "assistant-1", content: [{ type: "text", text: "旧回答" }] }, usage: { inputTokens: 3, outputTokens: 2 } } } },
+      { event: { type: "user/message", seq: 3, time: 3_000, surfaceOp: { op: "replace", start: 1, end: 2 }, data: { id: "summary-1", source: { kind: "user" }, content: [{ type: "text", text: "压缩后的摘要" }] } } },
+      { event: { type: "assistant/message", seq: 4, time: 4_000, surfaceOp: "append", data: { message: { id: "assistant-2", content: [{ type: "reasoning", text: "思考中" }, { type: "text", text: "新的回答" }, { type: "tool-call", name: "read", arguments: "{\"path\":\"a.txt\"}" }] }, usage: { inputTokens: 3, outputTokens: 2 } } } },
     ],
-  });
-  await flush();
-  const input = JSON.parse(spawned[0].input.trim());
-  assert.equal(input.type, "user");
-  assert.equal(input.message.role, "user");
-  assert.equal(Array.isArray(input.message.content), true);
-  assert.deepEqual(input.message.content[0], {
-    type: "image",
-    source: { type: "base64", media_type: "image/png", data: "iVBORw==" },
-  });
-  assert.match(input.message.content.at(-1).text, /这是微信带来的附件/u);
-  assert.match(input.message.content.at(-1).text, /<suzu-wechat-media>/u);
-  assert.ok(input.message.content.at(-1).text.includes(JSON.stringify(filePath).slice(1, -1)));
-  service.dispose();
-});
-
-test("a favorite sticker keeps its image and sends an explicit sticker meaning to Claude", async () => {
-  const root = await temporaryDirectory("suzu-sticker-inbound-chat-");
-  const projectRoot = path.join(root, "project");
-  const homeDirectory = path.join(root, "home");
-  const commandPath = path.join(homeDirectory, ".local", "bin", "claude.exe");
-  const stickerPath = path.join(root, "cheer.gif");
-  await Promise.all([
-    fs.mkdir(projectRoot, { recursive: true }),
-    fs.mkdir(path.dirname(commandPath), { recursive: true }),
-    fs.writeFile(stickerPath, Buffer.from("GIF89a-sticker")),
-  ]);
-  await fs.writeFile(commandPath, "fixture");
-  const spawned = [];
-  const service = createConversationChatService({
-    settingsService: { load: () => ({ projectRoot }) },
-    reader: { ensureActiveSession: async () => ({ id: "unused", projectRoot, hasTranscript: false }) },
-    homeDirectory,
-    spawnImpl: () => {
-      const child = new FakeChild();
-      spawned.push(child);
-      return child;
-    },
-  });
-
-  await service.sendToSession({
-    content: "",
-    memoryText: "用户发送了一个表情包：cheer.gif",
-    media: [{
-      data: Buffer.from("GIF89a-sticker"),
-      fileName: "cheer.gif",
-      kind: "image",
-      mimeType: "image/gif",
-      path: stickerPath,
-    }],
-    mediaSource: "sticker",
-    projectRoot,
-    sessionId: "sticker-session",
-  });
-  await flush();
-
-  const input = JSON.parse(spawned[0].input.trim());
-  assert.deepEqual(input.message.content[0], {
-    type: "image",
-    source: { type: "base64", media_type: "image/gif", data: Buffer.from("GIF89a-sticker").toString("base64") },
-  });
-  assert.match(input.message.content.at(-1).text, /<suzu-sticker>/u);
-  assert.match(input.message.content.at(-1).text, /"source":"suzu-sticker"/u);
-  assert.match(input.message.content.at(-1).text, /不要当成普通照片或文件附件/u);
-  service.dispose();
-});
-
-test("messages in the same Claude session run in FIFO order", async () => {
-  const root = await temporaryDirectory("suzu-chat-queue-");
-  const projectRoot = path.join(root, "project");
-  const homeDirectory = path.join(root, "home");
-  const commandPath = path.join(homeDirectory, ".local", "bin", "claude.exe");
-  await fs.mkdir(projectRoot, { recursive: true });
-  await fs.mkdir(path.dirname(commandPath), { recursive: true });
-  await fs.writeFile(commandPath, "fixture");
-  const events = [];
-  const spawned = [];
-  const service = createConversationChatService({
-    settingsService: { load: () => ({ projectRoot }) },
-    reader: { ensureActiveSession: async () => ({ id: "queue-session", projectRoot, hasTranscript: false }) },
-    homeDirectory,
-    spawnImpl: (_command, args) => {
-      const child = new FakeChild();
-      spawned.push({ args, child });
-      return child;
-    },
-    onEvent: (event) => events.push(event),
-  });
-
-  const first = await service.send({ content: "第一条" });
-  const second = await service.send({ content: "第二条" });
-  assert.equal(first.queued, false);
-  assert.equal(second.queued, true);
-  assert.equal(second.queuePosition, 1);
-  assert.equal(spawned.length, 1);
-
-  spawned[0].child.emitJson({ type: "result", result: "第一条完成" });
-  await flush();
-  await flush();
-  assert.equal(spawned.length, 1);
-  const sent = spawned[0].child.input.trim().split("\n").map((line) => JSON.parse(line));
-  assert.deepEqual(sent[1], {
-    type: "user",
-    message: { role: "user", content: "第二条" },
-  });
-  assert.ok(spawned[0].args.includes("--session-id"));
-  assert.ok(events.some((event) => event.type === "queue" && event.items.some((item) => item.requestId === second.requestId)));
-  spawned[0].child.emitJson({ type: "result", result: "第二条完成" });
-  await flush();
-  service.dispose();
-});
-
-test("proactive scheduled turns remain observable while active or queued", async () => {
-  const root = await temporaryDirectory("suzu-proactive-queue-");
-  const projectRoot = path.join(root, "project");
-  const homeDirectory = path.join(root, "home");
-  const commandPath = path.join(homeDirectory, ".local", "bin", "claude.exe");
-  await fs.mkdir(projectRoot, { recursive: true });
-  await fs.mkdir(path.dirname(commandPath), { recursive: true });
-  await fs.writeFile(commandPath, "fixture");
-  const spawned = [];
-  const service = createConversationChatService({
-    settingsService: { load: () => ({ projectRoot }) },
-    reader: { ensureActiveSession: async () => ({ id: "proactive-queue-session", projectRoot, hasTranscript: false }) },
-    homeDirectory,
-    spawnImpl: () => {
-      const child = new FakeChild();
-      spawned.push(child);
-      return child;
-    },
-  });
-  const scheduledTurn = {
-    contactId: "contact-proactive-queue",
-    hasTranscript: false,
-    kind: "schedule",
-    projectRoot,
-    scheduleSource: "proactive-chain",
-    sessionId: "proactive-queue-session",
+    hasMore: false,
   };
-
-  const first = await service.sendToSession({ ...scheduledTurn, content: "第一条主动关心" });
-  const second = await service.sendToSession({ ...scheduledTurn, content: "第二条主动关心" });
-  assert.equal(first.queued, false);
-  assert.equal(second.queued, true);
-  assert.equal(service.hasPendingTurn({
-    contactId: scheduledTurn.contactId,
-    kind: "schedule",
-    scheduleSource: "proactive-chain",
-  }), true);
-
-  spawned[0].emitJson({ type: "result", result: "第一条完成" });
-  spawned[0].close();
-  await flush();
-  await flush();
-  assert.equal(spawned.length, 2);
-  assert.equal(service.hasPendingTurn({
-    contactId: scheduledTurn.contactId,
-    kind: "schedule",
-    scheduleSource: "proactive-chain",
-  }), true);
-
-  spawned[1].emitJson({ type: "result", result: "第二条完成" });
-  spawned[1].close();
-  await flush();
-  await flush();
-  assert.equal(service.hasPendingTurn({
-    contactId: scheduledTurn.contactId,
-    kind: "schedule",
-    scheduleSource: "proactive-chain",
-  }), false);
-  service.dispose();
-});
-
-test("plain text reuses one Claude stream and closes it after the idle timeout", async () => {
-  const root = await temporaryDirectory("suzu-chat-idle-stream-");
-  const projectRoot = path.join(root, "project");
-  const homeDirectory = path.join(root, "home");
-  const commandPath = path.join(homeDirectory, ".local", "bin", "claude.exe");
-  await fs.mkdir(projectRoot, { recursive: true });
-  await fs.mkdir(path.dirname(commandPath), { recursive: true });
-  await fs.writeFile(commandPath, "fixture");
-  const spawned = [];
-  const service = createConversationChatService({
-    settingsService: { load: () => ({ projectRoot }) },
-    reader: { ensureActiveSession: async () => ({ id: "idle-session", projectRoot, hasTranscript: true }) },
-    homeDirectory,
-    idleStreamTimeoutMs: 100,
-    idleStreamCloseGraceMs: 1_000,
-    spawnImpl: (_command, args) => {
-      const child = new FakeChild();
-      spawned.push({ args, child });
-      return child;
-    },
-  });
-
-  await service.send({ content: "第一句" });
-  assert.deepEqual(spawned[0].args.slice(-2), ["--resume", "idle-session"]);
-  spawned[0].child.emitJson({ type: "result", result: "第一句完成" });
-  await flush();
-  await flush();
-  assert.equal(spawned[0].child.stdin.writableEnded, false);
-
-  const second = await service.send({ content: "第二句" });
-  assert.equal(second.queued, false);
-  assert.equal(spawned.length, 1);
-  assert.deepEqual(spawned[0].child.input.trim().split("\n").map((line) => JSON.parse(line)).map((item) => item.message.content), ["第一句", "第二句"]);
-
-  spawned[0].child.emitJson({ type: "result", result: "第二句完成" });
-  await flush();
-  await wait(130);
-  assert.equal(spawned[0].child.stdin.writableEnded, true);
-  spawned[0].child.close();
-  service.dispose();
-});
-
-test("normal text and an active voice call share one Claude stream", async () => {
-  const root = await temporaryDirectory("suzu-chat-shared-stream-");
-  const projectRoot = path.join(root, "project");
-  const homeDirectory = path.join(root, "home");
-  const commandPath = path.join(homeDirectory, ".local", "bin", "claude.exe");
-  await fs.mkdir(projectRoot, { recursive: true });
-  await fs.mkdir(path.dirname(commandPath), { recursive: true });
-  await fs.writeFile(commandPath, "fixture");
-  const events = [];
-  const spawned = [];
-  const service = createConversationChatService({
-    settingsService: { load: () => ({ projectRoot }) },
-    reader: { ensureActiveSession: async () => ({ id: "shared-session", projectRoot, hasTranscript: true }) },
-    homeDirectory,
-    spawnImpl: (_command, args) => {
-      const child = new FakeChild();
-      spawned.push({ args, child });
-      return child;
-    },
-    onEvent: (event) => events.push(event),
-  });
-
-  await service.send({ content: "先打一条普通文字" });
-  const promptIndex = spawned[0].args.indexOf("--append-system-prompt");
-  assert.match(spawned[0].args[promptIndex + 1], /suzu-voice-call-turn/u);
-  spawned[0].child.emitJson({ type: "result", result: "普通文字完成" });
-  await flush();
-  await flush();
-
-  const call = await service.sendToSession({
-    content: "这是通话里说的一句",
-    sessionId: "shared-session",
+  assert.deepEqual(conversationDisplayMessages(history.events).map((item) => item.id), ["user-1", "assistant-1", "assistant-2"]);
+  const runtime = createFakeRuntime({ history });
+  const contact = {
+    id: "contact-suzu",
+    name: "Suzu",
+    agentId: "agent-suzu",
     projectRoot,
-    hasTranscript: true,
-    kind: "call",
-    requestId: "suzu-call-shared-stream",
+    sessionId: "contact-session",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+    approvalMode: "default",
+    longTermMemoryEnabled: true,
+  };
+  const contacts = {
+    status: "ready",
+    contactsRoot: "D:\\Contacts",
+    contacts: [contact],
+    activeContact: contact,
+    preferredContact: contact,
+  };
+  const removals = [];
+  const reader = createConversationReader({
+    runtime,
+    settingsService: { load: () => ({ projectRoot }) },
+    contactProjectsService: {
+      async snapshot() { return contacts; },
+      async updatePresentation() {},
+      async updateApprovalMode() {},
+      async updateLongTermMemoryEnabled() {},
+      async remove(value) { removals.push(value); },
+    },
   });
-  assert.equal(call.queued, false);
-  assert.equal(spawned.length, 1);
-  const inputs = spawned[0].child.input.trim().split("\n").map((line) => JSON.parse(line));
-  assert.equal(inputs[0].message.content, "先打一条普通文字");
-  assert.match(inputs[1].message.content, /^<suzu-voice-call-turn>/u);
-  assert.match(inputs[1].message.content, /"transcript":"这是通话里说的一句"/u);
-
-  spawned[0].child.emitJson({ type: "result", result: "通话回复完成" });
-  await flush();
-  await flush();
-  assert.equal(events.find((event) => event.requestId === "suzu-call-shared-stream" && event.type === "reply")?.kind, "call");
-
-  await service.send({ content: "通话后继续打字" });
-  assert.equal(spawned.length, 1);
-  assert.equal(inputs.length, 2);
-  const thirdInput = JSON.parse(spawned[0].child.input.trim().split("\n")[2]);
-  assert.equal(thirdInput.message.content, "通话后继续打字");
-  service.dispose();
+  const snapshot = await reader.snapshot();
+  assert.equal(snapshot.activeSessionId, "contact-session");
+  assert.equal(snapshot.historyBackend, "agent-core");
+  assert.equal(snapshot.contactDeletion?.available, true);
+  assert.deepEqual(snapshot.messages.map((item) => item.id), ["user-1", "assistant-1", "assistant-2"]);
+  assert.equal(snapshot.messages[2].usage.input, 3);
+  assert.equal(snapshot.messages[2].usage.output, 2);
+  assert.equal(snapshot.messages[2].usage.total, 5);
+  assert.equal(snapshot.messages[2].blocks.some((block) => block.kind === "tool_use"), true);
+  const search = await reader.search("新的回答");
+  assert.equal(search.matches.length, 1);
+  const focus = await reader.focus({ messageId: "assistant-2" });
+  assert.equal(focus.focusMessageId, "assistant-2");
+  assert.deepEqual(runtime.calls.history[0], {
+    sessionId: "contact-session",
+    contactId: "contact-suzu",
+    cwd: projectRoot,
+    maxMessages: 600,
+  });
+  await reader.removeContact({ id: "contact-suzu", confirmed: true });
+  assert.deepEqual(removals, [{ id: "contact-suzu", confirmed: true }]);
 });
 
-test("call opening stays hidden from Claude's user transcript while the existing memory lifecycle receives call context", async () => {
-  const root = await temporaryDirectory("suzu-chat-call-open-");
-  const projectRoot = path.join(root, "project");
-  const homeDirectory = path.join(root, "home");
-  const commandPath = path.join(homeDirectory, ".local", "bin", "claude.exe");
-  await fs.mkdir(projectRoot, { recursive: true });
-  await fs.mkdir(path.dirname(commandPath), { recursive: true });
-  await fs.writeFile(commandPath, "fixture");
-  const prepared = [];
-  const completed = [];
-  const spawned = [];
-  const service = createConversationChatService({
+test("Agent Core reader hides internal scheduled task turns without hiding proactive replies", async () => {
+  const projectRoot = "D:\\Contacts\\scheduled-turns";
+  const planningTask = [
+    "<suzu-schedule-task>",
+    "任务说明：安排下次主动关心",
+    "这是 Suzu 自动任务触发，不是用户发来的新消息。",
+    "<!-- suzu-lives:display-system -->",
+    "",
+    "这是链式主动关心的内部安排阶段。",
+    "</suzu-schedule-task>",
+  ].join("\\n");
+  const checkTask = [
+    "<suzu-schedule-task>",
+    "任务说明：判断是否主动关心",
+    "这是 Suzu 自动任务触发，不是用户发来的新消息。",
+    "</suzu-schedule-task>",
+  ].join("\\n");
+  const events = [
+    { type: "user/message", seq: 1, time: 1_000, surfaceOp: "append", data: {
+      id: "user-before", source: { kind: "user" }, content: [{ type: "text", text: "今天怎么样？" }],
+    } },
+    { type: "assistant/message", seq: 2, time: 2_000, surfaceOp: "append", data: {
+      message: { id: "assistant-before", content: [{ type: "text", text: "挺好的，谢谢你。" }] },
+    } },
+    { type: "user/message", seq: 3, time: 3_000, surfaceOp: "append", data: {
+      id: "planning-input", source: { kind: "user" }, content: [{ type: "text", text: planningTask }],
+    } },
+    { type: "tool/result", seq: 4, time: 4_000, surfaceOp: "append", data: {
+      message: { content: [{ type: "text", text: "已建立下一次链式主动关心任务。" }] },
+    } },
+    { type: "assistant/message", seq: 5, time: 5_000, surfaceOp: "append", data: {
+      message: { id: "planning-reply", content: [{ type: "text", text: "NO_REPLY" }] },
+    } },
+    { type: "user/message", seq: 6, time: 6_000, surfaceOp: "append", data: {
+      id: "check-input", source: { kind: "user" }, content: [{ type: "text", text: checkTask }],
+    } },
+    { type: "assistant/message", seq: 7, time: 7_000, surfaceOp: "append", data: {
+      message: { id: "proactive-reply", content: [{ type: "text", text: "晚上好，记得吃饭呀。" }] },
+    } },
+    { type: "user/message", seq: 8, time: 8_000, surfaceOp: "append", data: {
+      id: "silent-check-input", source: { kind: "user" }, content: [{ type: "text", text: checkTask }],
+    } },
+    { type: "assistant/message", seq: 9, time: 9_000, surfaceOp: "append", data: {
+      message: { id: "silent-check-reply", content: [{ type: "text", text: "NO_REPLY" }] },
+    } },
+    { type: "user/message", seq: 10, time: 10_000, surfaceOp: "append", data: {
+      id: "user-after", source: { kind: "user" }, content: [{ type: "text", text: "我回来啦。" }],
+    } },
+    { type: "assistant/message", seq: 11, time: 11_000, surfaceOp: "append", data: {
+      message: { id: "assistant-after", content: [{ type: "text", text: "欢迎回来。" }] },
+    } },
+  ];
+
+  assert.deepEqual(conversationDisplayMessages(events).map((message) => [message.id, message.blocks[0]?.text]), [
+    ["user-before", "今天怎么样？"],
+    ["assistant-before", "挺好的，谢谢你。"],
+    ["proactive-reply", "晚上好，记得吃饭呀。"],
+    ["user-after", "我回来啦。"],
+    ["assistant-after", "欢迎回来。"],
+  ]);
+
+  const contact = {
+    id: "contact-scheduled",
+    name: "Suzu",
+    projectRoot,
+    sessionId: "scheduled-session",
+  };
+  const reader = createConversationReader({
+    runtime: createFakeRuntime({ history: { events, hasMore: false } }),
     settingsService: { load: () => ({ projectRoot }) },
-    reader: { ensureActiveSession: async () => ({ id: "call-open-session", projectRoot, hasTranscript: true }) },
-    homeDirectory,
-    memoryRuntime: {
-      prepareTurn: async (value) => {
-        prepared.push(value);
-        return { archiveTurn: value.turnId };
+    contactProjectsService: {
+      async snapshot() {
+        return {
+          status: "ready",
+          contactsRoot: "D:\\Contacts",
+          contacts: [contact],
+          activeContact: contact,
+          preferredContact: contact,
+        };
       },
-      completeTurn: async (turn, value) => { completed.push({ turn, value }); },
-      abortTurn: async () => undefined,
-    },
-    spawnImpl: (_command, args) => {
-      const child = new FakeChild();
-      spawned.push({ args, child });
-      return child;
     },
   });
+  const snapshot = await reader.snapshot();
+  assert.deepEqual(snapshot.messages.map((message) => message.id), [
+    "user-before",
+    "assistant-before",
+    "proactive-reply",
+    "user-after",
+    "assistant-after",
+  ]);
+  assert.equal((await reader.search("链式主动关心")).matches.length, 0);
+  assert.equal((await reader.search("NO_REPLY")).matches.length, 0);
+  assert.equal((await reader.search("晚上好")).matches.length, 1);
+});
 
-  await service.sendToSession({
-    content: "",
-    sessionId: "call-open-session",
+test("Agent Core reader keeps direct Core history when switching contacts and projects call transcripts", async () => {
+  const first = {
+    id: "contact-first",
+    name: "一号",
+    projectRoot: "D:\\Contacts\\first",
+    sessionId: "session-first",
+  };
+  const second = {
+    id: "contact-second",
+    name: "二号",
+    projectRoot: "D:\\Contacts\\second",
+    sessionId: "session-second",
+  };
+  const callMarker = [
+    "这是一次实时语音通话的转写。",
+    "<suzu-voice-call-turn>",
+    JSON.stringify({ source: "suzu-live-call", transcript: "你好，能听见吗？" }),
+    "</suzu-voice-call-turn>",
+  ].join("\n");
+  const histories = new Map([
+    [first.sessionId, {
+      events: [
+        {
+          type: "user/message",
+          seq: 4,
+          time: 4_000,
+          surfaceOp: "append",
+          data: { id: "first-user", source: { kind: "user" }, content: [{ type: "text", text: "普通聊天还在吗？" }] },
+        },
+        {
+          type: "assistant/message",
+          seq: 5,
+          time: 5_000,
+          surfaceOp: "append",
+          data: { message: { id: "first-answer", content: [{ type: "text", text: "还在。" }] } },
+        },
+        {
+          type: "user/message",
+          seq: 6,
+          time: 6_000,
+          surfaceOp: "append",
+          data: { id: "call-user", source: { kind: "user" }, content: [{ type: "text", text: callMarker }] },
+        },
+        {
+          type: "assistant/message",
+          seq: 7,
+          time: 7_000,
+          surfaceOp: "append",
+          data: { message: { id: "call-answer", content: [{ type: "text", text: "能听见，我在。" }] } },
+        },
+      ],
+      hasMore: false,
+    }],
+    [second.sessionId, { events: [], hasMore: false }],
+  ]);
+  let active = first;
+  const contacts = {
+    async select({ id }) {
+      active = id === second.id ? second : first;
+      return this.snapshot();
+    },
+    async snapshot() {
+      return {
+        status: "ready",
+        contactsRoot: "D:\\Contacts",
+        contacts: [first, second],
+        activeContact: active,
+        preferredContact: first,
+      };
+    },
+  };
+  const reader = createConversationReader({
+    runtime: {
+      async history({ sessionId }) { return histories.get(sessionId) || { events: [], hasMore: false }; },
+    },
+    settingsService: { load: () => ({ projectRoot: active.projectRoot }) },
+    contactProjectsService: contacts,
+  });
+
+  const firstSnapshot = await reader.snapshot();
+  assert.deepEqual(firstSnapshot.messages.map((message) => [message.kind, message.blocks[0]?.text]), [
+    ["user", "普通聊天还在吗？"],
+    ["assistant", "还在。"],
+    ["system", "通话 · 我：你好，能听见吗？"],
+    ["system", "通话 · 对方：能听见，我在。"],
+  ]);
+
+  const secondSnapshot = await reader.selectContact({ id: second.id });
+  assert.equal(secondSnapshot.activeContact.id, second.id);
+  assert.deepEqual(secondSnapshot.messages, []);
+
+  const returnedSnapshot = await reader.selectContact({ id: first.id });
+  assert.equal(returnedSnapshot.activeContact.id, first.id);
+  assert.deepEqual(returnedSnapshot.messages.map((message) => message.id), ["first-user", "first-answer", "call-user", "call-answer"]);
+});
+
+test("DSH reader renders cached conversation media instead of a placeholder image block", () => {
+  const dataRoot = "D:\\Suzu Lives\\dsh\\data";
+  const imagePath = path.join(dataRoot, "agents", "agent-a", "conversations", "session-a", "attachments", "photo.png");
+  const manifest = [
+    "<conversation-media>",
+    JSON.stringify({ version: 1, items: [{ kind: "image", fileName: "photo.png", mimeType: "image/png", path: imagePath, size: 123 }]}),
+    "</conversation-media>",
+  ].join("\n");
+  const messages = conversationDisplayMessages([{
+    event: {
+      type: "user/message",
+      seq: 1,
+      time: 1_000,
+      surfaceOp: "append",
+      data: {
+        id: "user-media",
+        source: { kind: "user" },
+        content: [
+          { type: "text", text: "看看这张图" },
+          { type: "text", text: manifest },
+          { type: "image", attachment: { attachmentId: "sha256:test" } },
+        ],
+      },
+    },
+  }], 500, { dataRoot });
+  assert.deepEqual(messages[0].blocks.map((block) => block.kind), ["text", "media"]);
+  assert.equal(messages[0].blocks[1].mediaKind, "image");
+  assert.equal(messages[0].blocks[1].fileName, "photo.png");
+  assert.match(messages[0].blocks[1].fileUrl, /^file:/u);
+});
+
+test("DSH reader renders an Agent attachment receipt as Suzu's image, audio, and file cards", () => {
+  const dataRoot = "D:\\Suzu Lives\\dsh\\data";
+  const attachmentRoot = path.join(dataRoot, "agents", "agent-a", "conversations", "session-a", "attachments");
+  const receipt = {
+    status: "ok",
+    type: "suzu-conversation-attachment",
+    receiptId: "attachment-agent-output",
+    items: [
+      { kind: "image", fileName: "generated.png", path: path.join(attachmentRoot, "generated.png"), size: 123 },
+      { kind: "audio", fileName: "voice.mp3", path: path.join(attachmentRoot, "voice.mp3"), size: 456 },
+      { kind: "file", fileName: "report.txt", path: path.join(attachmentRoot, "report.txt"), size: 789 },
+    ],
+  };
+  const messages = conversationDisplayMessages([{
+    event: {
+      type: "tool/result",
+      seq: 4,
+      time: 4_000,
+      surfaceOp: "append",
+      data: { message: { content: [{ type: "text", text: JSON.stringify(receipt) }] } },
+    },
+  }], 500, { dataRoot });
+
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].kind, "assistant");
+  assert.deepEqual(messages[0].blocks.map((block) => block.mediaKind), ["image", "audio", "file"]);
+  assert.ok(messages[0].blocks.every((block) => block.fileUrl.startsWith("file:")));
+});
+
+test("DSH reader keeps plugin context queryable according to each block's display fields", async () => {
+  const projectRoot = "D:\\Contacts\\context-trace";
+  const entries = [
+    { event: { type: "step/start", seq: 10, time: 10_000, data: { turn: 3, step: 2 } } },
+    { event: {
+      type: "user/message",
+      seq: 11,
+      time: 11_000,
+      surfaceOp: "append",
+      data: {
+        id: "dynamic-1",
+        source: {
+          kind: "plugin",
+          plugin: "suzu-lifecycle-bridge",
+          form: "snapshot",
+          sections: [
+            {
+              name: "time-1",
+              kind: "time-awareness",
+              source: "time-awareness",
+              text: "现在是 10:00。",
+              display: { category: "time", context: true, label: "时间感知", transcript: false },
+            },
+            {
+              name: "notice-1",
+              kind: "notice",
+              source: "notice",
+              text: "这一条可以显示为系统提示。",
+              display: { category: "notice", context: false, label: "提示", transcript: true },
+            },
+          ],
+        },
+        content: [{ type: "text", text: "动态上下文" }],
+      },
+    } },
+    { event: { type: "user/message", seq: 12, time: 12_000, surfaceOp: "append", data: {
+      id: "user-2",
+      source: { kind: "user" },
+      content: [{ type: "text", text: "晚上吃什么？" }],
+    } } },
+    { event: { type: "user/message", seq: 13, time: 13_000, surfaceOp: "append", data: {
+      id: "recall-1",
+      source: {
+        kind: "plugin",
+        plugin: "suzu-lifecycle-bridge",
+        form: "recall",
+        block: {
+          id: "memory-7",
+          kind: "memory",
+          source: "memory-retriever",
+          metadata: { memoryId: "7" },
+          priority: 8,
+          display: { category: "memory", context: true, label: "记忆召回", transcript: false },
+        },
+      },
+      content: [{ type: "text", text: "用户喜欢烤肉。" }],
+    } } },
+    { event: {
+      type: "assistant/message",
+      seq: 14,
+      time: 14_000,
+      surfaceOp: { op: "replace", start: 11, end: 11 },
+      sourceEventSeqs: [11],
+      data: { message: { content: [] } },
+    } },
+  ];
+
+  assert.deepEqual(conversationDisplayMessages(entries).map((message) => [message.kind, message.label, message.blocks[0]?.text]), [
+    ["system", "提示", "这一条可以显示为系统提示。"],
+    ["user", "", "晚上吃什么？"],
+  ]);
+  const records = conversationContextRecords(entries);
+  assert.deepEqual(records.map((record) => ({
+    messageId: record.messageId,
+    scope: record.scope,
+    status: record.status,
+    blocks: record.blocks.map((block) => [block.id, block.display.category, block.display.transcript, block.text]),
+  })), [
+    {
+      messageId: "user-2",
+      scope: "dynamic",
+      status: "expired",
+      blocks: [["time-1", "time", false, "现在是 10:00。"]],
+    },
+    {
+      messageId: "user-2",
+      scope: "durable",
+      status: "recorded",
+      blocks: [["memory-7", "memory", false, "用户喜欢烤肉。"]],
+    },
+  ]);
+
+  const contact = {
+    id: "contact-suzu",
+    name: "Suzu",
     projectRoot,
-    hasTranscript: true,
-    kind: "call-open",
-    requestId: "suzu-call-open-fixture",
-  });
-  const promptIndex = spawned[0].args.indexOf("--append-system-prompt");
-  assert.match(spawned[0].args[promptIndex + 1], /suzu-voice-call-open/u);
-  const openingInput = JSON.parse(spawned[0].child.input.trim());
-  assert.match(openingInput.message.content, /^<suzu-voice-call-open>/u);
-  assert.doesNotMatch(openingInput.message.content, /用户打来了电话/u);
-  assert.match(prepared[0].userText, /系统事件：实时语音通话已接通/u);
-  assert.match(prepared[0].userText, /不是用户说的话/u);
-
-  spawned[0].child.emitJson({ type: "result", result: "喂，我在。" });
-  await flush();
-  await flush();
-  assert.equal(completed[0]?.value?.assistantText, "喂，我在。");
-
-  await service.sendToSession({
-    content: "能听见吗？",
-    sessionId: "call-open-session",
-    projectRoot,
-    hasTranscript: true,
-    kind: "call",
-    requestId: "suzu-call-turn-fixture",
-  });
-  const callInput = JSON.parse(spawned[0].child.input.trim().split("\n")[1]);
-  assert.match(callInput.message.content, /^<suzu-voice-call-turn>/u);
-  assert.match(prepared[1].userText, /来自用户与联系人的实时语音通话/u);
-  assert.match(prepared[1].userText, /能听见吗？/u);
-  service.dispose();
-});
-
-test("a recalled turn stays on the existing Claude stream", async () => {
-  const root = await temporaryDirectory("suzu-chat-memory-stream-");
-  const projectRoot = path.join(root, "project");
-  const homeDirectory = path.join(root, "home");
-  const commandPath = path.join(homeDirectory, ".local", "bin", "claude.exe");
-  await fs.mkdir(projectRoot, { recursive: true });
-  await fs.mkdir(path.dirname(commandPath), { recursive: true });
-  await fs.writeFile(commandPath, "fixture");
-  const spawned = [];
-  let includeRecall = false;
-  const service = createConversationChatService({
+    sessionId: "context-session",
+  };
+  const reader = createConversationReader({
+    runtime: createFakeRuntime({ history: { events: entries, hasMore: false } }),
     settingsService: { load: () => ({ projectRoot }) },
-    reader: { ensureActiveSession: async () => ({ id: "memory-stream-session", projectRoot, hasTranscript: true }) },
-    homeDirectory,
-    memoryRuntime: {
-      prepareTurn: async () => ({ legacyRecall: includeRecall ? "<suzu-long-term-memory>本轮召回</suzu-long-term-memory>" : "" }),
-      completeTurn: async () => undefined,
-      abortTurn: async () => undefined,
-    },
-    spawnImpl: (_command, args) => {
-      const child = new FakeChild();
-      spawned.push({ args, child });
-      return child;
+    contactProjectsService: {
+      async snapshot() {
+        return {
+          status: "ready",
+          contactsRoot: "D:\\Contacts",
+          contacts: [contact],
+          activeContact: contact,
+          preferredContact: contact,
+        };
+      },
     },
   });
-
-  await service.send({ content: "不需要召回的第一句" });
-  spawned[0].child.emitJson({ type: "result", result: "第一句完成" });
-  await flush();
-  await flush();
-
-  includeRecall = true;
-  await service.send({ content: "需要按本轮召回的第二句" });
-  assert.equal(spawned.length, 1);
-  assert.equal(spawned[0].child.stdin.writableEnded, false);
-  assert.equal(spawned[0].args.some((value) => String(value).includes("本轮召回")), false);
-  assert.match(spawned[0].child.input, /需要按本轮召回的第二句/u);
-  spawned[0].child.close();
-  service.dispose();
+  const snapshot = await reader.snapshot();
+  assert.deepEqual(snapshot.context, { available: true, count: 2 });
+  const trace = await reader.contextTrace({ category: "memory", query: "烤肉" });
+  assert.equal(trace.matchedRecords, 1);
+  assert.deepEqual(trace.records[0]?.blocks.map((block) => block.id), ["memory-7"]);
 });
 
-test("copied Claude session ids remain isolated by project root", async () => {
-  const root = await temporaryDirectory("suzu-chat-project-scope-");
-  const projectA = path.join(root, "project-a");
-  const projectB = path.join(root, "project-b");
-  const homeDirectory = path.join(root, "home");
-  const commandPath = path.join(homeDirectory, ".local", "bin", "claude.exe");
-  await Promise.all([fs.mkdir(projectA, { recursive: true }), fs.mkdir(projectB, { recursive: true }), fs.mkdir(path.dirname(commandPath), { recursive: true })]);
-  await fs.writeFile(commandPath, "fixture");
-  const spawned = [];
-  const service = createConversationChatService({
-    settingsService: { load: () => ({ projectRoot: projectA }) },
-    reader: {
-      approvalModeForSession: async ({ projectRoot: requestedProjectRoot }) => requestedProjectRoot === projectA ? "plan" : "bypassPermissions",
-      ensureActiveSession: async () => ({ id: "unused", projectRoot: projectA, hasTranscript: false }),
-    },
-    homeDirectory,
-    spawnImpl: (_command, args, options) => {
-      const child = new FakeChild();
-      spawned.push({ args, child, options });
-      return child;
+test("DSH reader ignores a stale active contact and does not start DSH for an empty catalog", async () => {
+  const runtime = createFakeRuntime();
+  const reader = createConversationReader({
+    runtime,
+    settingsService: { load: () => ({}) },
+    contactProjectsService: {
+      async snapshot() {
+        return {
+          status: "ready",
+          contactsRoot: "D:\\Contacts",
+          contacts: [],
+          activeContact: {
+            id: "removed-contact",
+            name: "旧联系人",
+            projectRoot: "D:\\Contacts\\removed-contact",
+            sessionId: "old-session",
+          },
+          preferredContact: null,
+        };
+      },
     },
   });
 
-  await service.sendToSession({ content: "项目 A", sessionId: "copied-session", projectRoot: projectA });
-  await service.sendToSession({ content: "项目 B", sessionId: "copied-session", projectRoot: projectB });
-  assert.equal(spawned.length, 2);
-  assert.equal(spawned[0].options.cwd, projectA);
-  assert.equal(spawned[1].options.cwd, projectB);
-  assert.equal(spawned[0].args[spawned[0].args.indexOf("--permission-mode") + 1], "plan");
-  assert.equal(spawned[1].args[spawned[1].args.indexOf("--permission-mode") + 1], "bypassPermissions");
-
-  const stopped = service.stop({ sessionId: "copied-session", projectRoot: projectA });
-  assert.equal(stopped.stopped, true);
-  assert.equal(spawned[0].child.killed, true);
-  assert.equal(spawned[1].child.killed, false);
-  service.dispose();
+  const snapshot = await reader.snapshot();
+  assert.equal(snapshot.activeContact, null);
+  assert.equal(snapshot.status, "missing");
+  assert.deepEqual(snapshot.sessions, []);
+  assert.deepEqual(runtime.calls.history, []);
 });
 
-test("stop interrupts only the active turn and preserves the normal message queue", async () => {
-  const root = await temporaryDirectory("suzu-chat-stop-");
-  const projectRoot = path.join(root, "project");
-  const homeDirectory = path.join(root, "home");
-  const commandPath = path.join(homeDirectory, ".local", "bin", "claude.exe");
-  await fs.mkdir(projectRoot, { recursive: true });
-  await fs.mkdir(path.dirname(commandPath), { recursive: true });
-  await fs.writeFile(commandPath, "fixture");
-  const events = [];
-  const spawned = [];
-  const service = createConversationChatService({
-    settingsService: { load: () => ({ projectRoot }) },
-    reader: { ensureActiveSession: async () => ({ id: "stop-session", projectRoot, hasTranscript: false }) },
-    homeDirectory,
-    spawnImpl: () => {
-      const child = new FakeChild();
-      spawned.push(child);
-      return child;
-    },
-    onEvent: (event) => events.push(event),
+test("DSH runtime storage keeps durable state separate from explicit D temp", () => {
+  const paths = resolveSuzuAgentRuntimePaths({
+    dataRoot: "D:\\SuzuData",
+    temporaryDirectory: "D:\\Temp\\suzu-lives-test-runtime",
   });
-
-  await service.send({ content: "正在执行的任务" });
-  await service.send({ content: "排队的消息" });
-  const stopped = service.stop({ sessionId: "stop-session" });
-  assert.equal(stopped.stopped, true);
-  assert.equal(spawned[0].killed, true);
-
-  spawned[0].close(1, "SIGTERM");
-  await flush();
-  await flush();
-  assert.equal(events.find((event) => event.type === "turn-stopped")?.sessionId, "stop-session");
-  assert.equal(spawned.length, 2);
-  assert.equal(JSON.parse(spawned[1].input.trim()).message.content, "排队的消息");
-  service.dispose();
-});
-
-test("request-scoped stop can remove a queued voice turn before it starts", async () => {
-  const root = await temporaryDirectory("suzu-call-queue-stop-");
-  const projectRoot = path.join(root, "project");
-  const homeDirectory = path.join(root, "home");
-  const commandPath = path.join(homeDirectory, ".local", "bin", "claude.exe");
-  await fs.mkdir(projectRoot, { recursive: true });
-  await fs.mkdir(path.dirname(commandPath), { recursive: true });
-  await fs.writeFile(commandPath, "fixture");
-  const events = [];
-  const spawned = [];
-  const service = createConversationChatService({
-    settingsService: { load: () => ({ projectRoot }) },
-    reader: { ensureActiveSession: async () => ({ id: "call-stop-session", projectRoot, hasTranscript: false }) },
-    homeDirectory,
-    spawnImpl: () => {
-      const child = new FakeChild();
-      spawned.push(child);
-      return child;
-    },
-    onEvent: (event) => events.push(event),
-  });
-
-  await service.send({ content: "普通长任务" });
-  const queued = await service.sendToSession({
-    content: "会被打断的通话内容",
-    sessionId: "call-stop-session",
-    projectRoot,
-    kind: "call",
-    requestId: "suzu-call-queued-turn",
-  });
-  assert.equal(queued.queued, true);
-  const stopped = service.stop({
-    sessionId: "call-stop-session",
-    projectRoot,
-    requestId: "suzu-call-queued-turn",
-  });
-  assert.deepEqual(stopped, {
-    accepted: true,
-    stopped: true,
-    sessionId: "call-stop-session",
-    message: "已从队列中移除这次回复。",
-  });
-  assert.equal(events.find((event) => event.requestId === "suzu-call-queued-turn" && event.type === "turn-stopped")?.kind, "call");
-
-  spawned[0].emitJson({ type: "result", result: "普通任务结束" });
-  spawned[0].close();
-  await flush();
-  await flush();
-  assert.equal(spawned.length, 1);
-  service.dispose();
-});
-
-test("steer writes a correction into the active Claude stream without terminating the current task", async () => {
-  const root = await temporaryDirectory("suzu-chat-steer-");
-  const projectRoot = path.join(root, "project");
-  const homeDirectory = path.join(root, "home");
-  const commandPath = path.join(homeDirectory, ".local", "bin", "claude.exe");
-  await fs.mkdir(projectRoot, { recursive: true });
-  await fs.mkdir(path.dirname(commandPath), { recursive: true });
-  await fs.writeFile(commandPath, "fixture");
-  const spawned = [];
-  const service = createConversationChatService({
-    settingsService: { load: () => ({ projectRoot }) },
-    reader: { ensureActiveSession: async () => ({ id: "steer-session", projectRoot, hasTranscript: false }) },
-    homeDirectory,
-    spawnImpl: () => {
-      const child = new FakeChild();
-      spawned.push(child);
-      return child;
-    },
-  });
-
-  await service.send({ content: "原任务" });
-  await service.send({ content: "普通排队消息" });
-  const correction = await service.steer({ content: "请先只读分析，不要修改文件" });
-  assert.equal(correction.delivered, true);
-  assert.equal(spawned[0].killed, false);
-  const directInputs = spawned[0].input.trim().split("\n").map((line) => JSON.parse(line));
-  assert.equal(directInputs.length, 2);
-  assert.equal(directInputs[0].message.content, "原任务");
-  assert.equal(directInputs[1].message.content, "请先只读分析，不要修改文件");
-
-  spawned[0].emitJson({ type: "result", result: "已按引导调整" });
-  spawned[0].close();
-  await flush();
-  await flush();
-  assert.equal(spawned.length, 2);
-  assert.equal(JSON.parse(spawned[1].input.trim()).message.content, "普通排队消息");
-  service.dispose();
-});
-
-test("tool permission is returned only to the Claude process that requested it", async () => {
-  const root = await temporaryDirectory("suzu-direct-permission-");
-  const projectRoot = path.join(root, "project");
-  const homeDirectory = path.join(root, "home");
-  const commandPath = path.join(homeDirectory, ".local", "bin", "claude.exe");
-  await fs.mkdir(projectRoot, { recursive: true });
-  await fs.mkdir(path.dirname(commandPath), { recursive: true });
-  await fs.writeFile(commandPath, "fixture");
-  const events = [];
-  let child;
-  const service = createConversationChatService({
-    settingsService: { load: () => ({ projectRoot }) },
-    reader: { ensureActiveSession: async () => ({ id: "session-2", projectRoot, hasTranscript: true }) },
-    homeDirectory,
-    spawnImpl: () => {
-      child = new FakeChild();
-      return child;
-    },
-    onEvent: (event) => events.push(event),
-  });
-
-  await service.send({ content: "请读取项目文件" });
-  child.emitJson({
-    type: "control_request",
-    request_id: "permission-1",
-    request: { subtype: "can_use_tool", tool_name: "Read", input: { file_path: "CLAUDE.md" } },
-  });
-  await flush();
-  assert.equal(events.find((event) => event.type === "permission")?.toolName, "Read");
-
-  assert.deepEqual(
-    service.respondPermissionForSession({ sessionId: "another-session", projectRoot, behavior: "allow" }),
-    { accepted: false, reason: "no-pending-permission" },
-  );
-  const response = service.respondPermissionForSession({ sessionId: "session-2", projectRoot, behavior: "allow" });
-  assert.equal(response.accepted, true);
-  assert.equal(response.toolName, "Read");
-  assert.equal(events.find((event) => event.type === "permission-resolved")?.requestId, "permission-1");
-  await flush();
-  const messages = child.input.trim().split("\n").map((line) => JSON.parse(line));
-  assert.deepEqual(messages[1], {
-    type: "control_response",
-    response: {
-      subtype: "success",
-      request_id: "permission-1",
-      response: { behavior: "allow", updatedInput: { file_path: "CLAUDE.md" } },
-    },
-  });
-  child.emitJson({ type: "result", result: "已读取。" });
-  child.close();
+  assert.equal(paths.runtimeHome, path.join("D:\\SuzuData", "agent-runtime", "core"));
+  assert.equal(paths.temporaryDirectory, "D:\\Temp\\suzu-lives-test-runtime");
+  assert.equal(paths.fallbackTemporaryDirectory, path.join("D:\\SuzuData", "temporary", "agent-core"));
+  assert.equal(paths.coreProcessHome, path.join("D:\\SuzuData", "agent-runtime", "core-process-home"));
+  assert.equal(paths.coreAgentsHome, path.join("D:\\SuzuData", "agent-runtime", "core-agents"));
+  assert.equal(paths.coreAppData, path.join("D:\\SuzuData", "agent-runtime", "core-process-home", "AppData", "Roaming"));
+  assert.equal(paths.coreLocalAppData, path.join("D:\\SuzuData", "agent-runtime", "core-process-home", "AppData", "Local"));
 });

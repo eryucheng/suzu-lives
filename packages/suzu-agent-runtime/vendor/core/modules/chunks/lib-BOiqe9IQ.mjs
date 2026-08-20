@@ -1,0 +1,1 @@
+import{createRequire as e}from"node:module";e(import.meta.url);import{r as t}from"./lib-B4jo3z0c.mjs";function n(e){return e}var r=class e extends t{constructor(t){if(new.target===e)throw Error(`Suzu Agent Core job registry is abstract; load a selected local implementation instead`);super(t,`jobs`)}};export{r as n,n as t};

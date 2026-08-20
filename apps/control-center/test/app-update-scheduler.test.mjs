@@ -69,9 +69,9 @@ test("background update checks wait for startup, then repeat every twelve hours"
   assert.equal(checks, 2);
 });
 
-test("main process starts the background checker and disposes it before quitting", () => {
+test("main process schedules update checks only for packaged builds and disposes them before quitting", () => {
   const main = readFileSync(resolve(HERE, "..", "electron", "main.mjs"), "utf8");
 
-  assert.match(main, /scheduleAppUpdateChecks\(\{[\s\S]*?checkForUpdates: \(\) => appUpdateService\.checkForUpdates\(\)/u);
+  assert.match(main, /app\.isPackaged === true[\s\S]*?scheduleAppUpdateChecks\(\{[\s\S]*?checkForUpdates: \(\) => appUpdateService\.checkForUpdates\(\)/u);
   assert.match(main, /app\.once\("before-quit", stopAppUpdateChecks\)/u);
 });

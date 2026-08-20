@@ -24,5 +24,17 @@ test("the desktop shell collapses its navigation rail before reaching the minimu
   assert.match(compactRail, /\.shell-brand-copy \{ display:none; \}/u);
   assert.match(compactRail, /clip-path:inset\(50%\)/u);
   assert.match(compactRail, /left:calc\(50% \+ 35px\)/u);
-  assert.match(compactRail, /padding-left:calc\(70px \+ 20px\)/u);
+  assert.match(styles, /\.shell-command-form \{ width:100%; margin:0; \}/u);
+  assert.doesNotMatch(styles, /\.suzu-search-overlay/u);
+});
+
+test("the top command field opens the fixed Suzu software assistant instead of a command palette", () => {
+  const shell = readFileSync(resolve(HERE, "..", "src", "react", "app-shell.jsx"), "utf8");
+  const assistantStyles = readFileSync(resolve(HERE, "..", "src", "react", "software-assistant-dialog.css"), "utf8");
+
+  assert.match(shell, /SoftwareAssistantDialog/u);
+  assert.match(shell, /placeholder="问 Suzu：想做什么？"/u);
+  assert.match(shell, /aria-label="问 Suzu"/u);
+  assert.doesNotMatch(shell, /SuzuSearchDialog/u);
+  assert.match(assistantStyles, /@media \(max-width:1180px\)[\s\S]*?padding-left:calc\(70px \+ 20px\)/u);
 });

@@ -1,5 +1,4 @@
 import { resolveAgentDataRoot, resolveSuzuLivesDataRoot } from "@suzu-lives/agent-registry";
-import { asDashScopeImageConnection, createDashScopeConnectionService } from "@suzu-lives/service-connections";
 
 import { loadPhoneCameraComfyConnection, loadPhoneConfig, PhoneCameraError, takePhonePhoto } from "./index.mjs";
 
@@ -23,6 +22,17 @@ export function parsePhoneCameraArgs(values = []) {
 export async function runPhoneCameraCli(values, { environment = process.env, fetchImpl = fetch, connectionResolver } = {}) {
   const options = parsePhoneCameraArgs(values); const dataRoot = resolveSuzuLivesDataRoot({ configuredRoot: options.dataRoot || environment.SUZU_LIVES_DATA_ROOT, localAppData: environment.LOCALAPPDATA, appData: environment.APPDATA, fallbackBase: "", fallbackToLocatorWhenMissing: true }); const agentRoot = resolveAgentDataRoot({ dataRoot, agentId: options.agentId || environment.SUZU_LIVES_AGENT_ID, projectRoot: options.projectRoot || environment.SUZU_LIVES_PROJECT_ROOT });
   const phone = await loadPhoneConfig({ dataRoot, configPath: options.config }); const backend = options.backend || phone.config.defaultBackend;
-  const service = createDashScopeConnectionService({ dataRoot, safeStorage: { isEncryptionAvailable: () => false }, environment }); const connection = connectionResolver ? await connectionResolver({ kind: "phone-camera", dataRoot, agentRoot, options }) : asDashScopeImageConnection(await service.resolve()); const comfyui = await loadPhoneCameraComfyConnection(dataRoot);
+  let connection;
+  if (backend === "api") {
+    if (typeof connectionResolver === "function") {
+      const selected = await connectionResolver({ kind: "phone-camera", dataRoot, agentRoot, options });
+      const apiKey = clean(selected?.apiKey || selected?.key);
+      if (!apiKey && options.dryRun !== true) throw new PhoneCameraError("“生图”API 尚未配置可用 Key；请前往 设置 → API 重新选择或保存。 ");
+      connection = { ...(selected && typeof selected === "object" ? selected : {}), apiKey, key: apiKey };
+    } else if (options.dryRun !== true) {
+      throw new PhoneCameraError("手机拍照式生图必须由软件在 设置 → API 中选定的“生图”连接提供。 ");
+    }
+  }
+  const comfyui = await loadPhoneCameraComfyConnection(dataRoot);
   return takePhonePhoto({ agentRoot, dataRoot, connection: backend === "comfyui" ? comfyui : connection, registry: comfyui.registry, fetchImpl, options });
 }

@@ -276,7 +276,7 @@ export async function saveCandidate(root, { response, config, input, preferredNa
 export async function createVoiceCandidates({ root, config, input, apiKey, fetchImpl = fetch, onSuccess = async () => {}, timeoutMs = 90_000 }) {
   const safeConfig = validateVoiceDesignConfig(config);
   const safeInput = validateVoiceDesignInput(input);
-  if (!clean(apiKey)) throw new VoiceDesignError("未配置 API Key。请保存加密 Key 或设置 DASHSCOPE_API_KEY。");
+  if (!clean(apiKey)) throw new VoiceDesignError("未配置 API Key。请在 设置 → API 为“音色设计”选择并配置阿里百炼连接。");
   if (typeof fetchImpl !== "function") throw new VoiceDesignError("当前环境无法发起声音设计请求。");
   const created = [];
   const batch = String(Date.now()).slice(-6);

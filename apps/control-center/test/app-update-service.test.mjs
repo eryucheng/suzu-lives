@@ -32,11 +32,13 @@ class FixtureUpdater extends EventEmitter {
     this.error = error;
     this.event = event;
     this.latestVersion = version;
+    this.checks = 0;
     this.downloads = 0;
     this.installs = 0;
   }
 
   async checkForUpdates() {
+    this.checks += 1;
     if (this.error) throw this.error;
     const info = { version: this.latestVersion };
     this.emit(this.event, info);
@@ -60,6 +62,7 @@ test("development and ZIP builds never contact the update source", async () => {
     autoUpdater: developmentUpdater,
   });
   assert.equal((await development.checkForUpdates()).status, "development");
+  assert.equal(developmentUpdater.checks, 0);
   assert.equal(developmentUpdater.listenerCount("update-available"), 0);
 
   const zipUpdater = new FixtureUpdater();
@@ -71,6 +74,7 @@ test("development and ZIP builds never contact the update source", async () => {
   const result = await zip.checkForUpdates();
   assert.equal(result.status, "manual");
   assert.match(result.message, /ZIP\/测试构建/u);
+  assert.equal(zipUpdater.checks, 0);
   assert.equal(zipUpdater.listenerCount("update-available"), 0);
 });
 

@@ -1,107 +1,125 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Select } from "suzu-design-system";
 
 const STEPS = [
-  ["text-model", "文字模型"],
-  ["multimodal", "多模态 API"],
-  ["projects", "联系人目录"],
-  ["contact", "首个联系人"],
+  ["main-model", "主模型"],
+  ["contact", "新建联系人"],
+  ["persona", "填写人设"],
+  ["ready", "开始使用"],
 ];
 
 const PREVIOUS_STEP = {
-  multimodal: "text-model",
-  projects: "multimodal",
-  contact: "projects",
+  contact: "main-model",
+  persona: "contact",
+  ready: "persona",
 };
+
+const PROTOCOL_OPTIONS = [
+  { label: "Anthropic Messages", value: "anthropic-messages" },
+  { label: "OpenAI Chat Completions", value: "openai-completions" },
+  { label: "OpenAI Responses", value: "openai-responses" },
+];
+
+function modelDraft(model = {}) {
+  const selected = model.providers?.find((item) => item.id === model.providerId) || model.providers?.[0] || {};
+  return {
+    apiKey: "",
+    baseUrl: String(model.baseUrl || selected.baseUrl || ""),
+    model: String(model.model || selected.model || ""),
+    provider: String(model.providerId || selected.id || "deepseek"),
+    protocol: String(model.protocol || selected.protocol || "anthropic-messages"),
+  };
+}
 
 function OnboardingError({ error }) {
   return error ? <p className="onboarding-error" role="alert">{error}</p> : null;
 }
 
-function TextModelStep({ snapshot, actions }) {
+function MainModelStep({ snapshot, actions }) {
   const model = snapshot.textModel;
-  const [provider, setProvider] = useState(model.providerId);
-  const [apiKey, setApiKey] = useState("");
+  const [draft, setDraft] = useState(() => modelDraft(model));
+
+  useEffect(() => {
+    setDraft(modelDraft(model));
+  }, [model.baseUrl, model.model, model.protocol, model.providerId, model.ready]);
+
+  const change = (key, value) => setDraft((current) => ({ ...current, [key]: value }));
+  const changeProvider = (providerId) => {
+    const selected = model.providers?.find((item) => item.id === providerId) || {};
+    setDraft((current) => ({
+      ...current,
+      baseUrl: String(selected.baseUrl || ""),
+      model: String(selected.model || ""),
+      protocol: String(selected.protocol || "anthropic-messages"),
+      provider: providerId,
+    }));
+  };
   const submit = (event) => {
     event.preventDefault();
-    void actions.saveTextModel({ apiKey, provider });
+    void actions.saveMainModel(draft);
   };
   return (
-    <section className="onboarding-body">
-      <span className="reference-kicker">1 / 4 · TEXT MODEL</span>
-      <h2>先让 Claude Code 能聊天</h2>
-      <p>{model.copy}</p>
+    <section className="onboarding-body onboarding-body--model">
+      <span className="reference-kicker">1 / 4 · MAIN MODEL</span>
+      <h2>先让 Suzu 能聊天</h2>
+      <p>在这里直接填写主模型服务。保存后，这项配置会作为 Suzu Agent 的默认文字模型。</p>
       <form className="onboarding-form" onSubmit={submit}>
-        <label><span>文字模型服务</span><Select ariaLabel="文字模型服务" className="onboarding-provider-select" fullWidth onChange={setProvider} options={model.providers.map((item) => ({ label: item.label, value: item.id }))} value={provider} /></label>
-        <label><span>API Key</span><input autoComplete="new-password" maxLength={1000} name="apiKey" onChange={(event) => setApiKey(event.currentTarget.value)} placeholder={model.ready ? "已保存；重新填写才会替换" : "填写所选服务的 API Key"} required={!model.ready} type="password" value={apiKey} /></label>
-        <p className="onboarding-hint">需要自定义服务地址或模型映射时，之后可以在“管理 → Claude Code”中调整。</p>
+        <div className="onboarding-model-grid">
+          <label><span>服务</span><Select ariaLabel="文字模型服务" className="onboarding-provider-select" fullWidth onChange={changeProvider} options={model.providers.map((item) => ({ label: item.label, value: item.id }))} value={draft.provider} /></label>
+          <label><span>接口协议</span>{draft.provider === "deepseek" ? <input disabled value="OpenAI Chat Completions（原生）" /> : <Select ariaLabel="接口协议" fullWidth onChange={(value) => change("protocol", value)} options={PROTOCOL_OPTIONS} value={draft.protocol} />}</label>
+          <label className="onboarding-model-grid__wide"><span>服务地址</span><input autoComplete="url" maxLength={500} onChange={(event) => change("baseUrl", event.currentTarget.value)} placeholder="https://api.example.com" required value={draft.baseUrl} /></label>
+          <label><span>API Key</span><input autoComplete="new-password" maxLength={1000} name="apiKey" onChange={(event) => change("apiKey", event.currentTarget.value)} placeholder={model.ready ? "已保存；重新填写才会替换" : "填写所选服务的 API Key"} required={!model.ready} type="password" value={draft.apiKey} /></label>
+          <label><span>主模型</span><input autoComplete="off" maxLength={200} onChange={(event) => change("model", event.currentTarget.value)} placeholder="填写模型标识" required value={draft.model} /></label>
+        </div>
+        <p className="onboarding-hint">服务地址需要是 HTTPS；本机回环地址可以使用 HTTP。模型标识可按服务商文档直接填写，之后也能在“设置 → 主模型”修改。</p>
         <OnboardingError error={snapshot.error} />
-        <div className="onboarding-actions"><button className="secondary-button" disabled={!model.ready} onClick={() => actions.continue("multimodal")} type="button">沿用当前配置</button><button className="primary-button">保存并继续</button></div>
+        <div className="onboarding-actions"><button className="secondary-button" disabled={!model.ready} onClick={() => actions.continue("contact")} type="button">沿用当前配置</button><button className="primary-button">保存并继续</button></div>
       </form>
-    </section>
-  );
-}
-
-function MultimodalStep({ snapshot, actions }) {
-  return (
-    <section className="onboarding-body">
-      <span className="reference-kicker">2 / 4 · OPTIONAL</span>
-      <h2>图片、声音和视频按需再配</h2>
-      <p>纯文字聊天现在已经够用，不需要额外 API。以后要使用这些功能时，再为它们选择对应的 API 即可。</p>
-      <div className="onboarding-capability-list"><article><strong>图片</strong><span>生图、图片理解</span></article><article><strong>声音</strong><span>音色设计、语音消息</span></article><article><strong>视频</strong><span>视频理解</span></article></div>
-      <p className="onboarding-hint">在“管理 → API”先添加 API，再在功能列表中指定给图片、声音或视频。</p>
-      <OnboardingError error={snapshot.error} />
-      <div className="onboarding-actions"><button className="secondary-button" onClick={actions.openApiServices} type="button">现在配置多模态 API</button><button className="primary-button" onClick={() => actions.continue("projects")} type="button">继续下一步</button></div>
-    </section>
-  );
-}
-
-function ProjectsStep({ snapshot, actions }) {
-  const root = snapshot.contactsRoot;
-  return (
-    <section className="onboarding-body">
-      <span className="reference-kicker">3 / 4 · CONTACTS</span>
-      <h2>选择 Agent 工作目录</h2>
-      <p>每个联系人都会在这里拥有独立的 Claude 项目、提示词和能力开关。</p>
-      <div className={`onboarding-path${root ? " ready" : ""}`}><span>Agent 工作目录</span><strong>{root || "还没有选择"}</strong></div>
-      <OnboardingError error={snapshot.error} />
-      <div className="onboarding-actions"><button className="secondary-button" onClick={() => { void actions.selectContactsRoot(); }} type="button">选择目录</button><button className="primary-button" disabled={!root} onClick={() => actions.continue("contact")} type="button">继续</button></div>
     </section>
   );
 }
 
 function ContactStep({ snapshot, actions }) {
-  const [name, setName] = useState("");
-  if (snapshot.hasContact) {
-    return (
-      <section className="onboarding-body">
-        <span className="reference-kicker">4 / 4 · CONTACT</span>
-        <h2>第一个联系人已经准备好</h2>
-        <p>现在可以进入对话页，和这个联系人开始聊天。</p>
-        <OnboardingError error={snapshot.error} />
-        <div className="onboarding-actions"><button className="primary-button" onClick={() => { void actions.complete(); }} type="button">进入对话</button></div>
-      </section>
-    );
-  }
   return (
     <section className="onboarding-body">
-      <span className="reference-kicker">4 / 4 · CONTACT</span>
+      <span className="reference-kicker">2 / 4 · CONTACT</span>
       <h2>创建第一个联系人</h2>
-      <p>给联系人写一个备注即可。Suzu 会创建独立项目，并把它设为当前联系人。</p>
-      <form className="onboarding-form" onSubmit={(event) => { event.preventDefault(); void actions.createContact(name); }}>
-        <label><span>联系人备注</span><input autoComplete="off" maxLength={80} onChange={(event) => setName(event.currentTarget.value)} placeholder="例如：Suzu" required value={name} /></label>
-        <OnboardingError error={snapshot.error} />
-        <div className="onboarding-actions"><button className="primary-button">创建并进入对话</button></div>
-      </form>
+      <p>前往对话页，在联系人栏右上角点“＋”。给她写一个备注后，Suzu 会创建独立的资料与会话空间。</p>
+      <OnboardingError error={snapshot.error} />
+      <div className="onboarding-actions"><button className="primary-button" onClick={actions.openContactCreate} type="button">去点“＋”新建联系人</button></div>
+    </section>
+  );
+}
+
+function PersonaStep({ snapshot, actions }) {
+  return (
+    <section className="onboarding-body">
+      <span className="reference-kicker">3 / 4 · PERSONA</span>
+      <h2>写下她的人设</h2>
+      <p>前往“关系 → 相处设定”，在“人格与相处方式（persona.md）”中写她是谁、如何说话，以及你们怎样相处。保存后会自动进入最后一步。</p>
+      <OnboardingError error={snapshot.error} />
+      <div className="onboarding-actions"><button className="primary-button" onClick={actions.openPersonaSetup} type="button">去填写人设</button></div>
+    </section>
+  );
+}
+
+function ReadyStep({ snapshot, actions }) {
+  return (
+    <section className="onboarding-body">
+      <span className="reference-kicker">4 / 4 · READY</span>
+      <h2>现在可以开始相处了</h2>
+      <p>主模型、联系人和人设都已准备好。之后随时可以在设置、关系和能力页面继续调整。</p>
+      <OnboardingError error={snapshot.error} />
+      <div className="onboarding-actions"><button className="primary-button" onClick={() => { void actions.complete(); }} type="button">开始聊天</button></div>
     </section>
   );
 }
 
 function StepBody({ snapshot, actions }) {
-  if (snapshot.step === "multimodal") return <MultimodalStep actions={actions} snapshot={snapshot} />;
-  if (snapshot.step === "projects") return <ProjectsStep actions={actions} snapshot={snapshot} />;
+  if (snapshot.step === "ready") return <ReadyStep actions={actions} snapshot={snapshot} />;
+  if (snapshot.step === "persona") return <PersonaStep actions={actions} snapshot={snapshot} />;
   if (snapshot.step === "contact") return <ContactStep actions={actions} snapshot={snapshot} />;
-  return <TextModelStep actions={actions} snapshot={snapshot} />;
+  return <MainModelStep actions={actions} snapshot={snapshot} />;
 }
 
 export function OnboardingDialog({ onboarding = null }) {

@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
 
 import WebSocket from "ws";
 
@@ -8,7 +10,6 @@ import { resolveDirectVoiceRuntime, synthesizeDirectVoiceAudio } from "@suzu-liv
 const DEFAULT_ASR_MODEL = "qwen3-asr-flash-realtime";
 const MAX_AUDIO_CHUNK_BYTES = 48 * 1024;
 const MAX_TRANSCRIPT_LENGTH = 4_000;
-const ASR_INPUT_ENERGY_THRESHOLD = 0.025;
 const MAX_QUEUED_AUDIO_BYTES = 256 * 1024;
 const CONNECT_TIMEOUT_MS = 15_000;
 const DEFAULT_RECONNECT_DELAYS_MS = Object.freeze([500, 1_200, 2_500]);
@@ -69,7 +70,8 @@ function ttsErrorMessage(error) {
 }
 
 function isCosyVoiceRuntime(runtime) {
-  return clean(runtime?.tts?.provider).toLowerCase() === "cosyvoice";
+  const adapter = clean(runtime?.tts?.adapter || runtime?.tts?.provider).toLowerCase();
+  return adapter === "dashscope-cosyvoice" || adapter === "cosyvoice";
 }
 
 function isTtsRateLimited(error) {
@@ -77,10 +79,22 @@ function isTtsRateLimited(error) {
   return detail.includes("throttling.ratequota") || detail.includes("rate limit") || /\b429\b/u.test(detail);
 }
 
+function ttsHttpStatus(error) {
+  const match = /\bHTTP\s+([1-5]\d{2})\b/iu.exec(clean(error?.message || error));
+  return match?.[1] || "";
+}
+
 function ttsFailureSystemMessage(error) {
-  return isTtsRateLimited(error)
-    ? "通话系统：语音服务繁忙，已跳过这一句语音。"
-    : "通话系统：这句语音暂时无法合成，已跳过。";
+  if (isTtsRateLimited(error)) return "通话系统：语音服务繁忙，已跳过这一句语音。";
+  const code = clean(error?.code).toLowerCase();
+  if (code === "tts_timeout") return "通话系统：语音合成请求超时，已跳过这一句。请检查网络或稍后重试。";
+  if (code === "tts_network_error") return "通话系统：无法连接语音服务，已跳过这一句。请检查“语音消息”的服务地址和网络。";
+  if (code === "tts_http_error") {
+    const status = ttsHttpStatus(error);
+    return `通话系统：语音服务拒绝了这句合成${status ? `（HTTP ${status}）` : ""}，已跳过。请检查“语音消息”的模型、音色和接口类型。`;
+  }
+  if (code === "tts_response_invalid") return "通话系统：语音服务返回了无法播放的内容，已跳过这一句。请检查“语音消息”的接口类型和模型。";
+  return "通话系统：这句语音暂时无法合成，已跳过。";
 }
 
 function waitForCallTts(delayMs, signal) {
@@ -119,7 +133,7 @@ export function realtimeAsrWebSocketUrl(baseUrl = "", model = DEFAULT_ASR_MODEL)
 
 /**
  * Keeps synthesis ahead of playback without speaking partial words.  Unlike
- * AIRI's example we do not place <break/> in the saved Claude reply: Suzu
+ * AIRI's example we do not place <break/> in the saved Agent Core reply: Suzu
  * derives naturally speakable clauses from streamed punctuation instead.
  */
 export function takeCallSpeechSegments(value, { flush = false } = {}) {
@@ -180,8 +194,8 @@ export function createRealtimeVoiceCallService({
   if (!reader?.ensureActiveSession || !reader?.snapshot) {
     throw new RealtimeVoiceCallError("实时通话需要当前联系人的会话信息。");
   }
-  if (!connectionsService?.resolveDashScope) {
-    throw new RealtimeVoiceCallError("实时通话需要百炼连接服务。");
+  if (!connectionsService?.resolveNamedApiConnection) {
+    throw new RealtimeVoiceCallError("实时通话需要统一 API 连接服务。");
   }
   if (!settingsService?.load) {
     throw new RealtimeVoiceCallError("实时通话需要软件设置服务。");
@@ -296,6 +310,16 @@ export function createRealtimeVoiceCallService({
     return null;
   };
 
+  const resumeListeningWhenSpeechIsIdle = (call) => {
+    if (
+      !callIsActive(call)
+      || call.ttsQueue.length
+      || call.requestIds.size
+      || call.replyStates.size
+    ) return;
+    emitCall(call, "call-state", { state: "listening", label: "正在听你说…" });
+  };
+
   const drainSpeechQueue = async (call) => {
     if (call.ttsDraining) return;
     call.ttsDraining = true;
@@ -306,6 +330,7 @@ export function createRealtimeVoiceCallService({
           if (job) call.ttsControllers.delete(job.key);
           continue;
         }
+        let emittedAudio = false;
         try {
           const result = await synthesizeQueuedSpeech(call, job);
           if (!result || !canSpeakQueuedJob(call, job)) continue;
@@ -318,6 +343,7 @@ export function createRealtimeVoiceCallService({
             mimeType: audioMime(result.format),
             audioBase64: audio.toString("base64"),
           });
+          emittedAudio = true;
           emitCall(call, "call-state", { state: "speaking", label: "正在说话…" });
         } catch (error) {
           if (!canSpeakQueuedJob(call, job) || error?.code === "tts_aborted") continue;
@@ -334,6 +360,10 @@ export function createRealtimeVoiceCallService({
           emitCall(call, "call-audio-skip", { index: job.index, requestId: job.requestId });
         } finally {
           call.ttsControllers.delete(job.key);
+          // A greeting can be entirely skipped when the configured TTS rejects
+          // it.  That must leave the microphone usable rather than pinning the
+          // call UI in its dialing/thinking state forever.
+          if (!emittedAudio) resumeListeningWhenSpeechIsIdle(call);
         }
       }
     } finally {
@@ -449,8 +479,8 @@ export function createRealtimeVoiceCallService({
       if (!callIsActive(call)) return;
     }
     const generation = call.generation;
-    // Register the request before starting Claude.  Claude can emit its first
-    // streamed token immediately after the child process starts, before the
+    // Register the request before starting Agent Core.  Agent Core can emit its first
+    // streamed token immediately after the session starts, before the
     // async enqueue call resolves.
     const requestId = `suzu-call-${randomUUID()}`;
     call.requestIds.add(requestId);
@@ -485,7 +515,7 @@ export function createRealtimeVoiceCallService({
     if (!utterance?.audioBytes) return;
     await appendLedger(call.ledgerPath, {
       agentId: call.agentId,
-      provider: "阿里云百炼",
+      provider: call.asrProvider,
       model: call.asrModel,
       source: "实时语音识别",
       feature: "realtime-voice-call-asr",
@@ -691,15 +721,16 @@ export function createRealtimeVoiceCallService({
   const start = async ({ senderId = "", initiator = "user" } = {}) => {
     if (disposed) throw new RealtimeVoiceCallError("实时通话服务已经停止。 ");
     if (activeCall && !activeCall.closed) throw new RealtimeVoiceCallError("已有一通语音通话正在进行。 ");
-    const [snapshot, session, dashScope] = await Promise.all([
+    const [snapshot, session, voiceConnection, asrConnection] = await Promise.all([
       reader.snapshot(),
       reader.ensureActiveSession(),
-      connectionsService.resolveDashScope(),
+      connectionsService.resolveNamedApiConnection("voice-message"),
+      connectionsService.resolveNamedApiConnection("realtime-asr"),
     ]);
     const contact = snapshot?.activeContact || {};
     const agentId = clean(contact.agentId);
     if (!agentId) throw new RealtimeVoiceCallError("请先新建或选择一位联系人，再开始语音通话。 ");
-    if (!session?.id || !session?.projectRoot) throw new RealtimeVoiceCallError("当前联系人还没有可用的 Claude 会话。 ");
+    if (!session?.id || !session?.projectRoot) throw new RealtimeVoiceCallError("当前联系人还没有可用的 Agent Core 会话。 ");
     const settings = settingsService.load() || {};
     const dataRoot = typeof dataRootProvider === "function"
       ? clean(dataRootProvider(settings))
@@ -708,29 +739,52 @@ export function createRealtimeVoiceCallService({
       ? clean(ledgerPathProvider(settings))
       : clean(settingsService.usageLedgerPath?.(settings));
     if (!dataRoot || !ledgerPath) throw new RealtimeVoiceCallError("无法定位 Suzu 的语音配置或用量账本。 ");
+    let voiceEnergyThreshold = 0.025;
+    let voiceSilenceFrames = 9;
+    try {
+      const shared = JSON.parse(fs.readFileSync(path.join(dataRoot, "capabilities", "voice-message", "config.json"), "utf8"));
+      const threshold = Number(shared.voiceEnergyThreshold);
+      if (Number.isFinite(threshold) && threshold >= 0.001 && threshold <= 1) voiceEnergyThreshold = threshold;
+      const frames = Number(shared.voiceSilenceFrames);
+      if (Number.isFinite(frames) && frames >= 1 && frames <= 120) voiceSilenceFrames = Math.round(frames);
+    } catch { /* 没有共享语音设置时使用默认阈值。 */ }
+    const selectedVoiceConnection = voiceConnection;
+    if (!selectedVoiceConnection?.key) {
+      throw new RealtimeVoiceCallError("语音通话需要“语音消息”API；请先在 设置 → API 中选择并配置它。 ");
+    }
     const voiceRuntime = resolveVoiceRuntime({
       dataRoot,
       agentId,
-      apiKeyOverride: clean(dashScope?.key),
-      baseUrlOverride: clean(dashScope?.baseUrl),
+      apiKeyOverride: clean(selectedVoiceConnection?.key),
+      baseUrlOverride: clean(selectedVoiceConnection?.baseUrl),
+      modelOverride: clean(selectedVoiceConnection?.model),
+      connectionName: clean(selectedVoiceConnection?.name || selectedVoiceConnection?.provider),
+      connectionType: clean(selectedVoiceConnection?.type),
       environment: process.env,
     });
-    const asrApiKey = clean(dashScope?.key) || (voiceRuntime.tts.provider === "cosyvoice" ? clean(voiceRuntime.tts.apiKey) : "");
+    const selectedAsrConnection = asrConnection;
+    const asrApiKey = clean(selectedAsrConnection?.key);
     if (!asrApiKey) {
-      throw new RealtimeVoiceCallError("语音通话需要阿里百炼 API Key 才能实时识别你说的话；请在 管理 → API 中配置阿里百炼。 ");
+      throw new RealtimeVoiceCallError("语音通话需要识别 API Key 才能实时识别你说的话；请在设置 → API 中为“实时语音识别”选择并配置连接。 ");
     }
+    const asrModel = clean(selectedAsrConnection?.model);
+    if (!asrModel && clean(selectedAsrConnection?.type).toLowerCase() !== "dashscope") {
+      throw new RealtimeVoiceCallError("语音识别连接没有填写模型；请在 设置 → API 中为“实时语音识别”所选连接填写识别模型。");
+    }
+    const resolvedAsrModel = asrModel || DEFAULT_ASR_MODEL;
     const callId = `call-${randomUUID()}`;
     const call = {
       agentId,
       asrApiKey,
       asrConnecting: null,
-      asrModel: DEFAULT_ASR_MODEL,
+      asrModel: resolvedAsrModel,
+      asrProvider: clean(selectedAsrConnection?.name || selectedAsrConnection?.provider) || "阿里云百炼",
       asrReady: false,
       asrPendingAudioBytes: 0,
       asrQueuedAudio: [],
       asrQueuedAudioBytes: 0,
       asrUtterances: [],
-      asrUrl: realtimeAsrWebSocketUrl(dashScope?.baseUrl),
+      asrUrl: realtimeAsrWebSocketUrl(selectedAsrConnection?.baseUrl, resolvedAsrModel),
       closed: false,
       closing: false,
       contactId: clean(contact.id),
@@ -754,6 +808,7 @@ export function createRealtimeVoiceCallService({
       },
       socket: null,
       started: false,
+      asrEnergyThreshold: voiceEnergyThreshold,
       ttsControllers: new Map(),
       ttsDraining: false,
       ttsQueue: [],
@@ -764,7 +819,9 @@ export function createRealtimeVoiceCallService({
     return {
       callId: call.id,
       contactName: clean(contact.name) || "联系人",
-      provider: call.voiceRuntime.tts.provider,
+      provider: call.voiceRuntime.tts.adapter || call.voiceRuntime.tts.provider,
+      voiceEnergyThreshold,
+      voiceSilenceFrames,
     };
   };
 
@@ -777,7 +834,7 @@ export function createRealtimeVoiceCallService({
       return { accepted: false, reason: "audio" };
     }
     const energy = pcmEnergy(pcm);
-    if (energy < ASR_INPUT_ENERGY_THRESHOLD) return { accepted: false, reason: "quiet" };
+    if (energy < call.asrEnergyThreshold) return { accepted: false, reason: "quiet" };
     if (call.asrQueuedAudioBytes + pcm.length > MAX_QUEUED_AUDIO_BYTES) {
       emitCall(call, "call-error", { message: "说话音频积压过多，请停顿后再试。" });
       return { accepted: false, reason: "queue" };

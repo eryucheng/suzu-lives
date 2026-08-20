@@ -1,6 +1,6 @@
 {
   "name": "suzu-lives-console",
-  "version": "0.1.5",
+  "version": "0.2.0",
   "private": true,
   "author": "儿玉诚也",
   "description": "Local desktop control center for Suzu Lives.",
@@ -25,25 +25,25 @@
   },
   "dependencies": {
     "@emoji-mart/data": "^1.2.1",
+    "@suzu-lives/agent-image-generation": "0.1.0",
+    "@suzu-lives/agent-lifecycle": "0.1.0",
+    "@suzu-lives/agent-runtime": "0.1.0",
     "@suzu-lives/agent-registry": "0.1.0",
-    "@suzu-lives/browser-automation": "0.1.0",
-    "@suzu-lives/claude-integration": "0.1.0",
-    "@suzu-lives/conversation-reader": "0.1.0",
+    "@suzu-lives/web-browser": "0.1.0",
     "@suzu-lives/cost-ledger": "0.1.0",
+    "@suzu-lives/suzu-agent-runtime": "0.1.0",
     "@suzu-lives/external-capabilities": "0.1.0",
     "@suzu-lives/image-workbench": "0.1.0",
-    "@suzu-lives/iphone-bridge": "0.1.0",
-    "@suzu-lives/memory-compactor": "0.1.0",
-    "@suzu-lives/memory-core": "0.1.0",
-    "@suzu-lives/memory-retriever": "0.1.0",
-    "@suzu-lives/memory-visualization": "0.1.0",
+    "@suzu-lives/mail-bridge": "0.1.0",
+    "@suzu-lives/media-understanding": "0.1.0",
+    "@suzu-lives/phone-camera": "0.1.0",
     "@suzu-lives/service-connections": "0.1.0",
+    "@suzu-lives/suzu-agent-composition": "0.1.0",
     "@suzu-lives/task-scheduler": "0.1.0",
     "@suzu-lives/visual-reference-library": "0.1.0",
     "@suzu-lives/voice-design": "0.1.0",
     "@suzu-lives/voice-message": "0.1.0",
     "@suzu-memory/host-adapter": "0.1.0",
-    "@suzu-memory/ingestion": "0.1.0",
     "@suzu-memory/providers": "0.1.0",
     "@suzu-memory/service": "0.1.0",
     "electron-updater": "^6.8.9",
@@ -56,14 +56,15 @@
   },
   "build": {
     "appId": "com.suzulives.console",
-    "productName": "Suzu Lives Console",
+    "productName": "Suzu Lives",
     "asar": true,
+    "npmRebuild": false,
     "afterPack": "./scripts/package-type-hook.cjs",
     "asarUnpack": [
-      "node_modules/@suzu-lives/iphone-bridge/python/**",
-      "node_modules/@suzu-lives/browser-automation/src/web-browser/**",
-      "node_modules/@suzu-lives/media-understanding/worker/**",
-      "node_modules/@suzu-lives/traveling-merchant/worker/**"
+      "node_modules/@suzu-lives/suzu-agent-runtime/**",
+      "node_modules/@suzu-lives/mail-bridge/python/**",
+      "node_modules/@suzu-lives/web-browser/**",
+      "node_modules/@suzu-lives/media-understanding/worker/**"
     ],
     "extraResources": [
       {
@@ -77,6 +78,10 @@
       {
         "from": "../../release-keys/eryuchengye.ed25519.pub",
         "to": "release-provenance/eryuchengye.ed25519.pub"
+      },
+      {
+        "from": "../../packages/suzu-agent-runtime/vendor/core/node_modules",
+        "to": "agent-core-native/node_modules"
       }
     ],
     "directories": {
@@ -96,6 +101,7 @@
       "renderer/**/*",
       "shared/**/*",
       "src/**/*",
+      "!node_modules/@suzu-lives/suzu-agent-runtime/scripts/**/*",
       "package.json"
     ],
     "win": {
@@ -108,12 +114,13 @@
           ]
         }
       ],
-      "artifactName": "Suzu-Lives-Console-${version}-win-${arch}.${ext}"
+      "artifactName": "Suzu-Lives-${version}-win-${arch}.${ext}"
     },
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
-      "perMachine": false
+      "perMachine": false,
+      "include": "build/installer.nsh"
     }
   }
 }

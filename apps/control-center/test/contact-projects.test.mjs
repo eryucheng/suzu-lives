@@ -6,13 +6,31 @@ import test from "node:test";
 
 import { createContactProjectsService, normalizeContactName } from "../electron/services/contact-projects.mjs";
 import { resolveAgentDataRoot } from "@suzu-lives/agent-registry";
-import { claudeProjectDirectoryCandidates } from "../electron/services/conversation-reader.mjs";
 
 async function temporaryDirectory(prefix) {
   return fs.mkdtemp(path.join(os.tmpdir(), prefix));
 }
 
-test("contacts are normal Claude projects directly below the selected contacts root", async () => {
+test("contacts default to the managed contacts directory below Suzu data", async () => {
+  const dataRoot = await temporaryDirectory("suzu-contact-managed-root-");
+  const expectedRoot = path.join(dataRoot, "contacts");
+  let settings = { contactsRoot: "", preferredContactId: "", projectRoot: "" };
+  const service = createContactProjectsService({
+    dataRoot,
+    settingsService: { load: () => settings, save: (next) => { settings = next; return settings; } },
+  });
+
+  const initial = await service.snapshot();
+  assert.equal(initial.status, "ready");
+  assert.equal(initial.contactsRoot, expectedRoot);
+  assert.equal(settings.contactsRoot, expectedRoot);
+  await fs.stat(expectedRoot);
+
+  const created = await service.create({ name: "小苏" });
+  assert.equal(path.dirname(created.activeContact.projectRoot), expectedRoot);
+});
+
+test("contacts are Suzu workspaces directly below the configured contacts root", async () => {
   const contactsRoot = await temporaryDirectory("suzu-contact-projects-");
   const canonicalRoot = await fs.realpath(contactsRoot);
   let settings = { contactsRoot, projectRoot: "D:/old-project" };
@@ -29,12 +47,12 @@ test("contacts are normal Claude projects directly below the selected contacts r
   assert.equal(settings.projectRoot, projectRoot);
   assert.equal(settings.preferredContactId, created.activeContact.id);
   assert.equal(created.preferredContact.id, created.activeContact.id);
-  assert.equal(await fs.readFile(path.join(projectRoot, "CLAUDE.md"), "utf8"), "");
+  assert.equal(await fs.readFile(path.join(projectRoot, "SUZU.md"), "utf8"), "");
   const metadata = JSON.parse(await fs.readFile(path.join(projectRoot, ".suzu-lives", "contact.json"), "utf8"));
   assert.equal(metadata.version, 1);
   assert.equal(metadata.id, created.activeContact.id);
   assert.equal(metadata.name, "小苏");
-  assert.equal(created.activeContact.approvalMode, "acceptEdits");
+  assert.equal(Object.hasOwn(created.activeContact, "approvalMode"), false);
   assert.equal(created.activeContact.longTermMemoryEnabled, true);
   assert.equal(Object.hasOwn(metadata, "approvalMode"), false);
   assert.equal(Object.hasOwn(metadata, "longTermMemoryEnabled"), false);
@@ -61,8 +79,8 @@ test("renaming a contact only updates its contact metadata while preserving stab
   });
   const created = await service.create({ name: "旧备注" });
   const original = created.activeContact;
-  const claudePath = path.join(original.projectRoot, "CLAUDE.md");
-  await fs.writeFile(claudePath, "# 旧备注\n", "utf8");
+  const suzuPath = path.join(original.projectRoot, "SUZU.md");
+  await fs.writeFile(suzuPath, "# 旧备注\n", "utf8");
 
   const renamed = await service.rename({ id: original.id, name: "  新备注  " });
   const contact = renamed.contacts.find((item) => item.id === original.id);
@@ -79,38 +97,10 @@ test("renaming a contact only updates its contact metadata while preserving stab
   assert.equal(metadata.id, original.id);
   assert.equal(metadata.agentId, original.agentId);
   assert.equal(metadata.sessionId, original.sessionId);
-  assert.equal(await fs.readFile(claudePath, "utf8"), "# 旧备注\n");
+  assert.equal(await fs.readFile(suzuPath, "utf8"), "# 旧备注\n");
 
   await assert.rejects(service.rename({ id: original.id, name: " " }), /填写联系人备注/u);
   assert.equal(JSON.parse(await fs.readFile(metadataPath, "utf8")).name, "新备注");
-});
-
-test("each contact persists its own Claude approval mode without changing its identity or presentation", async () => {
-  const contactsRoot = await temporaryDirectory("suzu-contact-approval-mode-");
-  let settings = { contactsRoot, projectRoot: "", preferredContactId: "" };
-  const service = createContactProjectsService({
-    settingsService: { load: () => settings, save: (next) => { settings = next; return settings; } },
-  });
-  const created = await service.create({ name: "小苏" });
-  const contact = created.activeContact;
-  const metadataPath = path.join(contact.projectRoot, ".suzu-lives", "contact.json");
-
-  const planned = await service.updateApprovalMode({ id: contact.id, approvalMode: "plan" });
-  assert.equal(planned.activeContact?.approvalMode, "plan");
-  assert.equal(JSON.parse(await fs.readFile(metadataPath, "utf8")).approvalMode, "plan");
-
-  await service.rename({ id: contact.id, name: "新备注" });
-  await service.updatePresentation({ id: contact.id, pinned: true });
-  const preserved = JSON.parse(await fs.readFile(metadataPath, "utf8"));
-  assert.equal(preserved.approvalMode, "plan");
-  assert.equal(preserved.pinned, true);
-
-  const bypassed = await service.updateApprovalMode({ id: contact.id, approvalMode: "bypassPermissions" });
-  assert.equal(bypassed.activeContact?.approvalMode, "bypassPermissions");
-  await assert.rejects(service.updateApprovalMode({ id: contact.id, approvalMode: "everything" }), /审批模式无效/u);
-
-  await service.updateApprovalMode({ id: contact.id, approvalMode: "acceptEdits" });
-  assert.equal(Object.hasOwn(JSON.parse(await fs.readFile(metadataPath, "utf8")), "approvalMode"), false);
 });
 
 test("each contact can independently stop automatic long-term memory without deleting its existing data", async () => {
@@ -142,35 +132,15 @@ test("each contact can independently stop automatic long-term memory without del
 test("contact presentation state is persisted by ID and deletion removes only the confirmed contact-owned data", async () => {
   const contactsRoot = await temporaryDirectory("suzu-contact-presentation-");
   const dataRoot = await temporaryDirectory("suzu-contact-data-");
-  const homeDirectory = await temporaryDirectory("suzu-contact-home-");
   let settings = { contactsRoot, projectRoot: "", preferredContactId: "" };
   const cleanupCalls = [];
   const service = createContactProjectsService({
     settingsService: { load: () => settings, save: (next) => { settings = next; return settings; } },
     dataRoot,
-    homeDirectory,
     onBeforeRemove: async (contact) => { cleanupCalls.push(contact.id); },
   });
   const first = await service.create({ name: "一号" });
   const second = await service.create({ name: "二号" });
-  const firstHistoryDirectories = claudeProjectDirectoryCandidates({
-    projectRoot: first.activeContact.projectRoot,
-    homeDirectory,
-  });
-  const secondHistoryDirectories = claudeProjectDirectoryCandidates({
-    projectRoot: second.activeContact.projectRoot,
-    homeDirectory,
-  });
-  const usableFirstHistoryDirectories = firstHistoryDirectories.filter((directory) => !path.basename(directory).includes(":"));
-  const usableSecondHistoryDirectories = secondHistoryDirectories.filter((directory) => !path.basename(directory).includes(":"));
-  for (const directory of usableFirstHistoryDirectories) {
-    await fs.mkdir(directory, { recursive: true });
-    await fs.writeFile(path.join(directory, `${first.activeContact.sessionId}.jsonl`), "first", "utf8");
-  }
-  for (const directory of usableSecondHistoryDirectories) {
-    await fs.mkdir(directory, { recursive: true });
-    await fs.writeFile(path.join(directory, `${second.activeContact.sessionId}.jsonl`), "second", "utf8");
-  }
   const firstAgentData = resolveAgentDataRoot({ dataRoot, agentId: first.activeContact.agentId });
   const secondAgentData = resolveAgentDataRoot({ dataRoot, agentId: second.activeContact.agentId });
   await fs.mkdir(firstAgentData, { recursive: true });
@@ -221,9 +191,7 @@ test("contact presentation state is persisted by ID and deletion removes only th
   await assert.rejects(service.remove({ id: first.activeContact.id }), /明确确认/u);
   const removed = await service.remove({ id: first.activeContact.id, confirmed: true });
   await assert.rejects(fs.stat(first.activeContact.projectRoot), /ENOENT/u);
-  await Promise.all(usableFirstHistoryDirectories.map((directory) => assert.rejects(fs.stat(directory), /ENOENT/u)));
   await assert.rejects(fs.stat(firstAgentData), /ENOENT/u);
-  await Promise.all(usableSecondHistoryDirectories.map((directory) => fs.stat(directory)));
   await fs.stat(secondAgentData);
   assert.deepEqual(cleanupCalls, [first.activeContact.id]);
   assert.deepEqual(removed.contacts.map((contact) => contact.id), [second.activeContact.id]);
@@ -307,15 +275,15 @@ test("contacts use generated project folders even for notes that cannot be Windo
   assert.match(path.basename(created.activeContact.projectRoot), /^contact-[a-f0-9-]{36}$/u);
 });
 
-test("new and existing contacts receive the shared Claude project defaults through the injected writer", async () => {
+test("new and existing contacts receive injected Suzu workspace defaults", async () => {
   const contactsRoot = await temporaryDirectory("suzu-contact-project-settings-");
   let settings = { contactsRoot, projectRoot: "" };
   const calls = [];
   const service = createContactProjectsService({
     settingsService: { load: () => settings, save: (next) => { settings = next; return settings; } },
-    ensureClaudeProjectSettings: async ({ projectRoot }) => {
+    ensureContactProjectSettings: async ({ projectRoot }) => {
       calls.push(projectRoot);
-      return { changed: true, settingsPath: path.join(projectRoot, ".claude", "settings.json") };
+      return { changed: true, settingsPath: path.join(projectRoot, ".suzu-lives", "runtime.json") };
     },
   });
 
@@ -324,7 +292,7 @@ test("new and existing contacts receive the shared Claude project defaults throu
   assert.deepEqual(calls, [first.activeContact.projectRoot, second.activeContact.projectRoot]);
   calls.length = 0;
 
-  const synced = await service.syncClaudeProjectSettings();
+  const synced = await service.syncContactProjectSettings();
   assert.equal(synced.status, "synced");
   assert.deepEqual(calls.sort(), [first.activeContact.projectRoot, second.activeContact.projectRoot].sort());
 });
@@ -334,21 +302,4 @@ test("contact names remain concise visible remarks", () => {
   assert.equal(normalizeContactName("../outside"), "../outside");
   assert.equal(normalizeContactName("CON"), "CON");
   assert.throws(() => normalizeContactName(" "), /填写联系人备注/u);
-});
-
-test("changing the contacts root clears the active project instead of importing old projects", async () => {
-  const firstRoot = await temporaryDirectory("suzu-contact-first-");
-  const secondRoot = await temporaryDirectory("suzu-contact-second-");
-  const canonicalSecondRoot = await fs.realpath(secondRoot);
-  let settings = { contactsRoot: firstRoot, projectRoot: path.join(firstRoot, "existing") };
-  const service = createContactProjectsService({
-    settingsService: { load: () => settings, save: (next) => { settings = next; return settings; } },
-  });
-
-  const snapshot = await service.selectRoot(secondRoot);
-  assert.equal(snapshot.status, "ready");
-  assert.equal(snapshot.contacts.length, 0);
-  assert.equal(settings.contactsRoot, canonicalSecondRoot);
-  assert.equal(settings.preferredContactId, "");
-  assert.equal(settings.projectRoot, "");
 });

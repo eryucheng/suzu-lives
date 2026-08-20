@@ -77,3 +77,11 @@ test("phone camera CLI asks its caller for the selected image connection", async
   assert.equal(resolverInput.kind, "phone-camera");
   assert.equal(resolverInput.dataRoot, dataRoot);
 });
+
+test("phone camera CLI requires the software-selected image connection for a real API request", async () => {
+  const dataRoot = await temporary();
+  await assert.rejects(
+    () => runPhoneCameraCli(["--data-root", dataRoot, "--agent-id", "fixture", "--shot", "rear", "--scene", "窗边"], { environment: {} }),
+    /设置 → API/u,
+  );
+});

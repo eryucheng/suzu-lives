@@ -5,7 +5,7 @@ import path from "node:path";
 import test from "node:test";
 
 import { executeVoiceMessage, planVoiceMessage, VoiceMessageError } from "../src/index.mjs";
-import { resolveDirectVoiceRuntime, runDirectVoiceMessage } from "../src/direct-voice-message.mjs";
+import { resolveDirectVoiceRuntime, runDirectVoiceMessage, synthesizeDirectVoiceAudio } from "../src/direct-voice-message.mjs";
 import { resolveAgentDataRoot } from "@suzu-lives/agent-registry";
 import { CapabilityExecutionError, consumeCapabilityAuthorization, issueCapabilityAuthorization } from "@suzu-lives/capability-runtime";
 
@@ -58,7 +58,7 @@ test("voice planning bounds text and requires one input", () => {
   assert.throws(() => planVoiceMessage({ dataRoot: root }), VoiceMessageError);
 });
 
-test("an Alibaba CosyVoice clone from the shared custom library resolves its saved key and synthesis model", () => {
+test("a legacy CosyVoice shape normalizes to an adapter but never supplies a credential", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "suzu-voice-cosyvoice-clone-"));
   const agentId = "agent-1234567890abcdef";
   const agentRoot = resolveAgentDataRoot({ dataRoot: root, agentId });
@@ -83,14 +83,18 @@ test("an Alibaba CosyVoice clone from the shared custom library resolves its sav
     customVoiceSource: "global",
   }));
 
-  const runtime = resolveDirectVoiceRuntime({ dataRoot: root, agentId, environment: {} });
-  assert.equal(runtime.tts.provider, "cosyvoice");
+  const runtime = resolveDirectVoiceRuntime({
+    dataRoot: root,
+    agentId,
+    requireTtsCredentials: false,
+  });
+  assert.equal(runtime.tts.adapter, "dashscope-cosyvoice");
   assert.equal(runtime.tts.model, "cosyvoice-v3.5-plus");
   assert.equal(runtime.tts.voice, voiceId);
-  assert.equal(runtime.tts.apiKey, "development-only-bailian-key");
+  assert.equal(runtime.tts.apiKey, "");
 });
 
-test("an Alibaba CosyVoice clone uses its synthesis model, voice ID, and saved key when generating audio", async () => {
+test("an Alibaba CosyVoice clone uses its synthesis model, voice ID, and selected shared API key", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "suzu-voice-cosyvoice-clone-request-"));
   const agentId = "agent-abcdef1234567890";
   const agentRoot = resolveAgentDataRoot({ dataRoot: root, agentId });
@@ -115,7 +119,10 @@ test("an Alibaba CosyVoice clone uses its synthesis model, voice ID, and saved k
     ledgerPath: path.join(root, "cost-ledger", "events.jsonl"),
     agentId,
     text: "你好，这是复刻音色测试。",
-    environment: {},
+    apiKeyOverride: "selected-shared-dashscope-key",
+    baseUrlOverride: "https://dashscope.aliyuncs.com/api/v1",
+    connectionName: "我的百炼语音",
+    connectionType: "dashscope",
     fetchImpl: async (url, options = {}) => {
       requests.push({ url, options });
       if (url === "https://dashscope.aliyuncs.com/api/v1/services/audio/tts/SpeechSynthesizer") {
@@ -128,11 +135,133 @@ test("an Alibaba CosyVoice clone uses its synthesis model, voice ID, and saved k
     },
   });
   const synthesis = requests[0];
-  assert.equal(synthesis.options.headers.Authorization, "Bearer development-only-bailian-key");
+  assert.equal(synthesis.options.headers.Authorization, "Bearer selected-shared-dashscope-key");
+  assert.equal(synthesis.options.headers.Authorization.includes("development-only-bailian-key"), false);
   assert.deepEqual(JSON.parse(synthesis.options.body), {
     model: "cosyvoice-v3.5-plus",
     input: { text: "你好，这是复刻音色测试。", voice: voiceId, format: "mp3", sample_rate: 24000 },
   });
   assert.equal(result.status, "ok");
   assert.ok(fs.statSync(result.savedPath).size > 0);
+});
+
+test("an OpenAI-compatible custom voice uses the selected shared API without storing a key in the voice record", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "suzu-voice-openai-adapter-"));
+  const agentId = "agent-openai-voice-adapter";
+  const agentRoot = resolveAgentDataRoot({ dataRoot: root, agentId });
+  fs.mkdirSync(path.join(root, "voice-message"), { recursive: true });
+  fs.mkdirSync(path.join(agentRoot, "voice-message"), { recursive: true });
+  const customVoice = {
+    id: "openai-voice-1",
+    name: "Suzu 电话声",
+    adapter: "openai-speech",
+    model: "tts-1",
+    voiceId: "nova",
+  };
+  fs.writeFileSync(path.join(root, "voice-message", "custom-voices.json"), JSON.stringify({
+    schemaVersion: 2,
+    voices: [customVoice],
+  }));
+  fs.writeFileSync(path.join(agentRoot, "voice-message", "config.json"), JSON.stringify({
+    schemaVersion: 4,
+    adapter: "openai-speech",
+    voiceId: customVoice.voiceId,
+    customVoiceId: customVoice.id,
+    customVoiceSource: "global",
+  }));
+
+  const runtime = resolveDirectVoiceRuntime({
+    dataRoot: root,
+    agentId,
+    apiKeyOverride: "selected-shared-api-key",
+    baseUrlOverride: "https://tts.example.test/v1",
+    connectionName: "我的 TTS",
+    connectionType: "openai-compatible",
+    environment: {},
+  });
+  assert.equal(runtime.tts.adapter, "openai-speech");
+  assert.equal(runtime.tts.model, "tts-1");
+  assert.equal(runtime.tts.apiKey, "selected-shared-api-key");
+  assert.equal(JSON.stringify(customVoice).includes("apiKey"), false);
+
+  const requests = [];
+  const result = await synthesizeDirectVoiceAudio({
+    runtime,
+    text: "晚安，明天见。",
+    agentId,
+    ledgerPath: path.join(root, "cost-ledger", "events.jsonl"),
+    fetchImpl: async (url, options = {}) => {
+      requests.push({ url, options });
+      return { ok: true, arrayBuffer: async () => Buffer.from("mock-openai-mp3") };
+    },
+  });
+  assert.equal(result.format, "mp3");
+  assert.equal(requests[0].url, "https://tts.example.test/v1/audio/speech");
+  assert.equal(requests[0].options.headers.Authorization, "Bearer selected-shared-api-key");
+  assert.deepEqual(JSON.parse(requests[0].options.body), {
+    model: "tts-1",
+    input: "晚安，明天见。",
+    voice: "nova",
+    response_format: "mp3",
+  });
+});
+
+test("a legacy OpenAI-labelled DashScope CosyVoice sound uses the DashScope synthesis endpoint", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "suzu-voice-dashscope-auto-adapter-"));
+  const agentId = "agent-0abc123456789def";
+  const agentRoot = resolveAgentDataRoot({ dataRoot: root, agentId });
+  const voiceId = "cosyvoice-v3.5-plus-bailian-legacy-suzu";
+  fs.mkdirSync(path.join(root, "voice-message"), { recursive: true });
+  fs.mkdirSync(path.join(agentRoot, "voice-message"), { recursive: true });
+  fs.writeFileSync(path.join(root, "voice-message", "custom-voices.json"), JSON.stringify({
+    schemaVersion: 2,
+    voices: [{
+      id: "legacy-dashscope-cosyvoice",
+      name: "旧版百炼音色",
+      adapter: "openai-speech",
+      model: "cosyvoice-v3.5-plus",
+      voiceId,
+    }],
+  }));
+  fs.writeFileSync(path.join(agentRoot, "voice-message", "config.json"), JSON.stringify({
+    schemaVersion: 4,
+    adapter: "openai-speech",
+    voiceId,
+    customVoiceId: "legacy-dashscope-cosyvoice",
+    customVoiceSource: "global",
+  }));
+
+  const runtime = resolveDirectVoiceRuntime({
+    dataRoot: root,
+    agentId,
+    apiKeyOverride: "selected-dashscope-key",
+    baseUrlOverride: "https://dashscope.aliyuncs.com/api/v1",
+    connectionName: "我的百炼 TTS",
+    connectionType: "tts-api",
+  });
+  assert.equal(runtime.tts.adapter, "dashscope-cosyvoice");
+
+  const requests = [];
+  const response = (value) => ({ ok: true, arrayBuffer: async () => Buffer.from(JSON.stringify(value)) });
+  await synthesizeDirectVoiceAudio({
+    runtime,
+    text: "这条旧配置应该走百炼接口。",
+    agentId,
+    ledgerPath: path.join(root, "cost-ledger", "events.jsonl"),
+    fetchImpl: async (url, options = {}) => {
+      requests.push({ url, options });
+      if (url === "https://dashscope.aliyuncs.com/api/v1/services/audio/tts/SpeechSynthesizer") {
+        return response({ request_id: "legacy-cosyvoice-request", output: { audio: { url: "https://audio.example.test/legacy.mp3" } } });
+      }
+      if (url === "https://audio.example.test/legacy.mp3") {
+        return { ok: true, arrayBuffer: async () => Buffer.from("mock-cosyvoice-mp3") };
+      }
+      throw new Error("unexpected request: " + url);
+    },
+  });
+  assert.equal(requests[0].url, "https://dashscope.aliyuncs.com/api/v1/services/audio/tts/SpeechSynthesizer");
+  assert.deepEqual(JSON.parse(requests[0].options.body), {
+    model: "cosyvoice-v3.5-plus",
+    input: { text: "这条旧配置应该走百炼接口。", voice: voiceId, format: "mp3", sample_rate: 24000 },
+  });
 });

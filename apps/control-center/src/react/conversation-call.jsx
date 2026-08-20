@@ -54,6 +54,8 @@ function createAudioState(token) {
     skipped: new Set(),
     stream: null,
     token,
+    voiceEnergyThreshold: VOICE_ENERGY_THRESHOLD,
+    voiceSilenceFrames: VOICE_SILENCE_FRAME_COUNT,
   };
 }
 
@@ -226,7 +228,7 @@ export function ConversationCallProvider({ active = false, api = null, snapshot 
     const current = callRef.current;
     const audio = audioRef.current;
     if (!current || !audio || current.token !== token || audio.token !== token) return "";
-    if (energy >= VOICE_ENERGY_THRESHOLD) {
+    if (energy >= audio.voiceEnergyThreshold) {
       audio.silenceFrames = 0;
       if (!audio.sendingUtterance) {
         audio.sendingUtterance = true;
@@ -238,7 +240,7 @@ export function ConversationCallProvider({ active = false, api = null, snapshot 
     }
     if (!audio.sendingUtterance) return "";
     audio.silenceFrames += 1;
-    if (audio.silenceFrames >= VOICE_SILENCE_FRAME_COUNT) {
+    if (audio.silenceFrames >= audio.voiceSilenceFrames) {
       audio.sendingUtterance = false;
       return "ended";
     }
@@ -281,7 +283,7 @@ export function ConversationCallProvider({ active = false, api = null, snapshot 
       const input = event.inputBuffer.getChannelData(0);
       const energy = inputEnergy(input);
       const voiceTransition = updateVoiceActivity(token, energy);
-      if (energy >= VOICE_ENERGY_THRESHOLD) {
+      if (energy >= audio.voiceEnergyThreshold) {
         const pcm = downsamplePcm16(input, audio.audioContext.sampleRate, 16000);
         if (pcm.length) {
           const payload = pcm.buffer.slice(pcm.byteOffset, pcm.byteOffset + pcm.byteLength);
@@ -351,6 +353,10 @@ export function ConversationCallProvider({ active = false, api = null, snapshot 
       }
       const callId = cleanCallText(result?.callId);
       if (!callId) throw new Error("通话服务没有返回通话标识。 ");
+      const voiceThreshold = Number(result?.voiceEnergyThreshold);
+      const voiceFrames = Number(result?.voiceSilenceFrames);
+      if (Number.isFinite(voiceThreshold) && voiceThreshold >= 0.001 && voiceThreshold <= 1) audio.voiceEnergyThreshold = voiceThreshold;
+      if (Number.isFinite(voiceFrames) && voiceFrames >= 1 && voiceFrames <= 120) audio.voiceSilenceFrames = Math.round(voiceFrames);
       patchCall((current) => ({
         ...current,
         contactName: cleanCallText(result?.contactName) || current.contactName,
@@ -404,6 +410,9 @@ export function ConversationCallProvider({ active = false, api = null, snapshot 
       return;
     }
     if (event.type === "call-audio-skip") {
+      // A failed greeting has no audio event to dismiss the dialing sheet.
+      // Keep the call alive for ASR, but immediately reveal the normal call UI.
+      patchCall({ dialing: false });
       const audio = audioRef.current;
       const index = Number(event.index);
       if (audio?.token === token && Number.isSafeInteger(index) && index >= 0) {

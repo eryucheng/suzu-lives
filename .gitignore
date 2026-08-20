@@ -1,4 +1,9 @@
 node_modules/
+# Suzu's selected Agent Core snapshot is source-controlled on purpose.  It is
+# not an npm install directory: the build consumes it directly so the desktop
+# app does not carry the complete upstream DSH product.
+!packages/suzu-agent-runtime/vendor/
+!packages/suzu-agent-runtime/vendor/**
 __pycache__/
 dist/
 dist-*/

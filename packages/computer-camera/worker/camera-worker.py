@@ -2,7 +2,7 @@
 """Software-owned, detached one-shot OpenCV computer-camera worker.
 
 The package launcher supplies software-data-root output and status paths. This
-worker never reads a Claude project, external configuration, or external service.
+worker never reads a contact project, external configuration, or external service.
 """
 
 from __future__ import annotations

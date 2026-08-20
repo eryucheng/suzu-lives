@@ -48,15 +48,15 @@ test("software-issued credential is short-lived, opaque to its raw scope, and ac
 
 test("credential verification rejects forged, expired, replayed, and intent-mismatched invocations", () => {
   const root = temporaryDirectory("suzu-capability-auth-reject-");
-  const scope = { siteId: "douyin", action: "status", optionsDigest: "fixture" };
-  const issued = issueCapabilityAuthorization({ dataRoot: root, abilityId: "site-automation", action: "site:status", scope, ttlMs: 10, now: () => 100 });
+  const scope = { tabId: "tab-1", action: "status", optionsDigest: "fixture" };
+  const issued = issueCapabilityAuthorization({ dataRoot: root, abilityId: "web-browser", action: "browser:status", scope, ttlMs: 10, now: () => 100 });
   const forged = issued.credential.replace(/.$/u, (last) => last === "A" ? "B" : "A");
   assert.throws(
-    () => consumeCapabilityAuthorization({ dataRoot: root, credential: forged, abilityId: "site-automation", action: "site:status", scope, now: () => 101 }),
+    () => consumeCapabilityAuthorization({ dataRoot: root, credential: forged, abilityId: "web-browser", action: "browser:status", scope, now: () => 101 }),
     (error) => error instanceof CapabilityExecutionError && error.code === "AUTHORIZATION_FORGED",
   );
   assert.throws(
-    () => consumeCapabilityAuthorization({ dataRoot: root, credential: issued.credential, abilityId: "site-automation", action: "site:observe", scope, now: () => 101 }),
+    () => consumeCapabilityAuthorization({ dataRoot: root, credential: issued.credential, abilityId: "web-browser", action: "browser:snapshot", scope, now: () => 101 }),
     (error) => error instanceof CapabilityExecutionError && error.code === "AUTHORIZATION_MISMATCH",
   );
   assert.throws(
@@ -64,15 +64,15 @@ test("credential verification rejects forged, expired, replayed, and intent-mism
     (error) => error instanceof CapabilityExecutionError && error.code === "AUTHORIZATION_MISMATCH",
   );
   assert.throws(
-    () => consumeCapabilityAuthorization({ dataRoot: root, credential: issued.credential, abilityId: "site-automation", action: "site:status", scope: { ...scope, optionsDigest: "different" }, now: () => 101 }),
+    () => consumeCapabilityAuthorization({ dataRoot: root, credential: issued.credential, abilityId: "web-browser", action: "browser:status", scope: { ...scope, optionsDigest: "different" }, now: () => 101 }),
     (error) => error instanceof CapabilityExecutionError && error.code === "AUTHORIZATION_MISMATCH",
   );
   assert.throws(
-    () => consumeCapabilityAuthorization({ dataRoot: root, credential: issued.credential, abilityId: "site-automation", action: "site:status", scope, now: () => 110 }),
+    () => consumeCapabilityAuthorization({ dataRoot: root, credential: issued.credential, abilityId: "web-browser", action: "browser:status", scope, now: () => 110 }),
     (error) => error instanceof CapabilityExecutionError && error.code === "AUTHORIZATION_EXPIRED",
   );
   assert.throws(
-    () => assertVerifiedCapabilityAuthorization({ authorization: { abilityId: "site-automation" }, abilityId: "site-automation", action: "site:status", scope }),
+    () => assertVerifiedCapabilityAuthorization({ authorization: { abilityId: "web-browser" }, abilityId: "web-browser", action: "browser:status", scope }),
     (error) => error instanceof CapabilityExecutionError && error.code === "AUTHORIZATION_CREDENTIAL_REQUIRED",
   );
 });

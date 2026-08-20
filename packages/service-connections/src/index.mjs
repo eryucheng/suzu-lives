@@ -4,8 +4,6 @@ import path from "node:path";
 const DEFAULT_BASE_URL = "https://dashscope.aliyuncs.com/api/v1";
 
 function clean(value) { return String(value ?? "").trim(); }
-function connectionPath(dataRoot) { return path.join(path.resolve(dataRoot), "connections", "dashscope.json"); }
-function credentialPath(dataRoot, name) { return path.join(path.resolve(dataRoot), "connections", `${name}.json`); }
 function baseUrl(value) {
   const result = clean(value || DEFAULT_BASE_URL).replace(/\/+$/u, "");
   let parsed;
@@ -31,58 +29,6 @@ function credentialState(value, safeStorage) {
     return { key: "", status: "unreadable" };
   }
 }
-function decrypt(value, safeStorage) {
-  return credentialState(value, safeStorage).key;
-}
-
-function createCredentialService({ dataRoot, safeStorage, environment = process.env, name, environmentKeys = [] }) {
-  const filePath = credentialPath(dataRoot, name);
-  async function stored() {
-    const value = await readJson(filePath, null);
-    if (!value || typeof value !== "object" || Array.isArray(value)) return { encryptedApiKey: "", exists: false };
-    return { encryptedApiKey: clean(value.encryptedApiKey), exists: true };
-  }
-  function environmentKey() {
-    for (const key of environmentKeys) {
-      const value = clean(environment[key]);
-      if (value) return value;
-    }
-    return "";
-  }
-  async function snapshot() {
-    const value = await stored();
-    const savedKey = decrypt(value.encryptedApiKey, safeStorage);
-    const fromEnvironment = environmentKey();
-    return { configured: Boolean(fromEnvironment || savedKey), source: fromEnvironment ? "environment" : savedKey ? "saved" : "none" };
-  }
-  async function resolve() {
-    const value = await stored();
-    const fromEnvironment = environmentKey();
-    if (fromEnvironment) return { key: fromEnvironment, source: "environment" };
-    const savedKey = decrypt(value.encryptedApiKey, safeStorage);
-    return { key: savedKey, source: savedKey ? "saved" : "none" };
-  }
-  async function save({ apiKey } = {}) {
-    const key = clean(apiKey);
-    if (!key) throw new Error("API Key 不能为空。 ");
-    if (!safeStorage?.isEncryptionAvailable?.()) throw new Error("当前系统无法加密保存 API Key。 ");
-    await writeJsonAtomic(filePath, { encryptedApiKey: safeStorage.encryptString(key).toString("base64") });
-    return snapshot();
-  }
-  async function hasStoredConfiguration() {
-    try { await fs.lstat(filePath); return true; }
-    catch { return false; }
-  }
-  return { snapshot, resolve, save, hasStoredConfiguration };
-}
-
-export function createImageVisionCredentialService(options) {
-  return createCredentialService({ ...options, name: "image-vision", environmentKeys: ["VISION_API_KEY", "OPENAI_API_KEY"] });
-}
-
-export function createVideoUnderstandingCredentialService(options) {
-  return createCredentialService({ ...options, name: "video-understanding", environmentKeys: ["VIDEO_UNDERSTANDING_API_KEY", "DASHSCOPE_API_KEY"] });
-}
 function extraBody(value, label = "请求扩展 JSON") {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(label + "必须是 JSON 对象。");
   const visit = (item, depth = 0) => {
@@ -100,99 +46,19 @@ function extraBody(value, label = "请求扩展 JSON") {
   const result = visit(value); if (JSON.stringify(result).length > 50000) throw new Error(label + "不能超过 50 KB。"); return result;
 }
 
-export function createDashScopeConnectionService({ dataRoot, safeStorage, environment = process.env }) {
-  const filePath = connectionPath(dataRoot);
-  async function stored() {
-    const value = await readJson(filePath, null);
-    if (!value || typeof value !== "object" || Array.isArray(value)) return { baseUrl: DEFAULT_BASE_URL, encryptedApiKey: "", exists: false };
-    let storedBaseUrl;
-    try { storedBaseUrl = baseUrl(value.baseUrl); } catch { storedBaseUrl = DEFAULT_BASE_URL; }
-    return { baseUrl: storedBaseUrl, encryptedApiKey: clean(value.encryptedApiKey), exists: true };
-  }
-  async function snapshot() {
-    const saved = await stored();
-    const environmentKey = clean(environment.DASHSCOPE_API_KEY);
-    const savedKey = decrypt(saved.encryptedApiKey, safeStorage);
-    const source = environmentKey ? "environment" : savedKey ? "saved" : "none";
-    return {
-      baseUrl: saved.baseUrl,
-      configured: Boolean(environmentKey || savedKey),
-      source,
-    };
-  }
-  async function resolve() {
-    const saved = await stored();
-    const environmentKey = clean(environment.DASHSCOPE_API_KEY);
-    if (environmentKey) return { key: environmentKey, baseUrl: saved.baseUrl, source: "environment" };
-    const savedKey = decrypt(saved.encryptedApiKey, safeStorage);
-    return { key: savedKey, baseUrl: saved.baseUrl, source: savedKey ? "saved" : "none" };
-  }
-  async function save(value = {}) {
-    const existing = await stored();
-    const apiKey = clean(value.apiKey);
-    let encryptedApiKey = existing.encryptedApiKey;
-    if (apiKey) {
-      if (!safeStorage?.isEncryptionAvailable?.()) throw new Error("当前系统无法加密保存 API Key；请使用 DASHSCOPE_API_KEY 环境变量。");
-      encryptedApiKey = safeStorage.encryptString(apiKey).toString("base64");
-    }
-    await writeJsonAtomic(filePath, { baseUrl: baseUrl(value.baseUrl ?? existing.baseUrl), encryptedApiKey });
-    return snapshot();
-  }
-  async function clear() {
-    const existing = await stored();
-    await writeJsonAtomic(filePath, { baseUrl: existing.baseUrl, encryptedApiKey: "" });
-    return snapshot();
-  }
-  return { snapshot, resolve, save, clear };
-}
-
-/**
- * Normalizes the single 阿里百炼 credential for image generation.  The image
- * workbench chooses its model from the presence of reference images; callers
- * must not supply a second, OpenAI-compatible image key.
- */
-export function asDashScopeImageConnection(value = {}) {
-  const key = clean(value.apiKey || value.key);
-  return {
-    ...value,
-    type: "dashscope",
-    provider: "阿里百炼",
-    apiKey: key,
-    key,
-    timeoutMs: Math.min(600000, Math.max(1000, Number(value.timeoutMs) || 180000)),
-  };
-}
-
-export function createDashScopeImageConnectionService(options) {
-  const dashscope = createDashScopeConnectionService(options);
-  return {
-    snapshot: async (value) => {
-      const current = await dashscope.snapshot(value);
-      return {
-        ...current,
-        provider: "阿里百炼",
-        textToImageModel: "z-image-turbo",
-        referenceImageModel: "wan2.7-image",
-      };
-    },
-    resolve: async (value) => asDashScopeImageConnection(await dashscope.resolve(value)),
-  };
-}
-
-const NAMED_CONNECTION_TYPES = new Set(["openai-compatible", "dashscope", "generic-api"]);
+const NAMED_CONNECTION_TYPES = new Set(["tts-api", "asr-api", "openai-compatible", "dashscope", "generic-api"]);
 const BINDING_TYPES = {
-  "image-workbench": ["dashscope"],
-  "image-generation": ["dashscope"],
-  "phone-camera": ["dashscope"],
-  "voice-design": ["dashscope"],
-  "voice-message": ["dashscope"],
+  "image-workbench": ["openai-compatible", "dashscope", "generic-api"],
+  "image-generation": ["openai-compatible", "dashscope", "generic-api"],
+  "phone-camera": ["openai-compatible", "dashscope", "generic-api"],
+  "voice-message": ["tts-api", "openai-compatible", "dashscope", "generic-api"],
+  "realtime-asr": ["asr-api", "dashscope"],
   "image-vision": ["openai-compatible", "dashscope", "generic-api"],
   "video-understanding": ["openai-compatible", "dashscope", "generic-api"],
   "memory-embedding": ["openai-compatible", "dashscope"],
 };
 const BINDING_GROUPS = {
   "image-generation": ["image-workbench", "image-generation", "phone-camera"],
-  sound: ["voice-design", "voice-message"],
 };
 
 function bindingTargets(feature) {
@@ -210,15 +76,21 @@ function limited(value, label, maximum, { required = false } = {}) {
   return result;
 }
 
+function namedConnectionRemarkKey(value) {
+  return clean(value).normalize("NFKC").toLocaleLowerCase("zh-CN");
+}
+
 function namedBaseUrl(value, type) {
   const raw = clean(value || (type === "dashscope" ? DEFAULT_BASE_URL : "")).replace(/\/+$/u, "");
   if (!raw && type === "generic-api") return "";
   if (!raw && type === "openai-compatible") throw new Error("OpenAI Compatible 连接必须填写 Base URL。 ");
+  if (!raw && type === "tts-api") throw new Error("TTS API 连接必须填写服务地址。 ");
+  if (!raw && type === "asr-api") throw new Error("ASR API 连接必须填写服务地址。 ");
   return baseUrl(raw);
 }
 
 function typeLabel(type) {
-  return type === "dashscope" ? "DashScope" : type === "generic-api" ? "通用 API" : "OpenAI Compatible";
+  return type === "dashscope" ? "DashScope" : type === "generic-api" ? "通用 API" : type === "tts-api" ? "TTS API" : type === "asr-api" ? "ASR API" : "OpenAI Compatible";
 }
 
 function publicNamedConnection(value, safeStorage) {
@@ -310,6 +182,12 @@ export function createNamedApiConnectionService({ dataRoot, safeStorage }) {
     const current = index === -1 ? null : store.connections[index];
     const id = current?.id || generatedConnectionId(value.name, store.connections);
     const next = normalizedNamedConnection({ ...value, id }, { current, safeStorage, requireKey: !current });
+    const duplicate = store.connections.find((item, itemIndex) => (
+      itemIndex !== index && namedConnectionRemarkKey(item?.name) === namedConnectionRemarkKey(next.name)
+    ));
+    const keepsLegacyRemark = current
+      && namedConnectionRemarkKey(current.name) === namedConnectionRemarkKey(next.name);
+    if (duplicate && !keepsLegacyRemark) throw new Error(`API 备注“${next.name}”已经存在，请换一个。`);
     if (index === -1) store.connections.push(next);
     else store.connections[index] = next;
     for (const [feature, selectedId] of Object.entries(store.bindings)) {

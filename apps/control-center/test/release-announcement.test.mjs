@@ -5,6 +5,7 @@ import {
   createReleaseAnnouncementService,
   normalizeReleaseAnnouncement,
 } from "../electron/services/release-announcement.mjs";
+import { CURRENT_RELEASE_ANNOUNCEMENT } from "../shared/current-release-announcement.mjs";
 
 const ANNOUNCEMENT = {
   title: "本次更新",
@@ -101,4 +102,11 @@ test("an empty current announcement never creates a popup", () => {
   assert.equal(service.status().announcement, null);
   assert.equal(service.status().pending, false);
   assert.equal(normalizeReleaseAnnouncement({}), null);
+});
+
+test("the v0.2 release announcement uses the Suzu runtime name, not its upstream implementation name", () => {
+  const text = [CURRENT_RELEASE_ANNOUNCEMENT.title, CURRENT_RELEASE_ANNOUNCEMENT.summary, ...CURRENT_RELEASE_ANNOUNCEMENT.items].join("\n");
+
+  assert.match(text, /Suzu.*Agent Core/u);
+  assert.doesNotMatch(text, /\bDSH\b/u);
 });

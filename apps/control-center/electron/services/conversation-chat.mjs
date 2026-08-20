@@ -1,213 +1,30 @@
 import { randomUUID } from "node:crypto";
-import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import readline from "node:readline";
 
-import { DEFAULT_CLAUDE_PERMISSION_MODE, normalizeClaudePermissionMode } from "./claude-permission-mode.mjs";
+import { createSuzuAgentLifecycle } from "@suzu-lives/agent-lifecycle";
+import { conversationAttachmentReceipt } from "./conversation-attachment-service.mjs";
+import { createAgentUsageLedger } from "./agent-usage-ledger.mjs";
+import { SUZU_SOFTWARE_ASSISTANT_SESSION_ID } from "./software-assistant-service.mjs";
 
+const MAX_AGENT_MEDIA_BYTES = 50 * 1024 * 1024;
+const MAX_AGENT_MEDIA_ITEMS = 24;
 const MAX_MESSAGE_LENGTH = 20_000;
 const MAX_EVENT_TEXT_LENGTH = 200_000;
-const MAX_PERMISSION_PREVIEW_LENGTH = 4_000;
 const MAX_QUEUED_TURNS = 50;
-const MAX_AGENT_MEDIA_ITEMS = 24;
-const MAX_AGENT_MEDIA_BYTES = 50 * 1024 * 1024;
-const MAX_INBOUND_MEDIA_ITEMS = 24;
-const MAX_INBOUND_MEDIA_BYTES = 50 * 1024 * 1024;
-const TEXT_STREAM_IDLE_TIMEOUT_MS = 3 * 60 * 1000;
-const TEXT_STREAM_CLOSE_GRACE_MS = 5_000;
-const VOICE_CALL_TURN_OPEN = "<suzu-voice-call-turn>";
-const VOICE_CALL_TURN_CLOSE = "</suzu-voice-call-turn>";
-const VOICE_CALL_OPEN_OPEN = "<suzu-voice-call-open>";
-const VOICE_CALL_OPEN_CLOSE = "</suzu-voice-call-open>";
-const LONG_TERM_MEMORY_CONTEXT_OPEN = "<suzu-long-term-memory>";
-const LONG_TERM_MEMORY_CONTEXT_CLOSE = "</suzu-long-term-memory>";
-const CONVERSATION_ATTACHMENT_RECEIPT = "suzu-conversation-attachment";
-const VOICE_CALL_REQUEST_RECEIPT = "suzu-voice-call-request";
-const WECHAT_MEDIA_MANIFEST_OPEN = "<suzu-wechat-media>";
-const WECHAT_MEDIA_MANIFEST_CLOSE = "</suzu-wechat-media>";
-const STICKER_MEDIA_MANIFEST_OPEN = "<suzu-sticker>";
-const STICKER_MEDIA_MANIFEST_CLOSE = "</suzu-sticker>";
-const CLAUDE_RUNTIME_FEATURE_DEFAULTS = Object.freeze({
-  bash: true,
-  edit: true,
-  glob: true,
-  grep: true,
-  subagents: false,
-  taskList: false,
-  backgroundTasks: false,
-  nativeCron: false,
-  askUserQuestion: false,
-  write: true,
-});
-const VOICE_CALL_SYSTEM_PROMPT = [
-  `Suzu 会把实时语音通话的一轮输入包装为 ${VOICE_CALL_TURN_OPEN}JSON${VOICE_CALL_TURN_CLOSE}。`,
-  "仅在收到这个标记时，读取 JSON 中的 transcript 作为用户本轮说的话；用自然、口语化、简短的中文回答，先给一两句可以独立朗读的短句。",
-  `电话真正接通时，Suzu 会发送 ${VOICE_CALL_OPEN_OPEN}JSON${VOICE_CALL_OPEN_CLOSE}。这不是用户说的话；JSON 的 initiator 是本次通话请求方（agent 或 user）。收到它时只用一句自然、简短的电话问候开场，例如“喂，我在。”，不要假设或回答用户尚未说出的内容。`,
-  "这些标记约束只适用于各自所在的一轮；后续没有标记的普通文字消息保持正常回答方式。",
-  "不要提及这个标记、JSON、语音通话的内部机制，也不要朗读 Markdown、文件路径、工具过程、内部状态或“正在处理”。如确实需要操作工具，先用一句简短的话说明，再继续完成事情。",
-].join("\n");
-const SELECTABLE_CLAUDE_ALLOWED_TOOLS = Object.freeze([
-  ["read", "Read"],
-  ["webFetch", "WebFetch"],
-  ["webSearch", "WebSearch"],
-]);
+const SUZU_CAPABILITY_TOOL = "suzu_capability";
 
 export class ConversationChatError extends Error {
-  constructor(message) {
-    super(message);
+  constructor(message, { cause, code = "AGENT_CONVERSATION_CHAT_ERROR" } = {}) {
+    super(message, cause ? { cause } : undefined);
     this.name = "ConversationChatError";
+    this.code = code;
   }
 }
+
 
 function clean(value) {
   return String(value ?? "").trim();
-}
-
-function longTermMemoryRecallSystemMessage(value) {
-  const text = String(value ?? "");
-  const start = text.indexOf(LONG_TERM_MEMORY_CONTEXT_OPEN);
-  const end = text.indexOf(LONG_TERM_MEMORY_CONTEXT_CLOSE, start + LONG_TERM_MEMORY_CONTEXT_OPEN.length);
-  if (start < 0 || end < 0) return "";
-  const recalled = clean(text.slice(start + LONG_TERM_MEMORY_CONTEXT_OPEN.length, end));
-  return recalled ? bounded(`记忆召回\n${recalled}`, MAX_EVENT_TEXT_LENGTH) : "";
-}
-
-function normalizeClaudeRuntimeFeatures(value = {}) {
-  const source = value && typeof value === "object" && !Array.isArray(value) ? value : {};
-  return {
-    ...CLAUDE_RUNTIME_FEATURE_DEFAULTS,
-    bash: source.bash !== false,
-    edit: source.edit !== false,
-    glob: source.glob !== false,
-    grep: source.grep !== false,
-    subagents: source.subagents === true,
-    taskList: source.taskList === true,
-    backgroundTasks: source.backgroundTasks === true,
-    nativeCron: source.nativeCron === true,
-    askUserQuestion: source.askUserQuestion === true,
-    write: source.write !== false,
-  };
-}
-
-export function claudeAllowedTools(value = {}) {
-  const source = value && typeof value === "object" && !Array.isArray(value) ? value : {};
-  return SELECTABLE_CLAUDE_ALLOWED_TOOLS
-    .filter(([key]) => source[key] !== false)
-    .map(([, tool]) => tool);
-}
-
-function suzuCliAllowedTool(value) {
-  const command = clean(value);
-  if (!command || /[\r\n()]/u.test(command)) return "";
-  return `Bash(${command} *)`;
-}
-
-function normalizeClaudeWorkspaceDirectories(value) {
-  if (!Array.isArray(value)) return [];
-  const seen = new Set();
-  return value.flatMap((item) => {
-    const directory = clean(item);
-    if (!directory || /[\r\n]/u.test(directory) || !path.isAbsolute(directory)) return [];
-    const resolved = path.resolve(directory);
-    const key = process.platform === "win32" ? resolved.toLowerCase() : resolved;
-    if (seen.has(key)) return [];
-    seen.add(key);
-    return [resolved];
-  });
-}
-
-export function claudeAllowedToolsForWorkspace(value = {}, { suzuCliCommand = "" } = {}) {
-  const cliPermission = suzuCliAllowedTool(suzuCliCommand);
-  return [...claudeAllowedTools(value), ...(cliPermission ? [cliPermission] : [])];
-}
-
-function bounded(value, limit) {
-  const text = String(value ?? "");
-  return text.length > limit ? `${text.slice(0, limit)}\n[内容已截断]` : text;
-}
-
-function messageText(content) {
-  if (typeof content === "string") return bounded(content, MAX_EVENT_TEXT_LENGTH);
-  if (!Array.isArray(content)) return "";
-  return bounded(content
-    .filter((part) => part?.type === "text" && typeof part.text === "string")
-    .map((part) => part.text)
-    .join("\n"), MAX_EVENT_TEXT_LENGTH);
-}
-
-function isToolPlanningAssistantMessage(value) {
-  return clean(value?.type) === "assistant" && clean(value?.message?.stop_reason) === "tool_use";
-}
-
-function serializedText(value) {
-  if (typeof value === "string") return bounded(value, MAX_EVENT_TEXT_LENGTH);
-  try { return bounded(JSON.stringify(value ?? {}, null, 2), MAX_EVENT_TEXT_LENGTH); }
-  catch { return "[无法展示内容]"; }
-}
-
-function toolSummary(input) {
-  const source = input && typeof input === "object" ? input : {};
-  return clean(source.command || source.file_path || source.path || source.description || source.query || "");
-}
-
-function auxiliaryParts(content) {
-  if (!Array.isArray(content)) return [];
-  return content.flatMap((part) => {
-    const type = clean(part?.type);
-    if (type === "thinking") {
-      const text = bounded(part.thinking ?? part.text ?? "", MAX_EVENT_TEXT_LENGTH);
-      return text ? [{ type: "thinking", content: text }] : [];
-    }
-    if (type === "tool_use") {
-      const name = clean(part.name) || "工具";
-      const summary = toolSummary(part.input);
-      return [{ type: "tool", content: `Claude Code 工具调用：${name}${summary ? `\n${summary}` : ""}` }];
-    }
-    if (type === "tool_result") {
-      const detail = serializedText(part.content);
-      return [{ type: "tool", content: `Claude Code 工具结果${part.is_error ? "（错误）" : ""}${detail ? `：\n${detail}` : ""}` }];
-    }
-    return [];
-  });
-}
-
-function usageSummary(usage, model = "") {
-  const source = usage && typeof usage === "object" ? usage : null;
-  if (!source) return "";
-  const token = (value) => {
-    const number = Number(value);
-    return Number.isFinite(number) && number >= 0 ? number : null;
-  };
-  const values = [
-    ["输入", token(source.input_tokens ?? source.inputTokens ?? source.prompt_tokens ?? source.promptTokens)],
-    ["缓存写入", token(source.cache_creation_input_tokens ?? source.cacheCreationInputTokens ?? source.cache_write_tokens ?? source.cacheWriteTokens)],
-    ["缓存读取", token(source.cache_read_input_tokens ?? source.cacheReadInputTokens ?? source.cached_tokens ?? source.cachedTokens)],
-    ["输出", token(source.output_tokens ?? source.outputTokens ?? source.completion_tokens ?? source.completionTokens)],
-  ].filter(([, value]) => value !== null);
-  if (!values.length) return "";
-  const total = values.reduce((sum, [, value]) => sum + value, 0);
-  return `${clean(model || source.model) ? `${clean(model || source.model)} · ` : ""}${values.map(([label, value]) => `${label} ${value.toLocaleString("zh-CN")}`).join(" · ")} · 合计 ${total.toLocaleString("zh-CN")}`;
-}
-
-function mergeFullText(previous, next) {
-  if (!next) return previous;
-  if (!previous || next.startsWith(previous)) return next;
-  if (previous.startsWith(next)) return previous;
-  return next;
-}
-
-function permissionPreview(input) {
-  try {
-    return bounded(JSON.stringify(input ?? {}, null, 2), MAX_PERMISSION_PREVIEW_LENGTH);
-  } catch {
-    return "[无法展示工具参数]";
-  }
-}
-
-function processErrorMessage(error, fallback) {
-  return clean(error?.message || error) || fallback;
 }
 
 function plainObject(value) {
@@ -226,74 +43,59 @@ function parsedObject(value) {
     try {
       const parsed = JSON.parse(candidate);
       if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed;
-    } catch { /* Non-JSON tool output is not an attachment receipt. */ }
+    } catch {
+      // Ordinary Agent Core tool output is not a Suzu attachment receipt.
+    }
   }
   return null;
 }
 
-function normalizeAgentMediaReceipt(value) {
-  const source = plainObject(parsedObject(value));
-  if (source.status !== "ok" || clean(source.type) !== CONVERSATION_ATTACHMENT_RECEIPT) return null;
-  const receiptId = clean(source.receiptId).slice(0, 160);
-  const media = (Array.isArray(source.items) ? source.items : []).slice(0, MAX_AGENT_MEDIA_ITEMS).flatMap((item) => {
-    const entry = plainObject(item);
-    const kind = clean(entry.kind).toLowerCase();
-    const sourcePath = clean(entry.path);
-    const size = Number(entry.size);
-    if (!new Set(["image", "audio", "file"]).has(kind) || !sourcePath || !path.isAbsolute(sourcePath)) return [];
-    if (!Number.isSafeInteger(size) || size <= 0 || size > MAX_AGENT_MEDIA_BYTES) return [];
-    const resolved = path.resolve(sourcePath);
-    return [{
-      kind,
-      path: resolved,
-      fileName: clean(entry.fileName) || path.basename(resolved),
-      size,
-    }];
-  });
-  return media.length ? { receiptId, media } : null;
-}
-
-function attachmentReceiptsFromToolResults(content) {
-  if (!Array.isArray(content)) return [];
-  return content.flatMap((part) => {
-    if (clean(part?.type) !== "tool_result" || part?.is_error === true) return [];
-    const source = part.content;
-    if (Array.isArray(source)) {
-      return source.flatMap((item) => normalizeAgentMediaReceipt(item?.text ?? item?.content ?? item));
+function agentMediaReceipt(value) {
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      const receipt = agentMediaReceipt(entry);
+      if (receipt) return receipt;
     }
-    const receipt = normalizeAgentMediaReceipt(source);
-    return receipt ? [receipt] : [];
-  });
+    return null;
+  }
+  const source = plainObject(value);
+  for (const candidate of [source.text, source.content, source.data]) {
+    if (candidate === undefined || candidate === value) continue;
+    const nested = agentMediaReceipt(candidate);
+    if (nested) return nested;
+  }
+  const receipt = plainObject(parsedObject(value));
+  if (clean(receipt.status) !== "ok" || clean(receipt.type) !== conversationAttachmentReceipt.type) return null;
+  const media = (Array.isArray(receipt.items) ? receipt.items : [])
+    .slice(0, MAX_AGENT_MEDIA_ITEMS)
+    .flatMap((item) => {
+      const entry = plainObject(item);
+      const kind = clean(entry.kind).toLowerCase();
+      const sourcePath = clean(entry.path);
+      const size = Number(entry.size);
+      if (!new Set(["image", "audio", "file"]).has(kind) || !sourcePath || !path.isAbsolute(sourcePath)) return [];
+      if (!Number.isSafeInteger(size) || size <= 0 || size > MAX_AGENT_MEDIA_BYTES) return [];
+      const resolved = path.resolve(sourcePath);
+      return [{
+        kind,
+        path: resolved,
+        fileName: path.basename(clean(entry.fileName) || path.basename(resolved)),
+        size,
+      }];
+    });
+  return media.length ? {
+    receiptId: clean(receipt.receiptId).slice(0, 160),
+    media,
+  } : null;
 }
 
-function normalizeAgentVoiceCallRequest(value) {
-  const source = plainObject(parsedObject(value));
-  if (source.status !== "ok" || clean(source.capabilityId) !== "voice-call" || clean(source.action) !== "request") return null;
-  const result = plainObject(source.result);
-  if (clean(result.type) !== VOICE_CALL_REQUEST_RECEIPT) return null;
-  return {
-    reason: clean(result.reason).replace(/\s+/gu, " ").slice(0, 240),
-  };
+function bounded(value, limit = MAX_EVENT_TEXT_LENGTH) {
+  const text = String(value ?? "");
+  return text.length > limit ? `${text.slice(0, limit)}\n[内容已截断]` : text;
 }
 
-function voiceCallRequestsFromToolResults(content) {
-  if (!Array.isArray(content)) return [];
-  return content.flatMap((part) => {
-    if (clean(part?.type) !== "tool_result" || part?.is_error === true) return [];
-    const source = part.content;
-    if (Array.isArray(source)) {
-      return source.flatMap((item) => {
-        const request = normalizeAgentVoiceCallRequest(item?.text ?? item?.content ?? item);
-        return request ? [request] : [];
-      });
-    }
-    const request = normalizeAgentVoiceCallRequest(source);
-    return request ? [request] : [];
-  });
-}
-
-function isDirectory(stat) {
-  return Boolean(stat?.isDirectory?.());
+function errorMessage(error, fallback) {
+  return clean(error?.message || error) || fallback;
 }
 
 function sameProjectRoot(left, right) {
@@ -310,297 +112,152 @@ function sameProjectRoot(left, right) {
 function turnKey(sessionId, projectRoot) {
   const id = clean(sessionId);
   const root = clean(projectRoot);
-  if (!id || !root) throw new ConversationChatError("指定 Claude 会话时必须同时提供会话标识和工作目录。");
+  if (!id || !root) throw new ConversationChatError("指定 Agent 会话时必须同时提供会话标识和工作目录。", { code: "INVALID_SESSION_SCOPE" });
   const normalizedRoot = path.resolve(root);
   const stableRoot = process.platform === "win32" ? normalizedRoot.toLowerCase() : normalizedRoot;
   return `${stableRoot}\u0000${id}`;
 }
 
-async function existingFile(fsOps, filePath) {
-  try {
-    return (await fsOps.stat(filePath)).isFile();
-  } catch {
-    return false;
-  }
+function isDirectory(stat) {
+  return Boolean(stat?.isDirectory?.());
 }
 
-function writeJson(child, value) {
-  if (!child?.stdin || child.stdin.destroyed || child.stdin.writableEnded) {
-    throw new ConversationChatError("Claude Code 进程已经不可写入。");
-  }
-  child.stdin.write(`${JSON.stringify(value)}\n`);
+function mergeFullText(previous, next) {
+  const current = bounded(previous);
+  const candidate = bounded(next);
+  if (!candidate) return current;
+  if (!current || candidate.startsWith(current)) return candidate;
+  if (current.startsWith(candidate)) return current;
+  return bounded(`${current}${candidate}`);
 }
 
-function boundedDelay(value, fallback) {
-  const delay = Number(value);
-  return Number.isFinite(delay) && delay > 0 ? Math.trunc(delay) : fallback;
-}
-
-function streamSignature(args) {
-  const source = Array.isArray(args) ? args : [];
-  const sessionFlag = source.at(-2);
-  const stable = ["--resume", "--session-id"].includes(sessionFlag)
-    ? source.slice(0, -2)
-    : source;
-  return JSON.stringify(stable);
-}
-
-function inboundMediaFileName(value, fallback) {
-  const name = path.basename(clean(value)).replace(/[\r\n]/gu, "").slice(0, 300);
-  return name || fallback;
-}
-
-function normalizeInboundMedia(value, mediaSource = "wechat") {
-  const items = Array.isArray(value) ? value : [];
-  const sourceKey = clean(mediaSource).toLowerCase();
-  if (!new Set(["wechat", "iphone", "sticker"]).has(sourceKey)) throw new ConversationChatError("会话附件来源无效。");
-  if (items.length > MAX_INBOUND_MEDIA_ITEMS) {
-    throw new ConversationChatError(`单条会话消息最多包含 ${MAX_INBOUND_MEDIA_ITEMS} 个附件。`);
-  }
-  if (sourceKey === "sticker" && items.length !== 1) throw new ConversationChatError("一条表情包消息只能包含一张图片。");
-  return items.map((entry, index) => {
-    const item = plainObject(entry);
-    const kind = clean(item.kind).toLowerCase();
-    if (!new Set(["image", "file"]).has(kind)) throw new ConversationChatError("会话附件类型无效。");
-    if (sourceKey === "sticker" && kind !== "image") throw new ConversationChatError("表情包必须是图片。");
-    const sourcePath = clean(item.path);
-    if (!sourcePath || !path.isAbsolute(sourcePath)) throw new ConversationChatError("会话附件缓存路径无效。");
-    const data = Buffer.isBuffer(item.data) ? item.data : Buffer.from(item.data || []);
-    if (!data.length || data.length > MAX_INBOUND_MEDIA_BYTES) {
-      throw new ConversationChatError(`会话附件大小必须在 1 B 到 ${MAX_INBOUND_MEDIA_BYTES >> 20} MiB 之间。`);
-    }
-    return {
-      kind,
-      path: path.resolve(sourcePath),
-      fileName: inboundMediaFileName(item.fileName, `${kind}-${index + 1}`),
-      mimeType: clean(item.mimeType) || (kind === "image" ? "image/jpeg" : "application/octet-stream"),
-      size: data.length,
-      data,
-    };
-  });
-}
-
-function wechatMediaManifest(media, mediaSource = "wechat") {
-  const source = clean(mediaSource).toLowerCase();
-  const label = source === "iphone" ? "iPhone 反馈带来的附件" : "微信发来的附件";
-  return `${WECHAT_MEDIA_MANIFEST_OPEN}${JSON.stringify({
-    source,
-    instruction: `${label}。图片已经随消息附上；需要读取文件时，请使用下面的本地路径。`,
-    items: media.map((item) => ({
-      kind: item.kind,
-      path: item.path,
-      fileName: item.fileName,
-      size: item.size,
-    })),
-  })}${WECHAT_MEDIA_MANIFEST_CLOSE}`;
-}
-
-function stickerMediaManifest(media) {
-  return `${STICKER_MEDIA_MANIFEST_OPEN}${JSON.stringify({
-    source: "suzu-sticker",
-    type: "sticker",
-    instruction: "这是用户以表情包形式发送的图片。请把它当作表情、情绪或反应理解，不要当成普通照片或文件附件。",
-    items: media.map((item) => ({
-      kind: item.kind,
-      path: item.path,
-      fileName: item.fileName,
-      size: item.size,
-    })),
-  })}${STICKER_MEDIA_MANIFEST_CLOSE}`;
-}
-
-function voiceCallInputContent(text) {
-  return `${VOICE_CALL_TURN_OPEN}\n${JSON.stringify({ source: "suzu-live-call", transcript: text })}\n${VOICE_CALL_TURN_CLOSE}`;
-}
-
-function voiceCallInitiator(value) {
-  return clean(value).toLowerCase() === "agent" ? "agent" : "user";
-}
-
-function voiceCallOpeningContent(initiator = "user") {
-  return `${VOICE_CALL_OPEN_OPEN}\n${JSON.stringify({ source: "suzu-live-call", event: "open", initiator: voiceCallInitiator(initiator) })}\n${VOICE_CALL_OPEN_CLOSE}`;
-}
-
-function voiceCallMemoryText(text) {
-  return [
-    "[系统事件：实时语音通话] 以下内容来自用户与联系人的实时语音通话，不是文字聊天。",
-    `用户在本轮通话中说：${text}`,
-  ].join("\n");
-}
-
-function voiceCallOpeningMemoryText(initiator = "user") {
-  return voiceCallInitiator(initiator) === "agent"
-    ? "[系统事件：实时语音通话已接通] 这不是用户说的话。联系人主动发起来电，用户接听后与联系人进入了一次实时语音通话；对方将以电话问候回应。"
-    : "[系统事件：实时语音通话已接通] 这不是用户说的话。用户发起并接通了与联系人的一次实时语音通话；对方将以电话问候回应。";
-}
-
-function claudeInputContent(text, media, mediaSource = "wechat") {
-  if (!media.length) return text;
-  const parts = media
-    .filter((item) => item.kind === "image")
-    .map((item) => ({
-      type: "image",
-      source: {
-        type: "base64",
-        media_type: item.mimeType,
-        data: item.data.toString("base64"),
-      },
-    }));
-  const manifest = mediaSource === "sticker"
-    ? stickerMediaManifest(media)
-    : wechatMediaManifest(media, mediaSource);
-  const content = [text, manifest].filter(Boolean).join("\n\n");
-  parts.push({ type: "text", text: content });
-  return parts;
-}
-
-export function wechatAttachmentSystemPrompt(command) {
-  const launcher = clean(command);
-  if (!launcher) return "";
-  return `## Suzu 附件交付
-生成本机图片、MP3 音频或文件后需要交付给用户时，直接执行下面的命令。文件会作为当前 Suzu 会话中的附件显示；如果这个会话已经绑定微信，Suzu 会自动额外投递到它对应的微信，无需指定微信号。
-
-${launcher} --image "图片的绝对路径"
-${launcher} --audio "MP3 音频的绝对路径"
-${launcher} --file "文件的绝对路径"
-
-可重复使用 --image、--audio 或 --file。普通文字仍直接正常回复，不要用这个命令发送普通文字。
-`;
-}
-
-export function scheduleSystemPrompt(commands) {
-  const conversationAdd = clean(commands?.conversationAdd);
-  const list = clean(commands?.list);
-  const remove = clean(commands?.remove);
-  const chainPrompt = clean(commands?.proactiveChainPrompt) || "根据时间和前面聊的内容判断要不要主动联系对方，要发就正常发，不发就沉默。";
-  const followUpPrompt = clean(commands?.proactiveFollowUpPrompt) || "临时回访：用户在 TIME 提到 EVENT。先检查当前会话里是否已经有结果；已经有结果就只输出 NO_REPLY；还没有结果就自然地关心或询问。不要提及自动任务、回访任务或系统机制。这是一次性回访，不要设置下一次自动任务。";
-  const proactivePlanning = commands?.proactivePlanning === true;
-  const chainDescription = clean(commands?.proactiveChainDescription) || "链式主动关心";
-  const chainTaskPrompt = clean(commands?.proactiveChainTaskPrompt) || "执行一次主动关心判断。";
-  if (!conversationAdd) return "";
-  const sections = ["## Suzu 自动任务", "任务只会在 Suzu 软件运行期间执行；关闭期间不会执行或补跑。不要使用旧的 timer 或 cron 命令。"];
-  if (proactivePlanning) {
-    sections.push(`### 安排下一轮主动关心\n\n当前是内部安排阶段。不要向用户说话；根据当前时间、最近对话和相处节奏，必须且只能创建一条下一次判断任务：\n\n${conversationAdd} --delay <间隔> --prompt "${chainTaskPrompt}" --desc "${chainDescription}"\n\n安排完成后只输出精确的 NO_REPLY。不要创建临时回访或其他自动任务。`);
-  } else {
-    sections.push(`### 主动关心\n\n当前会话已在“主动关心”能力中启用。一次性任务会自动绑定当前 Claude 会话和项目：\n\n${conversationAdd} --delay 45m --prompt "到时间后要处理的完整任务内容" --desc "简短说明"\n\n链式主动关心触发时使用这段提示词：\n\n${chainPrompt}\n\n临时回访使用这段提示词：\n\n${followUpPrompt}`);
-  }
-  if (list && remove) {
-    sections.push(`### 查看与删除\n\n${list}\n${remove}`);
-  }
-  sections.push("--delay 使用 s、m、h 或 d，例如 45m。任务触发后，它不是用户的新消息；如无需对用户可见的回复，只输出精确的 NO_REPLY。");
-  return sections.join("\n\n");
-}
-
-function isNoReply(value) {
+function noReply(value) {
   return clean(value) === "NO_REPLY";
 }
 
-/** The flags are deliberately limited to Claude Code's public stream protocol. */
-export function claudeCliArguments({ sessionId, hasTranscript = false, appendSystemPrompt = "", claudeRuntimeFeatures, claudeToolPermissions, allowedTools = [], workspaceDirectories = [], permissionMode = DEFAULT_CLAUDE_PERMISSION_MODE } = {}) {
-  const id = clean(sessionId);
-  if (!id) throw new ConversationChatError("缺少 Claude 会话标识。");
-  const extraPrompt = clean(appendSystemPrompt);
-  const features = normalizeClaudeRuntimeFeatures(claudeRuntimeFeatures);
-  const toolPermissions = claudeToolPermissions && typeof claudeToolPermissions === "object" && !Array.isArray(claudeToolPermissions)
-    ? claudeToolPermissions
-    : {};
-  const selectedPermissionMode = normalizeClaudePermissionMode(permissionMode);
-  const disallowedTools = [
-    toolPermissions.read === false && "Read",
-    !features.glob && "Glob",
-    !features.grep && "Grep",
-    !features.edit && "Edit",
-    !features.write && "Write",
-    !features.bash && "Bash",
-    toolPermissions.webFetch === false && "WebFetch",
-    toolPermissions.webSearch === false && "WebSearch",
-    !features.subagents && "Agent",
-    !features.taskList && "TodoWrite",
-    !features.askUserQuestion && "AskUserQuestion",
-  ].filter(Boolean);
-  const permittedTools = [...new Set((Array.isArray(allowedTools) ? allowedTools : []).map(clean).filter((tool) => ["Read", "WebFetch", "WebSearch"].includes(tool) || /^Bash\([^\r\n()]+ \*\)$/u.test(tool)))];
-  const sharedDirectories = normalizeClaudeWorkspaceDirectories(workspaceDirectories);
-  return [
-    "-p",
-    "--input-format", "stream-json",
-    "--output-format", "stream-json",
-    "--verbose",
-    "--include-partial-messages",
-    "--permission-prompt-tool", "stdio",
-    "--replay-user-messages",
-    "--permission-mode", selectedPermissionMode,
-    ...sharedDirectories.flatMap((directory) => ["--add-dir", directory]),
-    ...(permittedTools.length ? ["--allowed-tools", permittedTools.join(",")] : []),
-    ...(disallowedTools.length ? ["--disallowed-tools", disallowedTools.join(",")] : []),
-    ...(extraPrompt ? ["--append-system-prompt", extraPrompt] : []),
-    ...(hasTranscript ? ["--resume", id] : ["--session-id", id]),
-  ];
-}
-
-export function claudeCliEnvironment({ claudeRuntimeFeatures, baseEnv = process.env } = {}) {
-  const features = normalizeClaudeRuntimeFeatures(claudeRuntimeFeatures);
-  const environment = baseEnv && typeof baseEnv === "object" ? baseEnv : {};
-  const next = { ...environment };
-  for (const key of Object.keys(next)) {
-    if (["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS", "CLAUDE_CODE_DISABLE_CRON"].includes(key.toUpperCase())) delete next[key];
+function inputForAgent({ kind, text, callDirection }) {
+  if (kind === "call") {
+    return [
+      "这是一次实时语音通话的转写。请自然、口语化且简短地回应；不要提及转写、内部工具或运行时。",
+      `<suzu-voice-call-turn>\n${JSON.stringify({ source: "suzu-live-call", transcript: clean(text) })}\n</suzu-voice-call-turn>`,
+    ].join("\n\n");
   }
-  if (!features.backgroundTasks) next.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS = "1";
-  if (!features.nativeCron) next.CLAUDE_CODE_DISABLE_CRON = "1";
-  return next;
-}
-
-export async function resolveClaudeCommand({
-  fsOps = fs,
-  homeDirectory = os.homedir(),
-  platform = process.platform,
-} = {}) {
-  const executable = platform === "win32" ? "claude.exe" : "claude";
-  const candidates = [
-    path.join(homeDirectory, ".local", "bin", executable),
-    path.join(homeDirectory, ".local", "bin", "claude"),
-  ];
-  for (const candidate of candidates) {
-    if (await existingFile(fsOps, candidate)) return candidate;
+  if (kind === "call-open") {
+    const initiator = clean(callDirection).toLowerCase() === "agent" ? "agent" : "user";
+    return [
+      `语音通话刚接通，发起方是 ${initiator}。这不是用户说的话；请只用一句自然简短的问候开场。`,
+      `<suzu-voice-call-open>\n${JSON.stringify({ initiator })}\n</suzu-voice-call-open>`,
+    ].join("\n\n");
   }
-  return executable;
+  return text;
 }
 
+function toolPreview(value) {
+  const source = plainObject(value);
+  const raw = typeof source.arguments === "string" ? source.arguments : "";
+  if (!raw) return "";
+  try { return bounded(JSON.stringify(JSON.parse(raw), null, 2), 4_000); }
+  catch { return bounded(raw, 4_000); }
+}
+
+function lifecycleScope(value = {}) {
+  return {
+    contactId: clean(value.contactId),
+    kind: clean(value.kind),
+    projectRoot: clean(value.projectRoot),
+    sessionId: clean(value.sessionId),
+    turnId: clean(value.requestId || value.turnId),
+  };
+}
+
+function lifecycleTurnPayload(turn, extra = {}) {
+  return {
+    ...lifecycleScope(turn),
+    ...(clean(turn?.userText) ? { userText: bounded(turn.userText, MAX_MESSAGE_LENGTH) } : {}),
+    ...(clean(turn?.text) ? { assistantText: bounded(turn.text) } : {}),
+    ...extra,
+  };
+}
+
+/**
+ * Translates the provider-neutral runtime facade back to the existing Suzu
+ * renderer / voice / WeChat event contract.  It owns the product queue, so a
+ * queued message can still be removed reliably before it reaches Agent Core.
+ */
 export function createConversationChatService({
-  settingsService,
+  attachmentService = null,
+  compactor = null,
   reader,
-  fsOps = fs,
-  homeDirectory = os.homedir(),
-  agentAttachmentCommand = null,
-  agentScheduleCommand = null,
-  claudeWorkspaceDirectories = [],
-  suzuCliCommand = "",
+  runtime,
+  settingsService,
+  capabilityRuntime = null,
   memoryRuntime = null,
-  spawnImpl = spawn,
+  lifecycle = null,
+  fsOps = fs,
   onEvent = () => {},
-  idleStreamTimeoutMs = TEXT_STREAM_IDLE_TIMEOUT_MS,
-  idleStreamCloseGraceMs = TEXT_STREAM_CLOSE_GRACE_MS,
 } = {}) {
-  if (!settingsService?.load) throw new ConversationChatError("会话聊天需要软件设置服务。");
-  if (!reader?.ensureActiveSession) throw new ConversationChatError("会话聊天需要原生 Claude 会话读取服务。");
+  if (!settingsService?.load) throw new ConversationChatError("Agent 聊天需要软件设置服务。", { code: "SETTINGS_REQUIRED" });
+  if (!reader?.ensureActiveSession) throw new ConversationChatError("Agent 聊天需要联系人会话读取服务。", { code: "READER_REQUIRED" });
+  for (const method of ["ensureSession", "sendTurn", "cancelTurn", "resolveApproval", "subscribe", "close"]) {
+    if (typeof runtime?.[method] !== "function") {
+      throw new ConversationChatError(`Agent 聊天运行时缺少 ${method}()。`, { code: "RUNTIME_CONTRACT_INVALID" });
+    }
+  }
+  const ownsLifecycle = !lifecycle;
+  const agentLifecycle = lifecycle || createSuzuAgentLifecycle();
+  for (const method of ["collectContext", "decide", "dispatch", "on"]) {
+    if (typeof agentLifecycle?.[method] !== "function") {
+      throw new ConversationChatError(`Suzu 生命周期缺少 ${method}()。`, { code: "LIFECYCLE_CONTRACT_INVALID" });
+    }
+  }
+  const agentUsageLedger = createAgentUsageLedger({
+    capabilityRuntime,
+    reader,
+    settingsService,
+  });
 
   let eventSink = typeof onEvent === "function" ? onEvent : () => {};
   const eventSubscribers = new Set();
-  const emit = (payload) => {
-    try { eventSink(payload); } catch { /* A UI listener must not affect the local Claude process. */ }
-    for (const listener of eventSubscribers) {
-      try { listener(payload); } catch { /* A secondary transport must not affect the local Claude process. */ }
-    }
-  };
   const activeTurns = new Map();
-  const knownTranscripts = new Set();
   const pendingTurns = new Map();
   const permissionRequests = new Map();
-  const reusableTextStreams = new Map();
   const startingSessions = new Set();
   const startingTurns = new Map();
-  const textStreamIdleTimeout = boundedDelay(idleStreamTimeoutMs, TEXT_STREAM_IDLE_TIMEOUT_MS);
-  const textStreamCloseGrace = boundedDelay(idleStreamCloseGraceMs, TEXT_STREAM_CLOSE_GRACE_MS);
+  const turnsById = new Map();
+  const openedSessions = new Map();
+  const activatedContacts = new Set();
   let disposed = false;
+
+  const dispatchLifecycle = (event, payload) => {
+    void Promise.resolve(agentLifecycle.dispatch(event, payload)).catch(() => undefined);
+  };
+
+  const turnForRuntimeSession = (sessionId, preferredTurnId = "") => {
+    const requestedTurnId = clean(preferredTurnId);
+    if (requestedTurnId) {
+      const matching = turnsById.get(requestedTurnId);
+      if (matching && matching.sessionId === clean(sessionId) && !matching.finished) return matching;
+    }
+    const matching = [...activeTurns.values()].filter((turn) => turn.sessionId === clean(sessionId) && !turn.finished);
+    return matching.length === 1 ? matching[0] : null;
+  };
+
+  const lifecyclePayloadForRuntimeSession = (sessionId, { turnId = "", ...extra } = {}) => {
+    const turn = turnForRuntimeSession(sessionId, turnId);
+    if (turn) return lifecycleTurnPayload(turn, extra);
+    const opened = [...openedSessions.values()].filter((scope) => scope.sessionId === clean(sessionId));
+    return {
+      ...(opened.length === 1 ? opened[0] : { sessionId: clean(sessionId) }),
+      ...extra,
+    };
+  };
+
+  const emit = (payload) => {
+    try { eventSink(payload); } catch { /* A UI listener cannot interrupt Agent Core. */ }
+    for (const listener of eventSubscribers) {
+      try { listener(payload); } catch { /* Secondary transports are isolated. */ }
+    }
+  };
 
   const queueFor = (sessionId, projectRoot) => {
     const key = turnKey(sessionId, projectRoot);
@@ -610,6 +267,17 @@ export function createConversationChatService({
       pendingTurns.set(key, queue);
     }
     return queue;
+  };
+
+  const emitQueue = (sessionId, projectRoot) => {
+    const queue = pendingTurns.get(turnKey(sessionId, projectRoot)) || [];
+    emit({
+      type: "queue",
+      sessionId,
+      projectRoot: clean(projectRoot),
+      items: queue.map((item, index) => ({ requestId: item.requestId, position: index + 1, kind: item.kind })),
+      timestamp: new Date().toISOString(),
+    });
   };
 
   const hasPendingTurn = ({ contactId, kind = "", scheduleSource = "" } = {}) => {
@@ -628,90 +296,98 @@ export function createConversationChatService({
     return [...pendingTurns.values()].some((queue) => queue.some(matches));
   };
 
-  const emitQueue = (sessionId, projectRoot = "") => {
-    const queue = pendingTurns.get(turnKey(sessionId, projectRoot)) || [];
+  const removePermissionRequests = (turn) => {
+    for (const [requestId, permission] of permissionRequests) {
+      if (permission.turn === turn) permissionRequests.delete(requestId);
+    }
+  };
+
+  // A turn can be local-only (for example, the internal planning half of a
+  // proactive-contact chain) or rendered as a conversation-system entry.
+  // Keep that presentation data with every event derived from the turn so
+  // external transports never have to infer it from prompt text.
+  const eventPresentation = (turn) => ({
+    ...(turn?.displayAsSystem === true ? { displayAsSystem: true } : {}),
+    ...(turn?.deliverToWechat === false ? { deliverToWechat: false } : {}),
+  });
+
+  const emitReply = (turn, type, done = false) => {
+    if (!turn.text || (turn.kind === "schedule" && noReply(turn.text))) return;
     emit({
-      type: "queue",
-      sessionId,
-      projectRoot: clean(projectRoot),
-      items: queue.map((item, index) => ({
-        requestId: item.requestId,
-        position: index + 1,
-        kind: item.kind,
-      })),
+      type,
+      requestId: turn.requestId,
+      sessionId: turn.sessionId,
+      projectRoot: turn.projectRoot,
+      kind: turn.kind,
+      content: turn.text,
+      done,
+      ...eventPresentation(turn),
       timestamp: new Date().toISOString(),
     });
   };
 
-  const clearTextStreamTimer = (stream, name) => {
-    const timer = stream?.[name];
-    if (!timer) return;
-    clearTimeout(timer);
-    stream[name] = null;
+  const emitAgentReply = (turn) => {
+    if (!turn.text || (turn.kind === "schedule" && noReply(turn.text))) return;
+    emit({
+      type: "agent-reply",
+      requestId: turn.requestId,
+      sessionId: turn.sessionId,
+      projectRoot: turn.projectRoot,
+      kind: turn.kind,
+      content: turn.text,
+      ...(clean(turn.contactId) ? { contactId: turn.contactId } : {}),
+      ...eventPresentation(turn),
+      timestamp: new Date().toISOString(),
+    });
   };
 
-  const releaseTextStream = (stream) => {
-    if (!stream) return;
-    clearTextStreamTimer(stream, "idleTimer");
-    clearTextStreamTimer(stream, "closeTimer");
-    stream.closed = true;
-    if (reusableTextStreams.get(stream.key) === stream) reusableTextStreams.delete(stream.key);
+  // This transport event is emitted after an Agent attachment is delivered.
+  // The linked WeChat bridge
+  // already consumes it, while the local chat continues to render the durable
+  // receipt from Agent Core session history.
+  const emitAgentMedia = (turn, receipt) => {
+    const source = plainObject(receipt);
+    const media = Array.isArray(source.media) ? source.media : [];
+    if (!media.length) return;
+    const key = clean(source.receiptId) || media.map((item) => `${item.kind}\u0000${item.path}\u0000${item.size}`).join("\u0001");
+    if (!key || turn.agentMediaReceipts.has(key)) return;
+    turn.agentMediaReceipts.add(key);
+    emit({
+      type: "agent-media",
+      requestId: turn.requestId,
+      sessionId: turn.sessionId,
+      projectRoot: turn.projectRoot,
+      kind: turn.kind,
+      media,
+      ...eventPresentation(turn),
+      timestamp: new Date().toISOString(),
+    });
   };
 
-  const closeTextStream = (stream, { force = false } = {}) => {
-    if (!stream || stream.closed || stream.closing) return;
-    clearTextStreamTimer(stream, "idleTimer");
-    stream.closing = true;
-    if (reusableTextStreams.get(stream.key) === stream) reusableTextStreams.delete(stream.key);
-    if (force) {
-      try { stream.child.kill?.("SIGTERM"); } catch { /* The process may already be stopping. */ }
-      return;
-    }
-    try {
-      if (!stream.child?.stdin || stream.child.stdin.destroyed || stream.child.stdin.writableEnded) throw new Error("Claude Code 输入流已经关闭。");
-      stream.child.stdin.end();
-    } catch {
-      try { stream.child.kill?.("SIGTERM"); } catch { /* The process may already be stopping. */ }
-      return;
-    }
-    stream.closeTimer = setTimeout(() => {
-      stream.closeTimer = null;
-      if (!stream.closed) {
-        try { stream.child.kill?.("SIGTERM"); } catch { /* The process may already be stopping. */ }
-      }
-    }, textStreamCloseGrace);
-    stream.closeTimer.unref?.();
+  const emitTool = (turn, { phase = "completed", toolName = "", content = "" } = {}) => {
+    const text = clean(content);
+    if (!text) return;
+    emit({
+      type: "tool",
+      phase: clean(phase) || "completed",
+      requestId: turn.requestId,
+      sessionId: turn.sessionId,
+      projectRoot: turn.projectRoot,
+      kind: turn.kind,
+      toolName: clean(toolName) || "Suzu 工具",
+      content: text,
+      ...eventPresentation(turn),
+      timestamp: new Date().toISOString(),
+    });
   };
 
-  const armTextStreamIdleClose = (stream) => {
-    if (disposed || !stream || stream.closed || stream.closing || stream.turn || pendingTurns.get(stream.key)?.length) return;
-    clearTextStreamTimer(stream, "idleTimer");
-    stream.idleTimer = setTimeout(() => {
-      stream.idleTimer = null;
-      if (!stream.turn && !pendingTurns.get(stream.key)?.length) closeTextStream(stream);
-    }, textStreamIdleTimeout);
-    stream.idleTimer.unref?.();
-  };
-
-  const textStreamIsWritable = (stream) => Boolean(
-    stream
-      && !stream.closed
-      && !stream.closing
-      && !stream.turn
-      && stream.child?.stdin
-      && !stream.child.stdin.destroyed
-      && !stream.child.stdin.writableEnded,
-  );
-
-  const removePermissionRequests = (turn) => {
-    for (const requestId of turn.permissionIds) permissionRequests.delete(requestId);
-    turn.permissionIds.clear();
-  };
+  let pumpSession = () => undefined;
 
   const finishTurn = async (turn, { error = "", interrupted = false } = {}) => {
-    if (turn.finished) return;
+    if (!turn || turn.finished) return;
     turn.finished = true;
     activeTurns.delete(turn.key);
+    turnsById.delete(turn.requestId);
     removePermissionRequests(turn);
     if (turn.memoryTurn) {
       try {
@@ -724,9 +400,10 @@ export function createConversationChatService({
           });
         }
       } catch {
-        // A memory archive failure must not change the actual chat result.
+        // Local memory archival must not rewrite the model outcome.
       }
     }
+    await Promise.allSettled(turn.usageTasks || []);
     if (interrupted) {
       emit({
         type: "turn-stopped",
@@ -734,9 +411,8 @@ export function createConversationChatService({
         sessionId: turn.sessionId,
         projectRoot: turn.projectRoot,
         kind: turn.kind,
-        displayAsSystem: turn.displayAsSystem,
-        deliverToWechat: turn.deliverToWechat,
-        message: turn.interruptMessage || "已停止当前 Claude Code 任务。",
+        message: turn.interruptMessage || "已停止当前 Agent 任务。",
+        ...eventPresentation(turn),
         timestamp: new Date().toISOString(),
       });
     } else if (error) {
@@ -746,9 +422,8 @@ export function createConversationChatService({
         sessionId: turn.sessionId,
         projectRoot: turn.projectRoot,
         kind: turn.kind,
-        displayAsSystem: turn.displayAsSystem,
-        deliverToWechat: turn.deliverToWechat,
         message: error,
+        ...eventPresentation(turn),
         timestamp: new Date().toISOString(),
       });
     } else {
@@ -758,524 +433,525 @@ export function createConversationChatService({
         sessionId: turn.sessionId,
         projectRoot: turn.projectRoot,
         kind: turn.kind,
-        displayAsSystem: turn.displayAsSystem,
-        deliverToWechat: turn.deliverToWechat,
+        ...eventPresentation(turn),
         timestamp: new Date().toISOString(),
       });
     }
-    void pumpSession(turn.sessionId, turn.projectRoot);
+    dispatchLifecycle("Stop", lifecycleTurnPayload(turn, {
+      outcome: interrupted ? "cancelled" : error ? "failed" : "completed",
+      ...(error ? { error: bounded(error, 4_000) } : {}),
+      ...(Array.isArray(turn.contextBlocks) && turn.contextBlocks.length ? { contextBlocks: turn.contextBlocks } : {}),
+      ...(Array.isArray(turn.dynamicContextBlocks) && turn.dynamicContextBlocks.length
+        ? { dynamicContextBlocks: turn.dynamicContextBlocks }
+        : {}),
+    }));
+    if (!disposed) void pumpSession(turn.sessionId, turn.projectRoot);
   };
 
-  const createTurn = (request, memoryTurn, child, textStream = null) => ({
-    agentCallRequestEmitted: false,
-    agentMediaReceipts: new Set(),
-    auxiliaryEvents: new Set(),
-    child,
-    completed: false,
-    contactId: clean(request.contactId),
-    displayAsSystem: request.displayAsSystem === true,
-    deliverToWechat: request.deliverToWechat === true,
-    finished: false,
-    interrupted: false,
-    kind: request.kind,
-    lastAssistantText: "",
-    key: request.key,
-    memoryTurn,
-    permissionIds: new Set(),
-    projectRoot: request.projectRoot,
-    requestId: request.requestId,
-    resultError: "",
-    scheduleSource: clean(request.scheduleSource),
-    sessionId: request.sessionId,
-    settling: false,
-    stderr: "",
-    text: "",
-    textStream,
-  });
-
-  const settleTextStreamTurn = (stream, turn, outcome = {}) => {
-    if (!stream || stream.turn !== turn || turn.settling) return;
-    turn.settling = true;
-    void finishTurn(turn, outcome).finally(() => {
-      if (stream.turn !== turn) return;
-      stream.turn = null;
-      if (!stream.closed && !stream.closing) armTextStreamIdleClose(stream);
-      void pumpSession(turn.sessionId, turn.projectRoot);
-    });
+  const requestCancellation = async (turn) => {
+    if (!turn || turn.finished || turn.cancelTask || turn.state !== "running") return;
+    turn.cancelTask = Promise.resolve(runtime.cancelTurn({ sessionId: turn.sessionId, turnId: turn.requestId }))
+      .catch((error) => {
+        if (!turn.finished) void finishTurn(turn, { error: `无法停止当前 Agent 任务：${errorMessage(error, "停止失败。")}` });
+      })
+      .finally(() => { turn.cancelTask = null; });
+    await turn.cancelTask;
   };
 
-  const emitReply = (turn, type, done = false) => {
-    if (!turn.text) return;
-    emit({
-      type,
-      requestId: turn.requestId,
-      sessionId: turn.sessionId,
-      projectRoot: turn.projectRoot,
-      kind: turn.kind,
-      displayAsSystem: turn.displayAsSystem,
-      deliverToWechat: turn.deliverToWechat,
-      content: turn.text,
-      done,
-      timestamp: new Date().toISOString(),
-    });
-  };
-
-  const emitAgentReply = (turn, content) => {
-    const text = clean(content);
-    if (!text) return;
-    emit({
-      type: "agent-reply",
-      requestId: turn.requestId,
-      sessionId: turn.sessionId,
-      projectRoot: turn.projectRoot,
-      kind: turn.kind,
-      displayAsSystem: turn.displayAsSystem,
-      deliverToWechat: turn.deliverToWechat,
-      content: text,
-      ...(clean(turn.contactId) ? { contactId: clean(turn.contactId) } : {}),
-      timestamp: new Date().toISOString(),
-    });
-  };
-
-  const emitCompletedReply = (turn) => {
-    if (!turn.text || (turn.kind === "schedule" && isNoReply(turn.text))) return;
-    if (turn.kind === "schedule") emitAgentReply(turn, turn.text);
-    emitReply(turn, "reply", true);
-  };
-
-  const emitAuxiliary = (turn, type, content) => {
-    const text = clean(content);
-    if (!text) return;
-    const key = `${type}\u0000${text}`;
-    if (turn.auxiliaryEvents.has(key)) return;
-    turn.auxiliaryEvents.add(key);
-    if (turn.auxiliaryEvents.size > 240) turn.auxiliaryEvents.delete(turn.auxiliaryEvents.values().next().value);
-    emit({
-      type,
-      requestId: turn.requestId,
-      sessionId: turn.sessionId,
-      projectRoot: turn.projectRoot,
-      kind: turn.kind,
-      displayAsSystem: turn.displayAsSystem,
-      deliverToWechat: turn.deliverToWechat,
-      content: text,
-      timestamp: new Date().toISOString(),
-    });
-  };
-
-  const emitAgentMedia = (turn, receipts) => {
-    for (const receipt of receipts) {
-      const source = plainObject(receipt);
-      const media = Array.isArray(source.media) ? source.media : [];
-      if (!media.length) continue;
-      const key = clean(source.receiptId) || media.map((item) => `${item.kind}\u0000${item.path}\u0000${item.size}`).join("\u0001");
-      if (!key || turn.agentMediaReceipts.has(key)) continue;
-      turn.agentMediaReceipts.add(key);
-      emit({
-        type: "agent-media",
-        requestId: turn.requestId,
-        sessionId: turn.sessionId,
-        projectRoot: turn.projectRoot,
-        kind: turn.kind,
-        displayAsSystem: turn.displayAsSystem,
-        deliverToWechat: turn.deliverToWechat,
-        media,
-        timestamp: new Date().toISOString(),
-      });
+  const respondLifecycleRequest = async (requestId, result) => {
+    if (typeof runtime?.respondLifecycleRequest !== "function") return false;
+    try {
+      return await runtime.respondLifecycleRequest({ requestId, result });
+    } catch {
+      return false;
     }
   };
 
-  const emitAgentVoiceCallRequest = (turn, requests) => {
-    if (turn.agentCallRequestEmitted || !clean(turn.contactId)) return;
-    const request = requests[0];
-    if (!request) return;
-    turn.agentCallRequestEmitted = true;
-    emit({
-      type: "call-request",
-      requestId: `${turn.requestId}:voice-call`,
-      sessionId: turn.sessionId,
-      projectRoot: turn.projectRoot,
-      kind: turn.kind,
-      displayAsSystem: turn.displayAsSystem,
-      deliverToWechat: turn.deliverToWechat,
-      contactId: turn.contactId,
-      reason: clean(request.reason),
-      timestamp: new Date().toISOString(),
-    });
-  };
+  const handleLifecycleBridge = async (event) => {
+    const source = plainObject(event);
+    const type = clean(source.type);
+    const lifecycleEvent = clean(source.lifecycleEvent);
+    const data = plainObject(source.data);
+    const sessionId = clean(data.sessionId || source.sessionId);
+    const coreTurn = Number.isInteger(data.coreTurn) ? data.coreTurn : null;
+    const step = Number.isInteger(data.step) ? data.step : null;
+    const turn = turnForRuntimeSession(sessionId, source.turnId);
 
-  const handleWireMessage = (turn, raw, textStream = null) => {
-    if (turn.interrupted || turn.settling || turn.finished) return;
-    const type = clean(raw?.type);
-    if (type === "system" && raw?.subtype === "init") {
-      const commands = Array.isArray(raw?.slash_commands)
-        ? raw.slash_commands.map((item) => clean(typeof item === "string" ? item : item?.name)).filter(Boolean)
-        : [];
-      emit({
-        type: "slash-commands",
-        sessionId: turn.sessionId,
-        projectRoot: turn.projectRoot,
-        kind: turn.kind,
-        displayAsSystem: turn.displayAsSystem,
-        deliverToWechat: turn.deliverToWechat,
-        commands,
-        timestamp: new Date().toISOString(),
-      });
-      return;
-    }
-    if (type === "system") {
-      emitAuxiliary(turn, "system", raw?.content ?? raw?.message?.content ?? (raw?.subtype ? `[系统: ${raw.subtype}]` : ""));
-      return;
-    }
-    if (type === "assistant") {
-      emitAgentMedia(turn, attachmentReceiptsFromToolResults(raw?.message?.content));
-      emitAgentVoiceCallRequest(turn, voiceCallRequestsFromToolResults(raw?.message?.content));
-      for (const item of auxiliaryParts(raw?.message?.content)) emitAuxiliary(turn, item.type, item.content);
-      const next = messageText(raw?.message?.content);
-      if (next) {
-        if (isToolPlanningAssistantMessage(raw)) {
-          emitAuxiliary(turn, "thinking", next);
-          return;
+    // One Agent Core child hosts both normal contact sessions and the built-in
+    // product-use assistant. Its lifecycle requests must be answered by that
+    // isolated service, never by a contact compactor, memory Hook, or
+    // capability runtime merely because they share a process.
+    if (sessionId === SUZU_SOFTWARE_ASSISTANT_SESSION_ID) return;
+
+    if (type === "lifecycle-request") {
+      const requestId = clean(source.requestId);
+      if (!requestId) return;
+      // This is intentionally a small configuration query rather than a
+      // lifecycle Hook. The compaction module asks at the real execution
+      // point, and the parent resolves only the trusted contact that owns this
+      // Agent session. It also works for a manual `/compact`, which has no chat
+      // turn to look up here.
+      if (lifecycleEvent === "CompactionSettings") {
+        let result = { available: false };
+        try {
+          if (typeof compactor?.settingsForRuntime === "function") {
+            result = await compactor.settingsForRuntime({
+              sessionId,
+              projectRoot: clean(data.projectRoot),
+            });
+          }
+        } catch {
+          // A missing contact or unreadable local settings file must disable
+          // automatic compaction rather than block a normal conversation.
         }
-        turn.text = mergeFullText(turn.text, next);
-        turn.lastAssistantText = next;
-        if (turn.kind !== "schedule") {
-          emitAgentReply(turn, next);
-          emitReply(turn, "reply-stream");
-        }
-      }
-      return;
-    }
-    if (type === "user") {
-      emitAgentMedia(turn, attachmentReceiptsFromToolResults(raw?.message?.content));
-      emitAgentVoiceCallRequest(turn, voiceCallRequestsFromToolResults(raw?.message?.content));
-      for (const item of auxiliaryParts(raw?.message?.content)) emitAuxiliary(turn, item.type, item.content);
-      return;
-    }
-    if (type === "attachment" || type === "hook_additional_context") {
-      const attachment = raw?.attachment && typeof raw.attachment === "object" ? raw.attachment : raw;
-      const content = Array.isArray(attachment.content) ? attachment.content.join("\n") : attachment.content;
-      const memoryRecall = longTermMemoryRecallSystemMessage(content);
-      if (memoryRecall) {
-        emitAuxiliary(turn, "system", memoryRecall);
+        await respondLifecycleRequest(requestId, result);
         return;
       }
-      emitAuxiliary(turn, "attachment", content);
-      return;
-    }
-    if (type === "stream_event") {
-      const delta = raw?.event?.delta?.text ?? raw?.delta?.text;
-      if (typeof delta === "string" && delta) {
-        turn.text = bounded(`${turn.text}${delta}`, MAX_EVENT_TEXT_LENGTH);
-        if (turn.kind !== "schedule") emitReply(turn, "reply-stream");
+      if (lifecycleEvent === "CapabilityCatalog") {
+        let result = { actions: [] };
+        if (turn && typeof capabilityRuntime?.availableActions === "function") {
+          try {
+            result = {
+              actions: await capabilityRuntime.availableActions({
+                contactId: turn.contactId,
+                coreTurn,
+                projectRoot: turn.projectRoot,
+                sessionId: turn.sessionId,
+                step,
+                turnId: turn.requestId,
+              }),
+            };
+          } catch {
+            // The model can still continue without an optional product action.
+          }
+        }
+        await respondLifecycleRequest(requestId, result);
+        return;
+      }
+      if (lifecycleEvent === "CapabilityExecute") {
+        let result = { status: "turn-unavailable" };
+        if (turn && typeof capabilityRuntime?.invoke === "function") {
+          try {
+            result = await capabilityRuntime.invoke({
+              action: clean(data.action),
+              capabilityId: clean(data.capabilityId),
+              contactId: turn.contactId,
+              coreTurn,
+              ...(Object.hasOwn(data, "input") ? { input: data.input } : {}),
+              projectRoot: turn.projectRoot,
+              sessionId: turn.sessionId,
+              step,
+              turnId: turn.requestId,
+            });
+          } catch (error) {
+            result = {
+              status: "failed",
+              error: {
+                code: clean(error?.code) || "CAPABILITY_ACTION_FAILED",
+                message: errorMessage(error, "能力动作执行失败。"),
+              },
+            };
+          }
+        }
+        await respondLifecycleRequest(requestId, result);
+        return;
+      }
+      if (lifecycleEvent === "ContextCollect") {
+        let result = { blocks: [] };
+        if (turn) {
+          try {
+            const context = await agentLifecycle.collectContext(lifecycleTurnPayload(turn, { coreTurn, step }));
+            turn.contextBlocks = context.blocks;
+            result = { blocks: context.blocks };
+          } catch (error) {
+            dispatchLifecycle("ContextInjectionFailed", lifecycleTurnPayload(turn, {
+              coreTurn,
+              step,
+              error: errorMessage(error, "上下文 Hook 失败。"),
+            }));
+          }
+        }
+        await respondLifecycleRequest(requestId, result);
+        return;
+      }
+      if (lifecycleEvent === "DynamicContextCollect") {
+        let result = { blocks: [] };
+        if (turn) {
+          try {
+            const context = await agentLifecycle.collectDynamicContext(lifecycleTurnPayload(turn, { coreTurn, step }));
+            turn.dynamicContextBlocks = context.blocks;
+            result = { blocks: context.blocks };
+          } catch (error) {
+            dispatchLifecycle("DynamicContextInjectionFailed", lifecycleTurnPayload(turn, {
+              coreTurn,
+              step,
+              error: errorMessage(error, "动态上下文 Hook 失败。"),
+            }));
+          }
+        }
+        await respondLifecycleRequest(requestId, result);
+        return;
+      }
+      if (lifecycleEvent === "PreToolUse") {
+        let decision = { kind: "allow" };
+        if (turn) {
+          try {
+            const outcome = await agentLifecycle.decide("PreToolUse", lifecycleTurnPayload(turn, {
+              arguments: source.data?.arguments,
+              callId: clean(data.callId),
+              rootCallId: clean(data.rootCallId),
+              toolName: clean(data.toolName) || "Suzu 工具",
+            }));
+            decision = outcome.decision;
+          } catch (error) {
+            decision = {
+              kind: "deny",
+              reason: `关键 PreToolUse Hook 失败：${bounded(errorMessage(error, "未知错误。"), 1_000)}`,
+            };
+          }
+        }
+        await respondLifecycleRequest(requestId, { decision });
       }
       return;
     }
-    if (type === "control_request") {
-      const requestId = clean(raw?.request_id);
-      const request = raw?.request && typeof raw.request === "object" ? raw.request : {};
-      if (!requestId || request.subtype !== "can_use_tool") return;
-      const permission = {
-        requestId,
-        turn,
-        input: request.input && typeof request.input === "object" ? request.input : {},
-        toolName: clean(request.tool_name) || "Claude Code 工具",
-      };
-      turn.permissionIds.add(requestId);
-      permissionRequests.set(requestId, permission);
+
+    if (type !== "lifecycle-event" || !turn) return;
+    if (lifecycleEvent === "ContextInjected") {
+      dispatchLifecycle("ContextInjected", lifecycleTurnPayload(turn, {
+        coreTurn,
+        step,
+        contextBlocks: Array.isArray(data.blocks) ? data.blocks : turn.contextBlocks,
+      }));
+    }
+    if (lifecycleEvent === "ContextInjectionFailed") {
+      dispatchLifecycle("ContextInjectionFailed", lifecycleTurnPayload(turn, {
+        coreTurn,
+        step,
+        error: bounded(clean(data.error) || "Agent Core 没有注入本轮上下文。", 4_000),
+      }));
+    }
+    if (lifecycleEvent === "DynamicContextInjected") {
+      const dynamicContextBlocks = Array.isArray(data.blocks) ? data.blocks : turn.dynamicContextBlocks;
+      turn.dynamicContextBlocks = dynamicContextBlocks;
+      dispatchLifecycle("DynamicContextInjected", lifecycleTurnPayload(turn, {
+        coreTurn,
+        step,
+        dynamicContextBlocks,
+      }));
+    }
+    if (lifecycleEvent === "DynamicContextInjectionFailed") {
+      dispatchLifecycle("DynamicContextInjectionFailed", lifecycleTurnPayload(turn, {
+        coreTurn,
+        step,
+        error: bounded(clean(data.error) || "Agent Core 没有注入本轮动态上下文。", 4_000),
+      }));
+    }
+    if (lifecycleEvent === "DynamicContextExpired") {
+      dispatchLifecycle("DynamicContextExpired", lifecycleTurnPayload(turn, {
+        coreTurn,
+        step,
+        dynamicContextBlocks: Array.isArray(data.blocks) ? data.blocks : turn.dynamicContextBlocks,
+      }));
+    }
+    if (lifecycleEvent === "DynamicContextCleanupFailed") {
+      dispatchLifecycle("DynamicContextCleanupFailed", lifecycleTurnPayload(turn, {
+        coreTurn,
+        step,
+        dynamicContextBlocks: Array.isArray(data.blocks) ? data.blocks : turn.dynamicContextBlocks,
+        error: bounded(clean(data.error) || "Agent Core 没有从活动上下文移除本轮动态内容。", 4_000),
+      }));
+    }
+  };
+
+  const handleCompactionEvent = (event) => {
+    const source = plainObject(event);
+    const type = clean(source.type);
+    const lifecycleEvent = type === "compaction-started"
+      ? "PreCompact"
+      : type === "compaction-completed"
+        ? "PostCompact"
+        : "CompactFailed";
+    dispatchLifecycle(lifecycleEvent, lifecyclePayloadForRuntimeSession(source.sessionId, {
+      turnId: clean(source.turnId),
+      compactionId: clean(source.data?.compactionId),
+      coreTurn: Number.isInteger(source.data?.coreTurn) ? source.data.coreTurn : null,
+      ...(clean(source.error) ? { error: bounded(source.error, 4_000) } : {}),
+    }));
+  };
+
+  const handleRuntimeEvent = (event) => {
+    const source = plainObject(event);
+    const type = clean(source.type);
+    if (type === "lifecycle-request" || type === "lifecycle-event") {
+      void handleLifecycleBridge(source);
+      return;
+    }
+    if (["compaction-started", "compaction-completed", "compaction-failed"].includes(type)) {
+      handleCompactionEvent(source);
+      return;
+    }
+    if (type === "model-usage") {
+      const usageTurn = turnsById.get(clean(source.turnId)) || null;
+      const task = Promise.resolve(agentUsageLedger.record({ event: source, turn: usageTurn }))
+        .catch(() => undefined);
+      if (usageTurn && !usageTurn.finished) usageTurn.usageTasks.push(task);
+      return;
+    }
+    const turn = turnsById.get(clean(source.turnId));
+    if (!turn || turn.finished) return;
+    if (type === "turn-started") {
+      turn.state = "running";
+      dispatchLifecycle("TurnStarted", lifecycleTurnPayload(turn, {
+        coreTurn: Number.isInteger(source.data?.coreTurn) ? source.data.coreTurn : null,
+      }));
+      if (turn.cancelRequested) void requestCancellation(turn);
+      return;
+    }
+    if (type === "assistant-reasoning-delta") {
+      // Agent Core keeps reasoning separate from visible answer text. The renderer
+      // only needs the phase transition (for its WeChat-style title), never
+      // the reasoning content itself.
+      if (turn.kind !== "schedule" && turn.outputPhase !== "thinking") {
+        turn.outputPhase = "thinking";
+        emit({
+          type: "thinking",
+          requestId: turn.requestId,
+          sessionId: turn.sessionId,
+          projectRoot: turn.projectRoot,
+          kind: turn.kind,
+          ...eventPresentation(turn),
+          timestamp: new Date().toISOString(),
+        });
+      }
+      return;
+    }
+    if (type === "assistant-delta") {
+      turn.outputPhase = "text";
+      turn.text = bounded(`${turn.text}${String(source.text || "")}`);
+      dispatchLifecycle("AssistantDelta", lifecycleTurnPayload(turn, {
+        delta: bounded(String(source.text || "")),
+      }));
+      if (turn.kind !== "schedule") emitReply(turn, "reply-stream");
+      return;
+    }
+    if (type === "assistant-completed") {
+      turn.text = mergeFullText(turn.text, source.text);
+      if (turn.text && turn.kind !== "schedule") emitReply(turn, "reply", true);
+      emitAgentReply(turn);
+      void finishTurn(turn);
+      return;
+    }
+    if (type === "turn-cancelled") {
+      void finishTurn(turn, { interrupted: true });
+      return;
+    }
+    if (type === "turn-failed") {
+      void finishTurn(turn, { error: clean(source.error) || "Agent Core 没有完成这次回复。" });
+      return;
+    }
+    if (type === "runtime-unavailable") {
+      void finishTurn(turn, { error: clean(source.error) || "Agent Core 暂时不可用。" });
+      return;
+    }
+    if (type === "tool-started") {
+      turn.toolNames.add(clean(source.toolName) || "Suzu 工具");
+      dispatchLifecycle("ToolStarted", lifecycleTurnPayload(turn, {
+        callId: clean(source.data?.callId),
+        toolName: clean(source.toolName) || "Suzu 工具",
+      }));
+      const preview = toolPreview(source.data);
+      const toolName = clean(source.toolName) || "工具";
+      emitTool(turn, {
+        phase: "started",
+        toolName,
+        content: `工具调用：${toolName}${preview ? `\n${preview}` : ""}`,
+      });
+      return;
+    }
+    if (type === "tool-completed" || type === "tool-failed") {
+      if (type === "tool-completed" && clean(source.toolName) === SUZU_CAPABILITY_TOOL) {
+        emitAgentMedia(turn, agentMediaReceipt(source.data?.result));
+      }
+      dispatchLifecycle(type === "tool-failed" ? "PostToolUseFailure" : "PostToolUse", lifecycleTurnPayload(turn, {
+        callId: clean(source.data?.callId),
+        toolName: clean(source.toolName) || "Suzu 工具",
+        status: type === "tool-failed" ? "failed" : "completed",
+        ...(source.data?.result !== undefined ? { result: source.data.result } : {}),
+        ...(clean(source.error) ? { error: bounded(source.error, 4_000) } : {}),
+      }));
+      const result = source.data?.result;
+      const suffix = result === undefined || result === "" ? "" : `\n${bounded(typeof result === "string" ? result : JSON.stringify(result, null, 2), 4_000)}`;
+      const toolName = clean(source.toolName) || "工具";
+      emitTool(turn, {
+        phase: type === "tool-failed" ? "failed" : "completed",
+        toolName,
+        content: `工具结果${type === "tool-failed" ? "（错误）" : ""}：${toolName}${suffix}`,
+      });
+      return;
+    }
+    if (type === "tool-approval-requested") {
+      const approvalId = clean(source.approvalId);
+      if (!approvalId) return;
+      const requestId = `${turn.requestId}:approval:${approvalId}`;
+      permissionRequests.set(requestId, { approvalId, requestId, turn, toolName: clean(source.toolName) || "Suzu 工具" });
+      dispatchLifecycle("PermissionRequest", lifecycleTurnPayload(turn, {
+        approvalId,
+        callId: clean(source.data?.callId),
+        reason: bounded(clean(source.data?.reason) || "Agent Core 请求使用工具。", 4_000),
+        toolName: clean(source.toolName) || "Suzu 工具",
+      }));
       emit({
         type: "permission",
         requestId,
         sessionId: turn.sessionId,
         projectRoot: turn.projectRoot,
         kind: turn.kind,
-        displayAsSystem: turn.displayAsSystem,
-        deliverToWechat: turn.deliverToWechat,
-        toolName: permission.toolName,
-        preview: permissionPreview(permission.input),
+        toolName: clean(source.toolName) || "Suzu 工具",
+        preview: bounded(clean(source.data?.reason) || "Agent Core 请求使用工具。", 4_000),
+        ...eventPresentation(turn),
         timestamp: new Date().toISOString(),
       });
       return;
     }
-    if (type !== "result" || raw?.subtype === "compact" || raw?.subtype === "compaction") return;
-    const result = typeof raw?.result === "string" ? bounded(raw.result, MAX_EVENT_TEXT_LENGTH) : "";
-    if (result) {
-      turn.text = mergeFullText(turn.text, result);
-      if (turn.kind !== "schedule" && clean(result) !== clean(turn.lastAssistantText)) emitAgentReply(turn, result);
+    if (type === "tool-approval-resolved") {
+      const approvalId = clean(source.approvalId);
+      const requestId = `${turn.requestId}:approval:${approvalId}`;
+      const permission = permissionRequests.get(requestId);
+      if (!permission) return;
+      permissionRequests.delete(requestId);
+      dispatchLifecycle("PermissionResolved", lifecycleTurnPayload(turn, {
+        approvalId,
+        behavior: clean(source.data?.decision) || "resolved",
+        toolName: clean(source.toolName) || permission?.toolName || "Suzu 工具",
+      }));
     }
-    emitAuxiliary(turn, "usage", usageSummary(raw?.usage ?? raw?.message?.usage, raw?.model ?? raw?.message?.model));
-    turn.completed = true;
-    turn.resultError = raw?.is_error === true ? clean(raw?.result) || "Claude Code 没有完成这次回复。" : "";
-    emitCompletedReply(turn);
-    if (textStream) {
-      settleTextStreamTurn(textStream, turn, { error: turn.resultError });
-      if (turn.resultError) closeTextStream(textStream);
-      return;
-    }
-    try { turn.child.stdin?.end(); } catch { /* Closing after a final result is best effort. */ }
   };
 
-  const finishTextStreamProcess = (stream, { code = null, signal = null, error = "" } = {}) => {
-    if (!stream || stream.closed) return;
-    const turn = stream.turn;
-    try { stream.output?.close(); } catch { /* Closing a completed reader is best effort. */ }
-    releaseTextStream(stream);
-    if (!turn) {
-      void pumpSession(stream.sessionId, stream.projectRoot);
-      return;
-    }
-    if (turn.settling || turn.finished) return;
-    if (turn.interrupted) {
-      settleTextStreamTurn(stream, turn, { interrupted: true });
-      return;
-    }
-    if (turn.completed || code === 0) {
-      if (!turn.completed) {
-        if (turn.text && clean(turn.text) !== clean(turn.lastAssistantText)) emitAgentReply(turn, turn.text);
-        emitCompletedReply(turn);
-      }
-      settleTextStreamTurn(stream, turn, { error: turn.resultError });
-      return;
-    }
-    const detail = clean(error || turn.stderr).replace(/\s+/gu, " ");
-    const reason = signal
-      ? `Claude Code 已停止（${signal}）。`
-      : `Claude Code 未能完成这次回复（退出代码 ${code ?? "未知"}）。`;
-    settleTextStreamTurn(stream, turn, { error: detail ? `${reason} ${detail}` : reason });
+  const unsubscribeRuntime = runtime.subscribe(handleRuntimeEvent);
+
+  const resolveSession = async ({ sessionId, projectRoot, hasTranscript } = {}) => {
+    const id = clean(sessionId);
+    const root = clean(projectRoot);
+    if (!id && !root) return reader.ensureActiveSession();
+    if (!id || !root) throw new ConversationChatError("指定 Agent 会话时必须同时提供会话标识和工作目录。", { code: "INVALID_SESSION_SCOPE" });
+    return { id, projectRoot: root, hasTranscript: hasTranscript === true };
   };
 
-  const createTextStream = (child, request, signature) => {
-    const stream = {
-      child,
-      closeTimer: null,
-      closed: false,
-      closing: false,
-      idleTimer: null,
-      key: request.key,
-      output: null,
-      projectRoot: request.projectRoot,
-      sessionId: request.sessionId,
-      signature,
-      turn: null,
-    };
-    reusableTextStreams.set(stream.key, stream);
-    const output = readline.createInterface({ input: child.stdout, crlfDelay: Infinity });
-    stream.output = output;
-    output.on("line", (line) => {
-      const turn = stream.turn;
-      if (!turn) return;
-      let raw;
-      try { raw = JSON.parse(line); } catch { return; }
-      handleWireMessage(turn, raw, stream);
-    });
-    child.stderr?.on?.("data", (chunk) => {
-      const turn = stream.turn;
-      if (turn) turn.stderr = bounded(`${turn.stderr}${String(chunk)}`, 6_000);
-    });
-    child.on?.("error", (error) => {
-      finishTextStreamProcess(stream, {
-        error: `无法运行本机 Claude Code：${processErrorMessage(error, "进程启动失败。")}`,
-      });
-      try { child.kill?.("SIGTERM"); } catch { /* The process may already be stopping. */ }
-    });
-    child.on?.("close", (code, signal) => finishTextStreamProcess(stream, { code, signal }));
-    return stream;
-  };
-
-  const startTextStreamTurn = (stream, request, memoryTurn) => {
-    clearTextStreamTimer(stream, "idleTimer");
-    const turn = createTurn(request, memoryTurn, stream.child, stream);
-    stream.turn = turn;
-    activeTurns.set(request.key, turn);
-    emit({
-      type: "turn-start",
-      requestId: turn.requestId,
-      sessionId: turn.sessionId,
-      projectRoot: turn.projectRoot,
-      kind: turn.kind,
-      displayAsSystem: turn.displayAsSystem,
-      timestamp: new Date().toISOString(),
-    });
+  const prepareMemoryTurn = async (request) => {
+    if (![
+      "message",
+      "call",
+      "call-open",
+      "mail-feedback",
+    ].includes(request.kind) || !clean(request.memoryText) || typeof memoryRuntime?.prepareTurn !== "function") return null;
     try {
-      writeJson(stream.child, { type: "user", message: { role: "user", content: request.content } });
-      knownTranscripts.add(request.key);
-    } catch (error) {
-      settleTextStreamTurn(stream, turn, { error: processErrorMessage(error, "无法向 Claude Code 发送消息。") });
-      closeTextStream(stream, { force: true });
+      return await memoryRuntime.prepareTurn({
+        occurredAt: request.memoryOccurredAt,
+        projectRoot: request.projectRoot,
+        sessionId: request.sessionId,
+        turnId: request.requestId,
+        userText: request.memoryText,
+      });
+    } catch {
+      return null;
     }
-  };
-
-  const validateContent = (value, { allowEmpty = false } = {}) => {
-    const text = String(value ?? "").trim();
-    if (!text && !allowEmpty) throw new ConversationChatError("消息不能为空。");
-    if (text.length > MAX_MESSAGE_LENGTH) {
-      throw new ConversationChatError(`消息不能超过 ${MAX_MESSAGE_LENGTH.toLocaleString("zh-CN")} 个字符。`);
-    }
-    return text;
   };
 
   const startTurn = async (request) => {
     if (disposed) return;
     let projectStat;
     try { projectStat = await fsOps.stat(request.projectRoot); }
-    catch { throw new ConversationChatError("当前 Claude 工作目录不存在或无法读取。"); }
-    if (!isDirectory(projectStat)) throw new ConversationChatError("当前 Claude 工作目录不是文件夹。");
+    catch { throw new ConversationChatError("当前 Agent 工作目录不存在或无法读取。", { code: "WORKSPACE_MISSING" }); }
+    if (!isDirectory(projectStat)) throw new ConversationChatError("当前 Agent 工作目录不是文件夹。", { code: "WORKSPACE_INVALID" });
 
-    const command = await resolveClaudeCommand({ fsOps, homeDirectory });
-    if (disposed) return;
-    const attachmentCommand = typeof agentAttachmentCommand === "function"
-      ? agentAttachmentCommand({ sessionId: request.sessionId, projectRoot: request.projectRoot })
-      : "";
-    const scheduleCommands = typeof agentScheduleCommand === "function"
-      ? await Promise.resolve(agentScheduleCommand({
-        sessionId: request.sessionId,
-        projectRoot: request.projectRoot,
-        kind: request.kind,
-        scheduleSource: request.scheduleSource,
-      }))
-      : null;
-    const currentSettings = settingsService.load() || {};
-    const claudeRuntimeFeatures = currentSettings.claudeRuntimeFeatures;
-    let memoryTurn = null;
-    if (["message", "call", "call-open", "iphone-feedback"].includes(request.kind)
-      && clean(request.memoryText)
-      && typeof memoryRuntime?.prepareTurn === "function") {
-      try {
-        memoryTurn = await memoryRuntime.prepareTurn({
-          occurredAt: request.memoryOccurredAt,
-          projectRoot: request.projectRoot,
-          sessionId: request.sessionId,
-          turnId: request.requestId,
-          userText: request.memoryText,
-        });
-      } catch {
-        memoryTurn = null;
-      }
-    }
+    const lifecycleBase = {
+      ...lifecycleScope(request),
+      userText: bounded(request.memoryText || request.content, MAX_MESSAGE_LENGTH),
+    };
+    // The instruction bridge is a critical TurnStarting Hook. Context is not
+    // collected here: Agent Core asks at every real `agent/pre-step`, where the
+    // lifecycle bridge can actually inject the returned blocks into the model.
+    await agentLifecycle.dispatch("TurnStarting", lifecycleBase);
+
+    const memoryTurn = await prepareMemoryTurn(request);
     if (disposed) {
-      try { await memoryRuntime?.abortTurn?.(memoryTurn); } catch { /* A stopped chat needs no memory cursor. */ }
+      try { await memoryRuntime?.abortTurn?.(memoryTurn); } catch { /* No running conversation remains. */ }
       return;
     }
-    const supportsVoiceCallTurns = ["message", "call", "call-open"].includes(request.kind);
-    const args = claudeCliArguments({
+    const turn = {
+      agentMediaReceipts: new Set(),
+      cancelRequested: false,
+      cancelTask: null,
+      contactId: clean(request.contactId),
+      finished: false,
+      interruptMessage: "",
+      kind: request.kind,
+      key: request.key,
+      memoryTurn,
+      projectRoot: request.projectRoot,
+      requestId: request.requestId,
+      scheduleSource: clean(request.scheduleSource),
       sessionId: request.sessionId,
-      hasTranscript: request.hasTranscript || knownTranscripts.has(request.key),
-      claudeRuntimeFeatures,
-      claudeToolPermissions: currentSettings.claudeToolPermissions,
-      allowedTools: claudeAllowedToolsForWorkspace(currentSettings.claudeToolPermissions, { suzuCliCommand }),
-      permissionMode: request.approvalMode,
-      workspaceDirectories: claudeWorkspaceDirectories,
-      appendSystemPrompt: [
-        wechatAttachmentSystemPrompt(attachmentCommand),
-        scheduleSystemPrompt(scheduleCommands),
-        supportsVoiceCallTurns ? VOICE_CALL_SYSTEM_PROMPT : "",
-      ].filter(Boolean).join("\n\n"),
-    });
-    // Long-term recall is injected by UserPromptSubmit alongside this user
-    // record. It no longer changes --append-system-prompt, so a recalled turn
-    // can keep using the same persistent Claude stream as every other turn.
-    const canReuseConversationStream = supportsVoiceCallTurns;
-    const signature = canReuseConversationStream ? streamSignature(args) : "";
-    const existingTextStream = reusableTextStreams.get(request.key);
-    if (canReuseConversationStream
-      && textStreamIsWritable(existingTextStream)
-      && existingTextStream.signature === signature) {
-      startTextStreamTurn(existingTextStream, request, memoryTurn);
-      return;
-    }
-    // A turn outside normal text/call or changed runtime options needs a fresh
-    // Claude process. Retire only an idle text stream; an active stream is
-    // protected by the session queue.
-    if (existingTextStream && !existingTextStream.turn) closeTextStream(existingTextStream);
-    let child;
-    try {
-      child = spawnImpl(command, args, {
-        cwd: request.projectRoot,
-        env: claudeCliEnvironment({
-          claudeRuntimeFeatures,
-        }),
-        stdio: ["pipe", "pipe", "pipe"],
-        windowsHide: true,
-      });
-    } catch (error) {
-      try { await memoryRuntime?.abortTurn?.(memoryTurn); } catch { /* The spawn error remains primary. */ }
-      throw new ConversationChatError(`无法启动本机 Claude Code：${processErrorMessage(error, "启动失败。")}`);
-    }
-    if (!child?.stdin || !child?.stdout) {
-      try { child?.kill?.(); } catch { /* The process may not have started. */ }
-      try { await memoryRuntime?.abortTurn?.(memoryTurn); } catch { /* The local pipe error remains primary. */ }
-      throw new ConversationChatError("无法建立 Claude Code 的本地输入输出通道。");
-    }
-
-    if (canReuseConversationStream) {
-      const textStream = createTextStream(child, request, signature);
-      startTextStreamTurn(textStream, request, memoryTurn);
-      return;
-    }
-
-    const turn = createTurn(request, memoryTurn, child);
-    activeTurns.set(request.key, turn);
+      displayAsSystem: request.displayAsSystem === true,
+      deliverToWechat: request.deliverToWechat !== false,
+      state: "starting",
+      text: "",
+      toolNames: new Set(),
+      usageTasks: [],
+      userText: lifecycleBase.userText,
+      contextBlocks: [],
+      dynamicContextBlocks: [],
+    };
+    activeTurns.set(turn.key, turn);
+    turnsById.set(turn.requestId, turn);
     emit({
       type: "turn-start",
       requestId: turn.requestId,
       sessionId: turn.sessionId,
       projectRoot: turn.projectRoot,
       kind: turn.kind,
-      displayAsSystem: turn.displayAsSystem,
+      ...eventPresentation(turn),
       timestamp: new Date().toISOString(),
     });
-    const output = readline.createInterface({ input: child.stdout, crlfDelay: Infinity });
-    output.on("line", (line) => {
-      let raw;
-      try { raw = JSON.parse(line); } catch { return; }
-      handleWireMessage(turn, raw);
-    });
-    child.stderr?.on?.("data", (chunk) => {
-      turn.stderr = bounded(`${turn.stderr}${String(chunk)}`, 6_000);
-    });
-    child.on?.("error", (error) => {
-      void finishTurn(turn, turn.interrupted
-        ? { interrupted: true }
-        : { error: `无法运行本机 Claude Code：${processErrorMessage(error, "进程启动失败。")}` });
-    });
-    child.on?.("close", (code, signal) => {
-      output.close();
-      if (turn.finished) return;
-      if (turn.interrupted) {
-        void finishTurn(turn, { interrupted: true });
-        return;
-      }
-      if (turn.completed || code === 0) {
-        if (!turn.completed) {
-          if (turn.kind !== "schedule" && turn.text && clean(turn.text) !== clean(turn.lastAssistantText)) emitAgentReply(turn, turn.text);
-          emitCompletedReply(turn);
-        }
-        void finishTurn(turn, { error: turn.resultError });
-        return;
-      }
-      const detail = clean(turn.stderr).replace(/\s+/gu, " ");
-      const reason = signal
-        ? `Claude Code 已停止（${signal}）。`
-        : `Claude Code 未能完成这次回复（退出代码 ${code ?? "未知"}）。`;
-      void finishTurn(turn, { error: detail ? `${reason} ${detail}` : reason });
-    });
     try {
-      writeJson(child, { type: "user", message: { role: "user", content: request.content } });
-      knownTranscripts.add(request.key);
+      await runtime.ensureSession({
+        sessionId: turn.sessionId,
+        contactId: turn.contactId,
+        cwd: turn.projectRoot,
+      });
+      if (turn.contactId && !activatedContacts.has(turn.key)) {
+        activatedContacts.add(turn.key);
+        dispatchLifecycle("ContactActivated", lifecycleScope(turn));
+      }
+      if (!openedSessions.has(turn.key)) {
+        const opened = lifecycleScope(turn);
+        openedSessions.set(turn.key, opened);
+        dispatchLifecycle("SessionStart", { ...opened, source: "product-open" });
+      }
+      if (turn.cancelRequested) {
+        await finishTurn(turn, { interrupted: true });
+        return;
+      }
+      await runtime.sendTurn({
+        sessionId: turn.sessionId,
+        turnId: turn.requestId,
+        input: request.input || inputForAgent({ kind: turn.kind, text: request.content, callDirection: request.callDirection }),
+        placement: "queue",
+      });
+      turn.state = "submitted";
     } catch (error) {
-      void finishTurn(turn, { error: processErrorMessage(error, "无法向 Claude Code 发送消息。") });
-      try { child.kill?.(); } catch { /* The error is already emitted to the conversation. */ }
+      await finishTurn(turn, { error: `无法发送给 Suzu Agent Core：${errorMessage(error, "未知错误。")}` });
     }
   };
 
-  const pumpSession = async (sessionId, projectRoot, { propagateStartError = false } = {}) => {
+  pumpSession = async (sessionId, projectRoot, { propagateStartError = false } = {}) => {
     const key = turnKey(sessionId, projectRoot);
-    if (disposed || activeTurns.has(key) || reusableTextStreams.get(key)?.turn || startingSessions.has(key)) return;
+    if (disposed || activeTurns.has(key) || startingSessions.has(key)) return;
     const queue = pendingTurns.get(key);
     if (!queue?.length) return;
     const request = queue.shift();
     if (!queue.length) pendingTurns.delete(key);
-    emitQueue(sessionId, request.projectRoot);
+    emitQueue(sessionId, projectRoot);
     startingSessions.add(key);
     startingTurns.set(key, request);
     try {
@@ -1285,11 +961,11 @@ export function createConversationChatService({
       emit({
         type: "error",
         requestId: request.requestId,
-        sessionId,
+        sessionId: request.sessionId,
         projectRoot: request.projectRoot,
         kind: request.kind,
-        displayAsSystem: request.displayAsSystem === true,
-        message: processErrorMessage(error, "无法启动本机 Claude Code。"),
+        message: errorMessage(error, "无法启动 Suzu Agent Core。"),
+        ...eventPresentation(request),
         timestamp: new Date().toISOString(),
       });
     } finally {
@@ -1299,91 +975,112 @@ export function createConversationChatService({
     }
   };
 
-  const permissionModeForSession = async ({ sessionId, projectRoot } = {}) => {
-    if (typeof reader?.approvalModeForSession !== "function") return DEFAULT_CLAUDE_PERMISSION_MODE;
-    try {
-      return normalizeClaudePermissionMode(await reader.approvalModeForSession({ sessionId, projectRoot }));
-    } catch {
-      return DEFAULT_CLAUDE_PERMISSION_MODE;
-    }
-  };
-
-  const resolveSession = async ({ sessionId, projectRoot, hasTranscript } = {}) => {
-    const id = clean(sessionId);
-    const root = clean(projectRoot);
-    if (!id && !root) {
-      const session = await reader.ensureActiveSession();
-      return { ...session, approvalMode: normalizeClaudePermissionMode(session?.approvalMode) };
-    }
-    if (!id || !root) throw new ConversationChatError("指定 Claude 会话时必须同时提供会话标识和工作目录。");
-    return {
-      id,
-      projectRoot: root,
-      hasTranscript: hasTranscript === true,
-      approvalMode: await permissionModeForSession({ sessionId: id, projectRoot: root }),
-    };
-  };
-
-  const enqueue = async ({ content, contactId = "", kind = "message", callDirection = "", media: suppliedMedia = [], mediaSource = "wechat", memoryText: suppliedMemoryText = "", requestId: suppliedRequestId = "", scheduleSource = "", displayAsSystem = false, deliverToWechat = false, session: requestedSession = null } = {}) => {
-    if (disposed) throw new ConversationChatError("聊天服务已经停止。");
-    const normalizedMediaSource = clean(mediaSource).toLowerCase() || "wechat";
-    const media = normalizeInboundMedia(suppliedMedia, normalizedMediaSource);
+  const enqueue = async ({
+    content,
+    contactId = "",
+    kind = "message",
+    callDirection = "",
+    media = [],
+    mediaSource = "",
+    memoryText = "",
+    requestId = "",
+    scheduleSource = "",
+    displayAsSystem = false,
+    deliverToWechat = false,
+    requestQueue = false,
+    session: requestedSession = null,
+  } = {}) => {
+    if (disposed) throw new ConversationChatError("Agent 聊天服务已经停止。", { code: "SERVICE_STOPPED" });
+    const suppliedMedia = Array.isArray(media) ? media : [];
     const voiceCallOpening = kind === "call-open";
-    const text = validateContent(content, { allowEmpty: media.length > 0 || voiceCallOpening });
+    const text = clean(content);
+    if (!text && !voiceCallOpening && !suppliedMedia.length) throw new ConversationChatError("消息不能为空。", { code: "EMPTY_MESSAGE" });
+    if (text.length > MAX_MESSAGE_LENGTH) {
+      throw new ConversationChatError(`消息不能超过 ${MAX_MESSAGE_LENGTH.toLocaleString("zh-CN")} 个字符。`, { code: "MESSAGE_TOO_LONG" });
+    }
     const session = await resolveSession(requestedSession || {});
-    if (!session?.id || !session.projectRoot) throw new ConversationChatError("请先选择 Claude 工作目录。");
+    if (!session?.id || !session.projectRoot) throw new ConversationChatError("请先选择 Agent 工作目录。", { code: "SESSION_REQUIRED" });
     let resolvedContactId = clean(contactId);
     if (!resolvedContactId && typeof reader.contactIdForSession === "function") {
+      try { resolvedContactId = clean(await reader.contactIdForSession({ sessionId: session.id, projectRoot: session.projectRoot })); } catch { /* Optional relation lookup. */ }
+    }
+    const queue = queueFor(session.id, session.projectRoot);
+    if (queue.length >= MAX_QUEUED_TURNS) {
+      throw new ConversationChatError(`当前会话最多只能排队 ${MAX_QUEUED_TURNS} 条消息，请等待部分任务完成后再发送。`, { code: "QUEUE_FULL" });
+    }
+    let preparedInput = inputForAgent({ kind, text, callDirection });
+    let preparedMedia = [];
+    let preparedMemoryText = "";
+    if (suppliedMedia.length) {
+      if (typeof attachmentService?.prepare !== "function") {
+        throw new ConversationChatError("图片和文件附件服务尚未就绪。", { code: "ATTACHMENT_SERVICE_REQUIRED" });
+      }
       try {
-        resolvedContactId = clean(await reader.contactIdForSession({ sessionId: session.id, projectRoot: session.projectRoot }));
-      } catch {
-        // A missing optional contact lookup must not prevent a normal chat turn.
+        const prepared = await attachmentService.prepare({
+          content: preparedInput,
+          media: suppliedMedia,
+          mediaSource,
+          projectRoot: session.projectRoot,
+          sessionId: session.id,
+        });
+        preparedInput = prepared?.input;
+        preparedMedia = Array.isArray(prepared?.media) ? prepared.media : [];
+        preparedMemoryText = clean(prepared?.memoryText);
+      } catch (error) {
+        throw new ConversationChatError(errorMessage(error, "无法准备会话附件。"), {
+          cause: error,
+          code: clean(error?.code) || "ATTACHMENT_PREPARE_FAILED",
+        });
       }
     }
-    const callInitiator = voiceCallInitiator(callDirection);
-    let projectStat;
-    try { projectStat = await fsOps.stat(session.projectRoot); }
-    catch { throw new ConversationChatError("当前 Claude 工作目录不存在或无法读取。"); }
-    if (!isDirectory(projectStat)) throw new ConversationChatError("当前 Claude 工作目录不是文件夹。");
-
     const request = {
-      content: claudeInputContent(
-        kind === "call"
-          ? voiceCallInputContent(text)
-          : voiceCallOpening
-            ? voiceCallOpeningContent(callInitiator)
-            : text,
-        media,
-        normalizedMediaSource,
-      ),
+      callDirection: clean(callDirection),
       contactId: resolvedContactId,
+      content: text,
+      input: preparedInput,
+      media: preparedMedia,
+      mediaSource: clean(mediaSource),
       displayAsSystem: displayAsSystem === true,
       deliverToWechat: deliverToWechat === true,
-      hasTranscript: Boolean(session.hasTranscript) || knownTranscripts.has(turnKey(session.id, session.projectRoot)),
-      kind,
-      approvalMode: session.approvalMode,
       key: turnKey(session.id, session.projectRoot),
+      kind,
       memoryOccurredAt: new Date().toISOString(),
-      memoryText: kind === "call"
-        ? voiceCallMemoryText(text)
-        : voiceCallOpening
-          ? voiceCallOpeningMemoryText(callInitiator)
-          : clean(suppliedMemoryText) || text,
+      memoryText: clean(memoryText) || preparedMemoryText || text,
       projectRoot: session.projectRoot,
-      requestId: clean(suppliedRequestId) || `suzu-${randomUUID()}`,
+      requestId: clean(requestId) || `suzu-${randomUUID()}`,
       scheduleSource: clean(scheduleSource),
       sessionId: session.id,
     };
-    const queue = queueFor(session.id, session.projectRoot);
-    if (queue.length >= MAX_QUEUED_TURNS) {
-      throw new ConversationChatError(`当前会话最多只能排队 ${MAX_QUEUED_TURNS} 条消息，请等待部分任务完成后再发送。`);
+    const queued = activeTurns.has(request.key) || startingSessions.has(request.key) || queue.length > 0;
+    const queuePosition = queue.length + 1;
+    const lifecyclePayload = {
+      ...lifecycleScope(request),
+      userText: bounded(request.memoryText || request.content, MAX_MESSAGE_LENGTH),
+    };
+    try {
+      await agentLifecycle.dispatch("UserPromptSubmit", lifecyclePayload);
+      await agentLifecycle.dispatch("TurnQueued", {
+        ...lifecyclePayload,
+        queuePosition,
+        queued,
+      });
+    } catch (error) {
+      if (!queue.length) pendingTurns.delete(request.key);
+      throw error;
     }
-    const queued = activeTurns.has(request.key)
-      || reusableTextStreams.get(request.key)?.turn
-      || startingSessions.has(request.key)
-      || queue.length > 0;
-    queue.push(request);
-    const queuePosition = queue.indexOf(request) + 1;
+    // 默认插队：普通消息到来时打断当前回复，并放到队首优先处理；
+    // 请求排队（/suzu queue）或计划任务、引导消息则追加到队尾等待。
+    const shouldInterrupt = !requestQueue && ["message", "call", "call-open"].includes(kind);
+    const active = activeTurns.get(request.key);
+    if (shouldInterrupt && active && !active.finished && active.state === "running") {
+      active.cancelRequested = true;
+      active.interruptMessage = "已收到新消息，停止当前回复。";
+      dispatchLifecycle("StopRequested", lifecycleTurnPayload(active, { reason: "user" }));
+      void requestCancellation(active);
+      queue.unshift(request);
+    } else {
+      queue.push(request);
+    }
     emitQueue(session.id, session.projectRoot);
     const pumping = pumpSession(session.id, session.projectRoot, { propagateStartError: !queued });
     if (!queued) await pumping;
@@ -1393,50 +1090,41 @@ export function createConversationChatService({
       queuePosition,
       requestId: request.requestId,
       sessionId: request.sessionId,
+      media: request.media,
     };
   };
 
-  const interruptTurn = (turn, message) => {
-    if (!turn || turn.finished) return false;
-    turn.interrupted = true;
-    turn.interruptMessage = message;
-    try {
-      const killed = turn.child.kill?.("SIGTERM");
-      if (killed === false) throw new Error("Claude Code 进程已经结束。");
-    } catch (error) {
-      turn.interrupted = false;
-      turn.interruptMessage = "";
-      throw new ConversationChatError(`无法停止当前 Claude Code 任务：${processErrorMessage(error, "停止失败。")}`);
-    }
-    return true;
-  };
-
-  const send = ({ content, media = [], mediaSource = "wechat", memoryText = "" } = {}) => enqueue({ content, media, mediaSource, memoryText, deliverToWechat: false });
-  const sendToSession = ({ content, contactId = "", sessionId, projectRoot, hasTranscript = false, kind = "message", callDirection = "", media = [], mediaSource = "wechat", memoryText = "", requestId = "", scheduleSource = "", displayAsSystem = false, deliverToWechat = true } = {}) => (
-    enqueue({ content, contactId, kind, callDirection, media, mediaSource, memoryText, requestId, scheduleSource, displayAsSystem, deliverToWechat, session: { sessionId, projectRoot, hasTranscript } })
+  const send = ({ content, media = [], mediaSource = "", memoryText = "", queued = false } = {}) => (
+    enqueue({ content, media, mediaSource, memoryText, deliverToWechat: false, requestQueue: queued })
+  );
+  const sendToSession = ({ content, contactId = "", sessionId, projectRoot, hasTranscript = false, kind = "message", callDirection = "", media = [], mediaSource = "", memoryText = "", requestId = "", scheduleSource = "", displayAsSystem = false, deliverToWechat = true, queued = false } = {}) => (
+    enqueue({ content, contactId, kind, callDirection, media, mediaSource, memoryText, requestId, scheduleSource, displayAsSystem, deliverToWechat, requestQueue: queued, session: { sessionId, projectRoot, hasTranscript } })
   );
 
-  const stop = ({ sessionId, projectRoot, requestId } = {}) => {
+  const stop = async ({ sessionId, projectRoot, requestId } = {}) => {
     const id = clean(sessionId);
-    if (!id) throw new ConversationChatError("缺少要停止的 Claude 会话标识。");
+    if (!id) throw new ConversationChatError("缺少要停止的 Agent 会话标识。", { code: "SESSION_REQUIRED" });
     const root = clean(projectRoot);
     const requestedRequestId = clean(requestId);
     const matches = root
       ? [activeTurns.get(turnKey(id, root))].filter(Boolean)
       : [...activeTurns.values()].filter((item) => item.sessionId === id);
-    if (matches.length > 1) throw new ConversationChatError("同名 Claude 会话正在多个工作目录中运行，请从对应会话里停止。 ");
+    if (matches.length > 1) throw new ConversationChatError("同名 Agent 会话正在多个工作目录中运行，请从对应会话里停止。", { code: "SESSION_AMBIGUOUS" });
     const turn = requestedRequestId ? matches.find((item) => item.requestId === requestedRequestId) : matches[0];
     if (requestedRequestId && !turn) {
       const queues = root
         ? [pendingTurns.get(turnKey(id, root))].filter(Boolean)
-        : [...pendingTurns.entries()]
-          .filter(([, queue]) => queue.some((item) => item.sessionId === id))
-          .map(([, queue]) => queue);
+        : [...pendingTurns.values()].filter((queue) => queue.some((item) => item.sessionId === id));
       for (const queue of queues) {
         const index = queue.findIndex((item) => item.requestId === requestedRequestId);
         if (index < 0) continue;
         const [queued] = queue.splice(index, 1);
         if (!queue.length) pendingTurns.delete(queued.key);
+        dispatchLifecycle("StopRequested", {
+          ...lifecycleScope(queued),
+          userText: bounded(queued.memoryText || queued.content, MAX_MESSAGE_LENGTH),
+          reason: "removed-from-queue",
+        });
         emitQueue(queued.sessionId, queued.projectRoot);
         emit({
           type: "turn-stopped",
@@ -1444,7 +1132,7 @@ export function createConversationChatService({
           sessionId: queued.sessionId,
           projectRoot: queued.projectRoot,
           kind: queued.kind,
-          message: "已停止当前 Claude Code 任务。",
+          message: "已从 Agent 队列中移除这次回复。",
           timestamp: new Date().toISOString(),
         });
         return { accepted: true, stopped: true, sessionId: id, message: "已从队列中移除这次回复。" };
@@ -1455,102 +1143,95 @@ export function createConversationChatService({
         accepted: true,
         stopped: false,
         sessionId: id,
-        message: requestedRequestId ? "这条通话回复已经结束或不在当前会话中。" : "当前会话没有正在执行的 Claude Code 任务。",
+        message: requestedRequestId ? "这条回复已经结束或不在当前会话中。" : "当前会话没有正在执行的 Agent 任务。",
       };
     }
-    interruptTurn(turn, "已停止当前 Claude Code 任务。");
-    return { accepted: true, stopped: true, sessionId: id, message: "正在停止当前 Claude Code 任务。" };
+    turn.cancelRequested = true;
+    turn.interruptMessage = "已停止当前 Agent 任务。";
+    dispatchLifecycle("StopRequested", lifecycleTurnPayload(turn, { reason: "user" }));
+    if (turn.state === "running") void requestCancellation(turn);
+    return { accepted: true, stopped: true, sessionId: id, message: "正在停止当前 Agent 任务。" };
   };
 
   const steer = async ({ content, sessionId, projectRoot, hasTranscript = false } = {}) => {
-    if (disposed) throw new ConversationChatError("聊天服务已经停止。");
-    const text = validateContent(content);
+    if (disposed) throw new ConversationChatError("Agent 聊天服务已经停止。", { code: "SERVICE_STOPPED" });
+    const text = clean(content);
+    if (!text) throw new ConversationChatError("消息不能为空。", { code: "EMPTY_MESSAGE" });
     const session = await resolveSession({ sessionId, projectRoot, hasTranscript });
-    if (!session?.id || !session.projectRoot) throw new ConversationChatError("请先选择 Claude 工作目录。");
-    const turn = activeTurns.get(turnKey(session.id, session.projectRoot));
-    if (!turn || turn.completed || turn.interrupted) {
-      const request = await enqueue({ content: text, kind: "steer", session });
-      return { ...request, delivered: false, message: "当前没有运行中的任务，已作为一条新消息发送。" };
-    }
-    try {
-      writeJson(turn.child, { type: "user", message: { role: "user", content: text } });
-    } catch (error) {
-      throw new ConversationChatError(`无法发送引导消息：${processErrorMessage(error, "Claude Code 当前不可写入。")}`);
-    }
+    const active = activeTurns.get(turnKey(session.id, session.projectRoot));
+    const request = await enqueue({ content: text, kind: "steer", session });
     return {
-      accepted: true,
-      delivered: true,
-      queued: false,
-      requestId: `suzu-${randomUUID()}`,
-      sessionId: session.id,
-      message: "引导已送达；Claude 会在当前动作完成后读取并调整下一步。",
+      ...request,
+      delivered: false,
+      message: active && !active.finished
+        ? "Agent Core 的中途引导尚未接入；已排在当前回复之后。"
+        : "当前没有运行中的任务，已作为一条新消息发送。",
     };
   };
 
-  const respondPermission = ({ requestId, behavior } = {}) => {
+  const respondPermission = async ({ requestId, behavior } = {}) => {
     const id = clean(requestId);
     const permission = permissionRequests.get(id);
-    if (!permission || permission.turn.finished) throw new ConversationChatError("这条 Claude Code 权限请求已经失效。");
-    if (!["allow", "deny"].includes(behavior)) throw new ConversationChatError("权限选择无效。");
+    if (!permission || permission.turn.finished) throw new ConversationChatError("这条 Agent 权限请求已经失效。", { code: "APPROVAL_EXPIRED" });
+    if (!new Set(["allow", "deny"]).has(clean(behavior))) throw new ConversationChatError("权限选择无效。", { code: "INVALID_APPROVAL" });
     const allow = behavior === "allow";
-    const toolName = clean(permission?.toolName) || "Claude Code 工具";
-    writeJson(permission.turn.child, {
-      type: "control_response",
-      response: {
-        subtype: "success",
-        request_id: id,
-        response: allow
-          ? { behavior: "allow", updatedInput: permission.input }
-          : { behavior: "deny", message: "The user denied this tool use. Stop and wait for the user's instructions." },
-      },
+    const result = await runtime.resolveApproval({
+      sessionId: permission.turn.sessionId,
+      approvalId: permission.approvalId,
+      decision: allow ? "allowed-once" : "rejected",
     });
+    if (result?.accepted !== true) throw new ConversationChatError("这条 Agent 权限请求已经失效。", { code: "APPROVAL_EXPIRED" });
     permissionRequests.delete(id);
-    permission.turn.permissionIds.delete(id);
-    const result = { accepted: true, requestId: id, behavior: allow ? "allow" : "deny", toolName };
+    dispatchLifecycle("PermissionResolved", lifecycleTurnPayload(permission.turn, {
+      approvalId: permission.approvalId,
+      behavior: allow ? "allow" : "deny",
+      toolName: permission.toolName,
+    }));
     emit({
       type: "permission-resolved",
       requestId: id,
       sessionId: permission.turn.sessionId,
       projectRoot: permission.turn.projectRoot,
-      behavior: result.behavior,
-      toolName,
+      behavior: allow ? "allow" : "deny",
+      toolName: permission.toolName,
       timestamp: new Date().toISOString(),
     });
-    return result;
+    return { accepted: true, requestId: id, behavior: allow ? "allow" : "deny", toolName: permission.toolName };
   };
 
-  const respondPermissionForSession = ({ sessionId, projectRoot, behavior } = {}) => {
+  const respondPermissionForSession = async ({ sessionId, projectRoot, behavior } = {}) => {
     const key = turnKey(sessionId, projectRoot);
-    const pending = [...permissionRequests.values()].filter((permission) => (
-      permission.turn.key === key && !permission.turn.finished
-    ));
+    const pending = [...permissionRequests.values()].filter((permission) => permission.turn.key === key && !permission.turn.finished);
     if (!pending.length) return { accepted: false, reason: "no-pending-permission" };
     if (pending.length > 1) return { accepted: false, reason: "multiple-pending-permissions" };
     return respondPermission({ requestId: pending[0].requestId, behavior });
   };
 
   const dispose = () => {
+    if (disposed) return;
     disposed = true;
+    try { unsubscribeRuntime?.(); } catch { /* Runtime cleanup continues below. */ }
     pendingTurns.clear();
     startingSessions.clear();
     startingTurns.clear();
     for (const turn of activeTurns.values()) {
       turn.finished = true;
-      removePermissionRequests(turn);
       try {
         const aborting = memoryRuntime?.abortTurn?.(turn.memoryTurn);
         void Promise.resolve(aborting).catch(() => undefined);
-      } catch {
-        // The local child process still needs to be stopped even if memory cleanup throws.
-      }
-      try { turn.child.kill?.(); } catch { /* Only processes created by this service are touched. */ }
+      } catch { /* The owned runtime still needs closing. */ }
     }
-    for (const stream of [...reusableTextStreams.values()]) closeTextStream(stream, { force: true });
     activeTurns.clear();
+    turnsById.clear();
     permissionRequests.clear();
+    for (const opened of openedSessions.values()) dispatchLifecycle("SessionEnd", { ...opened, reason: "service-disposed" });
+    openedSessions.clear();
+    activatedContacts.clear();
+    if (ownsLifecycle) agentLifecycle.close();
+    void Promise.resolve(runtime.close()).catch(() => undefined);
   };
 
-  return {
+  return Object.freeze({
     dispose,
     hasPendingTurn,
     respondPermission,
@@ -1565,5 +1246,5 @@ export function createConversationChatService({
     },
     steer,
     stop,
-  };
+  });
 }

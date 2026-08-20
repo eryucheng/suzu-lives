@@ -9,7 +9,6 @@
     "@suzu-lives/agent-image-generation": "0.1.0",
     "@suzu-lives/agent-registry": "0.1.0",
     "@suzu-lives/image-workbench": "0.1.0",
-    "@suzu-lives/service-connections": "0.1.0",
     "@suzu-lives/visual-reference-library": "0.1.0"
   }
 }

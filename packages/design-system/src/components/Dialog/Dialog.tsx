@@ -1,6 +1,15 @@
 import { useEffect, type ReactNode } from 'react';
 import styles from './Dialog.module.css';
 
+/**
+ * Dialog 的表层预设。
+ *
+ * - glass: 默认玻璃层，适合轻量信息。
+ * - soft: 接近实心的阅读层，保留细微的表层层次。
+ * - solid: 完全不透明的操作层，适合表单、确认和管理操作。
+ */
+export type DialogSurface = 'glass' | 'soft' | 'solid';
+
 export interface DialogProps {
   /** 是否打开 */
   open: boolean;
@@ -12,13 +21,18 @@ export interface DialogProps {
   children?: ReactNode;
   /** 底部操作区 */
   footer?: ReactNode;
+  /**
+   * 表层样式。背景、边框、高光、阴影和文字层由组件成套处理，
+   * 不要通过父级 opacity 一起调低，避免文字也随之发灰。
+   */
+  surface?: DialogSurface;
 }
 
 /**
  * Dialog —— 基于玻璃面板的居中弹窗。
  * 受控组件：open/onClose 由外部管理。支持 ESC 关闭、点击遮罩关闭。
  */
-export function Dialog({ open, onClose, title, children, footer }: DialogProps) {
+export function Dialog({ open, onClose, title, children, footer, surface = 'glass' }: DialogProps) {
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
@@ -36,7 +50,7 @@ export function Dialog({ open, onClose, title, children, footer }: DialogProps) 
         role="dialog"
         aria-modal="true"
         aria-label={typeof title === 'string' ? title : undefined}
-        className={styles.dialog}
+        className={[styles.dialog, styles[`surface-${surface}`]].join(' ')}
         onMouseDown={(e) => e.stopPropagation()}
       >
         {title != null && (

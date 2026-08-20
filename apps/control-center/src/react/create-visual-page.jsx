@@ -412,7 +412,7 @@ export function CreateVisualPage({ actions = {}, api }) {
           <label>尺寸<input onChange={(event) => setConfig((previous) => ({ ...previous, size: event.target.value }))} pattern="\d{2,5}x\d{2,5}" value={config.size} /></label>
           <label>Seed（可选）<input max="9007199254740991" min="0" onChange={(event) => setConfig((previous) => ({ ...previous, seed: event.target.value }))} placeholder="留空则随机生成" type="number" value={config.seed} /></label>
           <label className="drawing-workflow-field">使用哪个 ComfyUI 工作流<Select className="create-select-react" fullWidth onChange={(workflow) => setConfig((previous) => ({ ...previous, workflow }))} options={workflows.filter((item) => item.enabled).map((item) => ({ label: item.description || item.id, value: item.id }))} placeholder="选择可用工作流" value={config.workflow} /></label>
-          <p className="drawing-settings-note">本机可用的 ComfyUI 工作流会显示在这里；云端图像 API 可在管理 → API 中调整。</p>
+          <p className="drawing-settings-note">本机可用的 ComfyUI 工作流会显示在这里；云端图像 API 可在设置 → API 中调整。</p>
         </div>
       </CreateStudioDialog>
     </>

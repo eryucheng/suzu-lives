@@ -1,12 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
-import {
-  inspectExternalClaudeRegistration,
-  removeExternalClaudeRegistration,
-  writeExternalClaudeRegistration,
-} from "@suzu-lives/claude-integration";
-
 export const MANIFEST_FILENAME = "suzu-capability.json";
 export const MANIFEST_SCHEMA_VERSION = 1;
 
@@ -589,12 +583,22 @@ function diagnosticStatus({ diagnostics, registration, manifest }) {
   return "ready";
 }
 
-async function snapshotRecord(record, { projectRoot, fsOps }) {
+function requiredRegistrationAdapter(value) {
+  const adapter = value;
+  for (const method of ["inspect", "remove", "write"]) {
+    if (typeof adapter?.[method] !== "function") {
+      fail(`外部能力登记适配器缺少 ${method}()。`, "external-registration-adapter-invalid");
+    }
+  }
+  return adapter;
+}
+
+async function snapshotRecord(record, { projectRoot, fsOps, registrationAdapter, scopeLabel }) {
   const types = registeredAdapterTypes(record.manifest);
   const diagnostics = await sourceDiagnostics(record, fsOps);
   let inspected;
   try {
-    inspected = await inspectExternalClaudeRegistration({ projectRoot, capabilityId: record.manifest.id, types, fsOps });
+    inspected = await registrationAdapter.inspect({ projectRoot, capabilityId: record.manifest.id, types, fsOps });
   } catch (error) {
     inspected = { registered: false };
     for (const type of types) inspected[type] = { registered: false, reason: clean(error?.message) || "无法读取当前项目登记状态。", version: "" };
@@ -614,7 +618,7 @@ async function snapshotRecord(record, { projectRoot, fsOps }) {
     }
   }
   if (!clean(projectRoot)) {
-    diagnostics.push({ level: "info", code: "project-missing", message: "先选择当前联系人及其 Claude 项目目录，才能启用或停用外部能力。" });
+    diagnostics.push({ level: "info", code: "project-missing", message: `先选择${scopeLabel}，才能启用或停用外部能力。` });
   }
   const key = clean(projectRoot) ? projectKey(projectRoot) : "";
   return {
@@ -636,20 +640,39 @@ async function snapshotRecord(record, { projectRoot, fsOps }) {
   };
 }
 
-function normalizedProjectRoot(value) {
+function normalizedProjectRoot(value, scopeLabel) {
   const source = clean(value);
-  if (!source) fail("请先选择当前联系人及其 Claude 项目目录。", "external-project-missing");
+  if (!source) fail(`请先选择${scopeLabel}。`, "external-project-missing");
   return path.resolve(source);
+}
+
+function installationKeysForRoots(value) {
+  const keys = new Set();
+  for (const candidate of Array.isArray(value) ? value : []) {
+    const root = clean(candidate);
+    if (!root || !path.isAbsolute(root)) continue;
+    keys.add(projectKey(root));
+  }
+  return keys;
 }
 
 /**
  * Creates the external-capability control plane. It imports only local JSON
  * selected by the user and deliberately has no execution or download method.
  */
-export function createExternalCapabilitiesService({ dataRoot: configuredDataRoot, projectRoot = "", fsOps = fs, now = () => new Date() } = {}) {
+export function createExternalCapabilitiesService({
+  dataRoot: configuredDataRoot,
+  projectRoot = "",
+  fsOps = fs,
+  now = () => new Date(),
+  registrationAdapter = null,
+  scopeLabel = "当前能力运行时范围",
+} = {}) {
+  const adapter = requiredRegistrationAdapter(registrationAdapter);
+  const registrationScopeLabel = clean(scopeLabel) || "当前能力运行时范围";
   const rootPromise = resolveSafeDataRoot(configuredDataRoot, fsOps);
   const withRoot = async (action) => action(await rootPromise);
-  const currentProject = () => normalizedProjectRoot(projectRoot);
+  const currentProject = () => normalizedProjectRoot(projectRoot, registrationScopeLabel);
   const getRecord = async (id) => withRoot(async (root) => {
     const registry = await readRegistry(root, fsOps);
     const record = registry.capabilities[capabilityId(id)];
@@ -664,7 +687,12 @@ export function createExternalCapabilitiesService({ dataRoot: configuredDataRoot
         const current = clean(projectRoot) ? path.resolve(projectRoot) : "";
         const capabilities = await Promise.all(Object.values(registry.capabilities)
           .sort((left, right) => left.manifest.name.localeCompare(right.manifest.name, "zh-CN"))
-          .map((record) => snapshotRecord(record, { projectRoot: current, fsOps })));
+          .map((record) => snapshotRecord(record, {
+            projectRoot: current,
+            fsOps,
+            registrationAdapter: adapter,
+            scopeLabel: registrationScopeLabel,
+          })));
         return { projectRoot: current, capabilities };
       });
     },
@@ -713,13 +741,13 @@ export function createExternalCapabilitiesService({ dataRoot: configuredDataRoot
       const key = projectKey(project);
       const types = record.installations[key]?.types || registeredAdapterTypes(record.manifest);
       if (!enabled) {
-        const result = await removeExternalClaudeRegistration({ projectRoot: project, capabilityId: record.manifest.id, types, fsOps });
+        const result = await adapter.remove({ projectRoot: project, capabilityId: record.manifest.id, types, fsOps });
         delete record.installations[key];
         await writeRegistry(root, registry, fsOps);
         return { enabled: false, registration: result, snapshot: await this.snapshot() };
       }
       const sources = await resolveRegistrationSources(record, fsOps);
-      const registration = await writeExternalClaudeRegistration({
+      const registration = await adapter.write({
         projectRoot: project,
         capabilityId: record.manifest.id,
         version: record.manifest.version,
@@ -734,17 +762,95 @@ export function createExternalCapabilitiesService({ dataRoot: configuredDataRoot
       };
       try { await writeRegistry(root, registry, fsOps); }
       catch (error) {
-        await removeExternalClaudeRegistration({ projectRoot: project, capabilityId: record.manifest.id, types: registeredAdapterTypes(record.manifest), fsOps }).catch(() => undefined);
+        await adapter.remove({ projectRoot: project, capabilityId: record.manifest.id, types: registeredAdapterTypes(record.manifest), fsOps }).catch(() => undefined);
         throw error;
       }
       return { enabled: true, registration, snapshot: await this.snapshot() };
+    },
+
+    /**
+     * Re-homes installations that were materialized by a retired host.  The
+     * generic registry remains the authority: the new adapter is written and
+     * inspected before the old installation rows are removed.  Callers may
+     * clean the retired host projection only after this method succeeds.
+     */
+    async adoptInstallations({ legacyProjectRoots = [] } = {}) {
+      const destination = currentProject();
+      const destinationKey = projectKey(destination);
+      const legacyKeys = installationKeysForRoots(legacyProjectRoots);
+      legacyKeys.delete(destinationKey);
+      if (!legacyKeys.size) {
+        return { adopted: true, migratedCapabilities: 0, capabilityIds: [], registrations: [] };
+      }
+      return withRoot(async (root) => {
+        const registry = await readRegistry(root, fsOps);
+        const registrations = [];
+        for (const record of Object.values(registry.capabilities)) {
+          const sourceKeys = Object.keys(record.installations).filter((key) => legacyKeys.has(key));
+          if (!sourceKeys.length) continue;
+          // The old registry records which host adapters were actually
+          // enabled.  A capability package can declare both Skill and MCP, but
+          // adoption must not turn on an adapter a user had disabled.  Include
+          // a pre-existing managed installation as well, so adoption never
+          // narrows an already configured capability.
+          const enabledTypes = new Set([
+            ...sourceKeys.flatMap((key) => record.installations[key]?.types || []),
+            ...(record.installations[destinationKey]?.types || []),
+          ]);
+          const types = registeredAdapterTypes(record.manifest).filter((type) => enabledTypes.has(type));
+          if (!types.length) {
+            fail(`旧版外部能力 ${record.manifest.id} 没有可接管的有效登记类型。`, "external-adoption-invalid");
+          }
+          const sources = await resolveRegistrationSources(record, fsOps);
+          const registration = await adapter.write({
+            projectRoot: destination,
+            capabilityId: record.manifest.id,
+            version: record.manifest.version,
+            skill: types.includes("skill") ? sources.skill : null,
+            mcp: types.includes("mcp") ? sources.mcp : null,
+            fsOps,
+          });
+          const inspected = await adapter.inspect({
+            projectRoot: destination,
+            capabilityId: record.manifest.id,
+            types,
+            fsOps,
+          });
+          if (!types.every((type) => inspected?.[type]?.registered === true)) {
+            fail(`新版运行时没有确认接管外部能力 ${record.manifest.id}。`, "external-adoption-unverified");
+          }
+          const registeredAt = record.installations[destinationKey]?.registeredAt
+            || record.installations[sourceKeys[0]]?.registeredAt
+            || now().toISOString();
+          const sourceProjectRoots = sourceKeys.map((key) => record.installations[key]?.projectRoot || key);
+          record.installations[destinationKey] = {
+            projectRoot: destination,
+            types,
+            registeredAt,
+          };
+          for (const key of sourceKeys) delete record.installations[key];
+          registrations.push({
+            id: record.manifest.id,
+            types: [...types],
+            sourceProjectRoots,
+            registration,
+          });
+        }
+        if (registrations.length) await writeRegistry(root, registry, fsOps);
+        return {
+          adopted: true,
+          migratedCapabilities: registrations.length,
+          capabilityIds: registrations.map((entry) => entry.id).sort((left, right) => left.localeCompare(right, "en")),
+          registrations,
+        };
+      });
     },
 
     async remove({ id, confirmed = false } = {}) {
       if (confirmed !== true) fail("移除外部能力前需要明确确认。", "external-remove-confirmation-required");
       const { root, registry, record } = await getRecord(id);
       for (const installation of Object.values(record.installations)) {
-        await removeExternalClaudeRegistration({
+        await adapter.remove({
           projectRoot: installation.projectRoot,
           capabilityId: record.manifest.id,
           types: installation.types,

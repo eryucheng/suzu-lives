@@ -1,0 +1,1 @@
+import{createRequire as e}from"node:module";e(import.meta.url);import{r as t}from"./lib-B4jo3z0c.mjs";import{HarnessError as n}from"../llm.mjs";function r(e){return e}function i(e){return e}var a=class extends n{code;constructor(e,t,n){super(e,t,n),this.code=t}},o=class extends t{constructor(e){super(e,`fs`)}get sandboxMode(){}};export{i,a as n,r,o as t};

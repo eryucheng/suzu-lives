@@ -14,7 +14,7 @@ function selectedFile(files, selectedPath) {
 
 function fileLabel(file) {
   const path = clean(file?.path).toLowerCase();
-  if (path === "claude.md") return "总设定";
+  if (path === "suzu.md") return "总设定";
   if (path === "persona.md") return "人格与相处方式";
   if (path === "user.md") return "关于我";
   return clean(file?.path) || "未命名资料";
@@ -114,7 +114,7 @@ function RelationshipEditor({ actions, activeContact, current, files, onSelectFi
   }, [current?.content, current?.path]);
 
   const save = async () => {
-    if (!current || pending) return;
+    if (!current || current.readOnly || pending) return;
     setPending("save");
     setError("");
     try {
@@ -138,6 +138,7 @@ function RelationshipEditor({ actions, activeContact, current, files, onSelectFi
   };
 
   const name = contactName(activeContact);
+  const readOnly = current?.readOnly === true;
   const tabItems = files.map((file) => ({ label: fileLabel(file), value: file.path }));
   return (
     <>
@@ -151,6 +152,7 @@ function RelationshipEditor({ actions, activeContact, current, files, onSelectFi
       </header>
 
       {error ? <Banner className="relationship-settings-editor-error" tone="danger">{error}</Banner> : null}
+      {readOnly ? <Banner className="relationship-settings-editor-error" tone="warning">{current.message || "这是从旧版本保留下来的资料，仅供查看；新的相处设定请写入 SUZU.md。"}</Banner> : null}
       {current ? (
         <section className="relationship-settings-editor" aria-label={`${fileLabel(current)} 编辑器`}>
           <div className="relationship-settings-editor__toolbar">
@@ -159,11 +161,12 @@ function RelationshipEditor({ actions, activeContact, current, files, onSelectFi
               <strong>{fileLabel(current)}</strong>
               <code>{current.path}</code>
             </div>
-            <Button className="relationship-settings-save-button" disabled={Boolean(pending)} onClick={save}>{pending === "save" ? "正在保存…" : "保存"}</Button>
+            <Button className="relationship-settings-save-button" disabled={readOnly || Boolean(pending)} onClick={save}>{readOnly ? "只读" : pending === "save" ? "正在保存…" : "保存"}</Button>
           </div>
           <Textarea
             aria-label={`${current.path} 内容`}
             className="relationship-settings-editor__textarea"
+            disabled={readOnly || Boolean(pending)}
             maxLength="1000000"
             onChange={(event) => setDraft(event.target.value)}
             placeholder="写下这份资料的内容"
@@ -224,7 +227,7 @@ export function RelationshipSettingsPage({ actions = {}, snapshot = {} }) {
           <ContactRail activeContact={activeContact} contacts={contacts} disabled={selectingContact} onSelect={selectContact} settings={snapshot.settings} />
           <GlassPanel as="section" className="relationship-settings-workspace__main" intensity="soft">
             {!activeContact ? <WorkspaceEmpty description="从联系人列表选择一位联系人，开始整理相处资料。" title="选择联系人" />
-              : filesSnapshot?.status === "needs-project" ? <WorkspaceEmpty description="请先为当前联系人选择 Claude 项目目录。" title="尚未设置项目目录" />
+              : filesSnapshot?.status === "needs-project" ? <WorkspaceEmpty description="请先为当前联系人选择 Suzu 联系人工作区。" title="尚未设置联系人工作区" />
                 : !canEdit || !filesSnapshot ? <WorkspaceEmpty description="正在读取当前联系人的相处资料。" title="正在加载资料" />
                   : <RelationshipEditor actions={actions} activeContact={activeContact} current={current} files={files} onSelectFile={selectFile} settings={snapshot.settings} />}
           </GlassPanel>

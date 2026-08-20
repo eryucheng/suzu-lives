@@ -42,7 +42,7 @@ test("one-shot schedule tasks persist below the Suzu data root and use the selec
   assert.deepEqual(await listScheduleTasks({ dataRoot: root }), []);
 });
 
-test("cron accepts the merchant schedule and matches in local time", () => {
+test("cron expressions match in local time", () => {
   const cron = parseCronExpression("2 8,12,16,20 * * *");
   assert.equal(cronMatches(cron, new Date(2026, 7, 5, 8, 2)), true);
   assert.equal(cronMatches(cron, new Date(2026, 7, 5, 8, 3)), false);
@@ -59,13 +59,17 @@ test("schedule CLI keeps delay and cron under one command with parameters", asyn
   assert.equal(created.status, "ok");
   assert.equal(created.task.kind, "once");
   const cron = await runScheduleCli([
-    "add", "--data-root", root, "--cron", "2 8,12,16,20 * * *", "--exec", "traveling-merchant", "--desc", "洛克王国远行商人监控",
+    "add", "--data-root", root, "--cron", "2 8,12,16,20 * * *", "--contact-id", "contact-cli", "--prompt", "每天问候", "--desc", "每日问候",
   ], { now });
   assert.equal(cron.task.kind, "cron");
   const listed = await runScheduleCli(["list", "--data-root", root]);
   assert.equal(listed.tasks.length, 2);
   const removed = await runScheduleCli(["remove", created.task.id, "--data-root", root]);
   assert.equal(removed.removed, true);
+  await assert.rejects(
+    () => runScheduleCli(["add", "--data-root", root, "--cron", "2 8,12,16,20 * * *", "--exec", "traveling-merchant", "--desc", "旧能力"], { now }),
+    /内置操作与触发方式无效/u,
+  );
 });
 
 test("manual plans can target a daily contact or a local system script and be closed without deleting", async () => {
@@ -143,6 +147,28 @@ test("internal compactor operations keep their session scope and use the matchin
   );
 });
 
+test("daily Agent journal operations are software-owned cron tasks", async () => {
+  const root = await temporaryDirectory("suzu-schedule-agent-journal-");
+  const task = await createScheduleTask({
+    dataRoot: root,
+    cron: "2 0 * * *",
+    exec: "agent-journal",
+    description: "Agent 每日写日记",
+    source: "system",
+  });
+  assert.equal(task.kind, "cron");
+  assert.deepEqual(task.target, { type: "operation", name: "agent-journal" });
+  await assert.rejects(
+    createScheduleTask({
+      dataRoot: root,
+      cron: "2 0 * * *",
+      exec: "agent-journal",
+      source: "manual",
+    }),
+    /写日记的自动任务只能由 Suzu 内部创建/u,
+  );
+});
+
 test("runner keeps a closed task stored and does not execute it", async () => {
   const root = await temporaryDirectory("suzu-schedule-closed-");
   let current = new Date("2026-08-05T10:00:00+08:00");
@@ -192,8 +218,9 @@ test("runner executes future tasks only while Suzu is running and does not catch
   await createScheduleTask({
     dataRoot: root,
     cron: "2 10 * * *",
-    exec: "traveling-merchant",
+    exec: "agent-journal",
     now: new Date(2026, 7, 5, 9, 0),
+    source: "system",
   });
   const runner = createScheduleRunner({
     dataRoot: root,
@@ -213,9 +240,9 @@ test("runner executes future tasks only while Suzu is running and does not catch
 
   current = new Date(2026, 7, 5, 10, 2);
   await runner.poll();
-  assert.deepEqual(operations, ["traveling-merchant"]);
+  assert.deepEqual(operations, ["agent-journal"]);
   await runner.poll();
-  assert.deepEqual(operations, ["traveling-merchant"]);
+  assert.deepEqual(operations, ["agent-journal"]);
   runner.stop();
 });
 
@@ -233,9 +260,10 @@ test("runner keeps a local history for triggered plans, including plans accepted
   const operation = await createScheduleTask({
     dataRoot: root,
     cron: "2 10 * * *",
-    exec: "traveling-merchant",
-    description: "远行商人检查",
+    exec: "agent-journal",
+    description: "Agent 日记",
     now: current,
+    source: "system",
   });
   const runner = createScheduleRunner({
     dataRoot: root,

@@ -313,6 +313,7 @@ function ConversationEmojiPicker({ actions }) {
 function ConversationComposer({ actions, composer, focusRequest = 0 }) {
   const inputRef = useRef(null);
   const unavailable = Boolean(composer.unavailable);
+  const attachments = Array.isArray(composer.attachments) ? composer.attachments : [];
   const submitLabel = composer.sending ? "发送中" : composer.busy ? "加入队列" : "发送";
   const resize = (target = inputRef.current) => {
     if (!target) return;
@@ -325,7 +326,7 @@ function ConversationComposer({ actions, composer, focusRequest = 0 }) {
   }, [composer.draft, focusRequest]);
   return (
     <form className="conversation-composer" onSubmit={(event) => { event.preventDefault(); actions.submitMessage(); }}>
-      <div className="conversation-composer__surface">
+      <div className={`conversation-composer__surface${attachments.length ? " has-attachments" : ""}`}>
         <textarea
           value={composer.draft || ""}
           disabled={unavailable}
@@ -343,6 +344,21 @@ function ConversationComposer({ actions, composer, focusRequest = 0 }) {
           ref={inputRef}
           rows={3}
         />
+        {!composer.draft && !attachments.length ? <div aria-hidden="true" className="conversation-composer__command-hints">
+          <span>/suzu stop 停止</span>
+          <span>/suzu queue &lt;内容&gt; 排队</span>
+        </div> : null}
+        {attachments.length ? <div aria-label="待发送附件" className="conversation-composer__attachments">
+          {attachments.map((attachment) => (
+            <span className="conversation-composer__attachment" key={attachment.selectionToken} title={attachment.fileName}>
+              {attachment.kind === "image" && attachment.fileUrl
+                ? <img alt="" src={attachment.fileUrl} />
+                : <ConversationIcon name="folder" />}
+              <span>{attachment.fileName}</span>
+              <button aria-label={`移除 ${attachment.fileName}`} disabled={unavailable} onClick={() => actions.removeComposerAttachment(attachment.selectionToken)} type="button">×</button>
+            </span>
+          ))}
+        </div> : null}
         <div className="conversation-composer__footer">
           <div aria-label="聊天工具" className="conversation-composer__tools">
             <button
@@ -353,8 +369,8 @@ function ConversationComposer({ actions, composer, focusRequest = 0 }) {
               title="表情"
               type="button"
             ><ConversationIcon name="emoji" /></button>
-            <StaticTool icon="box" label="附件" />
-            <StaticTool icon="folder" label="文件" />
+            <button aria-label="添加图片" className="conversation-composer__tool" disabled={unavailable || composer.attachmentPicking} onClick={() => { void actions.selectComposerAttachments("image"); }} title="添加图片" type="button"><ConversationIcon name="box" /></button>
+            <button aria-label="添加文件" className="conversation-composer__tool" disabled={unavailable || composer.attachmentPicking} onClick={() => { void actions.selectComposerAttachments("file"); }} title="添加文件" type="button"><ConversationIcon name="folder" /></button>
             <StaticTool icon="scissors" label="截图" />
             <StaticTool icon="mic" label="语音输入" />
           </div>
@@ -503,7 +519,7 @@ function PlayableChatVoice({ fileName, fileUrl }) {
   );
 }
 
-function ConversationMessageBlock({ block, onPreview }) {
+function ConversationMessageBlock({ block, onOpenFile, onPreview }) {
   if (block.type === "audio") return <PlayableChatVoice fileName={block.fileName} fileUrl={block.fileUrl} />;
   if (block.type === "text") return <div className="conversation-text">{block.text}</div>;
   if (block.type === "detail") return <details className="conversation-detail"><summary>{block.title}</summary><pre>{block.detail}</pre></details>;
@@ -520,6 +536,7 @@ function ConversationMessageBlock({ block, onPreview }) {
       ><img alt="表情包" loading="lazy" src={preview.url} /></button>
     ) : null;
   }
+  const clickableFile = block.mediaKind === "file" && onOpenFile;
   return (
     <section className={`conversation-media conversation-media--${block.mediaKind}`}>
       {preview ? (
@@ -530,7 +547,13 @@ function ConversationMessageBlock({ block, onPreview }) {
           type="button"
         ><img alt={preview.name} className="conversation-media__image" loading="lazy" src={preview.url} /></button>
       ) : null}
-      <div className="conversation-media__copy"><small>{block.typeLabel}附件</small><strong>{block.fileName}</strong>{block.size ? <span>{block.size}</span> : null}</div>
+      <button
+        className="conversation-media__copy"
+        disabled={!clickableFile}
+        onClick={clickableFile ? () => onOpenFile(block) : undefined}
+        title={clickableFile ? `打开 ${block.fileName}` : undefined}
+        type="button"
+      ><small>{block.typeLabel}附件</small><strong>{block.fileName}</strong>{block.size ? <span>{block.size}</span> : null}</button>
     </section>
   );
 }
@@ -541,7 +564,7 @@ function ConversationUsage({ usage }) {
   return <div className="conversation-usage">{items.join(" · ")}</div>;
 }
 
-function ConversationMessage({ onPreview, row }) {
+function ConversationMessage({ onOpenFile, onPreview, row }) {
   const className = [
     "conversation-message",
     row.kind,
@@ -557,7 +580,7 @@ function ConversationMessage({ onPreview, row }) {
     >
       {row.avatar ? <div className="conversation-avatar"><PersonAvatar avatar={row.avatar} /></div> : null}
       <div className="conversation-bubble">
-        {row.blocks.map((block, index) => <ConversationMessageBlock block={block} key={`${block.type}-${block.fileUrl || block.text || block.title || index}-${index}`} onPreview={onPreview} />)}
+        {row.blocks.map((block, index) => <ConversationMessageBlock block={block} key={`${block.type}-${block.fileUrl || block.text || block.title || index}-${index}`} onOpenFile={onOpenFile} onPreview={onPreview} />)}
         <ConversationUsage usage={row.usage} />
         {row.timestamp ? <div className="conversation-meta">{row.timestamp}</div> : null}
       </div>
@@ -565,24 +588,24 @@ function ConversationMessage({ onPreview, row }) {
   );
 }
 
-function ConversationMessageList({ onPreview, rows }) {
+function ConversationMessageList({ onOpenFile, onPreview, rows }) {
   if (!rows.length) return null;
   return rows.map((row, index) => {
     const key = `${row.type}-${row.sourceMessageId || row.lineNumber || "row"}-${index}`;
     if (row.type === "day") return <div className="conversation-day" key={key}>{row.label}</div>;
     if (row.type === "time") return <div className="conversation-time-divider" key={key}>{row.label}</div>;
     if (row.type === "empty") return <div className="conversation-empty" key={key}>{row.text}</div>;
-    return <ConversationMessage key={key} onPreview={onPreview} row={row} />;
+    return <ConversationMessage key={key} onOpenFile={onOpenFile} onPreview={onPreview} row={row} />;
   });
 }
 
 function ConversationPermissions({ actions, permissions }) {
   if (!permissions.length) return null;
   return (
-    <section aria-label="Claude Code 权限请求" className="conversation-permissions">
+    <section aria-label="Suzu Agent 权限请求" className="conversation-permissions">
       {permissions.map((permission) => (
         <article className="conversation-permission" key={permission.requestId}>
-          <div><strong>Claude Code 想使用：{permission.toolName}</strong><pre>{permission.preview}</pre></div>
+          <div><strong>Suzu Agent 想使用：{permission.toolName}</strong><pre>{permission.preview}</pre></div>
           <div className="conversation-permission__actions">
             <button onClick={() => { void actions.respondPermission(permission.requestId, "deny"); }} type="button">拒绝</button>
             <button className="primary" onClick={() => { void actions.respondPermission(permission.requestId, "allow"); }} type="button">允许</button>
@@ -616,12 +639,12 @@ function ConversationSessionSettings({ actions, settings }) {
         <section className="conversation-session-settings__section"><header><div><span>CONTACT</span><h2>联系人头像</h2></div></header><div className="conversation-session-settings__avatar"><span className="conversation-contact__avatar"><PersonAvatar avatar={settings.contactAvatar} fallback={settings.contactName} /></span><div className="conversation-session-settings__avatar-copy"><strong>{settings.contactName}</strong><div className="conversation-session-settings__avatar-actions"><label className="secondary-button">选择头像<input accept="image/png,image/jpeg,image/webp" hidden onChange={(event) => { const file = event.currentTarget.files?.[0]; event.currentTarget.value = ""; void actions.uploadContactAvatar(file); }} type="file" /></label>{settings.removeContactAvatar ? <button className="text-button" onClick={() => { void actions.removeContactAvatar(); }} type="button">移除头像</button> : null}</div></div></div></section>
       ) : null}
       <section className="conversation-session-settings__section"><header><div><span>CHAT DISPLAY</span><h2>聊天显示</h2></div></header><div className="conversation-session-settings__checks">{settings.preferences.map((preference) => <label key={preference.key}><input checked={preference.checked} onChange={(event) => { void actions.setDisplayPreference(preference.key, event.currentTarget.checked); }} type="checkbox" />{preference.label}</label>)}<label className="conversation-settings__time-display"><span>时间显示</span><Select ariaLabel="时间显示方式" className="conversation-settings__select" onChange={(value) => { void actions.setTimeDisplay(value); }} options={[{ label: "每条气泡内", value: "bubble" }, { label: "画面中心", value: "center" }]} value={settings.timeDisplay} /></label></div></section>
-      <section className="conversation-session-settings__section"><header><div><span>CLAUDE CODE</span><h2>运行权限</h2></div></header><label className="conversation-settings__time-display"><span>审批模式</span><Select ariaLabel="审批模式" className="conversation-settings__select" onChange={(value) => { void actions.setApprovalMode(value); }} options={[{ label: "逐条确认", value: "default" }, { label: "自动编辑（当前）", value: "acceptEdits" }, { label: "只规划不执行", value: "plan" }, { label: "完全跳过审批", value: "bypassPermissions" }]} value={settings.approvalMode} /></label></section>
-      <section className="conversation-session-settings__section"><header><div><span>MEMORY</span><h2>长期记忆</h2><p>关闭后，这位联系人不会自动写入或召回长期记忆；已有记忆会保留。</p></div></header><label className="conversation-session-settings__switch"><input checked={settings.longTermMemoryEnabled} onChange={(event) => { void actions.setLongTermMemoryEnabled(event.currentTarget.checked); }} type="checkbox" /><span>启用长期记忆</span></label></section>
+      <section className="conversation-session-settings__section"><header><div><span>SUZU AGENT · CORE</span><h2>运行时能力</h2><p>当前陪伴 Agent 可直接使用 Windows PowerShell、文件工具、已有 CLI，以及已启用的图像/视频理解、图像生成、手机拍照式图像和语音能力；浏览器、子 Agent 和游戏控制尚未接入。</p></div></header></section>
+      <section className="conversation-session-settings__section"><header><div><span>MEMORY · CORE</span><h2>长期记忆</h2><p>关闭后，这位联系人不会自动写入或召回长期记忆；已有记忆会保留。召回内容只作为当前 Agent 请求的动态上下文，不会显示成聊天气泡。</p></div></header><label className="conversation-session-settings__switch"><input checked={settings.longTermMemoryEnabled} onChange={(event) => { void actions.setLongTermMemoryEnabled(event.currentTarget.checked); }} type="checkbox" /><span>启用长期记忆</span></label></section>
       {settings.hasSession ? (
         <>
           <section className="conversation-session-settings__section"><header><div><span>LOCAL MEDIA</span><h2>本地附件</h2><p>Agent 交付给这位联系人的图片和文件保存在 Suzu 本地缓存中。</p></div></header><div className="conversation-session-settings__actions"><button className="secondary-button" onClick={() => { void actions.openMediaDirectory(settings.contactId); }} type="button">打开文件目录</button></div></section>
-          {settings.wechat ? <section className="conversation-session-settings__section conversation-session-settings__wechat"><header><div><span>WECHAT</span><h2>微信连接</h2><p>二维码会在中间弹出。扫码后，请向这个微信机器人发一条文字消息，确认它已进入当前联系人的固定对话；回复默认投递 Agent 的说话内容。</p></div><span className="conversation-session-settings__status">{settings.wechat.status}</span></header><WechatSettingsControls actions={actions} contactId={settings.contactId} control={settings.wechat.control} />{settings.wechat.pendingQrError ? <p className="conversation-session-settings__error">{settings.wechat.pendingQrError}</p> : null}{settings.wechat.connectionError ? <p className="conversation-session-settings__error">{settings.wechat.connectionError}</p> : null}{settings.wechat.hint ? <p className="conversation-session-settings__hint">指令和普通消息与这里一致：/suzu stop、/suzu steer …、以及 Claude Code 自己的 / 指令。</p> : null}</section> : null}
+          {settings.wechat ? <section className="conversation-session-settings__section conversation-session-settings__wechat"><header><div><span>WECHAT</span><h2>微信连接</h2><p>二维码会在中间弹出。扫码后，请向这个微信机器人发一条文字消息，确认它已进入当前联系人的固定对话；回复默认投递 Agent 的说话内容。</p></div><span className="conversation-session-settings__status">{settings.wechat.status}</span></header><WechatSettingsControls actions={actions} contactId={settings.contactId} control={settings.wechat.control} />{settings.wechat.pendingQrError ? <p className="conversation-session-settings__error">{settings.wechat.pendingQrError}</p> : null}{settings.wechat.connectionError ? <p className="conversation-session-settings__error">{settings.wechat.connectionError}</p> : null}{settings.wechat.hint ? <p className="conversation-session-settings__hint">指令和普通消息与这里一致：/suzu stop、/suzu queue …；普通消息会优先处理。</p> : null}</section> : null}
         </>
       ) : <section className="conversation-session-settings__section"><header><div><span>CONTACT SETTINGS</span><h2>联系人设置</h2><p>当前联系人还没有聊天记录。发送第一条消息后，这里会显示本地附件和微信连接。</p></div></header></section>}
     </aside>
@@ -686,7 +709,7 @@ function ContactRenameDialog({ actions, contact }) {
 
 function WechatQrDialog({ actions, qr }) {
   if (!qr) return null;
-  return <div className="conversation-wechat-qr-overlay" onClick={(event) => { if (event.target === event.currentTarget) actions.closeWechatQr(); }}><section aria-labelledby="conversationWechatQrTitle" aria-modal="true" className="conversation-wechat-qr-dialog" id="conversationWechatQr" role="dialog"><header><div><span>WECHAT · 当前联系人</span><h2 id="conversationWechatQrTitle">连接「{qr.title}」</h2></div><button aria-label="关闭二维码" className="suzu-close-button" onClick={actions.closeWechatQr} type="button">×</button></header><img alt="用于连接当前联系人的微信二维码" src={qr.imageDataUrl} /><p className="conversation-wechat-qr-dialog__status">{qr.status}</p><p className="conversation-wechat-qr-dialog__instruction"><strong>扫码后，请在微信里向这个机器人发送一条文字消息。</strong><span>这条消息会作为“我”进入这位联系人的固定 Claude 对话，用来确认连接正确。</span></p><button className="secondary-button" onClick={actions.closeWechatQr} type="button">我知道了</button></section></div>;
+  return <div className="conversation-wechat-qr-overlay" onClick={(event) => { if (event.target === event.currentTarget) actions.closeWechatQr(); }}><section aria-labelledby="conversationWechatQrTitle" aria-modal="true" className="conversation-wechat-qr-dialog" id="conversationWechatQr" role="dialog"><header><div><span>WECHAT · 当前联系人</span><h2 id="conversationWechatQrTitle">连接「{qr.title}」</h2></div><button aria-label="关闭二维码" className="suzu-close-button" onClick={actions.closeWechatQr} type="button">×</button></header><img alt="用于连接当前联系人的微信二维码" src={qr.imageDataUrl} /><p className="conversation-wechat-qr-dialog__status">{qr.status}</p><p className="conversation-wechat-qr-dialog__instruction"><strong>扫码后，请在微信里向这个机器人发送一条文字消息。</strong><span>这条消息会作为“我”进入这位联系人的固定 Suzu 对话，用来确认连接正确。</span></p><button className="secondary-button" onClick={actions.closeWechatQr} type="button">我知道了</button></section></div>;
 }
 
 function MediaPreviewDialog({ actions, preview }) {
@@ -854,7 +877,7 @@ export function ConversationPage({ actions, incomingCall = null, snapshot = {} }
         {snapshot.focus ? <div className="conversation-focus-banner"><span>已定位到搜索结果附近的聊天记录</span><button onClick={actions.viewCurrentConversation} type="button">回到最新消息</button></div> : null}
         <div className="conversation-chat-shell">
           <ConversationPermissions actions={actions} permissions={permissions} />
-          <div aria-label={snapshot.listLabel || "Suzu 的聊天记录"} aria-live="polite" className="conversation-list" data-conversation-list="" onScroll={(event) => actions.setListScroll(event.currentTarget)} ref={listRef} role="log"><ConversationMessageList onPreview={actions.openMediaPreview} rows={messageRows} /></div>
+          <div aria-label={snapshot.listLabel || "Suzu 的聊天记录"} aria-live="polite" className="conversation-list" data-conversation-list="" onScroll={(event) => actions.setListScroll(event.currentTarget)} ref={listRef} role="log"><ConversationMessageList onOpenFile={actions.openMediaFile} onPreview={actions.openMediaPreview} rows={messageRows} /></div>
           {snapshot.unread ? <button className="conversation-latest" onClick={actions.jumpToLatest} type="button">回到最新消息</button> : null}
           <ConversationComposer actions={actions} composer={composer} focusRequest={ui.composerFocusRequest} />
         </div>

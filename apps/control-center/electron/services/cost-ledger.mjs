@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
-import readline from "node:readline";
 
 import {
   DEFAULT_PRICE_CATALOG,
@@ -11,15 +10,11 @@ import {
   readUsageEvents,
   resolveCatalogModel,
 } from "@suzu-lives/cost-ledger";
-import { isClaudeSyntheticNoResponseRecord } from "@suzu-lives/conversation-reader";
-
-import { locateClaudeProjectDirectory } from "./conversation-reader.mjs";
 
 export const PRICE_CATALOG = DEFAULT_PRICE_CATALOG;
 
 const TIME_ZONE = "Asia/Shanghai";
 const MAX_EVENTS = 12_000;
-const META_PROMPT = /^(?:<system-reminder>|你知道现在是|你想起了之前的片段|你想起了之前|下面是与眼前话题|Context:|Skill root)/iu;
 const SESSION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
 
 function clean(value) {
@@ -31,14 +26,6 @@ function readJson(filePath, fallback = {}) {
     return JSON.parse(fs.readFileSync(filePath, "utf8").replace(/^\uFEFF/u, ""));
   } catch {
     return fallback;
-  }
-}
-
-function existsFile(filePath) {
-  try {
-    return Boolean(filePath && fs.statSync(filePath).isFile());
-  } catch {
-    return false;
   }
 }
 
@@ -72,17 +59,6 @@ function contactEventFields(contact) {
   };
 }
 
-async function fixedContactTranscript(contact, { homeDirectory } = {}) {
-  const location = await locateClaudeProjectDirectory({
-    projectRoot: contact.projectRoot,
-    homeDirectory,
-  });
-  return {
-    projectRoot: location.projectRoot,
-    path: location.exists ? path.join(location.projectDir, `${contact.sessionId}.jsonl`) : "",
-  };
-}
-
 function dateKey(value) {
   const date = value instanceof Date ? value : new Date(value);
   if (!Number.isFinite(date.getTime())) return "";
@@ -98,37 +74,6 @@ function dateKey(value) {
 
 function monthKey(value) {
   return dateKey(value).slice(0, 7);
-}
-
-function visibleText(content) {
-  if (typeof content === "string") return content.trim();
-  if (!Array.isArray(content)) return "";
-  return content
-    .filter((block) => block && block.type === "text")
-    .map((block) => clean(block.text))
-    .filter(Boolean)
-    .join("\n")
-    .trim();
-}
-
-function promptPreview(record) {
-  if (record?.type !== "user" || record?.message?.role !== "user") return "";
-  const text = visibleText(record.message.content);
-  if (!text || META_PROMPT.test(text)) return "";
-  return text.replace(/\s+/gu, " ").slice(0, 180);
-}
-
-function assistantShape(record) {
-  const content = Array.isArray(record?.message?.content) ? record.message.content : [];
-  const toolNames = content
-    .filter((block) => block?.type === "tool_use")
-    .map((block) => clean(block.name))
-    .filter(Boolean);
-  const hasText = content.some((block) => block?.type === "text" && clean(block.text));
-  return {
-    kind: toolNames.length ? "工具循环" : hasText ? "回复" : "模型调用",
-    toolNames,
-  };
 }
 
 function modelProvider(catalog, model) {
@@ -172,93 +117,6 @@ function pricedUsage({
     ...calculated,
     units: withUnitTotals(calculated.units),
   };
-}
-
-async function scanTranscript(transcriptPath, catalog, customRevisions, contact) {
-  const result = {
-    status: "missing",
-    path: transcriptPath || "",
-    scannedRecords: 0,
-    malformedLines: 0,
-    duplicateUsageRecords: 0,
-    events: [],
-    warning: "",
-  };
-  if (!existsFile(transcriptPath)) {
-    result.warning = "没有找到联系人会话 JSONL。";
-    return result;
-  }
-
-  const records = [];
-  const input = fs.createReadStream(transcriptPath, { encoding: "utf8" });
-  const lines = readline.createInterface({ input, crlfDelay: Infinity });
-  for await (const line of lines) {
-    const value = line.trim().replace(/^\uFEFF/u, "");
-    if (!value) continue;
-    try {
-      records.push(JSON.parse(value));
-      result.scannedRecords += 1;
-    } catch {
-      result.malformedLines += 1;
-    }
-  }
-
-  const seen = new Set();
-  let activeTurn = { id: "", prompt: "未识别的会话轮次", timestamp: "" };
-  for (const record of records) {
-    const preview = promptPreview(record);
-    if (preview) {
-      activeTurn = {
-        id: clean(record.uuid) || `user:${record.timestamp || result.scannedRecords}`,
-        prompt: preview,
-        timestamp: clean(record.timestamp),
-      };
-    }
-    if (isClaudeSyntheticNoResponseRecord(record)) continue;
-    const usage = record?.message?.usage;
-    if (record?.type !== "assistant" || !usage) continue;
-    const identity = clean(record.uuid || record.message?.id);
-    if (!identity) continue;
-    if (seen.has(identity)) {
-      result.duplicateUsageRecords += 1;
-      continue;
-    }
-    seen.add(identity);
-    const model = clean(record.message?.model);
-    const cost = pricedUsage({
-      catalog,
-      model,
-      usage,
-      timestamp: record.timestamp,
-      customRevisions,
-    });
-    const shape = assistantShape(record);
-    result.events.push({
-      id: `transcript:${clean(contact?.contactId)}:${identity}`,
-      timestamp: clean(record.timestamp),
-      date: dateKey(record.timestamp),
-      ...contactEventFields(contact),
-      source: "对话",
-      feature: shape.kind,
-      provider: modelProvider(catalog, model),
-      model,
-      requestId: clean(record.message?.id),
-      turnId: activeTurn.id,
-      turnPrompt: activeTurn.prompt,
-      toolNames: shape.toolNames,
-      amountCny: cost.amountCny,
-      costStatus: cost.status,
-      priceRevision: cost.price,
-      units: cost.units || {
-        inputCacheMissTokens: Number(usage.input_tokens || 0),
-        inputCacheHitTokens: Number(usage.cache_read_input_tokens || 0),
-        outputTokens: Number(usage.output_tokens || 0),
-      },
-    });
-  }
-  result.status = "ready";
-  result.path = path.resolve(transcriptPath);
-  return result;
 }
 
 async function listJsonFiles(directory) {
@@ -323,7 +181,7 @@ async function scanVideoCache(projectRoot, catalog, customRevisions, contact) {
       date: dateKey(timestamp),
       ...contactEventFields(contact),
       source: "视频理解",
-      feature: clean(record.source).startsWith("douyin:") ? "抖音视频" : "视频分析",
+      feature: "视频分析",
       provider: modelProvider(catalog, model),
       model,
       requestId,
@@ -484,7 +342,6 @@ function summarize(events, today) {
 function sourceStatus(scans = []) {
   const ledgerEvents = scans.flatMap((scan) => Array.isArray(scan.ledger?.events) ? scan.ledger.events : []);
   const videoEvents = scans.flatMap((scan) => Array.isArray(scan.video?.events) ? scan.video.events : []);
-  const transcriptEvents = scans.flatMap((scan) => Array.isArray(scan.transcript?.events) ? scan.transcript.events : []);
   const contactCount = new Set(scans.map((scan) => clean(scan.contactId)).filter(Boolean)).size;
   const firstSourcePath = (key) => scans.map((scan) => clean(scan[key]?.path)).find(Boolean) || "";
   const eventCount = (matches, extraEvents = []) => {
@@ -516,10 +373,9 @@ function sourceStatus(scans = []) {
       count: ledgerEvents.length,
     }),
     connected({
-      id: "conversation-transcript",
-      name: "联系人会话",
-      count: transcriptEvents.length,
-      sourcePath: firstSourcePath("transcript"),
+      id: "agent-core-session-meter",
+      name: "Agent Core 会话费用",
+      count: eventCount((event) => ["agent-chat", "agent-compaction"].includes(clean(event.feature))),
     }),
     connected({
       id: "video-understanding",
@@ -587,12 +443,9 @@ function mergeEvents(...eventGroups) {
     .slice(-MAX_EVENTS);
 }
 
-export async function scanCostLedger(settings = {}, { contactScopes = [], homeDirectory } = {}) {
+export async function scanCostLedger(settings = {}, { contactScopes = [] } = {}) {
   const startedAt = Date.now();
-  const catalog = createPriceCatalog({
-    catalog: PRICE_CATALOG,
-    customPriceModels: settings.customPriceModels || [],
-  });
+  const catalog = createPriceCatalog({ customPriceModels: settings.customPriceModels || [] });
   const customRevisions = settings.priceRevisions || [];
   const today = dateKey(new Date());
   const priceCatalog = priceCatalogView({
@@ -613,15 +466,14 @@ export async function scanCostLedger(settings = {}, { contactScopes = [], homeDi
   }
 
   const scans = await Promise.all(contacts.map(async (contact) => {
-    const transcriptResolution = await fixedContactTranscript(contact, { homeDirectory });
-    const [transcript, video, ledger] = await Promise.all([
-      scanTranscript(transcriptResolution.path, catalog, customRevisions, contact),
-      scanVideoCache(transcriptResolution.projectRoot, catalog, customRevisions, contact),
+    const [video, ledger] = await Promise.all([
+      scanVideoCache(contact.projectRoot, catalog, customRevisions, contact),
       scanUnifiedLedger(contact.usageLedgerPath, catalog, customRevisions, contact),
     ]);
-    return { ...contact, transcript, video, ledger };
+    return { ...contact, video, ledger };
   }));
-  const events = mergeEvents(...scans.flatMap((scan) => [scan.transcript.events, scan.video.events, scan.ledger.events]));
+  const events = mergeEvents(...scans.flatMap((scan) => [scan.video.events, scan.ledger.events]));
+  const agentCoreEvents = events.filter((event) => ["agent-chat", "agent-compaction"].includes(clean(event.feature)));
   const summary = summarize(events, today);
   const sum = (key, field) => scans.reduce((total, scan) => total + Number(scan[key]?.[field] || 0), 0);
   return {
@@ -636,9 +488,10 @@ export async function scanCostLedger(settings = {}, { contactScopes = [], homeDi
     sources: sourceStatus(scans),
     diagnostics: {
       transcript: {
-        scannedRecords: sum("transcript", "scannedRecords"),
-        malformedLines: sum("transcript", "malformedLines"),
-        duplicateUsageRecords: sum("transcript", "duplicateUsageRecords"),
+        status: "ready",
+        scannedRecords: agentCoreEvents.length,
+        malformedLines: 0,
+        duplicateUsageRecords: 0,
       },
       video: {
         scannedFiles: sum("video", "scannedFiles"),
@@ -651,8 +504,6 @@ export async function scanCostLedger(settings = {}, { contactScopes = [], homeDi
       },
     },
     priceCatalog,
-    warning: scans.every((scan) => scan.transcript.status !== "ready")
-      ? "尚未识别到联系人会话记录；当前总额不包含 DeepSeek 对话费用。"
-      : "",
+    warning: "",
   };
 }

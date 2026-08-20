@@ -1,28 +1,36 @@
 import { dialog, ipcMain, nativeImage, safeStorage, shell } from "electron";
 import path from "node:path";
 
-import { createCapabilitiesService, packagedCliCommand, registerCapabilitiesIpc } from "./capabilities-ipc.mjs";
+import { appendUsageEvent } from "@suzu-lives/cost-ledger";
+import { stopWebBrowser } from "@suzu-lives/web-browser";
+import { createCapabilitiesService, registerCapabilitiesIpc } from "./capabilities-ipc.mjs";
+import { registerAgentJournalIpc } from "./agent-journal-ipc.mjs";
 import { registerConversationCompactorIpc } from "./conversation-compactor-ipc.mjs";
 import { createExternalCapabilitiesIpcService, registerExternalCapabilitiesIpc } from "./external-capabilities-ipc.mjs";
 import { registerConversationIpc } from "./conversation-ipc.mjs";
+import { registerSoftwareAssistantIpc } from "./software-assistant-ipc.mjs";
 import { registerWechatIpc } from "./wechat-ipc.mjs";
 import { createConnectionsService, registerConnectionsIpc } from "./connections-ipc.mjs";
 import { registerLedgerIpc } from "./ledger-ipc.mjs";
 import { registerImageWorkbenchIpc } from "./image-workbench-ipc.mjs";
 import { registerMemoryIpc } from "./memory-ipc.mjs";
 import { createLongTermMemoryService } from "../services/long-term-memory-service.mjs";
-import { createConversationCompactorService } from "../services/conversation-compactor-service.mjs";
+import { createAgentJournalService, localJournalDate } from "../services/agent-journal-service.mjs";
 import { createRelationshipFilesService, registerRelationshipFilesIpc } from "../services/relationship-files.mjs";
 import { createSettingsService, registerSettingsIpc } from "./settings-ipc.mjs";
 import { registerVisualReferencesIpc } from "./visual-references-ipc.mjs";
 import { registerVoiceDesignIpc } from "./voice-design-ipc.mjs";
 import { registerTodayCalendarIpc } from "./today-calendar-ipc.mjs";
-import { createProjectHooksService } from "../services/project-hooks.mjs";
-import { createAgentRuntimeConfigService, registerAgentRuntimeConfigIpc } from "../services/agent-runtime-config.mjs";
+import { createAgentRuntimeConfigService, registerAgentRuntimeConfigIpc } from "../services/agent-runtime-config-service.mjs";
+import { createCapabilityAccessPolicy } from "../services/capability-access-policy.mjs";
+import { createCapabilityRegistry, createCapabilityRuntime } from "../services/capability-registry.mjs";
+import { createAgentCapabilityAdapters } from "../services/agent-capability-adapters.mjs";
+import { collectAgentImageAttachmentIds } from "../services/agent-session-storage.mjs";
 import { createTodayCalendarService } from "../services/today-calendar.mjs";
 import { createWeChatLinkService } from "../services/wechat-link.mjs";
-import { createIphoneFeedbackLinkService } from "../services/iphone-feedback-link.mjs";
+import { createMailFeedbackLinkService } from "../services/mail-feedback-link.mjs";
 import { createContactProjectsService } from "../services/contact-projects.mjs";
+import { createSoftwareAssistantService } from "../services/software-assistant-service.mjs";
 import {
   createProactiveChainPlanningTask,
   createProactiveChainTask,
@@ -38,8 +46,7 @@ import {
   proactiveContactScopeKey,
 } from "../services/proactive-contact-maintenance.mjs";
 import { runScheduledScript, validateScheduledScriptPath } from "../services/scheduled-script.mjs";
-import { syncTravelingMerchantSchedule } from "../services/traveling-merchant-schedule.mjs";
-import { ensureSuzuClaudeProjectSettings } from "@suzu-lives/claude-integration";
+import { syncAgentJournalSchedule } from "../services/agent-journal-schedule.mjs";
 import {
   createScheduleRunner,
   createScheduleTask,
@@ -49,7 +56,6 @@ import {
   scheduleTaskSummary,
   setScheduleTaskEnabled,
 } from "@suzu-lives/task-scheduler";
-import { runTravelingMerchant } from "@suzu-lives/traveling-merchant";
 
 export { createSettingsService };
 
@@ -103,18 +109,6 @@ function dailyCron(value) {
   return `${Number(match[2])} ${Number(match[1])} * * *`;
 }
 
-function merchantResult(execution) {
-  const source = clean(execution?.stdout);
-  if (!source) throw new Error("远行商人执行器没有返回结果。 ");
-  let result;
-  try { result = JSON.parse(source); }
-  catch { throw new Error("远行商人执行器返回的结果格式无效。 "); }
-  if (!result || typeof result !== "object" || Array.isArray(result)) {
-    throw new Error("远行商人执行器返回的结果格式无效。 ");
-  }
-  return result;
-}
-
 function scheduledTaskContent(task, { prompt = "", displayAsSystem = false } = {}) {
   return [
     "<suzu-schedule-task>",
@@ -127,97 +121,189 @@ function scheduledTaskContent(task, { prompt = "", displayAsSystem = false } = {
   ].join("\n");
 }
 
-function merchantTaskContent(message) {
+function agentContactScope(contact) {
+  const sessionId = clean(contact?.sessionId);
+  const projectRoot = clean(contact?.projectRoot);
+  if (!sessionId || !projectRoot || !path.isAbsolute(projectRoot)) return null;
+  return { sessionId, projectRoot: path.resolve(projectRoot) };
+}
+
+function agentHistorySequence(entry) {
+  const value = Number(plainObject(entry).event?.seq);
+  return Number.isSafeInteger(value) && value >= 0 ? value : null;
+}
+
+/** Reads every Agent Core history page, rather than treating the UI's tail window as
+ * the authoritative attachment reference set used for irreversible cleanup. */
+async function completeAgentHistory(runtime, { contactId, projectRoot, sessionId }) {
+  if (typeof runtime?.history !== "function") throw new Error("Suzu Agent 会话运行时不支持完整历史读取。 ");
+  const events = [];
+  let beforeSeq;
+  for (let pageCount = 0; pageCount < 10_000; pageCount += 1) {
+    const page = await runtime.history({
+      sessionId,
+      contactId,
+      cwd: projectRoot,
+      maxMessages: 2_000,
+      ...(beforeSeq === undefined ? {} : { beforeSeq }),
+    });
+    const records = Array.isArray(page?.events) ? page.events : [];
+    events.push(...records);
+    if (page?.hasMore !== true) return events;
+    const sequences = records.map(agentHistorySequence).filter((value) => value !== null);
+    const oldest = sequences.length ? Math.min(...sequences) : null;
+    if (oldest === null || (beforeSeq !== undefined && oldest >= beforeSeq)) {
+      throw new Error("Agent 历史分页未能前进，未执行联系人删除。 ");
+    }
+    beforeSeq = oldest;
+  }
+  throw new Error("Agent 历史记录过长，无法安全确认附件引用。 ");
+}
+
+async function eraseContactAgentConversation({ contact, contactProjectsService, conversation }) {
+  const target = agentContactScope(contact);
+  if (!target) return { status: "no-agent-session" };
+  const runtime = conversation?.agentRuntime;
+  if (typeof runtime?.purgeSession !== "function") {
+    throw new Error("当前 Suzu Agent 会话运行时不支持完整删除。 ");
+  }
+  // Stop the visible turn first so the renderer receives the usual stop
+  // lifecycle before the owning runtime is shut down below. The hard stop in
+  // `purgeSession()` remains the race-free persistence boundary.
+  if (typeof conversation?.chat?.stop === "function") {
+    await conversation.chat.stop({ sessionId: target.sessionId, projectRoot: target.projectRoot }).catch(() => undefined);
+  }
+  const catalog = await contactProjectsService.snapshot();
+  const contacts = Array.isArray(catalog?.contacts) ? catalog.contacts : [];
+  const targetEvents = await completeAgentHistory(runtime, {
+    contactId: clean(contact?.id),
+    ...target,
+  });
+  const protectedAttachmentIds = new Set();
+  for (const candidate of contacts) {
+    if (clean(candidate?.id) === clean(contact?.id)) continue;
+    const scope = agentContactScope(candidate);
+    if (!scope) continue;
+    const events = await completeAgentHistory(runtime, {
+      contactId: clean(candidate?.id),
+      ...scope,
+    });
+    for (const id of collectAgentImageAttachmentIds(events)) protectedAttachmentIds.add(id);
+  }
+  const storage = await runtime.purgeSession({
+    sessionId: target.sessionId,
+    cwd: target.projectRoot,
+    imageAttachmentIds: collectAgentImageAttachmentIds(targetEvents),
+    protectedImageAttachmentIds: [...protectedAttachmentIds],
+  });
+  return { status: "deleted", ...storage };
+}
+
+function agentJournalTaskPrompt(date) {
   return [
-    "<suzu-merchant-task>",
-    "这是 Suzu 读取远行商人网页后的结果，不是用户发来的新消息。请将下方内容原样作为面向用户的最终回复，不要添加前缀、解释或自动任务说明。",
-    "",
-    message,
-    "</suzu-merchant-task>",
+    "这是一项只在本机保存的 Agent 日记任务，不是用户发来的消息。",
+    `请以你自己的第一人称，为 ${date} 写一则简短日记，记录今天和用户之间值得记下的事情、感受、约定或未完事项。`,
+    "只输出日记正文：不要加标题，不要向用户说话，不要提及自动任务、系统或提示词，也不要输出 NO_REPLY。即使当天没有特别事件，也请诚实写下简短的一句回顾。",
   ].join("\n");
 }
 
-export function registerIpcHandlers({ app, appUpdateService = null, dataStorageService, getMainWindow, releaseAnnouncementService = null, settingsService, wechatAttachmentCli = "", cliLauncherCommand = "", claudeWorkspaceDirectories = [] }) {
-  const currentCliLauncher = clean(cliLauncherCommand) || (app.isPackaged ? packagedCliCommand(app.getPath("exe")) : "");
+export function registerIpcHandlers({ app, appUpdateService = null, dataStorageService, getMainWindow, releaseAnnouncementService = null, settingsService }) {
   const dataRoot = settingsService.response(settingsService.load()).dataRoot;
   let removeContactAssociations = async () => undefined;
+  let removeScheduledContactTasks = async () => ({ removed: 0 });
   let wechatService = null;
   const contactProjectsService = createContactProjectsService({
     settingsService,
     dataRoot,
     onBeforeRemove: (contact) => removeContactAssociations(contact),
-    ensureClaudeProjectSettings: ({ projectRoot, previousProjectDefaults }) => {
-      if (!currentCliLauncher) return { status: "development" };
-      return ensureSuzuClaudeProjectSettings({
-        projectRoot,
-        launcher: { command: currentCliLauncher, available: true },
-        previousProjectDefaults,
-        projectDefaults: settingsService.load()?.claudeProjectDefaults,
-        toolPermissions: settingsService.load()?.claudeToolPermissions,
-        workspaceDirectories: claudeWorkspaceDirectories,
-      });
-    },
   });
-  const initialClaudeSettingsSync = contactProjectsService.syncClaudeProjectSettings();
-  void initialClaudeSettingsSync.catch(() => undefined);
   const connectionsService = createConnectionsService({ safeStorage, settingsService });
-  const externalCapabilitiesService = createExternalCapabilitiesIpcService({ settingsService });
-  const agentRuntimeConfigService = createAgentRuntimeConfigService();
+  const externalCapabilitiesService = createExternalCapabilitiesIpcService({
+    settingsService,
+    runtime: () => conversation?.agentRuntime || null,
+  });
+  // The config service shares the exact Agent Core child process owned by the
+  // conversation runtime. Its closure is resolved only when a renderer calls
+  // the public configuration IPC, after `conversation` has been initialized.
+  const agentRuntimeConfigService = createAgentRuntimeConfigService({
+    runtime: () => conversation?.agentRuntime || null,
+  });
   const memoryService = createLongTermMemoryService({
     connectionsService,
     contactProjectsService,
     settingsService,
-    textModelConnectionResolver: () => agentRuntimeConfigService.resolveClaudeCodeGenerationConnection(),
   });
   const todayCalendarService = createTodayCalendarService({ contactProjectsService, settingsService });
   const relationshipFilesService = createRelationshipFilesService({ settingsService });
-  const projectHooksService = createProjectHooksService({
-    settingsService,
-    executablePath: app.getPath("exe"),
-    hookRunnerPath: path.join(app.getAppPath(), "electron", "hooks", "runner.mjs"),
-    packaged: app.isPackaged,
-  });
-  const syncMemoryRecallHooks = async ({ enabled = settingsService.load()?.memoryRecallEnabled !== false } = {}) => {
-    if (!app.isPackaged) return { status: "development", contacts: [], errors: [] };
-    let catalog;
-    try {
-      catalog = await contactProjectsService.snapshot();
-    } catch (error) {
-      return { status: "unavailable", contacts: [], errors: [{ message: clean(error?.message) || "无法读取联系人项目。" }] };
-    }
-    const contacts = Array.isArray(catalog?.contacts) ? catalog.contacts : [];
-    const updated = [];
-    const errors = [];
-    for (const contact of contacts) {
-      const projectRoot = clean(contact?.projectRoot);
-      if (!projectRoot) continue;
-      try {
-        const recallEnabled = enabled && contact?.longTermMemoryEnabled !== false;
-        const result = recallEnabled
-          ? await projectHooksService.installMemoryRecall({ projectRoot })
-          : await projectHooksService.uninstallMemoryRecall({ projectRoot });
-        updated.push({ id: clean(contact?.id), projectRoot, status: result?.status || "updated" });
-      } catch (error) {
-        errors.push({ id: clean(contact?.id), projectRoot, message: clean(error?.message) || "无法更新记忆召回 Hook。" });
-      }
-    }
-    return { status: errors.length ? "partial" : "ready", contacts: updated, errors };
-  };
-  let iphoneFeedbackService = null;
+  const agentJournalService = createAgentJournalService({ contactProjectsService, settingsService });
+  // Memory recall is mounted once in the in-process Agent Core lifecycle registry.
+  // Both global and per-contact settings are read when the Hook collects, so
+  // changing either setting requires no project file mutation or reinstall.
+  const syncMemoryRecallHooks = async () => ({ status: "ready", runtime: "agent-lifecycle", contacts: [], errors: [] });
+  let mailFeedbackService = null;
   let conversation = null;
+  let requestAgentJournalScheduleSync = async () => undefined;
   let requestProactiveContactMaintenance = () => undefined;
-  let requestTravelingMerchantScheduleSync = async () => undefined;
+  const capabilityRegistry = createCapabilityRegistry();
+  const capabilityAccessPolicy = createCapabilityAccessPolicy({
+    capabilityRegistry,
+    settingsService,
+  });
+  let capabilityRuntime = null;
+  const agentCapabilityAdapters = createAgentCapabilityAdapters({
+    connectionsService,
+    contactProjectsService,
+    recordCapabilityUsage: (input) => {
+      if (!capabilityRuntime) throw new Error("Agent 能力运行时尚未初始化。 ");
+      return capabilityRuntime.recordUsage(input);
+    },
+    settingsService,
+  });
+  capabilityRuntime = createCapabilityRuntime({
+    canInvoke: capabilityAccessPolicy.canInvoke,
+    registry: capabilityRegistry,
+    adapters: {
+      ...agentCapabilityAdapters,
+      "agent-journal-schedule": () => requestAgentJournalScheduleSync(),
+      "agent-journal-storage": ({ context }) => agentJournalService.removeContact({ contactId: clean(context.contactId) }),
+      "conversation-attachment": ({ context }) => {
+        const delivery = conversation?.attachmentService;
+        if (typeof delivery?.deliver !== "function") {
+          throw new Error("当前 Agent 聊天附件交付服务尚未就绪。 ");
+        }
+        return delivery.deliver({
+          input: context.input,
+          projectRoot: clean(context.projectRoot),
+          sessionId: clean(context.sessionId),
+        });
+      },
+      "contact-scheduled-task-cleanup": ({ context }) => removeScheduledContactTasks(context.contact),
+      "cost-ledger": ({ capability, context }) => {
+        const ledgerPath = clean(context.ledgerPath);
+        const event = plainObject(context.event);
+        if (!ledgerPath || !Object.keys(event).length) {
+          throw new Error(`能力 ${capability.id} 的账单记录缺少流水路径或事件。`);
+        }
+        return appendUsageEvent(ledgerPath, {
+          ...event,
+          metadata: {
+            ...plainObject(event.metadata),
+            capabilityId: capability.id,
+          },
+        });
+      },
+      "mail-feedback-link": () => mailFeedbackService?.restart(),
+      "proactive-contact-maintenance": ({ context }) => {
+        requestProactiveContactMaintenance({ scope: context.scope || null });
+        return { requested: true };
+      },
+    },
+  });
   const capabilitiesService = createCapabilitiesService({
+    capabilityRegistry,
+    capabilityRuntime,
     contactProjectsService,
     settingsService,
-    packaged: app.isPackaged,
-    executablePath: app.getPath("exe"),
-    launcherCommand: currentCliLauncher,
-    openExternal: (url) => shell.openExternal(url),
-    projectHooksService,
-    onIphoneFeedbackChange: () => iphoneFeedbackService?.restart(),
-    onProactiveContactMaintenanceRequested: (request) => requestProactiveContactMaintenance(request),
-    onTravelingMerchantScheduleSyncRequested: () => requestTravelingMerchantScheduleSync(),
     resolveContactSession: (contactId) => {
       if (typeof conversation?.reader?.resolveContactSession !== "function") {
         throw new Error("当前软件无法解析联系人的会话。 ");
@@ -225,10 +311,7 @@ export function registerIpcHandlers({ app, appUpdateService = null, dataStorageS
       return conversation.reader.resolveContactSession(contactId);
     },
   });
-  void initialClaudeSettingsSync
-    .catch(() => undefined)
-    .then(() => syncMemoryRecallHooks())
-    .then(() => capabilitiesService.refreshManagedRegistrations())
+  void capabilitiesService.refreshManagedRegistrations()
     .catch(() => undefined);
   registerSettingsIpc({
     app,
@@ -249,6 +332,7 @@ export function registerIpcHandlers({ app, appUpdateService = null, dataStorageS
   registerCapabilitiesIpc({ ipcMain, capabilitiesService });
   registerExternalCapabilitiesIpc({ dialog, getMainWindow, ipcMain, externalCapabilitiesService });
   registerRelationshipFilesIpc({ ipcMain, relationshipFilesService });
+  registerAgentJournalIpc({ agentJournalService, ipcMain });
   conversation = registerConversationIpc({
     app,
     contactProjectsService,
@@ -256,45 +340,39 @@ export function registerIpcHandlers({ app, appUpdateService = null, dataStorageS
     dialog,
     getMainWindow,
     ipcMain,
+    capabilityRegistry,
+    capabilityRuntime,
     memoryRuntime: memoryService,
     settingsService,
     shell,
-    wechatAttachmentCli,
-    claudeWorkspaceDirectories,
     initializeContactCapabilities: async (contact) => {
       await capabilitiesService.initializeDefaultContactCapabilities(contact);
-      if (settingsService.load()?.memoryRecallEnabled !== false && contact?.longTermMemoryEnabled !== false) {
-        await projectHooksService.installMemoryRecall({ projectRoot: contact?.projectRoot });
-      }
     },
     onContactLongTermMemoryEnabledChanged: () => syncMemoryRecallHooks(),
-    proactiveContactSettings: () => capabilitiesService.proactiveContactSettings(),
-    isProactiveContactEnabled: ({ contactId }) => capabilitiesService.isCompanionContactEnabled({
-      abilityId: "proactive-contact", contactId,
-    }),
   });
   memoryService.setConversationReader(conversation.reader);
-  void memoryService.resumeExistingMaintenance().catch(() => undefined);
-  const conversationCompactorService = createConversationCompactorService({
-    reader: conversation.reader,
+  // The memory database remains an independent local subsystem. Its optional
+  // structured extraction calls the already-owned Agent Core model through a private
+  // child-process bridge, never by copying credentials into this process.
+  memoryService.setStructuredGenerationRuntime(conversation.agentRuntime);
+  const softwareAssistantService = createSoftwareAssistantService({
+    applicationPath: typeof app?.getAppPath === "function" ? app.getAppPath() : "",
+    dataRoot,
+    runtime: conversation.agentRuntime,
     settingsService,
   });
+  registerSoftwareAssistantIpc({ app, ipcMain, softwareAssistantService });
+  void memoryService.resumeExistingMaintenance().catch(() => undefined);
+  const conversationCompactorService = conversation.compactor;
   registerConversationCompactorIpc({
     ipcMain,
     compactorService: conversationCompactorService,
-    dialog,
-    getMainWindow,
   });
-  const unsubscribeCompactorAuto = conversation.chat.subscribe((event) => {
-    if (event?.type !== "turn-complete") return;
-    // Token-triggered compaction is still executed by the shared scheduler;
-    // the completed local turn only asks it to enqueue a scoped one-shot job.
-    void conversationCompactorService.enqueueTokenAuto({
-      projectRoot: event.projectRoot,
-      sessionId: event.sessionId,
-    }).catch(() => undefined);
-  });
-  const removeScheduledContactTasks = async (contact) => {
+  // Automatic compaction is now a real Agent Core pre-step component. There is no
+  // separate Electron timer to clean up: this noop keeps the existing orderly
+  // shutdown shape without reviving the old JSONL scheduler.
+  const unsubscribeCompactorAuto = () => {};
+  removeScheduledContactTasks = async (contact) => {
     const contactId = clean(contact?.id);
     const contactProjectRoot = projectScopeKey(contact?.projectRoot);
     if (!contactId || !contactProjectRoot) return { removed: 0 };
@@ -310,17 +388,23 @@ export function registerIpcHandlers({ app, appUpdateService = null, dataStorageS
   removeContactAssociations = async (contact) => {
     const contactId = clean(contact?.id);
     if (!contactId) throw new Error("要删除的联系人无效。 ");
-    await capabilitiesService.removeContact({ contactId });
-    await removeScheduledContactTasks(contact);
+    await eraseContactAgentConversation({ contact, contactProjectsService, conversation });
+    if (typeof memoryService?.forgetContact === "function") {
+      await memoryService.forgetContact({
+        agentId: clean(contact?.agentId),
+        sessionId: clean(contact?.sessionId),
+      });
+    }
+    await capabilitiesService.removeContact({ contactId, contact });
     await todayCalendarService.removeContact({ contactId });
     if (typeof wechatService?.removeContact === "function") {
       await wechatService.removeContact({ contactId });
     }
   };
-  iphoneFeedbackService = createIphoneFeedbackLinkService({
+  mailFeedbackService = createMailFeedbackLinkService({
     chat: conversation.chat,
     settingsProvider: () => settingsService.response(settingsService.load()),
-    configuredTargets: () => capabilitiesService.enabledIphoneBridgeSessions(),
+    configuredTargets: () => capabilitiesService.enabledMailBridgeSessions(),
     packaged: app.isPackaged,
   });
   const scheduleSnapshot = async () => {
@@ -486,8 +570,8 @@ export function registerIpcHandlers({ app, appUpdateService = null, dataStorageS
     if (!proactiveChainEnabled(contactId)) return null;
     const scope = { contactId };
     const existing = await listScheduleTasks({ dataRoot });
-    // This is the B result check, not a second maintenance loop: B either
-    // created its one A task or the application supplies the two-hour fallback.
+    // The planning turn either created its one next check, or this two-hour
+    // fallback restores the chain without starting a second maintenance loop.
     if (existing.some((task) => isActiveProactiveChainTask(task, scope))) return null;
     return createProactiveChainTask({
       dataRoot,
@@ -509,11 +593,37 @@ export function registerIpcHandlers({ app, appUpdateService = null, dataStorageS
       await createRecoveryCheck(request.contactId);
     }).catch(() => undefined);
   });
-  const syncEnabledTravelingMerchantSchedule = async () => {
-    const targets = await capabilitiesService.enabledCompanionSessions("traveling-merchant");
-    return syncTravelingMerchantSchedule({ dataRoot, hasEnabledContacts: targets.length > 0 });
+  const agentJournalRequests = new Map();
+  const unsubscribeAgentJournalTurns = conversation.chat.subscribe((event) => {
+    const requestId = clean(event?.requestId);
+    const request = agentJournalRequests.get(requestId);
+    if (!request) return;
+    // Agent Core keeps scheduled replies out of the live stream and emits
+    // `agent-reply`, which the product-owned journal writer consumes.
+    if ((event?.type === "reply" && event?.done === true) || event?.type === "agent-reply") {
+      request.content = clean(event.content);
+      return;
+    }
+    if (!["turn-complete", "turn-stopped", "error"].includes(event?.type)) return;
+    agentJournalRequests.delete(requestId);
+    if (event.type !== "turn-complete" || !request.content || request.content === "NO_REPLY") return;
+    void agentJournalService.record({
+      contactId: request.contactId,
+      content: request.content,
+      date: request.date,
+      sessionId: request.sessionId,
+    }).catch(() => undefined);
+  });
+  const syncEnabledAgentJournalSchedule = async () => {
+    const targets = await capabilitiesService.enabledCompanionSessions("agent-journal");
+    const settings = capabilitiesService.agentJournalSettings();
+    return syncAgentJournalSchedule({
+      dataRoot,
+      hasEnabledContacts: targets.length > 0,
+      time: settings.time,
+    });
   };
-  requestTravelingMerchantScheduleSync = syncEnabledTravelingMerchantSchedule;
+  requestAgentJournalScheduleSync = syncEnabledAgentJournalSchedule;
   const scheduleRunner = createScheduleRunner({
     dataRoot,
     onConversationTask: async (task) => {
@@ -574,40 +684,71 @@ export function registerIpcHandlers({ app, appUpdateService = null, dataStorageS
         await conversationCompactorService.runScheduledAutomaticTask(task);
         return;
       }
-      if (task.target.name !== "traveling-merchant") return;
-      const targets = await capabilitiesService.enabledCompanionSessions("traveling-merchant");
-      if (!targets.length) return;
-      const execution = await runTravelingMerchant(["--data-root", dataRoot]);
-      const result = merchantResult(execution);
-      const message = clean(result.message);
-      if (result.deliveryReady !== true || !message) return;
-      const deliveries = await Promise.allSettled(targets.map((target) => conversation.chat.sendToSession({
-        content: merchantTaskContent(message),
-        contactId: target.contactId,
-        sessionId: target.sessionId,
-        projectRoot: target.projectRoot,
-        hasTranscript: true,
-        kind: "schedule",
-      })));
-      const failed = deliveries.find((delivery) => delivery.status === "rejected");
-      if (failed?.status === "rejected") throw failed.reason;
+      if (task.target.name === "agent-journal") {
+        const targets = await capabilitiesService.enabledCompanionSessions("agent-journal");
+        if (!targets.length) return;
+        const date = localJournalDate();
+        const deliveries = await Promise.allSettled(targets.map(async (target) => {
+          const requestId = `suzu-agent-journal-${task.id}-${date}-${target.contactId}`;
+          agentJournalRequests.set(requestId, {
+            contactId: target.contactId,
+            content: "",
+            date,
+            sessionId: target.sessionId,
+          });
+          try {
+            const result = await conversation.chat.sendToSession({
+              content: scheduledTaskContent(task, {
+                displayAsSystem: true,
+                prompt: agentJournalTaskPrompt(date),
+              }),
+              contactId: target.contactId,
+              sessionId: target.sessionId,
+              projectRoot: target.projectRoot,
+              hasTranscript: target.hasTranscript === true,
+              kind: "schedule",
+              scheduleSource: "agent-journal",
+              requestId,
+              displayAsSystem: true,
+              deliverToWechat: false,
+            });
+            if (result?.accepted !== true) agentJournalRequests.delete(requestId);
+            return result;
+          } catch (error) {
+            agentJournalRequests.delete(requestId);
+            throw error;
+          }
+        }));
+        const failed = deliveries.find((delivery) => delivery.status === "rejected");
+        if (failed?.status === "rejected") throw failed.reason;
+        return;
+      }
     },
   });
   app?.once?.("before-quit", () => {
     unsubscribeCompactorAuto();
     unsubscribeProactiveChainTurns();
+    unsubscribeAgentJournalTurns();
     proactiveMaintenanceStopped = true;
     proactiveChainRequests.clear();
+    agentJournalRequests.clear();
     scheduleRunner.stop();
+    // 退出时停掉 Agent Core 子进程，避免关掉软件后进程残留（残留会挡住重装/卸载）。
+    void conversation?.agentRuntime?.close?.().catch?.(() => undefined);
+    // 退出时停掉专用浏览器进程。
+    void stopWebBrowser({ dataRoot }).catch(() => undefined);
   });
-  void syncEnabledTravelingMerchantSchedule()
+  void Promise.all([
+    capabilityRuntime.sync({ capabilityId: "agent-journal", reason: "startup" }),
+    capabilityRuntime.sync({ capabilityId: "proactive-contact", reason: "startup" }),
+  ])
     .catch(() => undefined)
     .then(() => scheduleRunner.start())
     .then(() => checkProactiveContactChains())
     .catch(() => undefined);
-  app?.once?.("before-quit", () => iphoneFeedbackService?.dispose());
+  app?.once?.("before-quit", () => mailFeedbackService?.dispose());
   app?.once?.("before-quit", () => memoryService.dispose());
-  void iphoneFeedbackService.start().catch(() => undefined);
+  void mailFeedbackService.start().catch(() => undefined);
   wechatService = createWeChatLinkService({
     chat: conversation.chat,
     dataRoot,
@@ -616,7 +757,13 @@ export function registerIpcHandlers({ app, appUpdateService = null, dataStorageS
   registerWechatIpc({ app, ipcMain, wechatService });
   void wechatService.start().catch(() => undefined);
   registerConnectionsIpc({ ipcMain, connectionsService });
-  registerImageWorkbenchIpc({ connectionsService, ipcMain, nativeImage, settingsService });
+  registerImageWorkbenchIpc({
+    connectionsService,
+    ipcMain,
+    nativeImage,
+    settingsService,
+    recordCapabilityUsage: (input) => capabilityRuntime.recordUsage(input),
+  });
   registerVisualReferencesIpc({ contactProjectsService, dialog, getMainWindow, ipcMain, nativeImage, settingsService });
   registerVoiceDesignIpc({ connectionsService, contactProjectsService, ipcMain, settingsService });
   registerMemoryIpc({ dialog, getMainWindow, ipcMain, memoryService });

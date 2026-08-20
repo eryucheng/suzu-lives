@@ -12,7 +12,7 @@ import {
 
 test("签发并验证 Ed25519 发布包签名", async () => {
   const temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "suzu-lives-release-signing-"));
-  const artifactPath = path.join(temporaryRoot, "Suzu-Lives-Console-test-win-x64.zip");
+  const artifactPath = path.join(temporaryRoot, "Suzu-Lives-test-win-x64.zip");
   const privateKeyPath = path.join(temporaryRoot, "private", "eryuchengye.ed25519.private.pem");
   const publicKeyPath = path.join(temporaryRoot, "public", "eryuchengye.ed25519.pub");
   const signaturePath = `${artifactPath}.sig`;

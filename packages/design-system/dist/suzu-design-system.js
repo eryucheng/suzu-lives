@@ -47,19 +47,22 @@ function d({ as: e = "div", intensity: n = "soft", className: r, style: i, child
 	});
 }
 var f = {
-	overlay: "_overlay_8uig4_5",
-	"fade-in": "_fade-in_8uig4_1",
-	dialog: "_dialog_8uig4_29",
-	"pop-in": "_pop-in_8uig4_1",
-	header: "_header_8uig4_97",
-	title: "_title_8uig4_115",
-	close: "_close_8uig4_127",
-	body: "_body_8uig4_161",
-	footer: "_footer_8uig4_177"
+	overlay: "_overlay_17ugj_17",
+	"fade-in": "_fade-in_17ugj_1",
+	dialog: "_dialog_17ugj_7",
+	"pop-in": "_pop-in_17ugj_1",
+	"surface-glass": "_surface-glass_17ugj_107",
+	"surface-soft": "_surface-soft_17ugj_113",
+	"surface-solid": "_surface-solid_17ugj_123",
+	header: "_header_17ugj_161",
+	title: "_title_17ugj_179",
+	close: "_close_17ugj_193",
+	body: "_body_17ugj_227",
+	footer: "_footer_17ugj_243"
 };
 //#endregion
 //#region src/components/Dialog/Dialog.tsx
-function p({ open: e, onClose: r, title: i, children: o, footer: s }) {
+function p({ open: e, onClose: r, title: i, children: o, footer: s, surface: c = "glass" }) {
 	return a(() => {
 		if (!e) return;
 		let t = (e) => {
@@ -73,7 +76,7 @@ function p({ open: e, onClose: r, title: i, children: o, footer: s }) {
 			role: "dialog",
 			"aria-modal": "true",
 			"aria-label": typeof i == "string" ? i : void 0,
-			className: f.dialog,
+			className: [f.dialog, f[`surface-${c}`]].join(" "),
 			onMouseDown: (e) => e.stopPropagation(),
 			children: [
 				i != null && /* @__PURE__ */ n("div", {
@@ -102,17 +105,17 @@ function p({ open: e, onClose: r, title: i, children: o, footer: s }) {
 	}) : null;
 }
 var m = {
-	overlay: "_overlay_t3h2f_5",
-	"fade-in": "_fade-in_t3h2f_1",
-	drawer: "_drawer_t3h2f_21",
-	"slide-right": "_slide-right_t3h2f_1",
-	"placement-left": "_placement-left_t3h2f_87",
-	"slide-left": "_slide-left_t3h2f_1",
-	"placement-right": "_placement-right_t3h2f_101",
-	header: "_header_t3h2f_117",
-	title: "_title_t3h2f_135",
-	close: "_close_t3h2f_147",
-	body: "_body_t3h2f_181"
+	overlay: "_overlay_1bfk0_5",
+	"fade-in": "_fade-in_1bfk0_1",
+	drawer: "_drawer_1bfk0_21",
+	"slide-right": "_slide-right_1bfk0_1",
+	"placement-left": "_placement-left_1bfk0_87",
+	"slide-left": "_slide-left_1bfk0_1",
+	"placement-right": "_placement-right_1bfk0_101",
+	header: "_header_1bfk0_117",
+	title: "_title_1bfk0_135",
+	close: "_close_1bfk0_147",
+	body: "_body_1bfk0_181"
 };
 //#endregion
 //#region src/components/Drawer/Drawer.tsx
@@ -221,21 +224,21 @@ var v = {
 		]
 	});
 }), S = {
-	wrapper: "_wrapper_j94e5_5",
-	fullWidth: "_fullWidth_j94e5_17",
-	trigger: "_trigger_j94e5_27",
-	open: "_open_j94e5_85",
-	placeholder: "_placeholder_j94e5_95",
-	label: "_label_j94e5_103",
-	chevron: "_chevron_j94e5_117",
-	chevronOpen: "_chevronOpen_j94e5_133",
-	panel: "_panel_j94e5_143",
-	"pop-in": "_pop-in_j94e5_1",
-	option: "_option_j94e5_213",
-	active: "_active_j94e5_251",
-	selected: "_selected_j94e5_263",
-	check: "_check_j94e5_273",
-	disabled: "_disabled_j94e5_321"
+	wrapper: "_wrapper_rjev6_5",
+	fullWidth: "_fullWidth_rjev6_17",
+	trigger: "_trigger_rjev6_27",
+	open: "_open_rjev6_85",
+	placeholder: "_placeholder_rjev6_95",
+	label: "_label_rjev6_103",
+	chevron: "_chevron_rjev6_117",
+	chevronOpen: "_chevronOpen_rjev6_133",
+	panel: "_panel_rjev6_143",
+	"pop-in": "_pop-in_rjev6_1",
+	option: "_option_rjev6_223",
+	active: "_active_rjev6_261",
+	selected: "_selected_rjev6_273",
+	check: "_check_rjev6_283",
+	disabled: "_disabled_rjev6_331"
 };
 //#endregion
 //#region src/components/Select/Select.tsx

@@ -24,8 +24,7 @@ test("removing a contact clears it from every contact-scoped capability config",
   const paths = [
     ["capabilities", "time-awareness", "config.json"],
     ["automation", "proactive-contact", "config.json"],
-    ["automation", "traveling-merchant", "config.json"],
-    ["automation", "iphone-bridge", "config.json"],
+    ["automation", "mail-bridge", "config.json"],
     ["capabilities", "image-vision", "config.json"],
   ];
   for (const segments of paths) {
@@ -35,11 +34,13 @@ test("removing a contact clears it from every contact-scoped capability config",
       untouched: true,
     });
   }
-  let iphoneNotifications = 0;
-  let merchantScheduleSynchronizations = 0;
+  const synchronizedCapabilityIds = [];
+  const removedContacts = [];
   const service = createCapabilitiesService({
-    onIphoneFeedbackChange: () => { iphoneNotifications += 1; },
-    onTravelingMerchantScheduleSyncRequested: async () => { merchantScheduleSynchronizations += 1; },
+    capabilityRuntime: {
+      sync: async ({ capabilityId }) => { synchronizedCapabilityIds.push(capabilityId); },
+      removeContact: async ({ contactId }) => { removedContacts.push(contactId); },
+    },
     settingsService: {
       load: () => ({ dataRoot }),
       response: () => ({ dataRoot }),
@@ -48,8 +49,13 @@ test("removing a contact clears it from every contact-scoped capability config",
 
   const result = await service.removeContact({ contactId: removedId });
   assert.equal(result.updated, paths.length);
-  assert.equal(iphoneNotifications, 1);
-  assert.equal(merchantScheduleSynchronizations, 1);
+  assert.deepEqual(new Set(synchronizedCapabilityIds), new Set([
+    "time-awareness",
+    "image-vision",
+    "mail-bridge",
+    "proactive-contact",
+  ]));
+  assert.deepEqual(removedContacts, [removedId]);
   for (const segments of paths) {
     const saved = JSON.parse(await fs.readFile(path.join(dataRoot, ...segments), "utf8"));
     assert.deepEqual(saved.enabledContactIds, [retainedId]);
@@ -58,31 +64,7 @@ test("removing a contact clears it from every contact-scoped capability config",
   }
 });
 
-test("merchant contact delivery changes ask the software scheduler to synchronize", async () => {
-  const dataRoot = await temporaryDirectory("suzu-capability-merchant-sync-");
-  const contactId = "contact-merchant";
-  const configPath = path.join(dataRoot, "automation", "traveling-merchant", "config.json");
-  const synchronizedRecipients = [];
-  const service = createCapabilitiesService({
-    contactProjectsService: {
-      snapshot: async () => ({ contacts: [{ id: contactId, name: "Suzu" }] }),
-    },
-    onTravelingMerchantScheduleSyncRequested: async () => {
-      const config = JSON.parse(await fs.readFile(configPath, "utf8"));
-      synchronizedRecipients.push(config.enabledContactIds);
-    },
-    settingsService: {
-      load: () => ({ dataRoot }),
-      response: () => ({ dataRoot }),
-    },
-  });
-
-  await service.saveSettings({ id: "traveling-merchant", value: { contactId, contactEnabled: true } });
-  await service.saveSettings({ id: "traveling-merchant", value: { contactId, contactEnabled: false } });
-  assert.deepEqual(synchronizedRecipients, [[contactId], []]);
-});
-
-test("voice-call registration is added for existing and newly created contacts", async () => {
+test("Agent Core capability initialization keeps capability state in the product runtime", async () => {
   const root = await temporaryDirectory("suzu-capability-voice-call-");
   const dataRoot = path.join(root, "software-data");
   const existingProject = path.join(root, "existing-contact");
@@ -92,7 +74,6 @@ test("voice-call registration is added for existing and newly created contacts",
     contactProjectsService: {
       snapshot: async () => ({ contacts: [{ id: "contact-existing", projectRoot: existingProject }] }),
     },
-    launcherCommand: "suzu-lives",
     settingsService: {
       load: () => ({ dataRoot, projectRoot: existingProject }),
       response: () => ({ dataRoot }),
@@ -100,31 +81,72 @@ test("voice-call registration is added for existing and newly created contacts",
   });
 
   const refreshed = await service.refreshManagedRegistrations();
+  assert.equal(refreshed.refreshed, false);
+  assert.equal(refreshed.status, "ready");
   assert.equal(refreshed.errors.length, 0);
-  const existingSkill = await fs.readFile(path.join(existingProject, ".claude", "skills", "voice-call", "SKILL.md"), "utf8");
-  assert.match(existingSkill, /suzu-lives:ability:voice-call/u);
 
   const initialized = await service.initializeDefaultContactCapabilities({ id: "contact-new", projectRoot: newProject });
+  assert.equal(initialized.initialized, false);
+  assert.equal(initialized.status, "ready");
   assert.equal(initialized.errors.length, 0);
-  const newSkill = await fs.readFile(path.join(newProject, ".claude", "skills", "voice-call", "SKILL.md"), "utf8");
-  assert.match(newSkill, /capability voice-call request/u);
+  const snapshot = service.snapshot();
+  assert.equal(snapshot.runtime, "agent-core");
+  assert.equal(snapshot.capabilities.find((capability) => capability.id === "voice-message")?.runtimeStatus, "agent-capability-bridge");
 });
 
-test("registration refresh replaces the old time Hook for enabled contacts", async () => {
+test("an Agent Core bridge capability keeps its installed contacts in the existing product config", async () => {
+  const root = await temporaryDirectory("suzu-capability-agent-core-contact-");
+  const dataRoot = path.join(root, "software-data");
+  const projectRoot = path.join(root, "contact");
+  const contactId = "contact-image-vision";
+  await Promise.all([fs.mkdir(dataRoot, { recursive: true }), fs.mkdir(projectRoot)]);
+  const synchronized = [];
+  const service = createCapabilitiesService({
+    capabilityRuntime: {
+      sync: async ({ capabilityId, contactEnabled, contactId: id }) => synchronized.push({ capabilityId, contactEnabled, contactId: id }),
+      removeContact: async () => undefined,
+    },
+    contactProjectsService: {
+      snapshot: async () => ({ contacts: [{ id: contactId, name: "Suzu", projectRoot }] }),
+    },
+    settingsService: {
+      load: () => ({ dataRoot }),
+      response: () => ({ dataRoot }),
+    },
+  });
+
+  const enabled = await service.saveSettings({ id: "image-vision", value: { contactId, contactEnabled: true } });
+  assert.equal(enabled.capabilities.find((item) => item.id === "image-vision")?.enabled, true);
+  const configPath = path.join(dataRoot, "capabilities", "image-vision", "config.json");
+  assert.deepEqual(JSON.parse(await fs.readFile(configPath, "utf8")), {
+    enabledContactIds: [contactId],
+    knownContactIds: [contactId],
+  });
+  await service.saveSettings({ id: "image-vision", value: { contactId, contactEnabled: false } });
+  assert.deepEqual(JSON.parse(await fs.readFile(configPath, "utf8")), {
+    enabledContactIds: [],
+    knownContactIds: [contactId],
+  });
+  assert.deepEqual(synchronized, [
+    { capabilityId: "image-vision", contactEnabled: true, contactId },
+    { capabilityId: "image-vision", contactEnabled: false, contactId },
+  ]);
+});
+
+test("Agent Core time awareness enables a contact through its lifecycle Hook", async () => {
   const root = await temporaryDirectory("suzu-capability-time-hook-refresh-");
   const dataRoot = path.join(root, "software-data");
   const contactProject = path.join(root, "time-contact");
   const contactId = "contact-time";
   await Promise.all([fs.mkdir(dataRoot, { recursive: true }), fs.mkdir(contactProject)]);
   await writeConfig(dataRoot, ["capabilities", "time-awareness", "config.json"], {
-    enabledContactIds: [contactId],
+    enabledContactIds: [],
   });
   const installedProjects = [];
   const service = createCapabilitiesService({
     contactProjectsService: {
       snapshot: async () => ({ contacts: [{ id: contactId, projectRoot: contactProject }] }),
     },
-    launcherCommand: "suzu-lives",
     projectHooksService: {
       installTimeAwareness: async ({ projectRoot }) => { installedProjects.push(projectRoot); },
       uninstallTimeAwareness: async () => undefined,
@@ -136,6 +158,13 @@ test("registration refresh replaces the old time Hook for enabled contacts", asy
   });
 
   const refreshed = await service.refreshManagedRegistrations();
+  assert.equal(refreshed.refreshed, false);
   assert.equal(refreshed.errors.length, 0);
-  assert.deepEqual(installedProjects, [contactProject]);
+  assert.deepEqual(installedProjects, []);
+  const snapshot = await service.saveSettings({ id: "time-awareness", value: { contactId, contactEnabled: true } });
+  const timeAwareness = snapshot.capabilities.find((capability) => capability.id === "time-awareness");
+  assert.equal(timeAwareness?.runtimeStatus, "agent-core-context-hook");
+  assert.equal(timeAwareness?.enabled, true);
+  assert.deepEqual(JSON.parse(await fs.readFile(path.join(dataRoot, "capabilities", "time-awareness", "config.json"), "utf8")).enabledContactIds, [contactId]);
+  assert.deepEqual(installedProjects, []);
 });

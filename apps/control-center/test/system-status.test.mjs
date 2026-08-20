@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
@@ -19,19 +18,27 @@ function itemById(snapshot, id) {
 }
 
 async function fixture(t) {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "suzu-system-status-"));
+  const temporaryRoot = process.env.SUZU_LIVES_TEST_TEMP || "D:\\Temp";
+  await fs.mkdir(temporaryRoot, { recursive: true });
+  const root = await fs.mkdtemp(path.join(temporaryRoot, "suzu-system-status-"));
   const dataRoot = path.join(root, "Suzu Lives");
   const contactsRoot = path.join(root, "Contacts");
-  const home = path.join(root, "Home");
   const project = path.join(contactsRoot, CONTACT_ID);
   await writeJson(path.join(dataRoot, "settings.json"), { theme: "light", identity: {} });
+  await fs.writeFile(path.join(dataRoot, "SUZU.md"), "# 全局 Suzu 设定\n", "utf8");
   await fs.mkdir(path.join(dataRoot, "agents", AGENT_ID), { recursive: true });
   await fs.mkdir(path.join(dataRoot, "capabilities", "image-generation"), { recursive: true });
+  await fs.mkdir(path.join(dataRoot, "software-assistant", "workspace"), { recursive: true });
   await fs.writeFile(path.join(dataRoot, "outside-data.txt"), "outside", "utf8");
-  await fs.mkdir(path.join(project, ".claude", "skills", "suzu-lives-voice"), { recursive: true });
-  await fs.mkdir(path.join(project, ".claude", "skills", "my-manual-skill"), { recursive: true });
+  await fs.mkdir(path.join(dataRoot, "agent-runtime", "core", ".agent-presets", "suzu-companion"), { recursive: true });
+  await fs.mkdir(path.join(dataRoot, "agent-runtime", "core", ".agent-presets", "suzu-software-assistant"), { recursive: true });
+  await fs.writeFile(path.join(dataRoot, "agent-runtime", "core", "settings.yaml"), "llm-deepseek: {}\n", "utf8");
+  await fs.writeFile(path.join(dataRoot, "agent-runtime", "core", ".credentials.yaml"), "DEEPSEEK_API_KEY: secret-agent-core-key\n", "utf8");
+  await fs.writeFile(path.join(dataRoot, "agent-runtime", "core", "AGENTS.md"), "# 私有指令桥接\n", "utf8");
+  await fs.writeFile(path.join(dataRoot, "agent-runtime", "core", ".agent-presets", "suzu-companion", "agent.cordis.yml"), "- id: tool-pwsh\n", "utf8");
+  await fs.writeFile(path.join(dataRoot, "agent-runtime", "core", ".agent-presets", "suzu-software-assistant", "agent.cordis.yml"), "- id: software-assistant\n", "utf8");
   await fs.mkdir(path.join(project, ".suzu-lives"), { recursive: true });
-  await fs.writeFile(path.join(project, "CLAUDE.md"), "# Contact\n", "utf8");
+  await fs.writeFile(path.join(project, "SUZU.md"), "# Contact\n", "utf8");
   await writeJson(path.join(project, ".suzu-lives", "contact.json"), {
     version: 1,
     id: CONTACT_ID,
@@ -39,64 +46,32 @@ async function fixture(t) {
     createdAt: "2026-08-15T00:00:00.000Z",
     agentId: AGENT_ID,
   });
-  await writeJson(path.join(project, ".claude", "settings.json"), {
-    hooks: { UserPromptSubmit: [{ hooks: [{ type: "command", args: ["--suzu-lives-hook", "memory-recall"] }] }] },
-    permissions: { allow: ["Read(*)"] },
-  });
-  await fs.writeFile(path.join(project, ".claude", "skills", "suzu-lives-voice", "SKILL.md"), "managed", "utf8");
-  await fs.writeFile(path.join(project, ".claude", "skills", "my-manual-skill", "SKILL.md"), "external", "utf8");
   await fs.mkdir(path.join(contactsRoot, "my-manual-project"), { recursive: true });
-  await writeJson(path.join(home, ".claude", "settings.json"), {
-    env: {
-      ANTHROPIC_AUTH_TOKEN: "secret-token-must-not-leak",
-      MY_CUSTOM_VARIABLE: "secret-custom-value-must-not-leak",
-    },
-    hooks: { Stop: [{ hooks: [{ type: "command", command: "not-run" }] }] },
-    mcpServers: { customServer: { command: "not-returned" } },
-  });
-  await writeJson(path.join(home, ".claude.json"), { hasCompletedOnboarding: true });
-  await fs.writeFile(path.join(home, ".claude", "CLAUDE.md"), "manual instruction", "utf8");
   const settingsService = { load: () => ({ contactsRoot }) };
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   return {
     dataRoot,
-    home,
-    globalSettings: path.join(home, ".claude", "settings.json"),
-    service: createSystemStatusService({ dataRoot, homeDirectory: home, settingsService }),
+    service: createSystemStatusService({ dataRoot, settingsService }),
   };
 }
 
-test("system status lists external additions and redacts Claude configuration values", async (t) => {
+test("system status audits Suzu and Agent Core files", async (t) => {
   const values = await fixture(t);
-  const before = await fs.readFile(values.globalSettings, "utf8");
   const snapshot = await values.service.scan();
 
   assert.equal(snapshot.summary.status, "ready");
-  assert.ok(snapshot.summary.external >= 4);
+  assert.ok(snapshot.summary.external >= 2);
   assert.equal(itemById(snapshot, "data-root:outside-data.txt")?.ownership, "external");
   assert.equal(itemById(snapshot, "contact:my-manual-project")?.ownership, "external");
-  assert.equal(itemById(snapshot, `contact:${CONTACT_ID}:skill:my-manual-skill`)?.ownership, "external");
-
-  const globalSettings = itemById(snapshot, "global-claude-settings");
-  assert.equal(globalSettings?.ownership, "shared");
-  assert.deepEqual(globalSettings?.metadata?.env?.managedKeys, ["ANTHROPIC_AUTH_TOKEN"]);
-  assert.deepEqual(globalSettings?.metadata?.env?.customKeys, ["MY_CUSTOM_VARIABLE"]);
-  assert.deepEqual(globalSettings?.metadata?.hooks?.events, ["Stop"]);
-  assert.deepEqual(globalSettings?.metadata?.mcpServers?.shown, ["customServer"]);
+  assert.equal(itemById(snapshot, `contact:${CONTACT_ID}:instructions`)?.title, "SUZU.md");
+  assert.equal(itemById(snapshot, "data-root:global-instructions")?.ownership, "managed");
+  assert.equal(itemById(snapshot, "data-root:software-assistant")?.ownership, "managed");
+  assert.equal(itemById(snapshot, "agent-core:credentials")?.title, "Suzu 本机模型凭据（内容不显示）");
+  assert.equal(itemById(snapshot, "agent-core:instruction-bridge")?.ownership, "managed");
+  assert.equal(itemById(snapshot, "agent-core:companion-preset")?.title, "Suzu 陪伴 preset（PowerShell / 文件）");
+  assert.equal(itemById(snapshot, "agent-core:software-assistant-preset")?.title, "Suzu 软件助手 preset（独立会话）");
+  assert.ok(snapshot.sections.some((section) => section.id === "agent-core"));
 
   const serialized = JSON.stringify(snapshot);
-  assert.doesNotMatch(serialized, /secret-token-must-not-leak|secret-custom-value-must-not-leak|not-returned/u);
-  assert.equal(await fs.readFile(values.globalSettings, "utf8"), before);
-});
-
-test("system status reports an invalid user-level Claude settings file without failing the whole scan", async (t) => {
-  const values = await fixture(t);
-  await fs.writeFile(values.globalSettings, "{ invalid json", "utf8");
-
-  const snapshot = await values.service.scan();
-  const globalSettings = itemById(snapshot, "global-claude-settings");
-
-  assert.equal(snapshot.summary.status, "error");
-  assert.equal(globalSettings?.state, "error");
-  assert.match(globalSettings?.detail || "", /有效的 JSON/u);
+  assert.doesNotMatch(serialized, /secret-agent-core-key/u);
 });

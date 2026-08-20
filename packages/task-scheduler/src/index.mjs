@@ -11,7 +11,7 @@ const SESSION_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
 const MAX_PROMPT_LENGTH = 20_000;
 const MAX_DESCRIPTION_LENGTH = 500;
 const MAX_HISTORY_ENTRIES = 500;
-const OPERATION_NAMES = new Set(["traveling-merchant", "conversation-compactor"]);
+const OPERATION_NAMES = new Set(["agent-journal", "conversation-compactor"]);
 const COMPACTOR_TRIGGERS = new Set(["time", "token"]);
 const TASK_SOURCES = new Set(["agent", "manual", "system"]);
 const HISTORY_STATUSES = new Set(["running", "dispatched", "queued", "completed", "failed", "skipped", "interrupted"]);
@@ -71,7 +71,7 @@ function absolutePath(value, label) {
 
 function sessionId(value) {
   const id = clean(value);
-  if (!SESSION_ID.test(id)) throw new ScheduleError("自动任务的 Claude 会话标识无效。 ");
+  if (!SESSION_ID.test(id)) throw new ScheduleError("自动任务的 Agent 会话标识无效。 ");
   return id;
 }
 
@@ -124,7 +124,7 @@ function scriptTarget(value) {
 function operationTarget(value, kind = "") {
   const operation = clean(value?.name).toLowerCase();
   if (value?.type !== "operation" || !OPERATION_NAMES.has(operation)) return null;
-  if (operation === "traveling-merchant") {
+  if (operation === "agent-journal") {
     if (kind && kind !== "cron") return null;
     return { type: "operation", name: operation };
   }
@@ -185,8 +185,10 @@ function creationTarget({
     projectRoot,
   }, kind);
   if (!operation) throw new ScheduleError("--exec 的内置操作与触发方式无效。 ");
-  if (operation.name === "conversation-compactor" && source !== "system") {
-    throw new ScheduleError("记忆压缩器的自动任务只能由 Suzu 内部创建。 ");
+  if (["conversation-compactor", "agent-journal"].includes(operation.name) && source !== "system") {
+    throw new ScheduleError(operation.name === "agent-journal"
+      ? "写日记的自动任务只能由 Suzu 内部创建。 "
+      : "记忆压缩器的自动任务只能由 Suzu 内部创建。 ");
   }
   return operation;
 }
@@ -620,6 +622,20 @@ export async function listScheduleHistory({ dataRoot, limit = MAX_HISTORY_ENTRIE
 
 export async function removeScheduleTask({ dataRoot, id } = {}) {
   const filePath = taskFile(dataRoot, id);
+  try {
+    await fs.unlink(filePath);
+    return true;
+  } catch (error) {
+    if (error?.code === "ENOENT") return false;
+    throw error;
+  }
+}
+
+/** Removes one persisted execution record.  This is intentionally separate
+ * from task deletion: a host migration may retire an operation type while
+ * keeping all unrelated schedule history intact. */
+export async function removeScheduleHistory({ dataRoot, id } = {}) {
+  const filePath = historyFile(dataRoot, id);
   try {
     await fs.unlink(filePath);
     return true;

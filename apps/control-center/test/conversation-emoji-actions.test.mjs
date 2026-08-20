@@ -116,3 +116,66 @@ test("favorite sticker actions stay behind the dedicated conversation bridge", a
     else globalThis.window = priorWindow;
   }
 });
+
+test("composer image and file selections remain renderer tokens until the message is sent", async () => {
+  const priorWindow = globalThis.window;
+  const calls = [];
+  globalThis.window = {
+    clearInterval: () => {},
+    setInterval: () => 1,
+  };
+  const context = {
+    api: {
+      conversation: {
+        attachments: {
+          discard: async (value) => { calls.push(["discard", value]); },
+          select: async (value) => {
+            calls.push(["select", value]);
+            return {
+              canceled: false,
+              items: [{
+                fileName: "photo.png",
+                fileUrl: "file:///D:/Temp/photo.png",
+                kind: "image",
+                mimeType: "image/png",
+                selectionToken: "attachment-1",
+                size: 128,
+              }],
+            };
+          },
+        },
+        onEvent: () => () => {},
+        snapshot: async () => ({
+          activeContact: { agentId: "agent-suzu", id: "contact-suzu", name: "Suzu" },
+          activeSessionId: "session-suzu",
+          contacts: [{ agentId: "agent-suzu", id: "contact-suzu", name: "Suzu" }],
+          contactsRoot: "D:/suzu-data/contacts",
+          messages: [],
+          projectRoot: "D:/suzu-data/contacts/suzu",
+          sessions: [{ id: "session-suzu", title: "Suzu" }],
+          status: "ready",
+          version: "attachment-action-test",
+        }),
+      },
+    },
+    render: () => {},
+    state: { settings: {} },
+  };
+
+  try {
+    startConversationPolling(context);
+    await flush();
+    const actions = createConversationReactActions(context);
+    await actions.selectComposerAttachments("image");
+    assert.deepEqual(calls, [["select", { kind: "image" }]]);
+    assert.deepEqual(conversationReactSnapshot(context).composer.attachments.map((item) => item.fileName), ["photo.png"]);
+    actions.removeComposerAttachment("attachment-1");
+    await flush();
+    assert.deepEqual(calls.at(-1), ["discard", { attachmentTokens: ["attachment-1"] }]);
+    assert.deepEqual(conversationReactSnapshot(context).composer.attachments, []);
+  } finally {
+    stopConversationPolling();
+    if (priorWindow === undefined) delete globalThis.window;
+    else globalThis.window = priorWindow;
+  }
+});

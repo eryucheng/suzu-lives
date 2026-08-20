@@ -23,6 +23,30 @@ test("API generation saves a software-owned candidate run without touching refer
   assert.equal(await fs.stat(path.join(target, run.candidates[0].file)).then((item) => item.isFile()), true);
 });
 
+test("DashScope image generation uses the model saved on the selected API connection", async () => {
+  let request;
+  const run = await createCandidates({
+    root: await root(),
+    connection: {
+      apiKey: credential(),
+      baseUrl: "https://dashscope.example.test/api/v1",
+      model: "my-dashscope-image-model",
+      type: "dashscope",
+    },
+    input,
+    fetchImpl: async (_url, options) => {
+      request = JSON.parse(options.body);
+      return jsonResponse({
+        request_id: "dashscope-model-request",
+        output: { choices: [{ message: { content: [{ image: "https://cdn.example.test/image.png" }] } }] },
+      });
+    },
+    imageDownloader: async () => png,
+  });
+  assert.equal(run.candidates[0].model, "my-dashscope-image-model");
+  assert.equal(request.model, "my-dashscope-image-model");
+});
+
 test("API references use the edit endpoint and role-aware multipart request", async () => {
   let target = "";
   await createCandidates({ root: await root(), connection: api, input: { ...input, prompt: "参考测试" }, references: [{ id: "ref-a", role: "identity", description: "人物", filename: "ref.png", mime: "image/png", data: png }], fetchImpl: async (url, options) => { target = url; assert.equal(options.body instanceof FormData, true); assert.match(String(options.body.get("prompt")), /Reference image roles/); return jsonResponse({ data: [{ b64_json: png.toString("base64") }] }); } });

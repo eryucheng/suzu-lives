@@ -10,7 +10,7 @@ import { DirectVoiceMessageError, runDirectVoiceMessage } from "@suzu-lives/voic
  * The stable, Agent-host-neutral contract for Suzu-owned capability commands.
  *
  * An Agent adapter only needs to provide its workspace identity, data root,
- * ledger path, and an already-resolved software connection. No Claude-specific
+ * ledger path, and an already-resolved software connection. No host-specific
  * project layout, prompts, or host configuration is part of this contract.
  */
 export const INTERNAL_CAPABILITY_CLI_SCHEMA_VERSION = 1;
@@ -328,7 +328,7 @@ function imageConnection(connection) {
 
 /**
  * Executes a normalized request with a host-supplied runtime context. This is
- * the reusable seam for future Claude, Hermes, or other Agent adapters.
+ * the reusable seam for future Agent runtime adapters.
  */
 export async function executeInternalCapability({ request, runtime } = {}) {
   if (!request || typeof request !== "object") {

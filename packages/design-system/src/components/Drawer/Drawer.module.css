@@ -16,10 +16,10 @@
   overflow: hidden;
   display: flex;
   flex-direction: column;
-  background: var(--glass-bg);
-  border: 1px solid var(--glass-border);
+  background: var(--panel);
+  border: 1px solid var(--border);
   color: var(--text);
-  box-shadow: var(--glass-shadow);
+  box-shadow: var(--shadow-lg);
   animation: slide-right 0.22s ease;
 }
 
@@ -34,8 +34,8 @@
   background: linear-gradient(
     90deg,
     transparent,
-    var(--glass-top-highlight, rgba(255, 255, 255, 0.18)) 20%,
-    var(--glass-top-highlight, rgba(255, 255, 255, 0.18)) 80%,
+    color-mix(in srgb, var(--text) 7%, transparent) 20%,
+    color-mix(in srgb, var(--text) 7%, transparent) 80%,
     transparent
   );
   pointer-events: none;

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Button, Empty, GlassPanel, PageHeader, Select, Status, Switch } from "suzu-design-system";
+import { TTS_ADAPTER_OPTIONS, ttsAdapterLabel } from "@suzu-lives/voice-message/tts-adapters";
 
 import { API_BINDINGS } from "../features/agent/runtime.mjs";
 import {
@@ -9,6 +10,7 @@ import {
   WECHAT_DELIVERY_OPTIONS,
   wechatConnectionSettings,
 } from "../features/capabilities/overview.mjs";
+import { ApiConnectionPicker } from "./api-connections-ui.jsx";
 import { CreateStudioDialog } from "./create-studio-dialog.jsx";
 
 const EXTERNAL_TYPE_LABELS = Object.freeze({
@@ -16,17 +18,12 @@ const EXTERNAL_TYPE_LABELS = Object.freeze({
   mcp: "MCP",
   skill: "Skill",
 });
-const CONTACT_SCOPED_CAPABILITY_IDS = new Set(["time-awareness", "image-vision", "video-understanding", "image-generation", "phone-camera", "voice-message", "site-automation", "iphone-bridge", "proactive-contact", "traveling-merchant"]);
+const CONTACT_SCOPED_CAPABILITY_IDS = new Set(["time-awareness", "image-vision", "video-understanding", "image-generation", "phone-camera", "voice-message", "web-browser", "mail-bridge", "agent-journal", "proactive-contact"]);
 
 function savedSettings(capability) {
   return capability?.savedSettings && typeof capability.savedSettings === "object"
     ? capability.savedSettings
     : {};
-}
-
-function capabilitySites(capability) {
-  const sites = savedSettings(capability).sites;
-  return Array.isArray(sites) ? sites : [];
 }
 
 function categoryFor(categoryId) {
@@ -151,39 +148,38 @@ function CapabilitySettingsForm({ abilityId, actions, children, submitLabel = "�
 
 function ApiBinding({ actions, apiServices, bindingId }) {
   const item = API_BINDINGS.find((candidate) => candidate.id === bindingId);
-  const [pending, setPending] = useState(false);
   if (!item) return null;
   const connections = Array.isArray(apiServices?.connections) ? apiServices.connections : [];
   const bindings = apiServices?.bindings && typeof apiServices.bindings === "object" ? apiServices.bindings : {};
   const available = connections.filter((connection) => item.types.includes(connection.type));
   const selectedId = item.selected(bindings);
   const selected = available.some((connection) => connection.id === selectedId) ? selectedId : "";
-  const change = async (id) => {
-    if (!id) return;
-    setPending(true);
-    try {
-      await actions.selectApiBinding?.(item.id, id);
-    } finally {
-      setPending(false);
-    }
-  };
   return (
     <div className="capability-api-binding-react">
       <div><strong>使用的 API</strong><small>{item.detail}</small></div>
       <div className="capability-api-binding-react__actions">
-        <Select className="capability-api-binding-react__select capability-select-react" disabled={!available.length || pending} onChange={change} options={available.map((connection) => ({ label: connection.name, value: connection.id }))} placeholder={available.length ? "选择 API" : "还没有可用 API"} value={selected} />
-        <Button onClick={actions.openApiServices} type="button" variant="secondary">管理 API</Button>
+        <ApiConnectionPicker
+          connections={available}
+          detail={item.detail}
+          onManage={actions.openApiServices}
+          onSelect={(connectionId) => actions.selectApiBinding?.(item.id, connectionId)}
+          selectedId={selected}
+          title={`为${item.label}选择 API`}
+        />
       </div>
     </div>
   );
 }
 
-function ContactDeliverySettings({ actions, capability, description, contactsSnapshot, emptyDescription = "先在对话中创建联系人，再回来选择要接收这项能力的对象。" }) {
+function ContactDeliverySettings({ actions, capability, contactsSnapshot, defaultEnabled = false, description, emptyDescription = "先在对话中创建联系人，再回来选择要接收这项能力的对象。" }) {
   const settings = savedSettings(capability);
   const contacts = Array.isArray(contactsSnapshot?.contacts) ? contactsSnapshot.contacts : [];
   const enabledContacts = new Set(Array.isArray(settings.enabledContactIds) ? settings.enabledContactIds : []);
+  const effectiveDescription = defaultEnabled
+    ? `${description} 未配置时默认对全部联系人启用；勾选后会按选择生效。`
+    : description;
   return (
-    <SettingSurface className="capability-contact-delivery-settings" description={description} eyebrow="联系人范围" title="在哪些联系人中启用">
+    <SettingSurface className="capability-contact-delivery-settings" description={effectiveDescription} eyebrow="联系人范围" title="在哪些联系人中启用">
       {contacts.length ? (
         <div className="capability-session-list">
           {contacts.map((contact) => {
@@ -206,11 +202,11 @@ function ContactDeliverySettings({ actions, capability, description, contactsSna
 function voiceChoiceLabel(contact, choices) {
   if (!contact?.voiceId) return "尚未配置";
   const choice = choices.find((item) => (
-    item.provider === contact.provider
+    item.adapter === contact.adapter
     && item.voiceId === contact.voiceId
     && (!item.id || item.id === contact.customVoiceId)
   ));
-  return choice?.name || (contact.provider === "minimax" ? "MiniMax 自定义音频" : contact.provider === "cosyvoice" ? "阿里百炼 CosyVoice 复刻音色" : "已保存的百炼音色");
+  return choice?.name || ttsAdapterLabel(contact?.adapter || "dashscope-qwen");
 }
 
 function SettingsDialogHeader({ children, onClose, title }) {
@@ -260,15 +256,14 @@ function VoiceContactConfigDialog({ onClose, open, voiceDesign }) {
     if (!contact || saving || typeof voiceDesign?.saveContactVoice !== "function") return;
     const key = new FormData(event.currentTarget).get("voiceSelection");
     const choice = choices.find((item) => item.key === key);
-    if (!choice?.voiceId || !choice.provider) return;
+    if (!choice?.voiceId || !choice.adapter) return;
     setSaving(true);
     setFeedback(`正在为“${contact.name}”保存音色…`);
     try {
       const next = await voiceDesign.saveContactVoice({
         contactId: contact.id,
         customVoiceId: choice.id || "",
-        provider: choice.provider,
-        sourceCandidateId: choice.sourceCandidateId || "",
+        adapter: choice.adapter,
         sourceContactId: choice.sourceContactId || "",
         voiceId: choice.voiceId,
       });
@@ -291,9 +286,9 @@ function VoiceContactConfigDialog({ onClose, open, voiceDesign }) {
         <div className="voice-form-actions voice-contact-dialog-actions"><button className="secondary-button" onClick={close} type="button">关闭</button></div>
       </> : contact ? <>
         <SettingsDialogHeader onClose={close} title={`为“${contact.name}”配置音色`}>联系人</SettingsDialogHeader>
-        <div className="voice-settings-copy"><p>{`这里列出已保留的百炼音色，以及本机音色库中的 MiniMax 和阿里百炼复刻音色；保存后只影响“${contact.name}”。`}</p></div>
+        <div className="voice-settings-copy"><p>{`这里列出已保存的音色；保存后只影响“${contact.name}”。`}</p></div>
         {feedback ? <div className="voice-settings-copy"><p>{feedback}</p></div> : null}
-        {choices.length ? <form className="voice-form voice-contact-config-form" onSubmit={save}><div className="voice-contact-choice-list">{choices.map((item) => { const selected = item.id ? contact.provider === item.provider && item.id === contact.customVoiceId && item.voiceId === contact.voiceId : contact.provider === item.provider && item.voiceId === contact.voiceId; return <label className="voice-contact-choice" key={item.key}><input defaultChecked={selected} name="voiceSelection" required type="radio" value={item.key} /><span><strong>{item.name}</strong><small>{selected ? `${contact.name}正在使用` : item.kindLabel}</small></span></label>; })}</div><div className="voice-form-actions"><button className="secondary-button" disabled={saving} onClick={() => setSelectedContactId("")} type="button">返回联系人列表</button><button className="primary-button" disabled={saving}>{saving ? "正在保存…" : "使用这个音色"}</button></div></form> : <><div className="voice-history-empty voice-contact-empty">先在创作 → 音色设计中保留一个候选音色，或添加 MiniMax、阿里百炼复刻声音。</div><div className="voice-form-actions voice-contact-dialog-actions"><button className="secondary-button" onClick={() => setSelectedContactId("")} type="button">返回联系人列表</button></div></>}
+        {choices.length ? <form className="voice-form voice-contact-config-form" onSubmit={save}><div className="voice-contact-choice-list">{choices.map((item) => { const selected = item.id ? contact.adapter === item.adapter && item.id === contact.customVoiceId && item.voiceId === contact.voiceId : contact.adapter === item.adapter && item.voiceId === contact.voiceId; return <label className="voice-contact-choice" key={item.key}><input defaultChecked={selected} name="voiceSelection" required type="radio" value={item.key} /><span><strong>{item.name}</strong><small>{selected ? `${contact.name}正在使用` : item.kindLabel}</small></span></label>; })}</div><div className="voice-form-actions"><button className="secondary-button" disabled={saving} onClick={() => setSelectedContactId("")} type="button">返回联系人列表</button><button className="primary-button" disabled={saving}>{saving ? "正在保存…" : "使用这个音色"}</button></div></form> : <><div className="voice-history-empty voice-contact-empty">还没有可用音色。请先在“语音消息”设置中新增一个音色。</div><div className="voice-form-actions voice-contact-dialog-actions"><button className="secondary-button" onClick={() => setSelectedContactId("")} type="button">返回联系人列表</button></div></>}
       </> : null}
     </CreateStudioDialog>
   );
@@ -383,7 +378,7 @@ function ImageGenerationSettings({ actions, apiServices, capability, contactsSna
         </FormGrid>
       </SettingSurface>
     </CapabilitySettingsForm>
-      <ContactDeliverySettings actions={actions} capability={capability} contactsSnapshot={contactsSnapshot} description="打开后，只向该联系人的 Claude 项目登记图像生成 Skill。关闭不会删除全局出图设置或已有图片。" emptyDescription="先创建联系人，再选择允许哪些联系人使用图像生成。" />
+      <ContactDeliverySettings actions={actions} capability={capability} contactsSnapshot={contactsSnapshot} description="所选联系人会通过 Suzu Agent Core 使用这套生图设置。" emptyDescription="先创建联系人，再选择允许哪些联系人使用图像生成。" />
     </>
   );
 }
@@ -409,38 +404,163 @@ function PhoneCameraSettings({ actions, apiServices, capability, contactsSnapsho
         </FormGrid>
       </SettingSurface>
     </CapabilitySettingsForm>
-      <ContactDeliverySettings actions={actions} capability={capability} contactsSnapshot={contactsSnapshot} description="打开后，只向该联系人的 Claude 项目登记手机拍照式生图 Skill。关闭不会删除全局画面偏好或已有图片。" emptyDescription="先创建联系人，再选择允许哪些联系人使用手机拍照式生图。" />
+      <ContactDeliverySettings actions={actions} capability={capability} contactsSnapshot={contactsSnapshot} description="所选联系人会通过 Suzu Agent Core 使用这套画面偏好。" emptyDescription="先创建联系人，再选择允许哪些联系人使用手机拍照式生图。" />
     </>
   );
 }
 
 function VoiceMessageSettings({ actions, apiServices, capability, contactsSnapshot }) {
   const [voiceDialogOpen, setVoiceDialogOpen] = useState(false);
+  const [voiceCreateOpen, setVoiceCreateOpen] = useState(false);
+  const [voiceSnapshot, setVoiceSnapshot] = useState(null);
+  const [voiceError, setVoiceError] = useState("");
+  const [customAdapter, setCustomAdapter] = useState("openai-speech");
+  const [savingCustomAudio, setSavingCustomAudio] = useState(false);
+  const [deletingVoiceId, setDeletingVoiceId] = useState("");
+
+  useEffect(() => { void refreshVoice(); }, []);
+  const refreshVoice = async () => {
+    try {
+      setVoiceSnapshot(await actions.voiceDesign?.snapshot());
+      setVoiceError("");
+    } catch (error) {
+      setVoiceError(error?.message || "无法读取音色设置。");
+    }
+  };
+  const customVoices = Array.isArray(voiceSnapshot?.customVoices) ? voiceSnapshot.customVoices : [];
+  const saveCustomAudio = async (event) => {
+    event.preventDefault();
+    if (savingCustomAudio) return;
+    const form = new FormData(event.currentTarget);
+    setSavingCustomAudio(true);
+    setVoiceError("");
+    try {
+      const next = await actions.voiceDesign?.saveCustomAudio({
+        adapter: customAdapter,
+        model: form.get("model"),
+        name: form.get("name"),
+        voiceId: form.get("voiceId"),
+      });
+      if (next?.status) setVoiceSnapshot(next);
+      setVoiceCreateOpen(false);
+    } catch (error) {
+      setVoiceError(error?.message || "保存音色失败，请稍后重试。");
+    } finally {
+      setSavingCustomAudio(false);
+    }
+  };
+  const deleteCustomVoice = async (voice) => {
+    if (!voice?.id || deletingVoiceId) return;
+    setDeletingVoiceId(voice.id);
+    setVoiceError("");
+    try {
+      const next = await actions.voiceDesign?.deleteCustomVoice({
+        id: voice.id,
+        source: voice.source || "",
+        sourceContactId: voice.sourceContactId || "",
+      });
+      if (next?.status) setVoiceSnapshot(next);
+    } catch (error) {
+      setVoiceError(error?.message || "删除音色失败，请稍后重试。");
+    } finally {
+      setDeletingVoiceId("");
+    }
+  };
+  const apiConnections = Array.isArray(apiServices?.connections) ? apiServices.connections : [];
+  const apiBindings = apiServices?.bindings && typeof apiServices.bindings === "object" ? apiServices.bindings : {};
+  const connectionsFor = (bindingId) => {
+    const types = API_BINDINGS.find((item) => item.id === bindingId)?.types || [];
+    return apiConnections.filter((item) => types.includes(item.type));
+  };
   return (
     <>
-    <SettingSurface description="API 用于文字转语音；每位联系人的音色和允许范围都单独保存。" eyebrow="声音" title="发送语音">
-        <FormGrid>
-          <ApiBinding actions={actions} apiServices={apiServices} bindingId="sound" />
-        </FormGrid>
-        <div className="capability-inline-action-react"><div><strong>为联系人配置音色</strong><p>直接在这里选择联系人和已保存的声音。</p></div><Button onClick={() => setVoiceDialogOpen(true)} type="button" variant="secondary">配置联系人音色</Button></div>
+    <SettingSurface
+      action={<Button onClick={() => setVoiceDialogOpen(true)} type="button" variant="secondary">配置联系人音色</Button>}
+      description="文字转语音与通话识别使用的 API。"
+      eyebrow="声音"
+      title="发送语音"
+    >
+        <div className="voice-binding-pair">
+          <div className="voice-binding-pair__item">
+            <span className="voice-binding-pair__label">TTS API</span>
+            <ApiConnectionPicker
+              connections={connectionsFor("voice-message")}
+              onManage={actions.openApiServices}
+              onSelect={(connectionId) => actions.selectApiBinding?.("voice-message", connectionId)}
+              selectedId={apiBindings["voice-message"] || ""}
+              title="为文字转语音选择 API"
+            />
+          </div>
+          <div className="voice-binding-pair__item">
+            <span className="voice-binding-pair__label">ASR API</span>
+            <ApiConnectionPicker
+              connections={connectionsFor("realtime-asr")}
+              onManage={actions.openApiServices}
+              onSelect={(connectionId) => actions.selectApiBinding?.("realtime-asr", connectionId)}
+              selectedId={apiBindings["realtime-asr"] || ""}
+              title="为语音识别选择 API"
+            />
+          </div>
+        </div>
     </SettingSurface>
-      <ContactDeliverySettings actions={actions} capability={capability} contactsSnapshot={contactsSnapshot} description="打开后，只向该联系人的 Claude 项目登记发送语音 Skill。关闭不会删除该联系人的音色设置。" emptyDescription="先创建联系人，再选择允许哪些联系人使用语音消息。" />
+    <CapabilitySettingsForm abilityId="voice-message" actions={actions} submitLabel="保存灵敏度">
+      <SettingSurface description="说话能量阈值越小越灵敏；静音判定帧数越多，一句话要停顿更久才算说完。" eyebrow="声音" title="通话灵敏度">
+        <FormGrid>
+          <FormField hint="建议 0.010～0.060；环境安静可以调低，有背景音可以调高。" label="说话能量阈值">
+            <input defaultValue={savedSettings(capability).voiceEnergyThreshold ?? 0.025} max="1" min="0.001" name="voiceEnergyThreshold" step="0.001" type="number" />
+          </FormField>
+          <FormField hint="默认 9 帧（约 0.4 秒停顿）。" label="静音判定帧数">
+            <input defaultValue={savedSettings(capability).voiceSilenceFrames ?? 9} max="120" min="1" name="voiceSilenceFrames" step="1" type="number" />
+          </FormField>
+        </FormGrid>
+      </SettingSurface>
+    </CapabilitySettingsForm>
+    <SettingSurface
+      action={<Button onClick={() => setVoiceCreateOpen(true)} type="button" variant="secondary">新增音色</Button>}
+      description="Agent 发语音消息和电话都会使用这里的声音。"
+      eyebrow="声音"
+      title="音色"
+    >
+        {voiceError ? <p className="voice-settings-copy">{voiceError}</p> : null}
+        {customVoices.length ? <div className="voice-candidate-list">{customVoices.map((voice) => (
+          <article className="voice-candidate" key={voice.key}>
+            <div className="voice-candidate-copy">
+              <span className="reference-kicker">{voice.kindLabel}</span>
+              <h3>{voice.name}</h3>
+              <p>{voice.model ? `模型 ${voice.model}` : "使用默认模型"} · 音色 {voice.voiceId}</p>
+            </div>
+            <div className="voice-candidate-actions">
+              <button className="danger-button" disabled={deletingVoiceId === voice.id} onClick={() => void deleteCustomVoice(voice)} type="button">{deletingVoiceId === voice.id ? "正在删除…" : "删除"}</button>
+            </div>
+          </article>
+        ))}</div> : <Empty className="capability-inline-empty" description="还没有音色。新增后可为联系人配置。" title="暂无音色" />}
+    </SettingSurface>
+      <ContactDeliverySettings actions={actions} capability={capability} contactsSnapshot={contactsSnapshot} description="所选联系人会通过 Suzu Agent Core 使用各自保存的音色设置。" emptyDescription="先创建联系人，再选择允许哪些联系人使用语音消息。" />
       <VoiceContactConfigDialog onClose={() => setVoiceDialogOpen(false)} open={voiceDialogOpen} voiceDesign={actions.voiceDesign} />
+      <CreateStudioDialog ariaLabel="新增音色" onClose={() => { if (!savingCustomAudio) setVoiceCreateOpen(false); }} open={voiceCreateOpen}>
+        <SettingsDialogHeader onClose={() => { if (!savingCustomAudio) setVoiceCreateOpen(false); }} title="新增音色">音色</SettingsDialogHeader>
+        <div className="voice-settings-copy"><p>填写声音的模型与音色 ID。若已选择百炼地址且模型或音色 ID 为 CosyVoice / Qwen TTS，Suzu 会自动使用百炼协议；其他服务再按其文档选择适配器。</p></div>
+        <form className="voice-form voice-contact-config-form" onSubmit={saveCustomAudio}>
+          <label>声音备注名<input autoFocus disabled={savingCustomAudio} maxLength="80" name="name" placeholder="例如：Suzu 的电话声" required /></label>
+          <label>接口适配器（其他服务用）<Select className="create-select-react" disabled={savingCustomAudio} fullWidth onChange={setCustomAdapter} options={TTS_ADAPTER_OPTIONS} value={customAdapter} /></label>
+          <label>模型<input disabled={savingCustomAudio} maxLength="160" name="model" placeholder="留空时使用适配器默认模型" /></label>
+          <label>音色 ID<input disabled={savingCustomAudio} maxLength="200" name="voiceId" placeholder="填写服务商提供的 voice ID" required /></label>
+          <div className="voice-form-actions"><button className="secondary-button" disabled={savingCustomAudio} onClick={() => setVoiceCreateOpen(false)} type="button">取消</button><button className="primary-button" disabled={savingCustomAudio}>{savingCustomAudio ? "正在保存…" : "保存音色"}</button></div>
+        </form>
+      </CreateStudioDialog>
     </>
   );
 }
 
 function ImageVisionSettings({ actions, apiServices, capability, contactsSnapshot }) {
   const settings = savedSettings(capability);
-  const provider = settings.provider || {};
   const vision = settings.vision || {};
   return (
     <>
       <CapabilitySettingsForm abilityId="image-vision" actions={actions}>
-        <SettingSurface description="选择用于图片理解的 API，再决定需要多细地读取图片。" eyebrow="理解图片" title="读取偏好">
+        <SettingSurface description="选择已在设置中保存的图片理解 API；模型、地址和 Key 均由该 API 连接统一管理。" eyebrow="理解图片" title="读取偏好">
           <FormGrid>
             <ApiBinding actions={actions} apiServices={apiServices} bindingId="image-vision" />
-            <FormField className="capability-form-field--wide" label="模型"><input defaultValue={provider.model || ""} maxLength="200" name="model" placeholder="从 API 服务说明中填写模型名" /></FormField>
             <FormField className="capability-form-field--wide" label="图片读取精度"><ChoiceSelect name="detail" options={[["auto", "自动"], ["low", "快速"], ["high", "细看"]]} value={vision.detail || "auto"} /></FormField>
             <FormField label="等待时间（秒）"><input defaultValue={vision.timeoutSeconds ?? 90} max="600" min="5" name="timeoutSeconds" type="number" /></FormField>
             <FormField label="最长回复（tokens）"><input defaultValue={vision.maxOutputTokens ?? 800} max="32000" min="32" name="maxOutputTokens" type="number" /></FormField>
@@ -455,23 +575,21 @@ function ImageVisionSettings({ actions, apiServices, capability, contactsSnapsho
           </FormGrid>
         </SettingSurface>
       </CapabilitySettingsForm>
-      <ContactDeliverySettings actions={actions} capability={capability} contactsSnapshot={contactsSnapshot} description="打开后，只向该联系人的 Claude 项目登记图像理解 Skill。登记本身不会调用模型或产生费用；只有 Agent 实际分析图片时才会请求配置的 API。" emptyDescription="先创建联系人，再选择允许哪些联系人使用图像理解。" />
+      <ContactDeliverySettings actions={actions} capability={capability} contactsSnapshot={contactsSnapshot} description="所选联系人会通过 Suzu Agent Core 使用这里的图片读取偏好与 API。" emptyDescription="先创建联系人，再选择允许哪些联系人使用图像理解。" />
     </>
   );
 }
 
 function VideoUnderstandingSettings({ actions, apiServices, capability, contactsSnapshot }) {
   const settings = savedSettings(capability);
-  const provider = settings.provider || {};
   const video = settings.video || {};
   return (
     <>
       <CapabilitySettingsForm abilityId="video-understanding" actions={actions}>
-        <SettingSurface description="选择视频理解的 API，并设置每秒取样的画面数量。" eyebrow="理解视频" title="读取偏好">
+        <SettingSurface description="选择已在设置中保存的视频理解 API，并设置模型读取完整视频时的时间密度。视频会作为视频输入直接交给模型；这里不做本地抽帧理解。" eyebrow="理解视频" title="读取偏好">
           <FormGrid>
             <ApiBinding actions={actions} apiServices={apiServices} bindingId="video-understanding" />
-            <FormField className="capability-form-field--wide" label="模型"><input defaultValue={provider.model || ""} maxLength="200" name="model" placeholder="从 API 服务说明中填写模型名" /></FormField>
-            <FormField className="capability-form-field--wide" label="取样速度"><ChoiceSelect name="fps" options={[["0.5", "节省：每 2 秒 1 帧"], ["1", "平衡：每秒 1 帧"], ["2", "细看：每秒 2 帧"]]} value={String(video.fps ?? 1)} /></FormField>
+            <FormField className="capability-form-field--wide" label="模型读取密度"><ChoiceSelect name="fps" options={[["0.5", "节省：约每 2 秒读取一次"], ["1", "平衡：约每秒读取一次"], ["2", "细看：约每秒读取两次"]]} value={String(video.fps ?? 1)} /></FormField>
             <CheckboxField defaultChecked={video.cacheEnabled !== false} label="保留本地缓存，加快同一视频的再次理解" name="cacheEnabled" />
           </FormGrid>
         </SettingSurface>
@@ -486,7 +604,7 @@ function VideoUnderstandingSettings({ actions, apiServices, capability, contacts
           </FormGrid>
         </SettingSurface>
       </CapabilitySettingsForm>
-      <ContactDeliverySettings actions={actions} capability={capability} contactsSnapshot={contactsSnapshot} description="打开后，只向该联系人的 Claude 项目登记视频理解 Skill。登记本身不会调用模型或产生费用；只有 Agent 实际分析视频时才会请求配置的 API。" emptyDescription="先创建联系人，再选择允许哪些联系人使用视频理解。" />
+      <ContactDeliverySettings actions={actions} capability={capability} contactsSnapshot={contactsSnapshot} description="所选联系人会通过 Suzu Agent Core 使用这里的视频读取偏好与 API。" emptyDescription="先创建联系人，再选择允许哪些联系人使用视频理解。" />
     </>
   );
 }
@@ -496,72 +614,42 @@ function TimeAwarenessSettings({ actions, capability, contactsSnapshot }) {
   return (
     <>
       <CapabilitySettingsForm abilityId="time-awareness" actions={actions}>
-        <SettingSurface description="同一 Claude 会话超过这个间隔后，才会将新的本机时间作为本轮额外上下文注入。" eyebrow="时间间隔" title="多久感知一次">
+        <SettingSurface description="同一对话超过这个间隔后，时间感知会把新的本机时间作为本轮额外上下文注入。" eyebrow="时间间隔" title="多久感知一次">
           <FormGrid>
             <FormField hint="默认 10 分钟；可设为 1 到 1440 分钟。" label="间隔（分钟）"><input defaultValue={settings.intervalMinutes ?? 10} max="1440" min="1" name="intervalMinutes" type="number" /></FormField>
           </FormGrid>
         </SettingSurface>
       </CapabilitySettingsForm>
-      <ContactDeliverySettings actions={actions} capability={capability} contactsSnapshot={contactsSnapshot} description="打开后，Suzu 会在该联系人的 Claude 项目中安装时间 Hook；关闭时只移除这一位联系人的 Hook。" emptyDescription="先创建联系人，再选择在哪些联系人中启用时间感知。" />
+      <ContactDeliverySettings actions={actions} capability={capability} contactsSnapshot={contactsSnapshot} defaultEnabled={settings.defaultEnabled === true} description="所选联系人会按这里的间隔获得本机时间上下文。" emptyDescription="先创建联系人，再选择在哪些联系人中启用时间感知。" />
     </>
   );
 }
 
-function SiteAutomationOverview({ actions, capability, contactsSnapshot }) {
+function WebBrowserSettings({ actions, capability, contactsSnapshot }) {
   const settings = savedSettings(capability);
-  const sites = Array.isArray(settings.sites) ? settings.sites : [];
   const configuration = settings.configuration || {};
+  const browser = settings.browser || {};
+  const running = browser.status === "ready";
   return (
     <>
-      <SettingSurface description="每个网站单独管理，所有联系人共用这套设置。新增网站后会自动出现在这里，不需要再造一套能力页面。" eyebrow="网页自动化" title="已接入的网站">
-        {sites.length ? <div className="capability-site-grid">{sites.map((site) => {
-          const enabledActions = (site.actions || []).filter((action) => action.enabled !== false).length;
-          return <button className="capability-site-card" key={site.id} onClick={() => actions.openSite?.(site.id)} type="button"><Status label={site.enabled !== false ? "已启用" : "已关闭"} tone={site.enabled !== false ? "success" : "muted"} /><strong>{site.name}</strong><span>{enabledActions + " / " + (site.actions || []).length + " 个动作可用"}</span></button>;
-        })}</div> : <Empty className="capability-inline-empty" description="接入新的站点适配器后，它会出现在这里。" title="还没有接入网站" />}
+      <SettingSurface description="每位已启用的联系人都通过同一个 Suzu 专用浏览器操作任意已登录网页。网站登录态只保存在本机 profile，不会写进联系人工作目录。" eyebrow="WEB BROWSER" title="专用浏览器">
+        <Status label={running ? "浏览器正在运行" : "浏览器尚未启动"} tone={running ? "success" : "muted"} />
+        {browser.browser ? <p className="capability-settings-note">{browser.browser}</p> : null}
       </SettingSurface>
-      <CapabilitySettingsForm abilityId="site-automation" actions={actions}>
-        <SettingSurface description="网页浏览和各网站动作共用 Suzu Lives 的专用浏览器；登录状态不会显示在这里。" eyebrow="网页自动化" title="浏览器与连接">
+      <CapabilitySettingsForm abilityId="web-browser" actions={actions}>
+        <SettingSurface description="Suzu 会在需要时启动自己的浏览器窗口；可先登录网站，之后 Agent 能直接使用同一登录态。" eyebrow="WEB BROWSER" title="连接与运行">
           <FormGrid>
-            <FormField className="capability-form-field--wide" label="浏览器连接地址"><input defaultValue={configuration.cdpUrl || "http://127.0.0.1:9222"} maxLength="500" name="cdpUrl" /></FormField>
+            <FormField className="capability-form-field--wide" hint="默认 http://127.0.0.1:9222，只能连接本机的 Suzu 专用浏览器。" label="浏览器连接地址"><input defaultValue={configuration.cdpUrl || "http://127.0.0.1:9222"} maxLength="500" name="cdpUrl" /></FormField>
+            <FormField className="capability-form-field--wide" hint="留空会自动寻找 Chrome，找不到时再填写 chrome.exe 或 msedge.exe 的绝对路径。" label="浏览器可执行文件（可选）"><input defaultValue={configuration.executablePath || ""} maxLength="1000" name="executablePath" placeholder="C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe" /></FormField>
             <FormField label="页面操作等待（毫秒）"><input defaultValue={configuration.timeoutMs ?? 10000} max="120000" min="1000" name="timeoutMs" type="number" /></FormField>
             <FormField label="打开页面等待（毫秒）"><input defaultValue={configuration.navigationTimeoutMs ?? 25000} max="180000" min="1000" name="navigationTimeoutMs" type="number" /></FormField>
             <CheckboxField defaultChecked={configuration.autoStartBrowser !== false} label="需要时启动专用浏览器" name="autoStartBrowser" />
-            <FormField className="capability-form-field--wide" label="Python 命令"><input defaultValue={configuration.pythonCommand || "python"} maxLength="300" name="pythonCommand" /></FormField>
           </FormGrid>
         </SettingSurface>
       </CapabilitySettingsForm>
-      <ContactDeliverySettings actions={actions} capability={capability} contactsSnapshot={contactsSnapshot} description="打开后，才向这位联系人的 Claude 项目登记网页自动化 Skill。关闭后，该联系人不能再使用专用浏览器或已接入的网站动作；浏览器登录状态和网站动作设置会保留。" emptyDescription="先创建联系人，再选择允许哪些联系人使用网页自动化。" />
+      <SettingSurface description="Agent 可打开、读取、截图、点击、填写、按键、滚动、等待、上传、下载，以及执行页面脚本。下载和截图会返回本机路径，可继续走现有聊天附件发送。" eyebrow="ACTIONS" title="通用网页操作" />
+      <ContactDeliverySettings actions={actions} capability={capability} contactsSnapshot={contactsSnapshot} description="启用后，这位联系人可通过 Suzu Agent Core 直接操作 Suzu 专用浏览器中的任意网页。" emptyDescription="先创建联系人，再选择允许哪些联系人使用网页自动化。" />
     </>
-  );
-}
-
-function actionGroups(site) {
-  const groups = new Map();
-  for (const action of site.actions || []) {
-    const group = action.group || "其他";
-    if (!groups.has(group)) groups.set(group, []);
-    groups.get(group).push(action);
-  }
-  return [...groups.entries()];
-}
-
-function SiteAutomationSiteSettings({ actions, site }) {
-  return (
-    <section className="capability-site-detail">
-      <SettingSurface description={"关闭网站后，" + site.name + " 的所有动作都会停止；单个动作的开关会保留，重新启用网站时继续生效。"} eyebrow="网页自动化 / 已接入网站" title={site.name}>
-        <AsyncSwitchRow checked={site.enabled !== false} label={site.enabled !== false ? "网站已启用" : "网站已关闭"} onChange={(siteEnabled) => actions.setSiteEnabled?.(site.id, siteEnabled)} />
-      </SettingSurface>
-      <SettingSurface description="每一项都会在真实的站点适配器入口处校验；关闭后，Agent 直接调用也会被拒绝。" eyebrow="动作节点" title={"允许 " + site.name + " 做什么"}>
-        <div className="capability-site-action-groups">
-          {actionGroups(site).map(([group, items]) => (
-            <section className="capability-site-action-group" key={group}>
-              <h3>{group}</h3>
-              {items.map((action) => <AsyncSwitchRow checked={action.enabled !== false} description={action.description || ""} key={action.id} label={action.label || action.id} onChange={(actionEnabled) => actions.setSiteAction?.(site.id, action.id, actionEnabled)} />)}
-            </section>
-          ))}
-        </div>
-      </SettingSurface>
-    </section>
   );
 }
 
@@ -592,36 +680,23 @@ function ProactiveContactSettings({ actions, capability, contactsSnapshot }) {
   );
 }
 
-function TravelingMerchantSettings({ actions, capability, contactsSnapshot }) {
+function AgentJournalSettings({ actions, capability, contactsSnapshot }) {
   const settings = savedSettings(capability);
-  const items = Array.isArray(settings.wantedItems) ? settings.wantedItems.join("\n") : "";
   return (
     <>
-      <CapabilitySettingsForm abilityId="traveling-merchant" actions={actions}>
-        <SettingSurface description="输入想买的物品；检测到其中任意一项时，会按你的通知文案提醒。" eyebrow="远行商人" title="关注与提醒">
+      <CapabilitySettingsForm abilityId="agent-journal" actions={actions} submitLabel="保存日记时间">
+        <SettingSurface description="每天由软件创建一次内部回合，让对应 Agent 回顾当天值得留下的事。日记单独保存在本机，不会作为普通聊天消息或微信消息发送，也不会进入长期记忆。" eyebrow="AGENT JOURNAL" title="每天写日记">
           <FormGrid>
-            <FormField className="capability-form-field--wide" label="关注的物品"><textarea defaultValue={items} maxLength="8000" name="wantedItems" placeholder={"棱镜球\n炫彩蛋"} /></FormField>
-            <FormField className="capability-form-field--wide" label="发现物品时的提醒"><input defaultValue={settings.notificationTemplate || "远行商人这轮有：{items}，快去买"} maxLength="1200" name="notificationTemplate" /></FormField>
-            <CheckboxField defaultChecked={settings.notifyOnError !== false} label="检查失败时也提醒我" name="notifyOnError" />
-            <FormField className="capability-form-field--wide" label="失败提醒"><input defaultValue={settings.errorNotificationTemplate || "远行商人监控这轮检查失败了：{error}"} maxLength="1200" name="errorNotificationTemplate" /></FormField>
+            <FormField hint="软件未运行时不会补写；默认是每天 00:02。" label="记录时间"><input defaultValue={settings.time || "00:02"} name="time" required type="time" /></FormField>
           </FormGrid>
-        </SettingSurface>
-        <SettingSurface description="设置读取的网址、等待时间与重试次数。" eyebrow="读取网页" title="网页与检查节奏">
-          <FormGrid>
-            <FormField className="capability-form-field--wide" label="页面地址"><input defaultValue={settings.url || ""} maxLength="500" name="url" /></FormField>
-            <FormField label="网页等待（秒）"><input defaultValue={settings.requestTimeoutSeconds ?? 15} max="120" min="3" name="requestTimeoutSeconds" type="number" /></FormField>
-            <FormField label="重试次数"><input defaultValue={settings.maxAttempts ?? 3} max="10" min="1" name="maxAttempts" type="number" /></FormField>
-            <FormField label="重试间隔（秒）"><input defaultValue={settings.retryDelaySeconds ?? 20} max="300" min="0" name="retryDelaySeconds" type="number" /></FormField>
-          </FormGrid>
-          <div className="capability-inline-action-react"><p>需要确认时，可以直接打开正在读取的网页。</p><Button onClick={actions.openTravelingMerchantPage} type="button" variant="secondary">打开网页</Button></div>
         </SettingSurface>
       </CapabilitySettingsForm>
-      <ContactDeliverySettings actions={actions} capability={capability} description="打开后，联系人会收到商人命中或已开启的失败提醒；可以同时开启多个联系人。网页只抓取一次，再分别投递。" contactsSnapshot={contactsSnapshot} />
+      <ContactDeliverySettings actions={actions} capability={capability} contactsSnapshot={contactsSnapshot} description="打开后，这位联系人的 Agent 会在设定时间写当天的日记；可以同时开启多个联系人。日记可在“关系 → 查看日记”中浏览。" emptyDescription="先创建联系人，再选择哪些 Agent 需要每天写日记。" />
     </>
   );
 }
 
-function IphoneBridgeConfigDialog({ actions, capability, onClose, open }) {
+function MailBridgeConfigDialog({ actions, capability, onClose, open }) {
   const [saving, setSaving] = useState(false);
   const [feedback, setFeedback] = useState("");
   const configuration = savedSettings(capability).configuration || {};
@@ -633,7 +708,7 @@ function IphoneBridgeConfigDialog({ actions, capability, onClose, open }) {
     setSaving(true);
     setFeedback("");
     try {
-      const result = await actions.saveSettings("iphone-bridge", formValue(event.currentTarget));
+      const result = await actions.saveSettings("mail-bridge", formValue(event.currentTarget));
       if (result?.ok) onClose?.();
       else setFeedback(result?.error?.message || "邮件连接没有保存，请检查填写内容。 ");
     } catch (error) {
@@ -643,42 +718,42 @@ function IphoneBridgeConfigDialog({ actions, capability, onClose, open }) {
     }
   };
   return (
-    <CreateStudioDialog ariaLabel="配置 iPhone 邮件连接" className="iphone-bridge-config-dialog" onClose={close} open={open}>
-      <SettingsDialogHeader onClose={close} title="配置 iPhone 邮件连接">iPhone 互通</SettingsDialogHeader>
-      <div className="voice-settings-copy"><p>填写已在 iPhone 快捷指令中使用的收发邮箱。授权码不写进页面或配置快照：请先把它放到操作系统环境变量，再在这里填写变量名。</p></div>
+    <CreateStudioDialog ariaLabel="配置邮箱通道" className="mail-bridge-config-dialog" onClose={close} open={open}>
+      <SettingsDialogHeader onClose={close} title="配置邮箱通道">邮箱通道</SettingsDialogHeader>
+      <div className="voice-settings-copy"><p>填写用于发送和接收邮件的邮箱。收件方可以是任何外部自动化或邮箱；授权码不写进页面或配置快照：请先把它放到操作系统环境变量，再在这里填写变量名。</p></div>
       {feedback ? <div className="voice-settings-copy"><p>{feedback}</p></div> : null}
-      <form className="iphone-bridge-config-form" onSubmit={save}>
+      <form className="mail-bridge-config-form" onSubmit={save}>
         <div className="capability-form-grid-react">
           <FormField label="SMTP 服务器"><input defaultValue={configuration.smtpHost || "smtp.163.com"} maxLength="320" name="smtpHost" required /></FormField>
           <FormField label="SMTP 端口"><input defaultValue={configuration.smtpPort ?? 465} max="65535" min="1" name="smtpPort" required type="number" /></FormField>
           <FormField label="发件邮箱"><input defaultValue={configuration.sender || ""} maxLength="320" name="sender" required type="email" /></FormField>
-          <FormField label="iPhone 快捷指令邮箱"><input defaultValue={configuration.recipient || ""} maxLength="320" name="recipient" required type="email" /></FormField>
+          <FormField label="默认收件邮箱"><input defaultValue={configuration.recipient || ""} maxLength="320" name="recipient" required type="email" /></FormField>
           <FormField label="IMAP 服务器"><input defaultValue={configuration.imapHost || "imap.163.com"} maxLength="320" name="imapHost" required /></FormField>
           <FormField label="IMAP 端口"><input defaultValue={configuration.imapPort ?? 993} max="65535" min="1" name="imapPort" required type="number" /></FormField>
-          <FormField label="反馈邮箱账号"><input defaultValue={configuration.username || ""} maxLength="320" name="username" required type="email" /></FormField>
+          <FormField label="收信邮箱账号"><input defaultValue={configuration.username || ""} maxLength="320" name="username" required type="email" /></FormField>
           <FormField label="收件箱"><input defaultValue={configuration.mailbox || "INBOX"} maxLength="160" name="mailbox" required /></FormField>
-          <FormField className="capability-form-field--wide" hint="每行一个地址；只有这些地址发来的反馈会交给 Agent。" label="允许的反馈发件人"><textarea defaultValue={allowedSenders} maxLength="9600" name="allowedSenders" required /></FormField>
-          <FormField className="capability-form-field--wide" hint="例如 SUZU_IPHONE_MAIL_PASSWORD。实际授权码只由本机进程从这个环境变量读取。" label="邮箱授权码环境变量"><input defaultValue={configuration.passwordEnv || "SUZU_IPHONE_MAIL_PASSWORD"} maxLength="128" name="passwordEnv" required /></FormField>
-          <FormField label="反馈邮件主题"><input defaultValue={configuration.feedbackSubject || "查岗"} maxLength="200" name="feedbackSubject" required /></FormField>
-          <FormField className="capability-form-field--wide" hint="可用变量：{{content}}、{{subject}}、{{from}}、{{receivedAt}}、{{attachments}}。" label="交给 Agent 的反馈提示词"><textarea defaultValue={configuration.feedbackPrompt || "这是来自 iPhone 的反馈（{{subject}}，来自 {{from}}，{{receivedAt}}）：\n{{content}}\n{{attachments}}"} maxLength="12000" name="feedbackPrompt" required /></FormField>
+          <FormField className="capability-form-field--wide" hint="每行一个地址；只有这些地址发来的邮件会按下面的主题路由交给 Agent。" label="允许的邮件发件人"><textarea defaultValue={allowedSenders} maxLength="9600" name="allowedSenders" required /></FormField>
+          <FormField className="capability-form-field--wide" hint="例如 SUZU_MAIL_PASSWORD。实际授权码只由本机进程从这个环境变量读取。" label="邮箱授权码环境变量"><input defaultValue={configuration.passwordEnv || "SUZU_MAIL_PASSWORD"} maxLength="128" name="passwordEnv" required /></FormField>
+          <FormField label="邮件主题路由"><input defaultValue={configuration.routeSubject || "Suzu"} maxLength="200" name="routeSubject" required /></FormField>
+          <FormField className="capability-form-field--wide" hint="可用变量：{{content}}、{{subject}}、{{from}}、{{receivedAt}}、{{attachments}}。" label="交给 Agent 的邮件提示词"><textarea defaultValue={configuration.routePrompt || "这是收到的一封邮件（{{subject}}，来自 {{from}}，{{receivedAt}}）：\n{{content}}\n{{attachments}}"} maxLength="12000" name="routePrompt" required /></FormField>
         </div>
-        <footer className="iphone-bridge-config-form__actions"><Button disabled={saving} onClick={close} type="button" variant="secondary">取消</Button><Button disabled={saving} type="submit">{saving ? "正在保存…" : "保存邮件连接"}</Button></footer>
+        <footer className="mail-bridge-config-form__actions"><Button disabled={saving} onClick={close} type="button" variant="secondary">取消</Button><Button disabled={saving} type="submit">{saving ? "正在保存…" : "保存邮箱通道"}</Button></footer>
       </form>
     </CreateStudioDialog>
   );
 }
 
-function IphoneBridgeSettings({ actions, capability, contactsSnapshot }) {
+function MailBridgeSettings({ actions, capability, contactsSnapshot }) {
   const [configOpen, setConfigOpen] = useState(false);
   const settings = savedSettings(capability);
   const status = settings.saved
-    ? "全局邮件连接参数已保存。软件运行时会读取授权码环境变量，并把反馈直接投递到下方勾选的联系人。"
-    : "先配置全局邮件连接，再选择要接收 iPhone 反馈的联系人。";
+    ? "全局邮箱通道已保存。软件运行时会读取授权码环境变量，并把符合主题路由的邮件直接投递到下方勾选的联系人。"
+    : "先配置全局邮箱通道，再选择要接收路由邮件的联系人。";
   return (
     <>
-      <SettingSurface action={<Button onClick={() => setConfigOpen(true)} type="button" variant="secondary">配置邮件连接</Button>} description={status} eyebrow="iPhone 反馈" title="本地直接接收" />
-      <ContactDeliverySettings actions={actions} capability={capability} description="可以同时勾选多个联系人；打开后会向该联系人的 Claude 项目登记 iPhone Skill，一封手机反馈也会分别排进所有已勾选联系人的对话。" contactsSnapshot={contactsSnapshot} />
-      <IphoneBridgeConfigDialog actions={actions} capability={capability} onClose={() => setConfigOpen(false)} open={configOpen} />
+      <SettingSurface action={<Button onClick={() => setConfigOpen(true)} type="button" variant="secondary">配置邮箱通道</Button>} description={status} eyebrow="MAIL BRIDGE" title="本地邮件收发" />
+      <ContactDeliverySettings actions={actions} capability={capability} description="可以同时勾选多个联系人；一封符合主题路由的邮件会分别排进所有已勾选联系人的对话。" contactsSnapshot={contactsSnapshot} />
+      <MailBridgeConfigDialog actions={actions} capability={capability} onClose={() => setConfigOpen(false)} open={configOpen} />
     </>
   );
 }
@@ -707,7 +782,7 @@ function GenericCapabilitySettings() {
   return <SettingSurface description="当前没有需要单独调整的选项。" eyebrow="能力资料" title="这项能力已准备好" />;
 }
 
-function CapabilitySettings({ actions, apiServices, capability, contactsSnapshot, siteId, wechatSnapshot }) {
+function CapabilitySettings({ actions, apiServices, capability, contactsSnapshot, wechatSnapshot }) {
   if (capability.id === "wechat-connection") return <WechatSettings actions={actions} wechatSnapshot={wechatSnapshot} />;
   if (capability.id === "image-generation") return <ImageGenerationSettings actions={actions} apiServices={apiServices} capability={capability} contactsSnapshot={contactsSnapshot} />;
   if (capability.id === "phone-camera") return <PhoneCameraSettings actions={actions} apiServices={apiServices} capability={capability} contactsSnapshot={contactsSnapshot} />;
@@ -715,13 +790,10 @@ function CapabilitySettings({ actions, apiServices, capability, contactsSnapshot
   if (capability.id === "time-awareness") return <TimeAwarenessSettings actions={actions} capability={capability} contactsSnapshot={contactsSnapshot} />;
   if (capability.id === "image-vision") return <ImageVisionSettings actions={actions} apiServices={apiServices} capability={capability} contactsSnapshot={contactsSnapshot} />;
   if (capability.id === "video-understanding") return <VideoUnderstandingSettings actions={actions} apiServices={apiServices} capability={capability} contactsSnapshot={contactsSnapshot} />;
-  if (capability.id === "site-automation") {
-    const site = capabilitySites(capability).find((item) => item.id === siteId);
-    return site ? <SiteAutomationSiteSettings actions={actions} site={site} /> : <SiteAutomationOverview actions={actions} capability={capability} contactsSnapshot={contactsSnapshot} />;
-  }
-  if (capability.id === "iphone-bridge") return <IphoneBridgeSettings actions={actions} capability={capability} contactsSnapshot={contactsSnapshot} />;
+  if (capability.id === "web-browser") return <WebBrowserSettings actions={actions} capability={capability} contactsSnapshot={contactsSnapshot} />;
+  if (capability.id === "mail-bridge") return <MailBridgeSettings actions={actions} capability={capability} contactsSnapshot={contactsSnapshot} />;
+  if (capability.id === "agent-journal") return <AgentJournalSettings actions={actions} capability={capability} contactsSnapshot={contactsSnapshot} />;
   if (capability.id === "proactive-contact") return <ProactiveContactSettings actions={actions} capability={capability} contactsSnapshot={contactsSnapshot} />;
-  if (capability.id === "traveling-merchant") return <TravelingMerchantSettings actions={actions} capability={capability} contactsSnapshot={contactsSnapshot} />;
   return <GenericCapabilitySettings />;
 }
 
@@ -731,25 +803,15 @@ export function CapabilityDetailPage({
   capability,
   categoryId,
   contactsSnapshot,
-  siteId,
   wechatSnapshot,
 }) {
   const category = categoryFor(categoryId);
-  const selectedSite = capability.id === "site-automation"
-    ? capabilitySites(capability).find((site) => site.id === siteId)
-    : null;
-  const title = selectedSite?.name || capability.name;
-  const subtitle = selectedSite
-    ? "设置这个网站允许 Agent 使用的动作。"
-    : capability.description;
-  const back = selectedSite
-    ? <Button onClick={actions.returnToSites} type="button" variant="secondary">返回网页自动化</Button>
-    : <Button onClick={() => actions.returnToCategory?.(category.id)} type="button" variant="secondary">返回{category.label}</Button>;
-  const detailAction = selectedSite
-    ? back
-    : CONTACT_SCOPED_CAPABILITY_IDS.has(capability.id)
+  const title = capability.name;
+  const subtitle = capability.description;
+  const back = <Button onClick={() => actions.returnToCategory?.(category.id)} type="button" variant="secondary">返回{category.label}</Button>;
+  const detailAction = CONTACT_SCOPED_CAPABILITY_IDS.has(capability.id)
       ? back
-    : <div className="capability-detail-header-actions"><CapabilityHeaderToggle actions={actions} capability={capability} />{back}</div>;
+      : <div className="capability-detail-header-actions"><CapabilityHeaderToggle actions={actions} capability={capability} />{back}</div>;
   if (capability.id === "wechat-connection") {
     return (
       <div className="capabilities-react-page capabilities-react-page--inner">
@@ -761,7 +823,7 @@ export function CapabilityDetailPage({
   return (
     <div className="capabilities-react-page capabilities-react-page--inner">
       <PageHeader action={detailAction} eyebrow={"CAPABILITIES / " + category.label} subtitle={subtitle} title={title} />
-      <CapabilitySettings actions={actions} apiServices={apiServices} capability={capability} contactsSnapshot={contactsSnapshot} siteId={siteId} wechatSnapshot={wechatSnapshot} />
+      <CapabilitySettings actions={actions} apiServices={apiServices} capability={capability} contactsSnapshot={contactsSnapshot} wechatSnapshot={wechatSnapshot} />
     </div>
   );
 }
@@ -782,7 +844,7 @@ function ExternalCapabilityCard({ actions, capability, onRemove }) {
         <div><span>本地来源</span><strong>{source.manifestPath || "来源路径不可用"}</strong></div>
       </div>
       <div className="external-capability-card__host">
-        <div><strong>Claude Code 项目登记</strong><p>{capability.enabled ? "Skill 和 MCP 的受管条目已写入当前项目；Claude Code 仍会按自己的批准流程决定何时连接或运行。" : "启用只会安全写入当前项目的受管 Skill/MCP 配置。"}</p></div>
+        <div><strong>Agent Core 登记</strong><p>{capability.enabled ? "这项外部能力已登记到 Suzu 管理的 Agent Core。" : "启用后，Skill 会放入受管技能目录，MCP 会作为 Agent Core 工具连接。不会写入旧版项目文件。"}</p></div>
         <div className="external-capability-card__actions">
           <Button disabled={capability.canEnable !== true} onClick={() => actions.setExternalEnabled?.(capability.id, true)} type="button" variant="secondary">{capability.enabled ? "再次启用以更新登记" : "启用并登记"}</Button>
           <Button disabled={capability.canDisable !== true} onClick={() => actions.setExternalEnabled?.(capability.id, false)} type="button" variant="secondary">停用</Button>
@@ -800,7 +862,7 @@ export function ExternalCapabilitiesPage({ actions = {}, externalSnapshot }) {
   const [importing, setImporting] = useState(false);
   const snapshot = externalSnapshot || { projectRoot: "", capabilities: [] };
   const capabilities = Array.isArray(snapshot.capabilities) ? snapshot.capabilities : [];
-  const project = String(snapshot.projectRoot || "").trim();
+  const runtimeHome = String(snapshot.runtimeHome || snapshot.projectRoot || "").trim();
   const importManifest = async () => {
     setImporting(true);
     try {
@@ -821,14 +883,14 @@ export function ExternalCapabilitiesPage({ actions = {}, externalSnapshot }) {
   };
   return (
     <div className="capabilities-react-page capabilities-react-page--inner">
-      <PageHeader action={<Button onClick={actions.returnToOverview} type="button" variant="secondary">返回能力</Button>} eyebrow="CAPABILITIES / EXTERNAL" subtitle="导入用户明确选择的本地清单。当前仅安装到所选的 Claude Code 项目。" title="外部能力" />
-      <SettingSurface description={project || "仍可导入并查看清单；启用前需要先选择项目。"} eyebrow="导入" title={project ? "已选择 Claude Code 项目" : "尚未选择 Claude Code 项目"}>
-        <div className="capability-inline-action-react"><p>导入只读取本地 suzu-capability.json；不会下载或运行第三方代码。</p><Button disabled={importing} onClick={importManifest} type="button" variant="secondary">{importing ? "正在导入…" : "导入 suzu-capability.json"}</Button></div>
+      <PageHeader action={<Button onClick={actions.returnToOverview} type="button" variant="secondary">返回能力</Button>} eyebrow="CAPABILITIES / EXTERNAL" subtitle="外部 Skill 与 MCP 会以 Agent Core 方式安装到 Suzu 的运行时，可供所有联系人使用。" title="外部能力" />
+      <SettingSurface description={runtimeHome || "Agent Core 会在首次使用时创建。"} eyebrow="全局运行时" title="Suzu Agent Core">
+        <div className="capability-inline-action-react"><p>导入只读取本地 suzu-capability.json；不会下载或运行第三方代码。启用 MCP 后，Agent Core 会在下一次聊天时按清单启动它。</p><Button disabled={importing} onClick={importManifest} type="button" variant="secondary">{importing ? "正在导入…" : "导入 suzu-capability.json"}</Button></div>
       </SettingSurface>
-      {capabilities.length ? <section className="external-capability-list">{capabilities.map((capability) => <ExternalCapabilityCard actions={actions} capability={capability} key={capability.id} onRemove={setRemoving} />)}</section> : <GlassPanel as="section" className="capability-empty-panel" intensity="soft"><Empty description="选择本地 suzu-capability.json 后，这里会显示静态诊断和所选项目中的登记状态。" title="还没有外部能力" /></GlassPanel>}
+      {capabilities.length ? <section className="external-capability-list">{capabilities.map((capability) => <ExternalCapabilityCard actions={actions} capability={capability} key={capability.id} onRemove={setRemoving} />)}</section> : <GlassPanel as="section" className="capability-empty-panel" intensity="soft"><Empty description="导入本地 suzu-capability.json 后，这里会显示 Skill/MCP 的静态诊断与 Agent Core 登记状态。" title="还没有外部能力" /></GlassPanel>}
       <CreateStudioDialog ariaLabel="移除外部能力" className="capability-remove-dialog" onClose={() => setRemoving(null)} open={Boolean(removing)}>
         <header><div><span>EXTERNAL CAPABILITY</span><h2>移除外部能力？</h2></div><button aria-label="关闭" className="suzu-close-button" onClick={() => setRemoving(null)} type="button">×</button></header>
-        <p>{`“${removing?.name || "这项外部能力"}”会先尝试清理所有由 Suzu Lives 登记的项目条目；任何冲突、项目缺失或手动修改都会中止并保留文件。`}</p>
+        <p>{`“${removing?.name || "这项外部能力"}”会清理所有由 Suzu 登记的 Skill 与 MCP 条目；若检测到手动修改会中止并保留文件。`}</p>
         <footer><Button disabled={removingPending} onClick={() => setRemoving(null)} type="button" variant="secondary">取消</Button><Button disabled={removingPending} onClick={remove} type="button" variant="danger">{removingPending ? "正在移除…" : "移除能力"}</Button></footer>
       </CreateStudioDialog>
     </div>

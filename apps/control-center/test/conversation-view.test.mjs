@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  companionPeerLabel,
   conversationMessageRows,
   dismissConversationOverlays,
   filterConversationItems,
@@ -12,6 +13,7 @@ import {
   shouldSubmitConversationOnEnter,
   shouldShowCenteredTimeDivider,
   splitAssistantMessageOnBlankLines,
+  splitCompanionReplyBuffer,
 } from "../src/features/conversation/index.mjs";
 
 const messages = [
@@ -34,7 +36,7 @@ test("conversation React snapshot keeps the current contact model and message ro
   assert.equal(view.sessionSettings, null);
   assert.equal(view.overlays.contactCreate, false);
   assert.equal(view.overlays.contactRename, null);
-  assert.doesNotMatch(view.messageRows[0]?.text || "", /独立 Claude 项目/u);
+  assert.doesNotMatch(view.messageRows[0]?.text || "", /独立外部项目/u);
   assert.doesNotMatch(view.rosterEmpty, /仅本地只读|RELATIONSHIPS \/ CONVERSATION/u);
 });
 
@@ -46,7 +48,9 @@ test("conversation display preferences filter optional records but keep user tex
   assert.equal(tokensOnly.length, 2);
   assert.equal(tokensOnly[1].blocks.length, 0);
 
-  assert.deepEqual(filterConversationItems(messages), [{ kind: "user", blocks: [{ kind: "text", text: "保留的普通文本" }] }]);
+  const defaults = filterConversationItems(messages);
+  assert.equal(defaults.length, 2);
+  assert.deepEqual(defaults[1]?.blocks, [{ kind: "tool_use", text: "隐藏工具" }]);
 });
 
 test("tool-planning thinking follows the thinking preference and uses the detail renderer", () => {
@@ -195,6 +199,47 @@ test("chat bubbles never append delivery or reply-status labels", () => {
   assert.doesNotMatch(renderedText, /已发送|正在回复|发送中|排队中|引导已送达/u);
 });
 
+test("companion reply projection hides unfinished token text and only adds completed sentences", () => {
+  assert.deepEqual(splitCompanionReplyBuffer("第一句。第二句！第三句？还没说完"), {
+    remainder: "还没说完",
+    sentences: ["第一句。", "第二句！", "第三句？"],
+  });
+  assert.deepEqual(splitCompanionReplyBuffer("第一句。第二句", { final: true }), {
+    remainder: "",
+    sentences: ["第一句。", "第二句"],
+  });
+
+  const merged = mergeConversationMessages([{
+    id: "user-1",
+    kind: "user",
+    timestamp: "2026-08-15T10:00:00.000Z",
+    blocks: [{ kind: "text", text: "你好" }],
+  }], [], new Map([["turn-1", {
+    content: "第一句。第二句还没说完",
+    phase: "delivering",
+    requestId: "turn-1",
+    sentences: ["第一句。"],
+    sessionId: "session-1",
+    timestamp: "2026-08-15T10:00:01.000Z",
+  }]]), "session-1");
+
+  assert.deepEqual(merged.map((item) => item.blocks[0]?.text), ["你好", "第一句。"]);
+  assert.equal(merged[1]?.streaming, false);
+});
+
+test("companion header substitutes the contact note only during a real thinking phase", () => {
+  const replies = new Map([["turn-1", {
+    done: false,
+    phase: "thinking",
+    sessionId: "session-1",
+  }]]);
+  assert.equal(companionPeerLabel("Suzu", "session-1", replies), "对方正在输入中...");
+
+  replies.set("turn-1", { done: false, phase: "delivering", sessionId: "session-1" });
+  assert.equal(companionPeerLabel("Suzu", "session-1", replies), "Suzu");
+  assert.equal(companionPeerLabel("Suzu", "other-session", replies), "Suzu");
+});
+
 test("conversation overlays close together when the user clicks away or presses Escape", () => {
   const state = { avatarCrop: { source: "data:image/png;base64,avatar" }, contactCreateOpen: true, contactContextMenu: { contactId: "contact-test" }, contactRenameOpen: true, emojiOpen: true, mediaPreview: { url: "file:///C:/temp/image.png" }, menuOpen: true, searchOpen: false, settingsOpen: true, wechatQrOpen: true };
   assert.equal(dismissConversationOverlays(state), true);
@@ -202,18 +247,19 @@ test("conversation overlays close together when the user clicks away or presses 
   assert.equal(dismissConversationOverlays(state), false);
 });
 
-test("Suzu reserves a namespaced stop and steer command without swallowing Claude Code slash commands", () => {
+test("Suzu exposes stop and queue while retaining compatible steer parsing without swallowing ordinary slash commands", () => {
   assert.deepEqual(parseSuzuConversationCommand("普通消息"), { action: "message", content: "普通消息" });
   assert.deepEqual(parseSuzuConversationCommand("/compact"), { action: "message", content: "/compact" });
   assert.deepEqual(parseSuzuConversationCommand("/suzu stop"), { action: "stop" });
   assert.deepEqual(parseSuzuConversationCommand("/suzu steer 请先只读分析"), { action: "steer", content: "请先只读分析" });
+  assert.deepEqual(parseSuzuConversationCommand("/suzu queue 排队这条"), { action: "queue", content: "排队这条" });
   assert.deepEqual(parseSuzuConversationCommand("/new"), {
     action: "notice",
     message: "请使用左侧联系人列表右上角的“＋”新建联系人。",
   });
   assert.deepEqual(parseSuzuConversationCommand("/suzu steer"), {
     action: "notice",
-    message: "可用的 Suzu 命令：/suzu stop；/suzu steer 请改为……",
+    message: "可用的 Suzu 命令：/suzu stop 停止；/suzu queue <内容> 排队发送。普通消息会优先处理。",
   });
 });
 
@@ -234,7 +280,7 @@ test("only an unmodified Enter submits the conversation composer", () => {
   assert.equal(shouldSubmitConversationOnEnter({ key: "a" }), false);
 });
 
-test("assistant replies split only on blank lines and keep the live state on the final bubble", () => {
+test("assistant replies split into sentence bubbles and keep the live state on the final bubble", () => {
   const reply = {
     id: "reply-1",
     kind: "assistant",
@@ -249,6 +295,13 @@ test("assistant replies split only on blank lines and keep the live state on the
   assert.deepEqual(parts.map((item) => item.usage?.total || 0), [0, 0, 42]);
   assert.deepEqual(parts.map((item) => item.sourceMessageId), ["reply-1", "reply-1", "reply-1"]);
   assert.deepEqual(splitAssistantMessageOnBlankLines({ kind: "user", blocks: reply.blocks }), [{ kind: "user", blocks: reply.blocks }]);
+
+  const punctuationParts = splitAssistantMessageOnBlankLines({
+    id: "reply-2",
+    kind: "assistant",
+    blocks: [{ kind: "text", text: "Hello! Nice to meet you. 你今天怎么样？" }],
+  });
+  assert.deepEqual(punctuationParts.map((item) => item.blocks[0].text), ["Hello!", "Nice to meet you.", "你今天怎么样？"]);
 });
 
 test("center time mode groups nearby messages and renders a centered divider", () => {

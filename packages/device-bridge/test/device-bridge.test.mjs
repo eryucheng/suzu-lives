@@ -5,12 +5,9 @@ import path from "node:path";
 import test from "node:test";
 
 import {
-  DeviceBridgeError,
   executeComputerCameraCapture,
   executeComputerCameraSession,
-  executeIphoneBridgeMessage,
   planComputerCameraCapture,
-  planIphoneBridgeMessage,
 } from "../src/index.mjs";
 import { CapabilityExecutionError, consumeCapabilityAuthorization, issueCapabilityAuthorization } from "@suzu-lives/capability-runtime";
 
@@ -23,11 +20,6 @@ function authorization(root, action, scope) {
   return consumeCapabilityAuthorization({ dataRoot: root, credential: issued.credential, abilityId: "computer-camera", action, scope, now: () => 1_001 });
 }
 
-function iphoneAuthorization(root, scope) {
-  const issued = issueCapabilityAuthorization({ dataRoot: root, abilityId: "iphone-bridge", action: "send-message", scope, now: () => 1_000 });
-  return consumeCapabilityAuthorization({ dataRoot: root, credential: issued.credential, abilityId: "iphone-bridge", action: "send-message", scope, now: () => 1_001 });
-}
-
 test("camera planning never opens a device or creates a capture directory", () => {
   const root = temporaryDirectory("suzu-device-camera-");
   const plan = planComputerCameraCapture({ dataRoot: root, cameraIndex: 1, requestedBy: "test", operation: "start" });
@@ -37,7 +29,6 @@ test("camera planning never opens a device or creates a capture directory", () =
   assert.match(plan.plannedOutputPath, /capabilities[\\/]computer-camera[\\/]captures/u);
   assert.equal(fs.existsSync(path.dirname(plan.plannedOutputPath)), false);
 });
-
 test("camera lifecycle rejects a disabled gate before probing or creating a worker", async () => {
   const root = temporaryDirectory("suzu-device-camera-gate-");
   let probed = false;
@@ -120,36 +111,4 @@ test("camera has a fake-worker prewarm, capture, status, and explicit confirmed 
   assert.equal(closedResult.userConfirmedClose, true);
   assert.equal(closed, true);
   assert.equal(JSON.parse(fs.readFileSync(closedResult.statePath, "utf8")).status, "closed");
-});
-
-test("iPhone plans and execution do not invent unverified HTTP routes", async () => {
-  const root = temporaryDirectory("suzu-device-iphone-");
-  const plan = planIphoneBridgeMessage({ dataRoot: root, topic: "提醒", content: "下午三点开会" });
-  assert.equal(plan.status, "blocked-unverified-bridge-protocol");
-  assert.equal(plan.willSendMessage, false);
-  const scope = { topicDigest: "fixture-topic", contentDigest: "fixture-content" };
-  await assert.rejects(
-    () => executeIphoneBridgeMessage({
-      dataRoot: root,
-      gate: { enabled: true, configured: true },
-      authorization: iphoneAuthorization(root, scope),
-      invocation: { scope },
-      topic: "提醒",
-      content: "下午三点开会",
-    }),
-    (error) => error instanceof CapabilityExecutionError && error.code === "IPHONE_BRIDGE_PROTOCOL_UNAVAILABLE",
-  );
-  const result = await executeIphoneBridgeMessage({
-    dataRoot: root,
-    gate: { enabled: true, configured: true },
-    authorization: iphoneAuthorization(root, { topicDigest: "second", contentDigest: "second" }),
-    invocation: { scope: { topicDigest: "second", contentDigest: "second" } },
-    topic: "提醒",
-    content: "下午三点开会",
-    randomId: () => "fixture",
-    bridgeAdapter: async (input) => ({ accepted: true, receipt: `fixture-${input.messageId}` }),
-  });
-  assert.equal(result.status, "ok");
-  assert.equal(fs.existsSync(result.outboxPath), true);
-  assert.throws(() => planIphoneBridgeMessage({ dataRoot: root, topic: "", content: "x" }), DeviceBridgeError);
 });

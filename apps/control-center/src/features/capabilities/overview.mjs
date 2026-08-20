@@ -34,7 +34,7 @@ export function createWechatConnectionCapability(snapshot) {
   return {
     id: "wechat-connection",
     name: "连接微信",
-    description: "把指定对话连接到手机微信；不创建 Claude Skill，也不依赖外部桥接器。",
+    description: "把指定对话连接到手机微信；不会写入旧版项目 Skill，也不依赖外部桥接器。",
     category: "act",
     enabled: current.enabled,
     softwareConnector: true,

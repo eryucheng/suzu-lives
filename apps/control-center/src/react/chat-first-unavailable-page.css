@@ -1,0 +1,11 @@
+.chat-first-unavailable-page {
+  width:min(760px,100%);
+  margin:0 auto;
+}
+
+.chat-first-unavailable-panel {
+  display:grid;
+  min-height:260px;
+  place-items:center;
+  padding:28px;
+}

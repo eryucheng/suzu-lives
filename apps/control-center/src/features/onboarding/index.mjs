@@ -2,18 +2,24 @@ function clean(value) {
   return String(value ?? "").trim();
 }
 
+export function mainModelIsReady(runtime) {
+  return runtime?.status === "ready" && runtime?.hasApiKey === true;
+}
+
+export function hasPersonaContent(snapshot) {
+  return Array.isArray(snapshot?.files) && snapshot.files.some((file) => (
+    clean(file?.path).replaceAll("\\", "/").toLowerCase() === "persona.md"
+    && Boolean(clean(file?.content))
+  ));
+}
+
 export function resolveOnboardingStep(state) {
-  if (!state?.claudeCodeApi?.hasApiKey) return "text-model";
-  const hasConfiguredMultimodalApi = Array.isArray(state?.apiServices?.connections)
-    && state.apiServices.connections.some((connection) => connection?.configured === true);
-  const multimodalCompleted = state?.settings?.onboardingMultimodalCompleted === true || hasConfiguredMultimodalApi;
-  if (!clean(state?.settings?.contactsRoot) && !multimodalCompleted) return "multimodal";
-  if (!clean(state?.settings?.contactsRoot)) return "projects";
+  if (!mainModelIsReady(state?.agentRuntime)) return "main-model";
   if (!clean(state?.settings?.projectRoot)) return "contact";
-  return "text-model";
+  if (!state?.onboardingPersonaReady) return "persona";
+  return "ready";
 }
 
 export function shouldShowOnboarding(settings) {
-  return settings?.onboardingCompleted !== true
-    && (!clean(settings?.contactsRoot) || !clean(settings?.projectRoot));
+  return settings?.onboardingCompleted !== true;
 }

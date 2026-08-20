@@ -16,19 +16,6 @@ const DEFAULT_SETTINGS = Object.freeze({
   onboardingCompleted: false,
   onboardingMultimodalCompleted: false,
   memoryRecallEnabled: true,
-  claudeToolPermissions: { read: true, webFetch: true, webSearch: true },
-  claudeRuntimeFeatures: {
-    bash: true,
-    edit: true,
-    glob: true,
-    grep: true,
-    subagents: false,
-    taskList: false,
-    backgroundTasks: false,
-    nativeCron: false,
-    askUserQuestion: false,
-    write: true,
-  },
   theme: "light",
   agentId: "",
   customPriceModels: [],
@@ -121,59 +108,6 @@ export function normalizeOnboardingMultimodalCompleted(value) {
   return value === true;
 }
 
-export function normalizeClaudeToolPermissions(value = {}) {
-  const source = value && typeof value === "object" && !Array.isArray(value) ? value : {};
-  return {
-    read: source.read !== false,
-    webFetch: source.webFetch !== false,
-    webSearch: source.webSearch !== false,
-  };
-}
-
-function normalizeClaudeToolRuleList(value) {
-  const source = Array.isArray(value)
-    ? value
-    : typeof value === "string"
-      ? value.split(/\r?\n|,/u)
-      : [];
-  const rules = [];
-  const seen = new Set();
-  for (const item of source) {
-    if (typeof item !== "string") continue;
-    const rule = item.trim();
-    if (!rule || rule.length > 500 || seen.has(rule)) continue;
-    seen.add(rule);
-    rules.push(rule);
-    if (rules.length >= 120) break;
-  }
-  return rules;
-}
-
-export function normalizeClaudeProjectDefaults(value = {}) {
-  const source = value && typeof value === "object" && !Array.isArray(value) ? value : {};
-  return {
-    allowedTools: normalizeClaudeToolRuleList(source.allowedTools),
-    deniedTools: normalizeClaudeToolRuleList(source.deniedTools),
-    skipWebFetchPreflight: source.skipWebFetchPreflight !== false,
-  };
-}
-
-export function normalizeClaudeRuntimeFeatures(value = {}) {
-  const source = value && typeof value === "object" && !Array.isArray(value) ? value : {};
-  return {
-    bash: source.bash !== false,
-    edit: source.edit !== false,
-    glob: source.glob !== false,
-    grep: source.grep !== false,
-    subagents: source.subagents === true,
-    taskList: source.taskList === true,
-    backgroundTasks: source.backgroundTasks === true,
-    nativeCron: source.nativeCron === true,
-    askUserQuestion: source.askUserQuestion === true,
-    write: source.write !== false,
-  };
-}
-
 function readJson(filePath, fallback = {}) {
   try {
     return JSON.parse(fs.readFileSync(filePath, "utf8").replace(/^\uFEFF/u, ""));
@@ -192,7 +126,6 @@ function normalizeSettings(value = {}) {
   // Until a contacts root is selected, no project may remain active.
   const hasContactsRoot = Boolean(contactsRoot);
   const projectRoot = hasContactsRoot ? String(value.projectRoot || "").trim() : "";
-  const hasClaudeProjectDefaults = Object.hasOwn(value, "claudeProjectDefaults");
   const customPriceModels = sanitizeCustomPriceModels(value.customPriceModels);
   const priceCatalog = createPriceCatalog({ customPriceModels });
   return {
@@ -202,9 +135,6 @@ function normalizeSettings(value = {}) {
     onboardingCompleted: normalizeOnboardingCompleted(value.onboardingCompleted),
     onboardingMultimodalCompleted: normalizeOnboardingMultimodalCompleted(value.onboardingMultimodalCompleted),
     memoryRecallEnabled: normalizeMemoryRecallEnabled(value.memoryRecallEnabled),
-    claudeToolPermissions: normalizeClaudeToolPermissions(value.claudeToolPermissions),
-    ...(hasClaudeProjectDefaults ? { claudeProjectDefaults: normalizeClaudeProjectDefaults(value.claudeProjectDefaults) } : {}),
-    claudeRuntimeFeatures: normalizeClaudeRuntimeFeatures(value.claudeRuntimeFeatures),
     theme: value.theme === "dark" ? "dark" : "light",
     agentId: stableAgentId(projectRoot),
     customPriceModels,
@@ -227,9 +157,6 @@ function safePatch(value, current = {}) {
   if (Object.hasOwn(value, "onboardingCompleted")) patch.onboardingCompleted = normalizeOnboardingCompleted(value.onboardingCompleted);
   if (Object.hasOwn(value, "onboardingMultimodalCompleted")) patch.onboardingMultimodalCompleted = normalizeOnboardingMultimodalCompleted(value.onboardingMultimodalCompleted);
   if (Object.hasOwn(value, "memoryRecallEnabled")) patch.memoryRecallEnabled = normalizeMemoryRecallEnabled(value.memoryRecallEnabled);
-  if (Object.hasOwn(value, "claudeToolPermissions")) patch.claudeToolPermissions = normalizeClaudeToolPermissions(value.claudeToolPermissions);
-  if (Object.hasOwn(value, "claudeProjectDefaults")) patch.claudeProjectDefaults = normalizeClaudeProjectDefaults(value.claudeProjectDefaults);
-  if (Object.hasOwn(value, "claudeRuntimeFeatures")) patch.claudeRuntimeFeatures = normalizeClaudeRuntimeFeatures(value.claudeRuntimeFeatures);
   if (Object.hasOwn(value, "theme")) patch.theme = value.theme === "light" ? "light" : "dark";
   if (Object.hasOwn(value, "customPriceModels")) patch.customPriceModels = customPriceModels;
   if (Object.hasOwn(value, "priceRevisions")) patch.priceRevisions = sanitizePriceRevisions(value.priceRevisions, priceCatalog);
@@ -268,6 +195,13 @@ export function createSettingsService({ app, dataStorageService = null }) {
     fs.renameSync(`${destination}.tmp`, destination);
     return value;
   };
+  // Product-owned services need the same safe patch boundary as the renderer
+  // settings IPC.  Keeping it on the service prevents a startup-only helper
+  // from assuming an API that the real settings implementation does not have.
+  const update = (patch) => {
+    const current = load();
+    return save({ ...current, ...safePatch(patch, current) });
+  };
   const response = (settings = load()) => ({
     ...settings,
     settingsPath: settingsPath(),
@@ -275,7 +209,7 @@ export function createSettingsService({ app, dataStorageService = null }) {
     dataStorage: dataStorageService?.snapshot?.() || { dataRoot: localDataRoot(), previousDataRoot: "", migration: { status: "idle" } },
     usageLedgerPath: usageLedgerPath(settings),
   });
-  return { hasStoredSettings, load, response, save, safePatch, usageLedgerPath };
+  return { hasStoredSettings, load, response, save, safePatch, update, usageLedgerPath };
 }
 
 export function registerSettingsIpc({ app, appUpdateService = null, contactProjectsService = null, dataStorageService, dialog, getMainWindow, ipcMain, onMemoryRecallEnabledChanged = null, releaseAnnouncementService = null, shell, settingsService, systemStatusService = null }) {
@@ -294,7 +228,15 @@ export function registerSettingsIpc({ app, appUpdateService = null, contactProje
     acknowledge: () => ({ announcement: null, pending: false, version: "" }),
     status: () => ({ announcement: null, pending: false, version: "" }),
   };
-  ipcMain.handle("settings:get", () => settingsService.response());
+  ipcMain.handle("settings:get", async () => {
+    // A new installation has no materialized contacts path. Materialize the
+    // product-owned default before returning the first settings snapshot, so
+    // every page sees the same data-root/contacts location from the start.
+    if (!clean(settingsService.load()?.contactsRoot) && typeof contacts.snapshot === "function") {
+      await contacts.snapshot();
+    }
+    return settingsService.response();
+  });
   ipcMain.handle("settings:release-announcement-status", () => announcementService.status());
   ipcMain.handle("settings:acknowledge-release-announcement", () => announcementService.acknowledge());
   ipcMain.handle("settings:app-update-status", () => updateService.status());
@@ -302,18 +244,6 @@ export function registerSettingsIpc({ app, appUpdateService = null, contactProje
   ipcMain.handle("settings:download-update", () => updateService.downloadUpdate());
   ipcMain.handle("settings:install-update", () => updateService.installUpdate());
   ipcMain.handle("settings:system-status", () => systemStatus.scan());
-  ipcMain.handle("settings:select-project", async () => {
-    const current = settingsService.load();
-    const result = await dialog.showOpenDialog(getMainWindow(), {
-      title: "选择联系人项目目录",
-      defaultPath: current.contactsRoot || undefined,
-      properties: ["openDirectory", "createDirectory"],
-    });
-    if (result.canceled || !result.filePaths[0]) return { canceled: true, settings: settingsService.response(current) };
-    const selected = path.resolve(result.filePaths[0]);
-    await contacts.selectRoot(selected);
-    return { canceled: false, settings: settingsService.response() };
-  });
   ipcMain.handle("settings:update", async (_event, value) => {
     const current = settingsService.load();
     const patch = settingsService.safePatch(value, current);
@@ -325,9 +255,6 @@ export function registerSettingsIpc({ app, appUpdateService = null, contactProje
       if (previousName !== nextName && typeof contacts.syncOwnerProfileTitle === "function") {
         ownerProfileTitleSync = await contacts.syncOwnerProfileTitle({ previousName, name: nextName });
       }
-    }
-    if (Object.hasOwn(patch, "claudeToolPermissions") || Object.hasOwn(patch, "claudeProjectDefaults")) {
-      await contacts.syncClaudeProjectSettings({ previousProjectDefaults: current.claudeProjectDefaults });
     }
     if (Object.hasOwn(patch, "memoryRecallEnabled")
       && current.memoryRecallEnabled !== settings.memoryRecallEnabled

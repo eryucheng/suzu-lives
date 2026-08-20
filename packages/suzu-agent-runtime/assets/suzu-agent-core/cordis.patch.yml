@@ -1,0 +1,137 @@
+# Suzu Agent Core host composition.
+#
+# This is intentionally a minimal Agent Core composition, not an upstream
+# product bundle. It mounts only the services that Suzu currently uses for long-lived companion
+# sessions: model routing, durable sessions, compaction, hooks, local tools,
+# skills and optional MCP capability rows.  Browser UI, Web server, workspace,
+# subagent, workflow, coding-mode and web-search bundles are absent.
+- insert:
+    - id: timer
+      name: '@suzu-lives/suzu-agent-runtime/core/timer'
+
+    - id: llm
+      name: '@suzu-lives/suzu-agent-runtime/core/llm'
+
+    - id: session
+      name: '@suzu-lives/suzu-agent-runtime/core/session'
+
+    - id: typert
+      name: '@suzu-lives/suzu-agent-runtime/core/type-registry'
+
+    - id: typert-loader
+      name: '@suzu-lives/suzu-agent-runtime/core/type-loader'
+
+    - id: agent
+      name: '@suzu-lives/suzu-agent-runtime/core/agent'
+
+    - id: agent-default-model
+      name: '@suzu-lives/suzu-agent-runtime/core/agent-default-model'
+      config:
+        provider: deepseek-official
+        model: deepseek-v4-flash
+
+    - id: jobs
+      name: '@suzu-lives/suzu-agent-runtime/core/jobs-local'
+
+    - id: llm-retry
+      name: '@suzu-lives/suzu-agent-runtime/core/llm-retry'
+
+    - id: settings
+      name: '@suzu-lives/suzu-agent-runtime/core/settings-file'
+
+    - id: credentials
+      name: '@suzu-lives/suzu-agent-runtime/core/credentials-local'
+
+    # Suzu's own configurable endpoint layer.  It supports only the three
+    # protocols exposed by the product model settings; it does not load an
+    # all-provider catalogue or unrelated provider SDKs.
+    - id: compatible-llm
+      name: '@suzu-lives/suzu-agent-runtime/compatible-llm'
+
+    - id: session-persistence-jsonl
+      name: '@suzu-lives/suzu-agent-runtime/core/session-persistence-jsonl'
+      config:
+        root: !!js suzuAgentHomePath('sessions')
+
+    - id: attachment-local
+      name: '@suzu-lives/suzu-agent-runtime/core/attachment-local'
+
+    - id: subprocess
+      name: '@suzu-lives/suzu-agent-runtime/core/subprocess-local'
+
+    - id: sandbox
+      name: '@suzu-lives/suzu-agent-runtime/core/sandbox-local'
+
+    - id: sandbox-policy
+      name: '@suzu-lives/suzu-agent-runtime/core/sandbox-policy'
+      config:
+        mode: !!js process.env.SUZU_AGENT_PERMISSION_MODE ?? 'workspace-write'
+        workspaceRoot: !!js process.cwd()
+
+    - id: bash-sandbox
+      name: '@suzu-lives/suzu-agent-runtime/core/bash-sandbox'
+      disabled: !!js process.platform === 'win32'
+      config:
+        timeoutMs: 60000
+
+    - id: pwsh-sandbox
+      name: '@suzu-lives/suzu-agent-runtime/core/pwsh-sandbox'
+      disabled: !!js process.platform !== 'win32'
+
+    - id: approval
+      name: '@suzu-lives/suzu-agent-runtime/core/user-approval'
+      config:
+        policy: !!js "(process.env.SUZU_AGENT_PERMISSION_MODE ?? 'workspace-write') === 'danger-full-access' ? 'never' : 'ask'"
+
+    - id: permission
+      name: '@suzu-lives/suzu-agent-runtime/core/permission-presets'
+      config:
+        presets:
+          read-only:
+            sandbox: read-only
+            approval: ask
+          workspace-write:
+            sandbox: workspace-write
+            approval: ask
+          danger-full-access:
+            sandbox: danger-full-access
+            approval: never
+
+    - id: shell-env
+      name: '@suzu-lives/suzu-agent-runtime/core/shell-environment'
+
+    - id: fs-observation-policy
+      name: '@suzu-lives/suzu-agent-runtime/core/filesystem-observation'
+
+    - id: skill
+      name: '@suzu-lives/suzu-agent-runtime/core/skill-catalog'
+
+    - id: commands
+      name: '@suzu-lives/suzu-agent-runtime/core/commands'
+
+    - id: token-meter
+      name: '@suzu-lives/suzu-agent-runtime/core/token-meter'
+
+    - id: tools
+      name: '@suzu-lives/suzu-agent-runtime/core/tools'
+
+    - id: system-prompt
+      name: '@suzu-lives/suzu-agent-runtime/core/system-prompt'
+      config:
+        persona: ''
+
+    - id: agent-loop
+      name: '@suzu-lives/suzu-agent-runtime/core/agent-loop'
+      config:
+        agents: []
+
+    - id: fs-sandbox
+      name: '@suzu-lives/suzu-agent-runtime/core/filesystem-sandbox'
+
+    - id: llm-deepseek
+      name: '@suzu-lives/suzu-agent-runtime/core/deepseek-model'
+
+    - id: agent-presets
+      name: '@suzu-lives/suzu-agent-runtime/core/agent-presets'
+      config:
+        default: suzu-companion

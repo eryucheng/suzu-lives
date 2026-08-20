@@ -123,7 +123,7 @@ async function appendUsageEvents({ ledgerPath, agentId, usageEvents }) {
 /**
  * Runs the software-owned video command without capability-registry or
  * authorization-token preconditions. The worker receives only software-owned
- * data paths and never receives a Claude project path.
+ * data paths and never receives a contact project path.
  */
 export async function runDirectVideoUnderstanding({
   dataRoot,

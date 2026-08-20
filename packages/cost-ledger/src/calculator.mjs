@@ -11,6 +11,20 @@ function number(value) {
 
 export function normalizeUsage(modelName, usage = {}) {
   const model = normalizeModelId(modelName);
+  // Agent Core emits public TokenUsage in camelCase. Normalize it before provider
+  // specific compatibility handling so an Agent Core-backed model keeps its original
+  // price catalog entry instead of becoming an unpriced raw event.
+  const hasCamelCaseUsage = Object.hasOwn(usage, "inputTokens")
+    || Object.hasOwn(usage, "outputTokens")
+    || Object.hasOwn(usage, "cacheReadTokens")
+    || Object.hasOwn(usage, "cacheWriteTokens");
+  if (hasCamelCaseUsage) {
+    return {
+      inputUncachedTokens: number(usage.inputTokens) + number(usage.cacheWriteTokens),
+      inputCachedTokens: number(usage.cacheReadTokens),
+      outputTextTokens: number(usage.outputTokens),
+    };
+  }
   if (model.startsWith("deepseek-")) {
     const nativeMiss = number(usage.prompt_cache_miss_tokens);
     const nativeHit = number(usage.prompt_cache_hit_tokens);
