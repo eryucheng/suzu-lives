@@ -36,7 +36,7 @@ Function LegacyMigrationPageCreate
 
   ${NSD_CreateLabel} 0 0 100% 24u "检测到已安装的 Suzu Lives 0.1.x"
   Pop $0
-  ${NSD_CreateLabel} 0 30u 100% 52u "0.2.0 已改用新的 Agent Core。可以在安装完成后临时打开迁移助手，把旧联系人、对话和可兼容设置迁入新版。$\r$\n$\r$\n如果暂不迁移，新版会正常安装，旧数据不会被修改。"
+  ${NSD_CreateLabel} 0 30u 100% 52u "0.2.x 已改用新的 Agent Core。可以在安装完成后临时打开迁移助手，把旧联系人、对话和可兼容设置迁入新版。$\r$\n$\r$\n如果暂不迁移，新版会正常安装，旧数据不会被修改。"
   Pop $0
   ${NSD_CreateCheckbox} 0 92u 100% 14u "迁移现有数据（推荐）"
   Pop $LegacyMigrationCheckbox

@@ -609,10 +609,12 @@ function messageRow(message, context, showTimestamp = true) {
   const timestamp = showTimestamp && message.timestamp ? dateTime(message.timestamp) : "";
   const sourceMessageId = messageSourceId(message);
   const lineNumber = messageLineNumber(message);
+  const anchorId = clean(message.id) || sourceMessageId || (lineNumber ? `line-${lineNumber}` : "");
   const focusLineNumber = messageLineNumber(viewState.focus);
   const focusMessageId = clean(viewState.focus?.focusMessageId);
   const focused = (lineNumber && lineNumber === focusLineNumber) || (sourceMessageId && sourceMessageId === focusMessageId);
   return {
+    anchorId,
     avatar: profile ? avatarPayload(profile, profile.displayName) : null,
     blocks,
     focused,

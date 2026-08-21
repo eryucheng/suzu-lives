@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import emojiMartData from "@emoji-mart/data/sets/15/apple.json";
 import emojiMartI18n from "@emoji-mart/data/i18n/zh.json";
 import appleEmojiSpritesheet from "emoji-datasource-apple/img/apple/sheets-128/32.png";
@@ -7,6 +7,7 @@ import { ChatVoice, Select } from "suzu-design-system";
 
 import { shouldSubmitConversationOnEnter } from "../features/conversation/index.mjs";
 import { useConversationCall } from "./conversation-call.jsx";
+import { captureConversationViewportAnchor, restoreConversationViewportAnchor } from "./conversation-scroll-anchor.mjs";
 import { useConversationVoiceInput } from "./conversation-voice-input.jsx";
 import "./conversation-page.css";
 
@@ -584,6 +585,7 @@ function ConversationMessage({ onOpenFile, onPreview, row }) {
   return (
     <article
       className={className}
+      data-conversation-anchor-id={row.anchorId || undefined}
       data-conversation-line-number={row.lineNumber || undefined}
       data-conversation-message-id={row.sourceMessageId || undefined}
     >
@@ -639,15 +641,17 @@ function WechatSettingsControls({ actions, contactId, control }) {
   return <div className="conversation-session-settings__actions"><button className="secondary-button" onClick={() => { void actions.startWechat(contactId); }} type="button">生成微信二维码</button></div>;
 }
 
-function ConversationSessionSettings({ actions, settings }) {
+function ConversationSessionSettings({ actions, onDisplayPreferenceChange, onTimeDisplayChange, settings }) {
   if (!settings) return null;
+  const changeDisplayPreference = typeof onDisplayPreferenceChange === "function" ? onDisplayPreferenceChange : actions.setDisplayPreference;
+  const changeTimeDisplay = typeof onTimeDisplayChange === "function" ? onTimeDisplayChange : actions.setTimeDisplay;
   return (
     <aside aria-label="当前联系人设置" className={`conversation-session-settings${settings.visible ? "" : " hidden"}`} id="conversationSettings">
       <header><div><span>当前联系人</span><div className="conversation-session-settings__contact-name"><strong>{settings.contactName}</strong><button className="conversation-session-settings__note-button" onClick={() => actions.openContactRename(settings.contactId)} type="button">修改联系人备注</button></div></div><button aria-label="关闭联系人设置" className="conversation-session-settings__close suzu-close-button" onClick={actions.closeSessionSettings} type="button">×</button></header>
       {settings.contactAvatar ? (
         <section className="conversation-session-settings__section"><header><div><span>CONTACT</span><h2>联系人头像</h2></div></header><div className="conversation-session-settings__avatar"><span className="conversation-contact__avatar"><PersonAvatar avatar={settings.contactAvatar} fallback={settings.contactName} /></span><div className="conversation-session-settings__avatar-copy"><strong>{settings.contactName}</strong><div className="conversation-session-settings__avatar-actions"><label className="secondary-button">选择头像<input accept="image/png,image/jpeg,image/webp" hidden onChange={(event) => { const file = event.currentTarget.files?.[0]; event.currentTarget.value = ""; void actions.uploadContactAvatar(file); }} type="file" /></label>{settings.removeContactAvatar ? <button className="text-button" onClick={() => { void actions.removeContactAvatar(); }} type="button">移除头像</button> : null}</div></div></div></section>
       ) : null}
-      <section className="conversation-session-settings__section"><header><div><span>CHAT DISPLAY</span><h2>聊天显示</h2></div></header><div className="conversation-session-settings__checks">{settings.preferences.map((preference) => <label key={preference.key}><input checked={preference.checked} onChange={(event) => { void actions.setDisplayPreference(preference.key, event.currentTarget.checked); }} type="checkbox" />{preference.label}</label>)}<label className="conversation-settings__time-display"><span>时间显示</span><Select ariaLabel="时间显示方式" className="conversation-settings__select" onChange={(value) => { void actions.setTimeDisplay(value); }} options={[{ label: "每条气泡内", value: "bubble" }, { label: "画面中心", value: "center" }]} value={settings.timeDisplay} /></label></div></section>
+      <section className="conversation-session-settings__section"><header><div><span>CHAT DISPLAY</span><h2>聊天显示</h2></div></header><div className="conversation-session-settings__checks">{settings.preferences.map((preference) => <label key={preference.key}><input checked={preference.checked} onChange={(event) => { void changeDisplayPreference(preference.key, event.currentTarget.checked); }} type="checkbox" />{preference.label}</label>)}<label className="conversation-settings__time-display"><span>时间显示</span><Select ariaLabel="时间显示方式" className="conversation-settings__select" onChange={(value) => { void changeTimeDisplay(value); }} options={[{ label: "每条气泡内", value: "bubble" }, { label: "画面中心", value: "center" }]} value={settings.timeDisplay} /></label></div></section>
       <section className="conversation-session-settings__section"><header><div><span>SUZU AGENT · CORE</span><h2>运行时能力</h2><p>当前陪伴 Agent 可直接使用 Windows PowerShell、文件工具、已有 CLI，以及已启用的图像/视频理解、图像生成、手机拍照式图像和语音能力；浏览器、子 Agent 和游戏控制尚未接入。</p></div></header></section>
       <section className="conversation-session-settings__section"><header><div><span>MEMORY · CORE</span><h2>长期记忆</h2><p>关闭后，这位联系人不会自动写入或召回长期记忆；已有记忆会保留。召回内容只作为当前 Agent 请求的动态上下文，不会显示成聊天气泡。</p></div></header><label className="conversation-session-settings__switch"><input checked={settings.longTermMemoryEnabled} onChange={(event) => { void actions.setLongTermMemoryEnabled(event.currentTarget.checked); }} type="checkbox" /><span>启用长期记忆</span></label></section>
       {settings.hasSession ? (
@@ -795,6 +799,7 @@ export function ConversationPage({ actions, api = null, incomingCall = null, sna
   const listRef = useRef(null);
   const latestScrollRequest = useRef(0);
   const scrollTargetRequest = useRef(0);
+  const viewportAnchorRef = useRef(null);
   const contacts = Array.isArray(snapshot.contacts) ? snapshot.contacts : [];
   const activeContactId = String(contacts.find((contact) => contact?.selected)?.id || "").trim();
   const composer = snapshot.composer || {};
@@ -802,6 +807,18 @@ export function ConversationPage({ actions, api = null, incomingCall = null, sna
   const permissions = Array.isArray(snapshot.permissions) ? snapshot.permissions : [];
   const ui = snapshot.ui || {};
   const contactContextMenu = snapshot.contactContextMenu || null;
+  const captureViewportAnchor = useCallback(() => {
+    const anchor = captureConversationViewportAnchor(listRef.current);
+    viewportAnchorRef.current = anchor ? { ...anchor, contactId: activeContactId } : null;
+  }, [activeContactId]);
+  const setDisplayPreferenceWithAnchor = useCallback((key, checked) => {
+    captureViewportAnchor();
+    return actions.setDisplayPreference(key, checked);
+  }, [actions, captureViewportAnchor]);
+  const setTimeDisplayWithAnchor = useCallback((value) => {
+    captureViewportAnchor();
+    return actions.setTimeDisplay(value);
+  }, [actions, captureViewportAnchor]);
   const voiceInput = useConversationVoiceInput({
     active: Boolean(activeContactId),
     api,
@@ -852,12 +869,16 @@ export function ConversationPage({ actions, api = null, incomingCall = null, sna
     const request = Number(ui.scrollToLatestRequest) || 0;
     if (request && request !== latestScrollRequest.current) {
       latestScrollRequest.current = request;
+      viewportAnchorRef.current = null;
       list.scrollTop = list.scrollHeight;
       return;
     }
+    const anchor = viewportAnchorRef.current;
+    viewportAnchorRef.current = null;
+    if (anchor && (!anchor.contactId || anchor.contactId === activeContactId) && restoreConversationViewportAnchor(list, anchor)) return;
     const top = Number(ui.listScrollTop);
     if (Number.isFinite(top)) list.scrollTop = top;
-  }, [messageRows, ui.listScrollTop, ui.scrollToLatestRequest]);
+  }, [activeContactId, messageRows, ui.listScrollTop, ui.scrollToLatestRequest]);
   useLayoutEffect(() => {
     const target = ui.scrollTarget;
     const request = Number(target?.request) || 0;
@@ -888,7 +909,7 @@ export function ConversationPage({ actions, api = null, incomingCall = null, sna
       <section className={`conversation-pane${callControl.call ? " has-active-call" : ""}`}>
         <ConversationHeader actions={actions} callControl={callControl} snapshot={snapshot} />
         <ConversationCallBar call={callControl.call} onEnd={callControl.end} />
-        <ConversationSessionSettings actions={actions} settings={snapshot.sessionSettings} />
+        <ConversationSessionSettings actions={actions} onDisplayPreferenceChange={setDisplayPreferenceWithAnchor} onTimeDisplayChange={setTimeDisplayWithAnchor} settings={snapshot.sessionSettings} />
         {snapshot.error || callControl.startError ? <div className="conversation-error">{snapshot.error || callControl.startError}</div> : null}
         {snapshot.notice ? <div className="conversation-notice">{snapshot.notice}</div> : null}
         {snapshot.focus ? <div className="conversation-focus-banner"><span>已定位到搜索结果附近的聊天记录</span><button onClick={actions.viewCurrentConversation} type="button">回到最新消息</button></div> : null}
