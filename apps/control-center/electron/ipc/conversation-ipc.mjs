@@ -55,6 +55,17 @@ function contactLongTermMemoryValue(value) {
   return { id: clean(source.id), enabled: source.enabled };
 }
 
+function contactPermissionModeValue(value) {
+  const source = plainObject(value);
+  if (Object.hasOwn(source, "sessionId") || Object.hasOwn(source, "projectRoot")) {
+    throw new Error("联系人审批模式只接受 contactId。 ");
+  }
+  const id = clean(source.id);
+  const permissionMode = clean(source.permissionMode);
+  if (!id || !permissionMode) throw new Error("联系人审批模式无效。 ");
+  return { id, permissionMode };
+}
+
 function contactPresentationValue(value) {
   const source = plainObject(value);
   if (Object.hasOwn(source, "sessionId") || Object.hasOwn(source, "projectRoot")) {
@@ -153,6 +164,23 @@ export function registerConversationIpc({
     // inherit the application source/package directory. Individual Agent Core
     // sessions still receive their contact projectRoot as their actual cwd.
     workspaceDirectory: path.resolve(dataRoot),
+    // The Core child is shared by all contacts.  Resolve the saved mode only
+    // when a session is opened, rather than turning it into a process-wide
+    // environment value that would leak from one contact into another.
+    resolveContactPermissionMode: async ({ contactId } = {}) => {
+      const id = clean(contactId);
+      if (!id || !contactProjectsService?.snapshot) return "";
+      try {
+        const snapshot = await contactProjectsService.snapshot();
+        const contact = (Array.isArray(snapshot?.contacts) ? snapshot.contacts : [])
+          .find((item) => clean(item?.id) === id) || null;
+        return clean(contact?.permissionMode);
+      } catch {
+        // A temporary catalogue read failure must not block a normal chat;
+        // the runtime falls back to the product default for this one open.
+        return "";
+      }
+    },
   });
   const attachmentService = createConversationAttachmentService({ dataRoot });
   // Keep product extension points provider-neutral. The Agent Core bridge is
@@ -458,6 +486,10 @@ export function registerConversationIpc({
       // optional project Hook sync cannot finish right now.
     }
     return snapshot;
+  });
+  ipcMain.handle("conversation:update-contact-permission-mode", async (event, value) => {
+    sender = event.sender;
+    return reader.updateContactPermissionMode(contactPermissionModeValue(value));
   });
   ipcMain.handle("conversation:remove-contact", async (event, value) => {
     sender = event.sender;

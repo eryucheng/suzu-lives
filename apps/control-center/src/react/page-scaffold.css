@@ -1,0 +1,102 @@
+:root {
+  --page-titlebar-block-start:22px;
+  --page-titlebar-inline:clamp(17px,2.5vw,36px);
+  --page-titlebar-to-canvas-gap:0;
+  --page-canvas-inline:var(--space-sm);
+  /* 与原有标题到内容间距等值，但留在可滚动画布内，供悬停阴影和上浮位移使用。 */
+  --page-canvas-block-start:var(--space-sm);
+  --page-canvas-block-end:var(--space-sm);
+  --page-card-gap:var(--space-xl);
+  /* 静止卡片只保留内部受光，不向相邻卡片的间隙投射阴影。 */
+  --page-static-card-shadow:inset 0 1px rgba(255,255,255,.035);
+}
+
+#content.page-workspace {
+  overflow:hidden;
+  padding:0;
+}
+
+#content.page-workspace > [id$="ReactRoot"] {
+  display:flex;
+  width:100%;
+  min-width:0;
+  min-height:0;
+  height:100%;
+  flex:1;
+}
+
+.page-layout {
+  display:flex;
+  width:100%;
+  min-width:0;
+  min-height:0;
+  height:100%;
+  flex:1;
+  flex-direction:column;
+  overflow:auto;
+  overscroll-behavior:contain;
+  scrollbar-gutter:stable;
+}
+
+.page-titlebar {
+  flex:0 0 auto;
+  min-width:0;
+  border:0;
+  background:transparent;
+  box-shadow:none;
+  padding:var(--page-titlebar-block-start) var(--page-titlebar-inline) var(--page-titlebar-to-canvas-gap);
+}
+
+.page-titlebar > [data-suzu-page-header] {
+  margin-bottom:0;
+}
+
+.page-canvas {
+  /* PageCanvas is a logical layout boundary, never a second surface or scroller. */
+  --glass-panel-shadow:none;
+  --glass-panel-prominent-shadow:none;
+  box-sizing:border-box;
+  min-width:0;
+  min-height:0;
+  flex:0 0 auto;
+  border:0;
+  background:transparent;
+  box-shadow:none;
+  overflow:visible;
+  padding:var(--page-canvas-block-start) var(--page-canvas-inline) var(--page-canvas-block-end);
+}
+
+.page-canvas > * {
+  min-width:0;
+  max-width:100%;
+}
+
+.page-canvas--stack {
+  display:grid;
+  align-content:start;
+  gap:var(--page-card-gap);
+}
+
+.page-canvas--fill {
+  display:flex;
+  flex:1 0 auto;
+  flex-direction:column;
+}
+
+.page-canvas--fill > * {
+  min-width:0;
+  min-height:0;
+  flex:1;
+}
+
+.page-layout::-webkit-scrollbar {
+  width:8px;
+  height:8px;
+}
+
+.page-layout::-webkit-scrollbar-thumb {
+  border:2px solid transparent;
+  border-radius:99px;
+  background:color-mix(in srgb,var(--muted) 30%,transparent);
+  background-clip:padding-box;
+}

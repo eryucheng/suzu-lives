@@ -27,10 +27,10 @@ function l({ variant: e = "primary", size: n = "md", className: r, type: i = "bu
 	});
 }
 var u = {
-	panel: "_panel_2lw65_5",
-	"intensity-subtle": "_intensity-subtle_2lw65_25",
-	"intensity-soft": "_intensity-soft_2lw65_31",
-	"intensity-prominent": "_intensity-prominent_2lw65_37"
+	panel: "_panel_1tan7_5",
+	"intensity-subtle": "_intensity-subtle_1tan7_24",
+	"intensity-soft": "_intensity-soft_1tan7_30",
+	"intensity-prominent": "_intensity-prominent_1tan7_36"
 };
 //#endregion
 //#region src/components/Glass/GlassPanel.tsx
@@ -354,18 +354,19 @@ var w = { textarea: "_textarea_rlake_5" }, T = r(function({ className: e, style:
 		...r
 	});
 }), E = {
-	header: "_header_16usu_5",
-	copy: "_copy_16usu_23",
-	eyebrow: "_eyebrow_16usu_31",
-	title: "_title_16usu_47",
-	subtitle: "_subtitle_16usu_63",
-	action: "_action_16usu_79"
+	header: "_header_1usjt_5",
+	copy: "_copy_1usjt_22",
+	eyebrow: "_eyebrow_1usjt_30",
+	title: "_title_1usjt_46",
+	subtitle: "_subtitle_1usjt_62",
+	action: "_action_1usjt_78"
 };
 //#endregion
 //#region src/components/PageHeader/PageHeader.tsx
 function D({ eyebrow: e, title: r, subtitle: i, action: a, className: o }) {
 	return /* @__PURE__ */ n("div", {
 		className: [E.header, o].filter(Boolean).join(" "),
+		"data-suzu-page-header": !0,
 		children: [/* @__PURE__ */ n("div", {
 			className: E.copy,
 			children: [

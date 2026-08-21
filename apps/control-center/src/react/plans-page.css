@@ -1,8 +1,5 @@
 .plans-react-page {
   --plans-layout-max-width:1200px;
-  display:grid;
-  align-content:start;
-  gap:clamp(18px,2cqw,28px);
   container-type:inline-size;
   width:100%;
   min-width:0;
@@ -45,7 +42,7 @@
 .plans-task-list {
   display:grid;
   min-width:0;
-  gap:clamp(12px,1.4cqw,18px);
+  gap:var(--page-card-gap);
 }
 
 .plans-task-card {

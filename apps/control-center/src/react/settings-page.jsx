@@ -4,6 +4,7 @@ import { Button, GlassPanel, PageHeader, Status, Tabs } from "suzu-design-system
 import { sortSystemStatusSections } from "./system-status-order.mjs";
 import { ApiConnectionsSettings } from "./api-connections-ui.jsx";
 import { AgentModelSettings } from "./admin-page.jsx";
+import { PageScaffold } from "./page-scaffold.jsx";
 import "./settings-page.css";
 
 const SETTINGS_TABS = [
@@ -333,8 +334,11 @@ export function SettingsPage({ actions = {}, snapshot = {} }) {
   };
 
   return (
-    <div className="settings-react-page">
-      <PageHeader eyebrow="SETTINGS" subtitle="调整软件外观、API 连接、数据存储与联系人隐私。" title="设置" />
+    <PageScaffold
+      canvasClassName="page-canvas--stack"
+      className="settings-react-page"
+      header={<PageHeader eyebrow="SETTINGS" subtitle="调整软件外观、API 连接、数据存储与联系人隐私。" title="设置" />}
+    >
       <Tabs active={tab} className="settings-page-tabs" items={SETTINGS_TABS} onChange={actions.setTab} size="md" />
       <section className="settings-page-body" aria-label={tab === "api" ? "API 设置" : tab === "main-model" ? "主模型设置" : tab === "data" ? "数据设置" : tab === "privacy" ? "隐私设置" : "常规设置"}>
         {tab === "data" ? (
@@ -387,6 +391,6 @@ export function SettingsPage({ actions = {}, snapshot = {} }) {
           />
         )}
       </section>
-    </div>
+    </PageScaffold>
   );
 }

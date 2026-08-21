@@ -2,6 +2,7 @@ import { Empty, GlassPanel, PageHeader, Status } from "suzu-design-system";
 
 import { capabilityCategory, capabilityOverview, createWechatConnectionCapability } from "../features/capabilities/overview.mjs";
 import { CapabilityCategoryPage, CapabilityDetailPage, ExternalCapabilitiesPage } from "./capability-detail-page.jsx";
+import { PageScaffold } from "./page-scaffold.jsx";
 
 import "./capabilities-page.css";
 
@@ -81,9 +82,10 @@ function CapabilitiesOverview({ actions, overview, snapshot }) {
     : 0;
 
   return (
-    <div className="capabilities-react-page">
-      <PageHeader eyebrow="CAPABILITIES" subtitle="整理感知、陪伴、行动与创作。" title="能力" />
-
+    <PageScaffold
+      className="capabilities-react-page"
+      header={<PageHeader eyebrow="CAPABILITIES" subtitle="整理感知、陪伴、行动与创作。" title="能力" />}
+    >
       <section aria-label="能力方向" className="capabilities-overview-grid">
         {overview.categories.map((category) => (
           <CapabilityCategoryCard
@@ -95,7 +97,7 @@ function CapabilitiesOverview({ actions, overview, snapshot }) {
         ))}
         <ExternalCapabilityCard count={externalCount} onOpen={actions.openExternal} />
       </section>
-    </div>
+    </PageScaffold>
   );
 }
 
@@ -103,10 +105,12 @@ export function CapabilitiesPage({ actions = {}, snapshot = {} }) {
   const capabilitySnapshot = snapshot.capabilitySnapshot;
   if (!capabilitySnapshot) {
     return (
-      <div className="capabilities-react-page">
-        <PageHeader eyebrow="CAPABILITIES" subtitle="整理感知、陪伴、行动与创作。" title="能力" />
+      <PageScaffold
+        className="capabilities-react-page"
+        header={<PageHeader eyebrow="CAPABILITIES" subtitle="整理感知、陪伴、行动与创作。" title="能力" />}
+      >
         <Empty className="capabilities-empty" description="正在读取可用能力与已保存设置。" title="正在读取能力" />
-      </div>
+      </PageScaffold>
     );
   }
 

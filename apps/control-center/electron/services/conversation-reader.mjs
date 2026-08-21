@@ -170,6 +170,7 @@ function publicContact(contact) {
     unread: unreadCount > 0,
     unreadCount,
     longTermMemoryEnabled: contact.longTermMemoryEnabled !== false,
+    permissionMode: clean(contact.permissionMode) || "danger-full-access",
     ...(clean(contact.updatedAt) ? { updatedAt: clean(contact.updatedAt) } : {}),
   };
 }
@@ -807,6 +808,16 @@ export function createConversationReader({
     }
   };
 
+  const unavailableHistory = (error) => {
+    const code = clean(error?.code) || "AGENT_HISTORY_FAILED";
+    const reason = clean(error?.message).slice(0, 1_200) || "未知错误。";
+    return {
+      status: "unavailable",
+      code,
+      message: `聊天记录暂不可用：${reason}`,
+    };
+  };
+
   const context = async () => {
     const catalog = await activeCatalog();
     const contactsVersion = JSON.stringify(catalog.contacts.map((contact) => [
@@ -818,11 +829,17 @@ export function createConversationReader({
       contact.hidden,
       contact.muted,
       contact.longTermMemoryEnabled,
+      contact.permissionMode,
     ]));
     if (!catalog.projectRoot || !isSessionId(catalog.sessionId)) {
       return {
         status: catalog.projectRoot ? "ready" : "missing",
         ...catalog,
+        history: {
+          status: "missing",
+          code: "",
+          message: "",
+        },
         session: null,
         events: [],
         messages: [],
@@ -831,7 +848,31 @@ export function createConversationReader({
         updatedAt: "",
       };
     }
-    const history = await activeHistory(catalog);
+    let history;
+    try {
+      history = await activeHistory(catalog);
+    } catch (error) {
+      const unavailable = unavailableHistory(error);
+      const session = {
+        id: catalog.sessionId,
+        title: clean(catalog.activeContact?.name) || "对话",
+        preview: "聊天记录暂不可用",
+        updatedAt: "",
+        createdAt: "",
+        draft: false,
+      };
+      return {
+        status: "ready",
+        ...catalog,
+        history: unavailable,
+        session,
+        events: [],
+        messages: [],
+        contextRecords: [],
+        version: `${selectionVersion}:${catalog.sessionId}:history-unavailable:${unavailable.code}:${contactsVersion}`,
+        updatedAt: "",
+      };
+    }
     const events = Array.isArray(history.events) ? history.events : [];
     const messages = conversationDisplayMessages(events, MAX_MESSAGES, { dataRoot });
     const contextRecords = conversationContextRecords(events);
@@ -849,6 +890,11 @@ export function createConversationReader({
     return {
       status: "ready",
       ...catalog,
+      history: {
+        status: "ready",
+        code: "",
+        message: "",
+      },
       session,
       events,
       messages,
@@ -876,9 +922,11 @@ export function createConversationReader({
       activeSessionId: current.session?.id || "",
       fileName: current.session ? "Agent Core 会话历史" : "",
       version: current.version,
+      history: current.history,
+      error: current.history?.status === "unavailable" ? current.history.message : "",
       messages: current.messages,
       context: Object.freeze({
-        available: current.status === "ready",
+        available: current.history?.status === "ready",
         count: current.contextRecords.length,
       }),
       scannedRecords: current.events.length,
@@ -929,6 +977,15 @@ export function createConversationReader({
   const updateContactPresentation = async (value = {}) => {
     if (!contactProjectsService?.updatePresentation) throw new ConversationReaderError("当前版本未接入联系人项目服务。", { code: "CONTACTS_REQUIRED" });
     await contactProjectsService.updatePresentation(value);
+    selectionVersion += 1;
+    return snapshot();
+  };
+
+  const updateContactPermissionMode = async (value = {}) => {
+    if (!contactProjectsService?.updatePermissionMode) {
+      throw new ConversationReaderError("当前版本未接入联系人审批模式服务。", { code: "CONTACTS_REQUIRED" });
+    }
+    await contactProjectsService.updatePermissionMode(value);
     selectionVersion += 1;
     return snapshot();
   };
@@ -1157,6 +1214,7 @@ export function createConversationReader({
     setPreferredContact,
     snapshot,
     updateContactLongTermMemoryEnabled,
+    updateContactPermissionMode,
     updateContactPresentation,
   });
 }

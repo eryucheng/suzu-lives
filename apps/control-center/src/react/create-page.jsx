@@ -1,6 +1,7 @@
 import { PageHeader, Status } from "suzu-design-system";
 
 import { CREATE_SPACES } from "../features/create/overview.mjs";
+import { PageScaffold } from "./page-scaffold.jsx";
 
 function CreateSpaceCard({ onOpen, space }) {
   return (
@@ -20,8 +21,10 @@ function CreateSpaceCard({ onOpen, space }) {
 
 export function CreatePage({ actions = {} }) {
   return (
-    <>
-      <PageHeader eyebrow="CREATE" subtitle="把视觉灵感与声音方向整理成可以继续推进的创作现场。" title="创造" />
+    <PageScaffold
+      className="create-react-page"
+      header={<PageHeader eyebrow="CREATE" subtitle="把视觉灵感与声音方向整理成可以继续推进的创作现场。" title="创造" />}
+    >
       <section aria-label="创作空间" className="create-space-grid">
         {CREATE_SPACES.map((space) => (
           <CreateSpaceCard
@@ -31,6 +34,6 @@ export function CreatePage({ actions = {} }) {
           />
         ))}
       </section>
-    </>
+    </PageScaffold>
   );
 }

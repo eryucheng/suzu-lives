@@ -12,6 +12,7 @@ import {
 } from "../features/capabilities/overview.mjs";
 import { ApiConnectionPicker } from "./api-connections-ui.jsx";
 import { CreateStudioDialog } from "./create-studio-dialog.jsx";
+import { PageScaffold } from "./page-scaffold.jsx";
 
 const EXTERNAL_TYPE_LABELS = Object.freeze({
   cli: "CLI（预留）",
@@ -337,13 +338,17 @@ export function CapabilityCategoryPage({ actions = {}, capabilitySnapshot, categ
   const wechat = capabilitySnapshot ? [createWechatConnectionCapability(wechatSnapshot)] : [];
   const members = [...builtIn, ...wechat].filter((capability) => capabilityCategory(capability) === category.id);
   return (
-    <div className="capabilities-react-page capabilities-react-page--inner">
-      <PageHeader
-        action={<Button onClick={actions.returnToOverview} type="button" variant="secondary">返回能力</Button>}
-        eyebrow={"CAPABILITIES / " + category.label.toUpperCase()}
-        subtitle={category.detail}
-        title={category.label}
-      />
+    <PageScaffold
+      className="capabilities-react-page capabilities-react-page--inner"
+      header={(
+        <PageHeader
+          action={<Button onClick={actions.returnToOverview} type="button" variant="secondary">返回能力</Button>}
+          eyebrow={"CAPABILITIES / " + category.label.toUpperCase()}
+          subtitle={category.detail}
+          title={category.label}
+        />
+      )}
+    >
       <section aria-label={category.label + "能力"} className="capability-entry-react-grid">
         {members.map((capability) => (
           <CapabilityEntryCard
@@ -353,7 +358,7 @@ export function CapabilityCategoryPage({ actions = {}, capabilitySnapshot, categ
           />
         ))}
       </section>
-    </div>
+    </PageScaffold>
   );
 }
 
@@ -814,17 +819,23 @@ export function CapabilityDetailPage({
       : <div className="capability-detail-header-actions"><CapabilityHeaderToggle actions={actions} capability={capability} />{back}</div>;
   if (capability.id === "wechat-connection") {
     return (
-      <div className="capabilities-react-page capabilities-react-page--inner">
-        <PageHeader action={back} eyebrow="CAPABILITIES / 行动" subtitle={subtitle} title={title} />
+      <PageScaffold
+        canvasClassName="page-canvas--stack"
+        className="capabilities-react-page capabilities-react-page--inner"
+        header={<PageHeader action={back} eyebrow="CAPABILITIES / 行动" subtitle={subtitle} title={title} />}
+      >
         <WechatSettings actions={actions} wechatSnapshot={wechatSnapshot} />
-      </div>
+      </PageScaffold>
     );
   }
   return (
-    <div className="capabilities-react-page capabilities-react-page--inner">
-      <PageHeader action={detailAction} eyebrow={"CAPABILITIES / " + category.label} subtitle={subtitle} title={title} />
+    <PageScaffold
+      canvasClassName="page-canvas--stack"
+      className="capabilities-react-page capabilities-react-page--inner"
+      header={<PageHeader action={detailAction} eyebrow={"CAPABILITIES / " + category.label} subtitle={subtitle} title={title} />}
+    >
       <CapabilitySettings actions={actions} apiServices={apiServices} capability={capability} contactsSnapshot={contactsSnapshot} wechatSnapshot={wechatSnapshot} />
-    </div>
+    </PageScaffold>
   );
 }
 
@@ -882,17 +893,22 @@ export function ExternalCapabilitiesPage({ actions = {}, externalSnapshot }) {
     }
   };
   return (
-    <div className="capabilities-react-page capabilities-react-page--inner">
-      <PageHeader action={<Button onClick={actions.returnToOverview} type="button" variant="secondary">返回能力</Button>} eyebrow="CAPABILITIES / EXTERNAL" subtitle="外部 Skill 与 MCP 会以 Agent Core 方式安装到 Suzu 的运行时，可供所有联系人使用。" title="外部能力" />
-      <SettingSurface description={runtimeHome || "Agent Core 会在首次使用时创建。"} eyebrow="全局运行时" title="Suzu Agent Core">
-        <div className="capability-inline-action-react"><p>导入只读取本地 suzu-capability.json；不会下载或运行第三方代码。启用 MCP 后，Agent Core 会在下一次聊天时按清单启动它。</p><Button disabled={importing} onClick={importManifest} type="button" variant="secondary">{importing ? "正在导入…" : "导入 suzu-capability.json"}</Button></div>
-      </SettingSurface>
-      {capabilities.length ? <section className="external-capability-list">{capabilities.map((capability) => <ExternalCapabilityCard actions={actions} capability={capability} key={capability.id} onRemove={setRemoving} />)}</section> : <GlassPanel as="section" className="capability-empty-panel" intensity="soft"><Empty description="导入本地 suzu-capability.json 后，这里会显示 Skill/MCP 的静态诊断与 Agent Core 登记状态。" title="还没有外部能力" /></GlassPanel>}
+    <>
+      <PageScaffold
+        canvasClassName="page-canvas--stack"
+        className="capabilities-react-page capabilities-react-page--inner"
+        header={<PageHeader action={<Button onClick={actions.returnToOverview} type="button" variant="secondary">返回能力</Button>} eyebrow="CAPABILITIES / EXTERNAL" subtitle="外部 Skill 与 MCP 会以 Agent Core 方式安装到 Suzu 的运行时，可供所有联系人使用。" title="外部能力" />}
+      >
+        <SettingSurface description={runtimeHome || "Agent Core 会在首次使用时创建。"} eyebrow="全局运行时" title="Suzu Agent Core">
+          <div className="capability-inline-action-react"><p>导入只读取本地 suzu-capability.json；不会下载或运行第三方代码。启用 MCP 后，Agent Core 会在下一次聊天时按清单启动它。</p><Button disabled={importing} onClick={importManifest} type="button" variant="secondary">{importing ? "正在导入…" : "导入 suzu-capability.json"}</Button></div>
+        </SettingSurface>
+        {capabilities.length ? <section className="external-capability-list">{capabilities.map((capability) => <ExternalCapabilityCard actions={actions} capability={capability} key={capability.id} onRemove={setRemoving} />)}</section> : <GlassPanel as="section" className="capability-empty-panel" intensity="soft"><Empty description="导入本地 suzu-capability.json 后，这里会显示 Skill/MCP 的静态诊断与 Agent Core 登记状态。" title="还没有外部能力" /></GlassPanel>}
+      </PageScaffold>
       <CreateStudioDialog ariaLabel="移除外部能力" className="capability-remove-dialog" onClose={() => setRemoving(null)} open={Boolean(removing)}>
         <header><div><span>EXTERNAL CAPABILITY</span><h2>移除外部能力？</h2></div><button aria-label="关闭" className="suzu-close-button" onClick={() => setRemoving(null)} type="button">×</button></header>
         <p>{`“${removing?.name || "这项外部能力"}”会清理所有由 Suzu 登记的 Skill 与 MCP 条目；若检测到手动修改会中止并保留文件。`}</p>
         <footer><Button disabled={removingPending} onClick={() => setRemoving(null)} type="button" variant="secondary">取消</Button><Button disabled={removingPending} onClick={remove} type="button" variant="danger">{removingPending ? "正在移除…" : "移除能力"}</Button></footer>
       </CreateStudioDialog>
-    </div>
+    </>
   );
 }

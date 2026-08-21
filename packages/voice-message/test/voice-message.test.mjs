@@ -265,3 +265,132 @@ test("a legacy OpenAI-labelled DashScope CosyVoice sound uses the DashScope synt
     input: { text: "这条旧配置应该走百炼接口。", voice: voiceId, format: "mp3", sample_rate: 24000 },
   });
 });
+
+test("DashScope native TTS adapters reject a compatible-mode URL before sending a malformed request", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "suzu-voice-dashscope-endpoint-"));
+  const configPath = path.join(root, "voice-message", "config.json");
+  fs.mkdirSync(path.dirname(configPath), { recursive: true });
+  fs.writeFileSync(configPath, JSON.stringify({
+    adapter: "dashscope-cosyvoice",
+    model: "cosyvoice-v3.5-plus",
+    voiceId: "longanhuan",
+  }));
+
+  assert.throws(
+    () => resolveDirectVoiceRuntime({
+      dataRoot: root,
+      configPath,
+      apiKeyOverride: "dashscope-key",
+      baseUrlOverride: "https://workspace.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
+      connectionType: "tts-api",
+    }),
+    (error) => error?.code === "tts_endpoint_incompatible" && /compatible-mode\/v1/u.test(error.message),
+  );
+});
+
+test("Qwen-Audio TTS models use DashScope SpeechSynthesizer even when an old Qwen adapter was saved", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "suzu-voice-qwen-audio-routing-"));
+  const configPath = path.join(root, "voice-message", "config.json");
+  fs.mkdirSync(path.dirname(configPath), { recursive: true });
+  fs.writeFileSync(configPath, JSON.stringify({
+    adapter: "dashscope-qwen",
+    model: "qwen-audio-3.0-tts-flash",
+    voiceId: "longanhuan_v3.6",
+  }));
+
+  const runtime = resolveDirectVoiceRuntime({
+    dataRoot: root,
+    configPath,
+    apiKeyOverride: "dashscope-key",
+    baseUrlOverride: "https://dashscope.aliyuncs.com/api/v1",
+    connectionType: "tts-api",
+  });
+  assert.equal(runtime.tts.adapter, "dashscope-cosyvoice");
+  assert.equal(runtime.tts.protocol, "json");
+});
+
+test("CosyVoice v1 voice IDs cannot be sent to a Qwen-Audio TTS model", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "suzu-voice-v1-voice-model-"));
+  const configPath = path.join(root, "voice-message", "config.json");
+  fs.mkdirSync(path.dirname(configPath), { recursive: true });
+  fs.writeFileSync(configPath, JSON.stringify({
+    adapter: "dashscope-qwen",
+    model: "qwen-audio-3.0-tts-flash",
+    voiceId: "longwan",
+  }));
+
+  assert.throws(
+    () => resolveDirectVoiceRuntime({
+      dataRoot: root,
+      configPath,
+      apiKeyOverride: "dashscope-key",
+      baseUrlOverride: "https://dashscope.aliyuncs.com/api/v1",
+      connectionType: "tts-api",
+    }),
+    (error) => error?.code === "tts_voice_model_incompatible" && /longwan/u.test(error.message),
+  );
+});
+
+test("CosyVoice v1 consumes DashScope SSE and downloads the final audio URL", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "suzu-voice-cosyvoice-sse-"));
+  const configPath = path.join(root, "voice-message", "config.json");
+  fs.mkdirSync(path.dirname(configPath), { recursive: true });
+  fs.writeFileSync(configPath, JSON.stringify({
+    adapter: "dashscope-cosyvoice",
+    model: "cosyvoice-v1",
+    voiceId: "longwan",
+  }));
+  const runtime = resolveDirectVoiceRuntime({
+    dataRoot: root,
+    configPath,
+    apiKeyOverride: "dashscope-key",
+    baseUrlOverride: "https://dashscope.aliyuncs.com/api/v1",
+    connectionType: "tts-api",
+  });
+  assert.equal(runtime.tts.protocol, "dashscope-sse");
+
+  const requests = [];
+  const finalEvent = {
+    request_id: "cosyvoice-v1-sse-request",
+    output: {
+      finish_reason: "stop",
+      audio: { url: "https://audio.example.test/cosyvoice-v1.mp3" },
+    },
+    usage: { characters: 6 },
+  };
+  const result = await synthesizeDirectVoiceAudio({
+    runtime,
+    text: "你好，测试。",
+    agentId: "agent-1234567890abcdef",
+    ledgerPath: path.join(root, "cost-ledger", "events.jsonl"),
+    fetchImpl: async (url, options = {}) => {
+      requests.push({ url, options });
+      if (url === "https://dashscope.aliyuncs.com/api/v1/services/audio/tts/SpeechSynthesizer") {
+        const stream = new ReadableStream({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode(`event: result\ndata: ${JSON.stringify({ output: { finish_reason: "null" } })}\n\n`));
+            controller.enqueue(new TextEncoder().encode(`event: result\ndata: ${JSON.stringify(finalEvent)}\n\n`));
+            controller.close();
+          },
+        });
+        return {
+          ok: true,
+          headers: { get: (name) => name.toLowerCase() === "content-type" ? "text/event-stream" : "" },
+          body: stream,
+        };
+      }
+      if (url === "https://audio.example.test/cosyvoice-v1.mp3") {
+        return { ok: true, arrayBuffer: async () => Buffer.from("mock-cosyvoice-v1-mp3") };
+      }
+      throw new Error("unexpected request: " + url);
+    },
+  });
+
+  assert.equal(requests[0].options.headers["X-DashScope-SSE"], "enable");
+  assert.deepEqual(JSON.parse(requests[0].options.body), {
+    model: "cosyvoice-v1",
+    input: { text: "你好，测试。", voice: "longwan", format: "mp3", sample_rate: 24000 },
+  });
+  assert.equal(result.requestId, "cosyvoice-v1-sse-request");
+  assert.equal(result.audio.toString("utf8"), "mock-cosyvoice-v1-mp3");
+});

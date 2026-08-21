@@ -3,6 +3,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 import { normalizeAgentId, resolveAgentDataRoot } from "@suzu-lives/agent-registry";
+import {
+  DEFAULT_SUZU_AGENT_PERMISSION_MODE,
+  normalizeSuzuAgentPermissionMode,
+  SUZU_AGENT_PERMISSION_MODES,
+} from "@suzu-lives/suzu-agent-runtime";
 
 const CONTACT_FILE = "SUZU.md";
 const CONTACT_METADATA_DIRECTORY = ".suzu-lives";
@@ -15,6 +20,12 @@ const SESSION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
 const MAX_CONTACTS = 160;
 const MAX_CONTACT_NAME_LENGTH = 80;
 
+// This is contact-owned product state, not a process-wide Core setting.  The
+// runtime writes the chosen value into the corresponding Agent Core session
+// whenever that contact is opened.
+export const CONTACT_PERMISSION_MODES = SUZU_AGENT_PERMISSION_MODES;
+export const DEFAULT_CONTACT_PERMISSION_MODE = DEFAULT_SUZU_AGENT_PERMISSION_MODE;
+
 export class ContactProjectsError extends Error {
   constructor(message) {
     super(message);
@@ -24,6 +35,18 @@ export class ContactProjectsError extends Error {
 
 function clean(value) {
   return String(value ?? "").trim();
+}
+
+export function normalizeContactPermissionMode(value) {
+  return normalizeSuzuAgentPermissionMode(value);
+}
+
+function requiredContactPermissionMode(value) {
+  const mode = clean(value);
+  if (!CONTACT_PERMISSION_MODES.includes(mode)) {
+    throw new ContactProjectsError("联系人审批模式无效。 ");
+  }
+  return mode;
 }
 
 function unreadCount(value) {
@@ -142,6 +165,7 @@ async function contactMetadata(fsOps, projectRoot) {
       unread: storedUnreadCount > 0,
       unreadCount: storedUnreadCount,
       longTermMemoryEnabled: raw.longTermMemoryEnabled !== false,
+      permissionMode: normalizeContactPermissionMode(raw.permissionMode),
     };
   } catch {
     return null;
@@ -177,6 +201,7 @@ async function contactAt(fsOps, root, value) {
     muted: metadata.muted,
     pinned: metadata.pinned,
     longTermMemoryEnabled: metadata.longTermMemoryEnabled,
+    permissionMode: metadata.permissionMode,
     sessionId: metadata.sessionId,
     unread: metadata.unread,
     unreadCount: metadata.unreadCount,
@@ -222,7 +247,19 @@ function updatedOwnerProfileTitle(content, { previousName, name } = {}) {
   return `${bom}${nextTitle}${body.slice(previousTitle.length)}`;
 }
 
-function contactMetadataText({ id, name, createdAt, sessionId = "", agentId, hidden = false, muted = false, pinned = false, unreadCount: count = 0, longTermMemoryEnabled = true } = {}) {
+function contactMetadataText({
+  id,
+  name,
+  createdAt,
+  sessionId = "",
+  agentId,
+  hidden = false,
+  muted = false,
+  pinned = false,
+  unreadCount: count = 0,
+  longTermMemoryEnabled = true,
+  permissionMode = DEFAULT_CONTACT_PERMISSION_MODE,
+} = {}) {
   const storageIdentity = normalizeAgentId(agentId);
   if (!storageIdentity) throw new ContactProjectsError("联系人固定存储身份无效。 ");
   const normalizedUnreadCount = unreadCount(count);
@@ -238,6 +275,7 @@ function contactMetadataText({ id, name, createdAt, sessionId = "", agentId, hid
     ...(normalizedUnreadCount > 0 ? { unreadCount: normalizedUnreadCount } : {}),
     ...(muted === true ? { muted: true } : {}),
     ...(longTermMemoryEnabled === false ? { longTermMemoryEnabled: false } : {}),
+    permissionMode: normalizeContactPermissionMode(permissionMode),
   }, null, 2)}\n`;
 }
 
@@ -444,6 +482,7 @@ export function createContactProjectsService({
         pinned: contact.pinned,
         unreadCount: contact.unreadCount,
         longTermMemoryEnabled: contact.longTermMemoryEnabled,
+        permissionMode: contact.permissionMode,
       }));
     } catch (error) {
       throw new ContactProjectsError(`无法更新联系人备注：${clean(error?.message) || "未知错误"}`);
@@ -497,6 +536,7 @@ export function createContactProjectsService({
         agentId: contact.agentId,
         ...next,
         longTermMemoryEnabled: contact.longTermMemoryEnabled,
+        permissionMode: contact.permissionMode,
       }));
     } catch (error) {
       throw new ContactProjectsError(`无法更新联系人显示状态：${clean(error?.message) || "未知错误"}`);
@@ -522,9 +562,36 @@ export function createContactProjectsService({
         pinned: contact.pinned,
         unreadCount: contact.unreadCount,
         longTermMemoryEnabled: enabled,
+        permissionMode: contact.permissionMode,
       }));
     } catch (error) {
       throw new ContactProjectsError(`无法更新联系人长期记忆开关：${clean(error?.message) || "未知错误"}`);
+    }
+    return snapshot();
+  };
+
+  const updatePermissionMode = async ({ id, permissionMode } = {}) => {
+    const nextPermissionMode = requiredContactPermissionMode(permissionMode);
+    const root = await contactsRoot();
+    const contact = await contactAt(fsOps, root, id);
+    if (!contact) throw new ContactProjectsError("所选联系人不存在或不是由 Suzu 创建的联系人工作区。 ");
+    if (nextPermissionMode === contact.permissionMode) return snapshot();
+    try {
+      await writeTextAtomic(fsOps, path.join(contact.projectRoot, CONTACT_METADATA_DIRECTORY, CONTACT_METADATA_FILE), contactMetadataText({
+        id: contact.id,
+        name: contact.name,
+        createdAt: contact.createdAt,
+        sessionId: contact.sessionId,
+        agentId: contact.agentId,
+        hidden: contact.hidden,
+        muted: contact.muted,
+        pinned: contact.pinned,
+        unreadCount: contact.unreadCount,
+        longTermMemoryEnabled: contact.longTermMemoryEnabled,
+        permissionMode: nextPermissionMode,
+      }));
+    } catch (error) {
+      throw new ContactProjectsError(`无法更新联系人审批模式：${clean(error?.message) || "未知错误"}`);
     }
     return snapshot();
   };
@@ -602,6 +669,7 @@ export function createContactProjectsService({
         createdAt: new Date().toISOString(),
         sessionId,
         agentId: agentIdForContactId(id),
+        permissionMode: DEFAULT_CONTACT_PERMISSION_MODE,
       }));
     } catch (error) {
       throw new ContactProjectsError(`无法保存联系人备注：${clean(error?.message) || "未知错误"}`);
@@ -619,5 +687,17 @@ export function createContactProjectsService({
     };
   };
 
-  return { create, remove, rename, select, setPreferred, snapshot, syncContactProjectSettings, syncOwnerProfileTitle, updateLongTermMemoryEnabled, updatePresentation };
+  return {
+    create,
+    remove,
+    rename,
+    select,
+    setPreferred,
+    snapshot,
+    syncContactProjectSettings,
+    syncOwnerProfileTitle,
+    updateLongTermMemoryEnabled,
+    updatePermissionMode,
+    updatePresentation,
+  };
 }

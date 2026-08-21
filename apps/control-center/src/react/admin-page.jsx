@@ -19,6 +19,7 @@ import { getIdentity, profileInitial } from "../core/identity.mjs";
 import { TEXT_MODEL_PROVIDERS } from "../features/agent/runtime.mjs";
 import { usageAmountLabel, usageCostLabel } from "../features/usage/usage-display.mjs";
 
+import { PageScaffold } from "./page-scaffold.jsx";
 import "./admin-page.css";
 
 const ADMIN_TAB_LABELS = Object.freeze({
@@ -872,13 +873,16 @@ export function AdminPage({ actions = {}, snapshot = {} }) {
   const settings = snapshot.settings || {};
 
   return (
-    <div className="admin-react-page">
-      <PageHeader eyebrow="MANAGE" subtitle="管理我的资料与用量。" title="管理" />
+    <PageScaffold
+      canvasClassName="page-canvas--stack"
+      className="admin-react-page"
+      header={<PageHeader eyebrow="MANAGE" subtitle="管理我的资料与用量。" title="管理" />}
+    >
       <Tabs active={tab} className="admin-page-tabs" items={ADMIN_TABS} onChange={actions.setTab} size="md" />
       <section aria-label={ADMIN_TABS.find((item) => item.value === tab)?.label || "管理"} className="admin-page-body">
         {tab === "agent" ? <IdentitySettings actions={actions} settings={settings} /> : null}
         {tab === "usage" ? <UsageSettings actions={actions} data={snapshot.data} /> : null}
       </section>
-    </div>
+    </PageScaffold>
   );
 }

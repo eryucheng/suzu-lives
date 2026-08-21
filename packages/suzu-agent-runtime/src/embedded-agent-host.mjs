@@ -29,6 +29,7 @@ const MODULE_DIRECTORY = fileURLToPath(new URL(".", import.meta.url));
 const CORE_CONFIG_FILE = resolve(MODULE_DIRECTORY, "..", "assets", "suzu-agent-core", "cordis.yml");
 const CORE_PATCH_FILE = resolve(MODULE_DIRECTORY, "..", "assets", "suzu-agent-core", "cordis.patch.yml");
 const MAX_IDENTIFIER_LENGTH = 256;
+const PERMISSION_MODES = new Set(["danger-full-access", "workspace-write", "read-only"]);
 
 function clean(value) {
   return String(value ?? "").trim();
@@ -70,6 +71,13 @@ function requiredAbsoluteDirectory(value, label) {
   const source = clean(value);
   if (!source || !isAbsolute(source)) throw new Error(`${label}必须是绝对目录。`);
   return resolve(source);
+}
+
+function permissionMode(value) {
+  const mode = clean(value);
+  if (!mode) return "";
+  if (!PERMISSION_MODES.has(mode)) throw new Error("Suzu Agent 审批模式无效。 ");
+  return mode;
 }
 
 function boundedError(error, fallback = "Suzu Agent Core 操作失败。") {
@@ -241,9 +249,27 @@ export class SuzuAgentHost {
     return "";
   }
 
+  currentDefaultModelSelection() {
+    // `agentDefaultModel` belongs to the Core host context.  Individual
+    // Agent contexts deliberately do not inject that product-wide setting;
+    // reading `agent.ctx.agentDefaultModel` therefore throws under Cordis
+    // instead of returning undefined.  Always resolve it through the host's
+    // safe service lookup and let a session's captured selection be the
+    // fallback for an already-running Agent.
+    const service = this.ctx.get?.("agentDefaultModel");
+    return modelSelection(service?.currentSelection?.());
+  }
+
+  requireCurrentDefaultModelSelection() {
+    const selection = this.currentDefaultModelSelection();
+    if (selection) return selection;
+    throw new Error("Suzu Agent 缺少可用的主模型配置；请在“设置 → 主模型”保存后重试。 ");
+  }
+
   selectionFor(agent) {
     const existing = this.selections.get(agent);
     if (existing) return existing;
+    const host = this;
     let chosen;
     const selection = {
       get current() {
@@ -252,7 +278,7 @@ export class SuzuAgentHost {
         // It must win over an old request header: otherwise changing the
         // setting after a contact's first turn would leave that contact
         // permanently pinned to its original provider/model.
-        const live = modelSelection(agent.ctx.agentDefaultModel?.currentSelection?.());
+        const live = host.currentDefaultModelSelection();
         if (live) return live;
         // agentOptions is the selection captured while this Agent was
         // created or resumed. Keep it as the fallback when the Core's live
@@ -286,6 +312,19 @@ export class SuzuAgentHost {
     };
   }
 
+  async applyPermissionMode(agent, value) {
+    const mode = permissionMode(value);
+    if (!mode) return "";
+    const service = this.ctx.permissionPresets
+      || this.ctx.get?.("permissionPresets")
+      || agent?.ctx?.permissionPresets;
+    if (!service || typeof service.set !== "function") {
+      throw new Error("Suzu Agent 审批模式服务不可用。 ");
+    }
+    await Promise.resolve(service.set(agent.session, mode));
+    return mode;
+  }
+
   async ensureSession(payload) {
     const sessionId = identifier(payload.sessionId, "会话标识");
     // Session creation receives the contact workspace explicitly. Later requests
@@ -295,6 +334,7 @@ export class SuzuAgentHost {
     const requestedCwd = clean(payload.cwd);
     const cwd = requestedCwd ? requiredAbsoluteDirectory(requestedCwd, "工作目录") : "";
     const requestedPreset = clean(payload.agentPreset) || undefined;
+    const requestedPermissionMode = permissionMode(payload.permissionMode);
     let creation = this.sessionCreations.get(sessionId);
     if (!creation) {
       creation = (async () => {
@@ -312,7 +352,7 @@ export class SuzuAgentHost {
             throw new Error(`会话 ${sessionId} 已绑定到 ${storedPreset}，不能切换到 ${requestedPreset}。`);
           }
           const composition = await this.compositionFor(storedPreset || requestedPreset);
-          const selection = this.ctx.agentDefaultModel.currentSelection();
+          const selection = this.requireCurrentDefaultModelSelection();
           return (await this.ctx.agents.resume({
             resumeSessionId: sessionId,
             agentOptions: { provider: selection.provider, model: selection.model },
@@ -322,7 +362,7 @@ export class SuzuAgentHost {
         if (!cwd) throw new Error("创建会话需要工作目录。 ");
         await mkdir(cwd, { recursive: true });
         const composition = await this.compositionFor(requestedPreset);
-        const selection = this.ctx.agentDefaultModel.currentSelection();
+        const selection = this.requireCurrentDefaultModelSelection();
         return (await this.ctx.agents.create({
           sessionId,
           agentOptions: { provider: selection.provider, model: selection.model },
@@ -340,6 +380,7 @@ export class SuzuAgentHost {
     if (requestedPreset && storedPreset && requestedPreset !== storedPreset) {
       throw new Error(`会话 ${sessionId} 已绑定到 ${storedPreset}，不能切换到 ${requestedPreset}。`);
     }
+    await this.applyPermissionMode(agent, requestedPermissionMode);
     return agent;
   }
 
@@ -363,7 +404,11 @@ export class SuzuAgentHost {
         };
       case "sessions.create": {
         const agent = await this.ensureSession(payload);
-        return { sessionId: agent.session.id, agentPreset: resolveSessionPreset(agent.session) };
+        return {
+          sessionId: agent.session.id,
+          agentPreset: resolveSessionPreset(agent.session),
+          ...(permissionMode(payload.permissionMode) ? { permissionMode: permissionMode(payload.permissionMode) } : {}),
+        };
       }
       case "sessions.history":
         return this.history(payload);

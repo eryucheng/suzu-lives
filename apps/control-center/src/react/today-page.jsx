@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { Banner, Button, Calendar, Dialog, GlassPanel, Input, PageHeader, Select, Status, Switch } from "suzu-design-system";
 
 import { dateTime, money } from "../core/formatters.mjs";
+import { PageScaffold } from "./page-scaffold.jsx";
 import "./today-page.css";
 
 const EVENT_TYPES = ["纪念日", "生日", "日程", "其他"];
@@ -239,14 +240,12 @@ export function TodayPage({ actions = {}, snapshot = {} }) {
   );
   const recentEvents = Array.isArray(snapshot.data?.events) ? snapshot.data.events.slice(-3).reverse() : [];
   return (
-    <div className="today-react-page">
-      <PageHeader
-        className="today-page-header"
-        eyebrow="TODAY"
-        subtitle="把握当下"
-        title="今天"
-      />
-
+    <>
+      <PageScaffold
+        canvasClassName="page-canvas--fill"
+        className="today-react-page"
+        header={<PageHeader className="today-page-header" eyebrow="TODAY" subtitle="把握当下" title="今天" />}
+      >
       <div className="today-page-content">
         <section className="today-glass-workspace" aria-label="今日日历">
           <GlassPanel as="section" className="today-calendar-panel" intensity="soft">
@@ -349,8 +348,8 @@ export function TodayPage({ actions = {}, snapshot = {} }) {
           </GlassPanel>
         </section>
       </div>
-
+      </PageScaffold>
       <TodayEventEditor actions={actions} canEdit={canEdit} contacts={contacts} defaultContactId={defaultContactId} editor={snapshot.editor} selectedDate={selectedDate} />
-    </div>
+    </>
   );
 }

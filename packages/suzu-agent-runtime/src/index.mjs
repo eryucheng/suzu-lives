@@ -1,6 +1,13 @@
 import { SuzuAgentRuntimeError } from "./runtime-error.mjs";
+import { isSuzuAgentPermissionMode } from "./permission-modes.mjs";
 
 export { SuzuAgentRuntimeError };
+export {
+  DEFAULT_SUZU_AGENT_PERMISSION_MODE,
+  SUZU_AGENT_PERMISSION_MODES,
+  isSuzuAgentPermissionMode,
+  normalizeSuzuAgentPermissionMode,
+} from "./permission-modes.mjs";
 
 const MAX_IDENTIFIER_LENGTH = 256;
 const EVENT_STREAM_OPEN_TIMEOUT_MS = 10_000;
@@ -580,15 +587,25 @@ export function createSuzuAgentRuntimeDriver({
       const suzuSessionId = identifier(sessionId, "Suzu 会话标识");
       const requestedRuntimeSessionId = identifier(createRuntimeSessionId(suzuSessionId), "Agent Core 会话标识");
       const existing = sessions.get(requestedRuntimeSessionId);
-      if (existing) return { runtimeSessionId: existing.runtimeSessionId, created: false };
       await ensureStreams();
       const preset = clean(plainObject(presentation).agentPreset);
+      const permissionMode = clean(plainObject(presentation).permissionMode);
+      if (permissionMode && !isSuzuAgentPermissionMode(permissionMode)) {
+        throw new SuzuAgentRuntimeError("INVALID_PERMISSION_MODE", "Suzu Agent 审批模式无效。 ");
+      }
       const value = unwrapRpc(await coreApi.sessions.create({
         sessionId: requestedRuntimeSessionId,
         ...(clean(cwd) ? { cwd: clean(cwd) } : {}),
         ...(preset ? { agentPreset: preset } : {}),
+        ...(permissionMode ? { permissionMode } : {}),
       }), "创建会话");
       const runtimeSessionId = identifier(plainObject(value).sessionId, "Agent Core 会话标识");
+      if (existing) {
+        if (existing.runtimeSessionId !== runtimeSessionId) {
+          throw new SuzuAgentRuntimeError("SESSION_CONFLICT", "Agent Core 返回的会话标识与已打开会话不一致。 ");
+        }
+        return { runtimeSessionId, created: false };
+      }
       if (sessions.has(runtimeSessionId)) {
         throw new SuzuAgentRuntimeError("SESSION_CONFLICT", "Agent Core 返回的会话标识已被占用。 ");
       }

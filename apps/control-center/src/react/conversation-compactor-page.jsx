@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Banner, Button, Empty, GlassPanel, Input, PageHeader, Status, Switch, Textarea } from "suzu-design-system";
 
+import { PageScaffold } from "./page-scaffold.jsx";
 import "./conversation-compactor-page.css";
 
 function clean(value) {
@@ -125,26 +126,32 @@ export function ConversationCompactorPage({ actions = {}, error = "", loading = 
   };
 
   return (
-    <div className="conversation-compactor-react-page">
-      <PageHeader
-        action={<Button className="conversation-compactor-return-button" onClick={actions.returnToOverview} variant="secondary">返回关系</Button>}
-        eyebrow="CONVERSATION MEMORY"
-        subtitle="压缩只替换模型上下文；聊天界面始终保留完整的原始对话。"
-        title="记忆压缩器"
-      />
+    <PageScaffold
+      canvasClassName="page-canvas--fill"
+      className="conversation-compactor-react-page"
+      header={(
+        <PageHeader
+          action={<Button className="conversation-compactor-return-button" onClick={actions.returnToOverview} variant="secondary">返回关系</Button>}
+          eyebrow="CONVERSATION MEMORY"
+          subtitle="压缩只替换模型上下文；聊天界面始终保留完整的原始对话。"
+          title="记忆压缩器"
+        />
+      )}
+    >
+      <div className="conversation-compactor-page-body">
 
-      {error ? <Banner className="conversation-compactor-page-error" tone="danger">{error}</Banner> : null}
-      {!snapshot && loading ? (
-        <GlassPanel as="section" className="conversation-compactor-loading" intensity="soft">
-          <Status label="正在读取对话设置" tone="warning" />
-        </GlassPanel>
-      ) : !selectedConversation ? (
-        <GlassPanel as="section" className="conversation-compactor-contact-empty" intensity="soft">
-          <Empty description="先创建并选择一位联系人，才能为她的固定对话设置压缩方式。" title="还没有可设置的联系人" />
-        </GlassPanel>
-      ) : (
-        <div className="conversation-compactor-workspace">
-          <ContactRail contacts={contacts} disabled={busy} onSelect={selectContact} selectedContactId={selectedContactId} />
+        {error ? <Banner className="conversation-compactor-page-error" tone="danger">{error}</Banner> : null}
+        {!snapshot && loading ? (
+          <GlassPanel as="section" className="conversation-compactor-loading" intensity="soft">
+            <Status label="正在读取对话设置" tone="warning" />
+          </GlassPanel>
+        ) : !selectedConversation ? (
+          <GlassPanel as="section" className="conversation-compactor-contact-empty" intensity="soft">
+            <Empty description="先创建并选择一位联系人，才能为她的固定对话设置压缩方式。" title="还没有可设置的联系人" />
+          </GlassPanel>
+        ) : (
+          <div className="conversation-compactor-workspace">
+            <ContactRail contacts={contacts} disabled={busy} onSelect={selectContact} selectedContactId={selectedContactId} />
 
           <GlassPanel as="section" className="conversation-compactor-workspace__main" intensity="soft">
             <header className="conversation-compactor-main-header">
@@ -230,9 +237,10 @@ export function ConversationCompactorPage({ actions = {}, error = "", loading = 
                 )}
               </section>
             </div>
-          </GlassPanel>
-        </div>
-      )}
-    </div>
+            </GlassPanel>
+          </div>
+        )}
+      </div>
+    </PageScaffold>
   );
 }

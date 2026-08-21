@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 
 import { rolldown } from "rolldown";
 
+import { applyAgentCoreIntegrityPatches } from "./agent-core-integrity-patches.mjs";
 import { listSuzuAgentCoreSourceEntries } from "./upstream-agent-core-source-catalog.mjs";
 
 const SCRIPT_DIRECTORY = dirname(fileURLToPath(import.meta.url));
@@ -327,7 +328,7 @@ function ownAgentCoreDiagnostics(code) {
 }
 
 function ownAgentCoreExecutionSource(code, id) {
-  let next = ownAgentCoreDiagnostics(code);
+  let next = applyAgentCoreIntegrityPatches(ownAgentCoreDiagnostics(code), id);
   if (/[/\\]dsh-home-paths[/\\]lib[/\\]index\.js$/u.test(id)) {
     const before = next;
     next = next

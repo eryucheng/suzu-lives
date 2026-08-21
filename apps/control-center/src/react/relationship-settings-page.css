@@ -2,8 +2,6 @@
   display:flex;
   min-height:0;
   flex-direction:column;
-  overflow:hidden;
-  padding:34px clamp(17px,2.5vw,36px) clamp(20px,3.8dvh,36px);
 }
 
 #content.content--relationship-settings > #relationshipSettingsReactRoot {
@@ -14,10 +12,6 @@
 
 .relationship-settings-react-page {
   --relationship-settings-layout-max-width:1200px;
-  display:grid;
-  align-content:start;
-  grid-template-rows:auto minmax(0,1fr);
-  gap:clamp(18px,2cqw,28px);
   container-type:inline-size;
   width:100%;
   min-width:0;
@@ -44,6 +38,16 @@
 .relationship-settings-page-error,
 .relationship-settings-editor-error { margin:0; }
 
+.relationship-settings-page-body {
+  display:flex;
+  width:100%;
+  min-width:0;
+  min-height:0;
+  flex:1;
+  flex-direction:column;
+  gap:var(--page-card-gap);
+}
+
 .relationship-settings-loading {
   display:grid;
   min-height:260px;
@@ -57,8 +61,10 @@
   display:grid;
   grid-template-columns:minmax(210px,.3fr) minmax(0,1fr);
   align-items:stretch;
-  gap:var(--space-lg);
+  min-width:0;
   min-height:0;
+  flex:1;
+  gap:var(--page-card-gap);
 }
 
 .relationship-settings-contact-rail {
@@ -141,6 +147,21 @@
 .relationship-settings-file-tabs button { font-size:var(--font-size-lg); }
 .relationship-settings-new-file-button { margin-left:auto; }
 
+.relationship-settings-approval-mode {
+  display:grid;
+  grid-template-columns:minmax(0,1fr) minmax(190px,240px);
+  align-items:center;
+  gap:var(--space-md);
+  padding:var(--space-sm) var(--space-md);
+  border:1px solid var(--border);
+  border-radius:var(--radius-md);
+  background:var(--panel-soft);
+}
+
+.relationship-settings-approval-mode > div { display:grid; gap:2px; min-width:0; }
+.relationship-settings-approval-mode span { color:var(--text); font-size:var(--font-size-md); font-weight:var(--font-weight-semibold); }
+.relationship-settings-approval-mode p { margin:0; color:var(--text-secondary); font-size:var(--font-size-sm); line-height:1.45; }
+
 .relationship-settings-editor {
   display:grid;
   grid-template-rows:auto minmax(0,1fr);
@@ -201,4 +222,5 @@ body:has(.relationship-settings-create-form) [role="dialog"] {
   .relationship-settings-editor__toolbar code { display:none; }
   .relationship-settings-file-tabs { flex:1; overflow-x:auto; }
   .relationship-settings-editor { padding:var(--space-sm); }
+  .relationship-settings-approval-mode { grid-template-columns:minmax(0,1fr); }
 }

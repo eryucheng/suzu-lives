@@ -4,6 +4,9 @@ import { fileURLToPath } from "node:url";
 
 import { createAgentRuntime } from "@suzu-lives/agent-runtime";
 import {
+  DEFAULT_SUZU_AGENT_PERMISSION_MODE,
+  isSuzuAgentPermissionMode,
+  normalizeSuzuAgentPermissionMode,
   SuzuAgentRuntimeError,
   createSuzuAgentRuntimeDriver,
   createSuzuAgentCoreSupervisor,
@@ -18,7 +21,7 @@ import { createSuzuInstructionBridge } from "./suzu-instruction-bridge.mjs";
 
 export { SUZU_COMPANION_AGENT_PRESET };
 export const SUZU_SOFTWARE_ASSISTANT_AGENT_PRESET = "suzu-software-assistant";
-export const SUZU_COMPANION_PERMISSION_MODE = "danger-full-access";
+export const SUZU_COMPANION_PERMISSION_MODE = DEFAULT_SUZU_AGENT_PERMISSION_MODE;
 
 const DEFAULT_SUZU_AGENT_COMPOSITION = createSuzuAgentComposition();
 
@@ -283,6 +286,7 @@ export function createSuzuAgentRuntime({
   dataRoot,
   temporaryDirectory = "",
   workspaceDirectory,
+  resolveContactPermissionMode = null,
   fsOps = fs,
   defaultAgentPreset = SUZU_COMPANION_AGENT_PRESET,
   agentAdapter = DEFAULT_SUZU_AGENT_COMPOSITION,
@@ -310,7 +314,7 @@ export function createSuzuAgentRuntime({
     );
   }
   const companionPreset = clean(companionAgentBinding?.agentPreset);
-  if (!companionPreset || clean(defaultAgentPreset) !== companionPreset || typeof ensureCompanionPreset !== "function" || typeof ensureSoftwareAssistantPreset !== "function" || typeof ensureExternalCapabilitiesPatch !== "function" || typeof createInstructionBridge !== "function" || !fsOps?.mkdir || typeof createSupervisor !== "function" || typeof createDriver !== "function" || typeof createRuntimeFacade !== "function" || typeof deleteSessionStorage !== "function") {
+  if (!companionPreset || clean(defaultAgentPreset) !== companionPreset || typeof ensureCompanionPreset !== "function" || typeof ensureSoftwareAssistantPreset !== "function" || typeof ensureExternalCapabilitiesPatch !== "function" || typeof createInstructionBridge !== "function" || !fsOps?.mkdir || typeof createSupervisor !== "function" || typeof createDriver !== "function" || typeof createRuntimeFacade !== "function" || typeof deleteSessionStorage !== "function" || (resolveContactPermissionMode !== null && typeof resolveContactPermissionMode !== "function")) {
     throw new SuzuAgentRuntimeServiceError("Suzu Agent Core 会话运行时依赖无效。", { code: "RUNTIME_CONTRACT_INVALID" });
   }
   let instructionBridge;
@@ -516,7 +520,27 @@ export function createSuzuAgentRuntime({
     throw new SuzuAgentRuntimeServiceError("Suzu Agent 会话不能使用未受产品管理的 preset。", { code: "AGENT_PRESET_UNAVAILABLE" });
   };
 
+  const permissionModeFor = async ({ contactId = "", presentation = {} } = {}) => {
+    const source = plainObject(presentation);
+    const requested = clean(source.permissionMode);
+    if (requested && !isSuzuAgentPermissionMode(requested)) {
+      throw new SuzuAgentRuntimeServiceError("Suzu Agent 审批模式无效。", { code: "INVALID_PERMISSION_MODE" });
+    }
+    let saved = "";
+    const id = clean(contactId);
+    if (id && typeof resolveContactPermissionMode === "function") {
+      try {
+        saved = clean(await resolveContactPermissionMode({ contactId: id }));
+      } catch {
+        // A contact catalogue failure must not make an otherwise available
+        // conversation unusable. The durable default remains full access.
+      }
+    }
+    return normalizeSuzuAgentPermissionMode(saved || requested || SUZU_COMPANION_PERMISSION_MODE);
+  };
+
   const ensureSession = async ({ sessionId, contactId = "", cwd, presentation = {} } = {}) => {
+    const permissionMode = await permissionModeFor({ contactId, presentation });
     const facade = await start();
     try {
       return await facade.createSession({
@@ -526,6 +550,7 @@ export function createSuzuAgentRuntime({
         presentation: {
           ...plainObject(presentation),
           agentPreset: managedPreset(presentation),
+          permissionMode,
         },
       });
     } catch (error) {

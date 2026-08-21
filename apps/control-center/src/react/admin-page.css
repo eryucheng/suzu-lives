@@ -2,7 +2,6 @@
   display:flex;
   min-height:0;
   flex-direction:column;
-  padding:34px clamp(17px,2.5vw,36px) clamp(20px,3.8dvh,36px);
 }
 
 #content.content--admin > #adminReactRoot {
@@ -13,9 +12,6 @@
 
 .admin-react-page {
   --admin-layout-max-width:1200px;
-  display:grid;
-  align-content:start;
-  gap:clamp(15px,1.7cqw,24px);
   container-type:inline-size;
   width:100%;
   min-width:0;
@@ -50,7 +46,7 @@
 .admin-price-list {
   display:grid;
   min-width:0;
-  gap:clamp(12px,1.4cqw,18px);
+  gap:var(--page-card-gap);
 }
 
 .admin-page-body {
@@ -1097,19 +1093,5 @@ body:has(.admin-api-editor) [role="dialog"] [role="listbox"] {
 
   .admin-price-card__footer > .admin-field {
     width:100%;
-  }
-}
-
-@media (max-width:1100px) {
-  #content.content--admin {
-    padding-top:28px;
-    padding-bottom:clamp(20px,3.8dvh,36px);
-  }
-}
-
-@media (max-width:820px) {
-  #content.content--admin {
-    padding-top:23px;
-    padding-bottom:clamp(18px,3.8dvh,32px);
   }
 }

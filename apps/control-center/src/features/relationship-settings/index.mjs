@@ -31,3 +31,12 @@ export async function selectRelationshipContact(context, id) {
   if (context.api.settings?.get) context.state.settings = await context.api.settings.get().catch(() => context.state.settings);
   await loadRelationshipFiles(context, { contactSnapshot: snapshot });
 }
+
+export async function updateRelationshipContactPermissionMode(context, { id, permissionMode } = {}) {
+  if (typeof context.api.conversation?.updateContactPermissionMode !== "function") {
+    throw new Error("当前版本未接入联系人审批模式。 ");
+  }
+  const snapshot = await context.api.conversation.updateContactPermissionMode({ id, permissionMode });
+  applyRelationshipContacts(context, snapshot);
+  return snapshot;
+}

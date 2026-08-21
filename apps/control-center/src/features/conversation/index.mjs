@@ -956,10 +956,11 @@ export function conversationReactSnapshot(context) {
   const sourceEntries = payload?.messages || [];
   const entries = viewState.mode === "focus" ? sourceEntries : displayedMessages(sourceEntries);
   const prefs = preferences(context.state.settings);
-  const ready = (viewState.snapshot?.status || payload?.status) === "ready";
+  const snapshot = viewState.snapshot || {};
+  const historyAvailable = snapshot.history?.status !== "unavailable";
+  const ready = (snapshot.status || payload?.status) === "ready" && historyAvailable;
   const agent = getAgentProfile(context.state.settings);
   const identity = getIdentity(context.state.settings);
-  const snapshot = viewState.snapshot || {};
   const selected = activeSession(snapshot);
   const contacts = snapshot.contacts || [];
   const activeContact = snapshot.activeContact || null;
@@ -1021,7 +1022,7 @@ export function conversationReactSnapshot(context) {
     },
     contactContextMenu,
     contacts: contactRows,
-    error: viewState.error ? conversationInfo(payload) : "",
+    error: viewState.error ? conversationInfo(payload) : clean(snapshot.error || payload?.error),
     focus: viewState.mode === "focus",
     hasContactsRoot,
     listLabel: `${agent.displayName || "Suzu"} 的聊天记录`,

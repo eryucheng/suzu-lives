@@ -1,5 +1,6 @@
 import { GlassPanel, PageHeader, Status } from "suzu-design-system";
 
+import { PageScaffold } from "./page-scaffold.jsx";
 import "./relationships-page.css";
 
 function RelationshipCard({ ariaLabel, children, className = "", onOpen }) {
@@ -17,9 +18,10 @@ export function RelationshipsPage({ actions = {}, snapshot = {} }) {
   const memoryReady = memory.status === "ready";
 
   return (
-    <div className="relationships-react-page">
-      <PageHeader eyebrow="RELATIONSHIPS" subtitle="在这里查看对话、记忆与重要关系。" title="关系" />
-
+    <PageScaffold
+      className="relationships-react-page"
+      header={<PageHeader eyebrow="RELATIONSHIPS" subtitle="在这里查看对话、记忆与重要关系。" title="关系" />}
+    >
       <section aria-label="关系功能" className="relationships-overview">
         <RelationshipCard
           ariaLabel="打开对话：查看并继续当前会话"
@@ -80,6 +82,6 @@ export function RelationshipsPage({ actions = {}, snapshot = {} }) {
           <p className="relationships-card__description">按联系人浏览 Agent 写下的每日回顾。</p>
         </RelationshipCard>
       </section>
-    </div>
+    </PageScaffold>
   );
 }

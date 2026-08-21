@@ -1,9 +1,7 @@
 .agent-journal-react-page {
-  display:grid;
   width:100%;
   min-width:0;
   max-width:1280px;
-  gap:clamp(18px,2cqw,28px);
   margin:0 auto;
 }
 
@@ -24,7 +22,7 @@
 .agent-journal-workspace {
   display:grid;
   grid-template-columns:minmax(210px,.34fr) minmax(0,1fr);
-  gap:var(--space-lg);
+  gap:var(--page-card-gap);
   align-items:start;
 }
 

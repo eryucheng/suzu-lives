@@ -25,7 +25,7 @@ import { createAgentRuntimeConfigService, registerAgentRuntimeConfigIpc } from "
 import { createCapabilityAccessPolicy } from "../services/capability-access-policy.mjs";
 import { createCapabilityRegistry, createCapabilityRuntime } from "../services/capability-registry.mjs";
 import { createAgentCapabilityAdapters } from "../services/agent-capability-adapters.mjs";
-import { collectAgentImageAttachmentIds } from "../services/agent-session-storage.mjs";
+import { eraseContactAgentConversation } from "../services/agent-contact-cleanup.mjs";
 import { createTodayCalendarService } from "../services/today-calendar.mjs";
 import { createWeChatLinkService } from "../services/wechat-link.mjs";
 import { createMailFeedbackLinkService } from "../services/mail-feedback-link.mjs";
@@ -119,84 +119,6 @@ function scheduledTaskContent(task, { prompt = "", displayAsSystem = false } = {
     clean(prompt) || clean(task?.target?.prompt),
     "</suzu-schedule-task>",
   ].join("\n");
-}
-
-function agentContactScope(contact) {
-  const sessionId = clean(contact?.sessionId);
-  const projectRoot = clean(contact?.projectRoot);
-  if (!sessionId || !projectRoot || !path.isAbsolute(projectRoot)) return null;
-  return { sessionId, projectRoot: path.resolve(projectRoot) };
-}
-
-function agentHistorySequence(entry) {
-  const value = Number(plainObject(entry).event?.seq);
-  return Number.isSafeInteger(value) && value >= 0 ? value : null;
-}
-
-/** Reads every Agent Core history page, rather than treating the UI's tail window as
- * the authoritative attachment reference set used for irreversible cleanup. */
-async function completeAgentHistory(runtime, { contactId, projectRoot, sessionId }) {
-  if (typeof runtime?.history !== "function") throw new Error("Suzu Agent 会话运行时不支持完整历史读取。 ");
-  const events = [];
-  let beforeSeq;
-  for (let pageCount = 0; pageCount < 10_000; pageCount += 1) {
-    const page = await runtime.history({
-      sessionId,
-      contactId,
-      cwd: projectRoot,
-      maxMessages: 2_000,
-      ...(beforeSeq === undefined ? {} : { beforeSeq }),
-    });
-    const records = Array.isArray(page?.events) ? page.events : [];
-    events.push(...records);
-    if (page?.hasMore !== true) return events;
-    const sequences = records.map(agentHistorySequence).filter((value) => value !== null);
-    const oldest = sequences.length ? Math.min(...sequences) : null;
-    if (oldest === null || (beforeSeq !== undefined && oldest >= beforeSeq)) {
-      throw new Error("Agent 历史分页未能前进，未执行联系人删除。 ");
-    }
-    beforeSeq = oldest;
-  }
-  throw new Error("Agent 历史记录过长，无法安全确认附件引用。 ");
-}
-
-async function eraseContactAgentConversation({ contact, contactProjectsService, conversation }) {
-  const target = agentContactScope(contact);
-  if (!target) return { status: "no-agent-session" };
-  const runtime = conversation?.agentRuntime;
-  if (typeof runtime?.purgeSession !== "function") {
-    throw new Error("当前 Suzu Agent 会话运行时不支持完整删除。 ");
-  }
-  // Stop the visible turn first so the renderer receives the usual stop
-  // lifecycle before the owning runtime is shut down below. The hard stop in
-  // `purgeSession()` remains the race-free persistence boundary.
-  if (typeof conversation?.chat?.stop === "function") {
-    await conversation.chat.stop({ sessionId: target.sessionId, projectRoot: target.projectRoot }).catch(() => undefined);
-  }
-  const catalog = await contactProjectsService.snapshot();
-  const contacts = Array.isArray(catalog?.contacts) ? catalog.contacts : [];
-  const targetEvents = await completeAgentHistory(runtime, {
-    contactId: clean(contact?.id),
-    ...target,
-  });
-  const protectedAttachmentIds = new Set();
-  for (const candidate of contacts) {
-    if (clean(candidate?.id) === clean(contact?.id)) continue;
-    const scope = agentContactScope(candidate);
-    if (!scope) continue;
-    const events = await completeAgentHistory(runtime, {
-      contactId: clean(candidate?.id),
-      ...scope,
-    });
-    for (const id of collectAgentImageAttachmentIds(events)) protectedAttachmentIds.add(id);
-  }
-  const storage = await runtime.purgeSession({
-    sessionId: target.sessionId,
-    cwd: target.projectRoot,
-    imageAttachmentIds: collectAgentImageAttachmentIds(targetEvents),
-    protectedImageAttachmentIds: [...protectedAttachmentIds],
-  });
-  return { status: "deleted", ...storage };
 }
 
 function agentJournalTaskPrompt(date) {

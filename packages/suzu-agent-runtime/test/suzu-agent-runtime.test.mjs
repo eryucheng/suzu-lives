@@ -163,6 +163,37 @@ test("Agent Core driver maps one public FIFO text turn into neutral stream event
   });
 });
 
+test("Agent Core driver reapplies a contact permission preset when its existing session is reopened", async () => {
+  const { driver, fake } = setup();
+  const first = await driver.createSession({
+    sessionId: "permission-session",
+    cwd: "D:\\Temp\\suzu-agent-core-test-cwd",
+    presentation: { agentPreset: "standard", permissionMode: "read-only" },
+  });
+  const reopened = await driver.createSession({
+    sessionId: "permission-session",
+    cwd: "D:\\Temp\\suzu-agent-core-test-cwd",
+    presentation: { agentPreset: "standard", permissionMode: "danger-full-access" },
+  });
+
+  assert.deepEqual(first, { runtimeSessionId: "permission-session", created: true });
+  assert.deepEqual(reopened, { runtimeSessionId: "permission-session", created: false });
+  assert.deepEqual(fake.calls.create, [
+    {
+      sessionId: "permission-session",
+      cwd: "D:\\Temp\\suzu-agent-core-test-cwd",
+      agentPreset: "standard",
+      permissionMode: "read-only",
+    },
+    {
+      sessionId: "permission-session",
+      cwd: "D:\\Temp\\suzu-agent-core-test-cwd",
+      agentPreset: "standard",
+      permissionMode: "danger-full-access",
+    },
+  ]);
+});
+
 test("Agent Core driver forwards validated native image prompt parts unchanged", async () => {
   const { driver, fake } = setup();
   const { runtimeSessionId } = await createSession(driver);

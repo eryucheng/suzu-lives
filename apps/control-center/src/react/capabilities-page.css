@@ -1,15 +1,15 @@
 #capabilitiesReactRoot {
-  display:contents;
+  display:flex;
+  min-width:0;
+  min-height:0;
+  flex:1;
 }
 
 .capabilities-react-page {
-  --capabilities-layout-min-width:920px;
   --capabilities-layout-max-width:1280px;
-  display:grid;
   width:100%;
-  min-width:var(--capabilities-layout-min-width);
+  min-width:0;
   max-width:var(--capabilities-layout-max-width);
-  gap:24px;
   margin:0 auto;
   padding-bottom:4px;
 }
@@ -224,14 +224,10 @@
   }
 }
 
-.capabilities-react-page--inner {
-  gap:22px;
-}
-
 .capability-entry-react-grid {
   display:grid;
   grid-template-columns:repeat(2,minmax(0,1fr));
-  gap:16px;
+  gap:var(--page-card-gap);
 }
 
 .capability-entry-react-card,

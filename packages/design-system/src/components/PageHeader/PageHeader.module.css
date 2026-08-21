@@ -6,7 +6,7 @@
   justify-content: space-between;
   gap: 24px;
   max-width: 1200px;
-  margin-bottom: 27px;
+  margin-bottom: var(--page-header-content-gap, var(--space-xl));
 }
 
 .copy {

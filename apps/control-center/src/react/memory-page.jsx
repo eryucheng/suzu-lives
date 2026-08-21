@@ -4,6 +4,7 @@ import { Banner, Button, Dialog, Empty, GlassPanel, Input, PageHeader, Select, S
 import { API_BINDINGS } from "../features/agent/runtime.mjs";
 import { createMemoryBrainView } from "../features/memory-brain/brain-view.mjs";
 import { ApiConnectionPicker } from "./api-connections-ui.jsx";
+import { PageScaffold } from "./page-scaffold.jsx";
 
 import "./memory-page.css";
 
@@ -1186,13 +1187,31 @@ export function MemoryPage({ actions = {}, api, loading = false, snapshot = {} }
     <Button onClick={actions.returnToOverview} type="button" variant="secondary">返回关系</Button>
   </div>;
 
-  return <div className="memory-react-page">
-    <PageHeader
-      action={headerActions}
-      eyebrow="RELATIONSHIPS / MEMORY"
-      subtitle="查看长期记忆、测试召回，并维护结构化事件之间的联系。"
-      title="记忆"
-    />
+  return <>
+    <PageScaffold
+      canvasClassName="page-canvas--stack"
+      className="memory-react-page"
+      header={(
+        <PageHeader
+          action={headerActions}
+          eyebrow="RELATIONSHIPS / MEMORY"
+          subtitle="查看长期记忆、测试召回，并维护结构化事件之间的联系。"
+          title="记忆"
+        />
+      )}
+    >
+      {pageError ? <Banner className="memory-page-error" tone="danger">{pageError}</Banner> : null}
+      {!contactId && !contacts.length ? <GlassPanel as="section" className="memory-page-empty" intensity="soft"><Empty description="先在关系页创建一位联系人，再为对方建立长期记忆。" title="还没有联系人" /></GlassPanel>
+        : visibleView === "brain" ? <MemoryBrain api={api} available={ready} contactId={contactId} onDelete={deleteMemory} onEdit={(detail) => {
+          setView("library");
+          openEdit(detail);
+        }} onError={reportError} onSuccess={reportSuccess} refreshToken={memoryRefreshToken} />
+          : visibleView === "review" ? <MemoryReview actions={{ refreshStatus }} api={api} contactId={contactId} onError={reportError} onSuccess={reportSuccess} refreshToken={memoryRefreshToken} />
+            : <>
+              <MemoryOverview api={api} contactId={contactId} memory={memory} onError={reportError} onSuccess={reportSuccess} />
+              <MemoryLibrary api={api} contactId={contactId} onDelete={deleteMemory} onEdit={openEdit} onError={reportError} onRestore={restoreMemory} onSuccess={reportSuccess} refreshToken={memoryRefreshToken} />
+            </>}
+    </PageScaffold>
     <ContactPicker contacts={contacts} onClose={() => setContactPickerOpen(false)} onSelect={selectContact} open={contactPickerOpen} selectedContactId={contactId} switching={loading || contactPending} />
     <Dialog
       footer={<div className="memory-import-dialog-actions"><Button onClick={() => setImportDialogOpen(false)} type="button" variant="secondary">取消</Button><Button onClick={confirmMemoryImport} type="button">选择 .db 文件</Button></div>}
@@ -1206,17 +1225,6 @@ export function MemoryPage({ actions = {}, api, loading = false, snapshot = {} }
         <p>导入会覆盖「{contactName(selectedContact)}」当前的记忆库，但会先创建安全备份，源文件不会被修改。</p>
       </div>
     </Dialog>
-    {pageError ? <Banner className="memory-page-error" tone="danger">{pageError}</Banner> : null}
-    {!contactId && !contacts.length ? <GlassPanel as="section" className="memory-page-empty" intensity="soft"><Empty description="先在关系页创建一位联系人，再为对方建立长期记忆。" title="还没有联系人" /></GlassPanel>
-      : visibleView === "brain" ? <MemoryBrain api={api} available={ready} contactId={contactId} onDelete={deleteMemory} onEdit={(detail) => {
-        setView("library");
-        openEdit(detail);
-      }} onError={reportError} onSuccess={reportSuccess} refreshToken={memoryRefreshToken} />
-        : visibleView === "review" ? <MemoryReview actions={{ refreshStatus }} api={api} contactId={contactId} onError={reportError} onSuccess={reportSuccess} refreshToken={memoryRefreshToken} />
-          : <>
-            <MemoryOverview api={api} contactId={contactId} memory={memory} onError={reportError} onSuccess={reportSuccess} />
-            <MemoryLibrary api={api} contactId={contactId} onDelete={deleteMemory} onEdit={openEdit} onError={reportError} onRestore={restoreMemory} onSuccess={reportSuccess} refreshToken={memoryRefreshToken} />
-          </>}
     <MemoryEditorDialog api={api} contactId={contactId} detail={editing} onClose={() => setEditing(null)} onError={reportError} onSaved={finishEdit} onSuccess={reportSuccess} />
-  </div>;
+  </>;
 }

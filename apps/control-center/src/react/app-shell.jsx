@@ -285,7 +285,7 @@ export function AppShell() {
           <IncomingVoiceCall call={workspace?.incomingVoiceCall} onAnswer={workspace?.actions?.answerIncomingVoiceCall} onDecline={workspace?.actions?.declineIncomingVoiceCall} />
           <ReleaseAnnouncementDialog announcement={workspace?.releaseAnnouncement} onAcknowledge={workspace?.actions?.acknowledgeReleaseAnnouncement} open={workspace?.releaseAnnouncementOpen === true} />
           <GlobalNotice message={notice} />
-          <section className={`content${workspace?.contentClassName ? ` ${workspace.contentClassName}` : ""}`} id="content" aria-live="polite">
+          <section className={`content page-workspace${workspace?.contentClassName ? ` ${workspace.contentClassName}` : ""}`} id="content" aria-live="polite">
             <ConversationCallProvider active={Boolean(conversationProps)} api={conversationProps?.api} snapshot={conversationProps?.snapshot}>
               <ApplicationRouter workspace={workspace} />
             </ConversationCallProvider>

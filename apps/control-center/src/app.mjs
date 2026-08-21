@@ -2,7 +2,11 @@ import { state } from "./core/state.mjs";
 import { TEXT_MODEL_PROVIDERS, loadAgentRuntimeConfig, loadApiServices, loadCapabilities } from "./features/agent/runtime.mjs";
 import { hasPersonaContent, mainModelIsReady, resolveOnboardingStep, shouldShowOnboarding } from "./features/onboarding/index.mjs";
 import { conversationReactSnapshot, createConversationReactActions, isScheduledAgentReply, startConversationPolling, stopConversationPolling } from "./features/conversation/index.mjs";
-import { loadRelationshipFiles, selectRelationshipContact } from "./features/relationship-settings/index.mjs";
+import {
+  loadRelationshipFiles,
+  selectRelationshipContact,
+  updateRelationshipContactPermissionMode,
+} from "./features/relationship-settings/index.mjs";
 import {
   SUZU_ADMIN_TABS,
   getDeferredCapabilityView,
@@ -1165,6 +1169,14 @@ function selectRelationshipFile(path) {
   render();
 }
 
+async function saveRelationshipPermissionMode({ id, permissionMode } = {}) {
+  const snapshot = await updateRelationshipContactPermissionMode(context, { id, permissionMode });
+  state.relationshipFilesError = "";
+  setNotice("已更新联系人审批模式。 ");
+  render();
+  return snapshot;
+}
+
 let conversationCompactorRequest = 0;
 
 async function loadConversationCompactor({ contactId = "" } = {}) {
@@ -1449,6 +1461,7 @@ function routeForCurrentView() {
           createFile: createRelationshipFile,
           returnToOverview: () => setRelationshipPage("overview"),
           saveFile: saveRelationshipFile,
+          savePermissionMode: saveRelationshipPermissionMode,
           selectContact: (id) => selectRelationshipContact(context, id),
           selectFile: selectRelationshipFile,
         },

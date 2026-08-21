@@ -1,15 +1,9 @@
 #memoryReactRoot {
-  min-width: 920px;
-}
-
-#content.content--memory {
-  scrollbar-gutter: stable;
+  min-width:0;
 }
 
 .memory-react-page {
-  display: grid;
-  min-width: 920px;
-  gap: 22px;
+  min-width:0;
 }
 
 .memory-react-page .memory-overview {

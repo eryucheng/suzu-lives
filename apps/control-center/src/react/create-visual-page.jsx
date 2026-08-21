@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { PageHeader, Select, Status } from "suzu-design-system";
 
 import { CreateStudioDialog } from "./create-studio-dialog.jsx";
+import { PageScaffold } from "./page-scaffold.jsx";
 
 const ROLES = Object.freeze({ identity: "人物", location: "地点", object: "物品", style: "风格" });
 const ROLE_OPTIONS = Object.freeze(Object.entries(ROLES).map(([value, label]) => ({ label, value })));
@@ -371,15 +372,21 @@ export function CreateVisualPage({ actions = {}, api }) {
 
   return (
     <>
-      <PageHeader
-        action={<div className="create-subpage-actions"><button className="secondary-button" onClick={actions.returnToOverview} type="button">返回创作</button><button aria-label="绘画设置" className="create-settings-button" onClick={() => setSettingsOpen(true)} title="绘画设置" type="button"><span aria-hidden="true">⚙</span></button></div>}
-        className="create-studio-page-header"
-        eyebrow="CREATE / VISUAL"
-        subtitle="让提示词、视觉参考与候选结果保持在同一条创作流里。"
-        title="视觉工作台"
-      />
-      {feedback ? <div className="reference-feedback" role="status">{feedback}</div> : null}
-      <section className="drawing-workbench visual-workbench">
+      <PageScaffold
+        canvasClassName="page-canvas--stack"
+        className="create-visual-react-page"
+        header={(
+          <PageHeader
+            action={<div className="create-subpage-actions"><button className="secondary-button" onClick={actions.returnToOverview} type="button">返回创作</button><button aria-label="绘画设置" className="create-settings-button" onClick={() => setSettingsOpen(true)} title="绘画设置" type="button"><span aria-hidden="true">⚙</span></button></div>}
+            className="create-studio-page-header"
+            eyebrow="CREATE / VISUAL"
+            subtitle="让提示词、视觉参考与候选结果保持在同一条创作流里。"
+            title="视觉工作台"
+          />
+        )}
+      >
+        {feedback ? <div className="reference-feedback" role="status">{feedback}</div> : null}
+        <section className="drawing-workbench visual-workbench">
         <section className="drawing-compose-panel">
           <div className="drawing-head"><div><span className="reference-kicker">开始创作</span><h2>从灵感到候选</h2><p>{ready ? "写下画面方向，挑选参考，再把可比较的候选留在同一处。" : "选择有效项目后，即可开始整理提示词、参考与候选。"}</p></div><Status label={ready ? "可以开始" : "需要项目"} tone={statusTone(drawing?.status)} /></div>
           <form className="voice-form drawing-generate-form" onSubmit={generate}>
@@ -389,8 +396,8 @@ export function CreateVisualPage({ actions = {}, api }) {
           </form>
         </section>
         <VisualRuns onOpenCandidate={openCandidate} runs={drawing?.runs || []} />
-      </section>
-      <section className="drawing-references">
+        </section>
+        <section className="drawing-references">
         <div className="drawing-section-heading"><div><span className="reference-kicker">视觉参考</span><h2>从资料库挑选本次参考</h2><p>{hasContact ? `可同时使用我的共享资料和“${references.contact.name}”的专属资料；专属人物不会出现在其他联系人中。` : "未选择联系人时，只能管理我的共享资料；不会再写入未归属资料库。"}</p></div><span className="drawing-reference-count">已选 {selectedReferences.size} 张</span></div>
         <section className="reference-workspace">
           <div className="reference-main">
@@ -403,7 +410,8 @@ export function CreateVisualPage({ actions = {}, api }) {
           <ReferenceImport empty={!references?.assets?.length} onCancel={() => setPendingImport(null)} onSelect={selectLocalReference} onSubmit={importReference} pending={pendingImport} role={importRole} scope={importScope} scopeOptions={scopeOptions} setRole={selectImportRole} setScope={setImportScope} sets={importSets} />
           <ReferenceGroups onRemove={removeGroup} onSubmit={saveGroup} scope={groupScope} scopeOptions={scopeOptions} setScope={setGroupScope} sets={references?.sets || []} />
         </section>
-      </section>
+        </section>
+      </PageScaffold>
       <CreateStudioDialog ariaLabel="绘画设置" onClose={() => setSettingsOpen(false)} open={settingsOpen}>
         <header className="create-settings-dialog__header"><div><span className="reference-kicker">绘画设置</span><h2>尺寸、出图方式与本机工作流</h2></div><button aria-label="关闭绘画设置" className="create-settings-close suzu-close-button" onClick={() => setSettingsOpen(false)} type="button"><span aria-hidden="true">×</span></button></header>
         <div className="drawing-settings-body">

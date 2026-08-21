@@ -1,7 +1,7 @@
 .create-space-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 16px;
+  gap: var(--page-card-gap);
   max-width: 1040px;
 }
 
@@ -17,7 +17,7 @@
   background:
     radial-gradient(circle at 92% 8%, rgba(69, 212, 191, .18), transparent 28%),
     linear-gradient(145deg, color-mix(in srgb, var(--panel) 96%, #17282a), var(--panel));
-  box-shadow: 0 15px 42px rgba(0, 0, 0, .16), inset 0 1px rgba(255, 255, 255, .035);
+  box-shadow:var(--page-static-card-shadow);
   color: var(--text);
   cursor: pointer;
   padding: 24px;
@@ -270,7 +270,7 @@
   border: 1px solid var(--line);
   border-radius: 19px;
   background: linear-gradient(145deg, color-mix(in srgb, var(--panel) 96%, #1b2132), var(--panel));
-  box-shadow: 0 16px 45px rgba(0, 0, 0, .16), inset 0 1px rgba(255, 255, 255, .026);
+  box-shadow:var(--page-static-card-shadow);
 }
 
 .drawing-compose-panel {
@@ -1736,12 +1736,12 @@
 .voice-workspace {
   grid-template-columns: minmax(520px, 1.16fr) minmax(320px, .84fr);
   align-items: start;
-  gap: 18px;
+  gap: var(--page-card-gap);
   min-width: 920px;
 }
 
 .create-studio-page-header {
-  min-width: 920px;
+  min-width: 0;
   flex-direction: row;
   align-items: flex-end;
 }
@@ -1875,9 +1875,15 @@
   }
 }
 
-#createVisualReactRoot,
+#createVisualReactRoot {
+  display:flex;
+  min-width:0;
+  min-height:0;
+  flex:1;
+}
+
 #createAudioReactRoot {
-  display: contents;
+  display:contents;
 }
 
 .drawing-references .reference-workspace {

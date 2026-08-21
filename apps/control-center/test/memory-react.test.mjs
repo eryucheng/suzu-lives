@@ -34,6 +34,7 @@ test("memory route is owned by a React page and scopes every action to a contact
   assert.match(page, /export function MemoryPage/u);
   assert.match(page, /useState/u);
   assert.match(page, /PageHeader/u);
+  assert.match(page, /PageScaffold/u);
   assert.match(page, /createMemoryBrainView/u);
   assert.match(page, /memory\.contacts/u);
   assert.match(page, /contactId \}/u);
@@ -65,7 +66,7 @@ test("memory route is owned by a React page and scopes every action to a contact
   assert.doesNotMatch(page, /memory\.sessions/u);
 
   assert.ok(page.indexOf("memory-contact-picker-trigger") < page.indexOf("memory-recall-control"));
-  assert.match(css, /#memoryReactRoot[\s\S]*min-width:\s*920px/u);
-  assert.match(css, /#content\.content--memory[\s\S]*scrollbar-gutter:\s*stable/u);
+  assert.match(css, /#memoryReactRoot[\s\S]*min-width:\s*0;/u);
+  assert.doesNotMatch(css, /#content\.content--memory/u);
   assert.doesNotMatch(css, /@media/u);
 });

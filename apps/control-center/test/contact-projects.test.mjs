@@ -54,8 +54,10 @@ test("contacts are Suzu workspaces directly below the configured contacts root",
   assert.equal(metadata.name, "小苏");
   assert.equal(Object.hasOwn(created.activeContact, "approvalMode"), false);
   assert.equal(created.activeContact.longTermMemoryEnabled, true);
+  assert.equal(created.activeContact.permissionMode, "danger-full-access");
   assert.equal(Object.hasOwn(metadata, "approvalMode"), false);
   assert.equal(Object.hasOwn(metadata, "longTermMemoryEnabled"), false);
+  assert.equal(metadata.permissionMode, "danger-full-access");
   assert.ok(Number.isFinite(Date.parse(metadata.createdAt)));
   assert.match(metadata.sessionId, /^[0-9a-f-]{36}$/u);
   assert.equal(created.activeContact.sessionId, metadata.sessionId);
@@ -302,4 +304,30 @@ test("contact names remain concise visible remarks", () => {
   assert.equal(normalizeContactName("../outside"), "../outside");
   assert.equal(normalizeContactName("CON"), "CON");
   assert.throws(() => normalizeContactName(" "), /填写联系人备注/u);
+});
+
+test("each contact persists its own Agent approval mode and defaults to full access", async () => {
+  const contactsRoot = await temporaryDirectory("suzu-contact-permission-mode-");
+  let settings = { contactsRoot, projectRoot: "", preferredContactId: "" };
+  const service = createContactProjectsService({
+    settingsService: { load: () => settings, save: (next) => { settings = next; return settings; } },
+  });
+  const first = await service.create({ name: "小苏" });
+  const second = await service.create({ name: "工作" });
+  const firstId = first.activeContact.id;
+  const secondId = second.activeContact.id;
+
+  const updated = await service.updatePermissionMode({ id: firstId, permissionMode: "read-only" });
+  assert.equal(updated.contacts.find((contact) => contact.id === firstId)?.permissionMode, "read-only");
+  assert.equal(updated.contacts.find((contact) => contact.id === secondId)?.permissionMode, "danger-full-access");
+
+  const metadataPath = path.join(first.activeContact.projectRoot, ".suzu-lives", "contact.json");
+  assert.equal(JSON.parse(await fs.readFile(metadataPath, "utf8")).permissionMode, "read-only");
+  await service.rename({ id: firstId, name: "新的备注" });
+  assert.equal(JSON.parse(await fs.readFile(metadataPath, "utf8")).permissionMode, "read-only");
+
+  await assert.rejects(
+    service.updatePermissionMode({ id: firstId, permissionMode: "everything" }),
+    /审批模式无效/u,
+  );
 });

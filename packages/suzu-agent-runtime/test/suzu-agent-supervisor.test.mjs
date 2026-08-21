@@ -326,9 +326,6 @@ test("embedded host keeps a newly created session's contact workspace for its fi
         return { agent };
       },
     },
-    agentDefaultModel: {
-      currentSelection: () => ({ provider: "test-provider", model: "test-model" }),
-    },
     agentPresets: {
       async resolve(id) { return { id: id || "suzu-companion" }; },
       async mount() {},
@@ -338,7 +335,11 @@ test("embedded host keeps a newly created session's contact workspace for its fi
           : undefined;
       },
     },
-    get: () => undefined,
+    get(name) {
+      return name === "agentDefaultModel"
+        ? { currentSelection: () => ({ provider: "test-provider", model: "test-model" }) }
+        : undefined;
+    },
   };
   const host = new SuzuAgentHost(context, { send: () => true });
 
@@ -376,13 +377,64 @@ test("embedded host keeps a newly created session's contact workspace for its fi
   );
 });
 
+test("embedded host writes the requested approval mode to the same contact session", async () => {
+  const workspace = resolve(TEST_DIRECTORY, "host-permission-workspace");
+  const agents = new Map();
+  const changes = [];
+  const context = {
+    agents: {
+      get: (sessionId) => agents.get(sessionId),
+      async create({ sessionId, meta }) {
+        const agent = {
+          session: { id: sessionId, header: { cwd: meta.cwd, agentPreset: "suzu-companion" }, events: [] },
+          ctx: { get: () => undefined },
+        };
+        agents.set(sessionId, agent);
+        return { agent };
+      },
+    },
+    agentPresets: { async resolve(id) { return { id: id || "suzu-companion" }; }, async mount() {} },
+    permissionPresets: {
+      set(session, mode) {
+        changes.push({ sessionId: session.id, mode });
+        session.events.push({ type: "permission/preset", data: { preset: mode } });
+      },
+    },
+    get(name) {
+      return name === "agentDefaultModel"
+        ? { currentSelection: () => ({ provider: "test-provider", model: "test-model" }) }
+        : undefined;
+    },
+  };
+  const host = new SuzuAgentHost(context, { send: () => true });
+
+  const first = await host.handle("sessions.create", {
+    sessionId: "permission-contact-session",
+    cwd: workspace,
+    agentPreset: "suzu-companion",
+    permissionMode: "read-only",
+  });
+  const second = await host.handle("sessions.create", {
+    sessionId: "permission-contact-session",
+    cwd: workspace,
+    agentPreset: "suzu-companion",
+    permissionMode: "workspace-write",
+  });
+
+  assert.equal(first.permissionMode, "read-only");
+  assert.equal(second.permissionMode, "workspace-write");
+  assert.deepEqual(changes, [
+    { sessionId: "permission-contact-session", mode: "read-only" },
+    { sessionId: "permission-contact-session", mode: "workspace-write" },
+  ]);
+});
+
 test("embedded host keeps the create-time model selection when Core's live default source is unavailable", () => {
-  const host = new SuzuAgentHost({}, { send: () => true });
+  const host = new SuzuAgentHost({ get: () => undefined }, { send: () => true });
   const agent = {
     options: { provider: "suzu-test-provider", model: "suzu-test-model" },
     session: { requestHeader: () => undefined },
     ctx: {
-      agentDefaultModel: { currentSelection: () => undefined },
       on: () => () => undefined,
     },
   };
@@ -396,14 +448,17 @@ test("embedded host keeps the create-time model selection when Core's live defau
 
 test("embedded host applies a changed live main model to a persisted contact session", () => {
   let liveSelection = { provider: "deepseek-official", model: "deepseek-v4-flash" };
-  const host = new SuzuAgentHost({}, { send: () => true });
+  const host = new SuzuAgentHost({
+    get(name) {
+      return name === "agentDefaultModel" ? { currentSelection: () => liveSelection } : undefined;
+    },
+  }, { send: () => true });
   const agent = {
     options: { provider: "deepseek-official", model: "deepseek-v4-flash" },
     session: {
       requestHeader: () => ({ config: { provider: "deepseek-official", model: "deepseek-v4-flash" } }),
     },
     ctx: {
-      agentDefaultModel: { currentSelection: () => liveSelection },
       on: () => () => undefined,
     },
   };
@@ -413,6 +468,29 @@ test("embedded host applies a changed live main model to a persisted contact ses
 
   liveSelection = { provider: "suzu-kimi", model: "kimi-for-coding" };
   assert.deepEqual(selection.current, liveSelection);
+});
+
+test("embedded host reads the product main model from the host context, not an Agent injection", () => {
+  const liveSelection = { provider: "suzu-test-provider", model: "suzu-test-model" };
+  const host = new SuzuAgentHost({
+    get(name) {
+      return name === "agentDefaultModel" ? { currentSelection: () => liveSelection } : undefined;
+    },
+  }, { send: () => true });
+  const agent = {
+    options: {},
+    session: { requestHeader: () => undefined },
+    ctx: new Proxy({ on: () => () => undefined }, {
+      get(target, property, receiver) {
+        if (property === "agentDefaultModel") {
+          throw new Error('cannot get property "agentDefaultModel" without inject');
+        }
+        return Reflect.get(target, property, receiver);
+      },
+    }),
+  };
+
+  assert.deepEqual(host.selectionFor(agent).current, liveSelection);
 });
 
 test("embedded Suzu host and private resolver are concrete", async () => {

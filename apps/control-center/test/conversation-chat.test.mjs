@@ -1157,6 +1157,64 @@ test("Agent Core reader keeps direct Core history when switching contacts and pr
   assert.deepEqual(returnedSnapshot.messages.map((message) => message.id), ["first-user", "first-answer", "call-user", "call-answer"]);
 });
 
+test("Agent Core reader keeps the roster and contact switch usable when one stored history cannot be opened", async () => {
+  const healthy = {
+    id: "contact-healthy",
+    name: "可用联系人",
+    projectRoot: "D:\\Contacts\\healthy",
+    sessionId: "session-healthy",
+  };
+  const damaged = {
+    id: "contact-damaged",
+    name: "损坏联系人",
+    projectRoot: "D:\\Contacts\\damaged",
+    sessionId: "session-damaged",
+  };
+  let active = healthy;
+  const contacts = {
+    async select({ id }) {
+      active = id === damaged.id ? damaged : healthy;
+      return this.snapshot();
+    },
+    async snapshot() {
+      return {
+        status: "ready",
+        contactsRoot: "D:\\Contacts",
+        contacts: [healthy, damaged],
+        activeContact: active,
+        preferredContact: healthy,
+      };
+    },
+  };
+  const reader = createConversationReader({
+    runtime: {
+      async history({ sessionId }) {
+        if (sessionId === damaged.sessionId) {
+          const error = new Error('stored session "session-damaged" failed validation');
+          error.code = "AGENT_SESSION_INVALID";
+          throw error;
+        }
+        return { events: [], hasMore: false };
+      },
+    },
+    settingsService: { load: () => ({ projectRoot: active.projectRoot }) },
+    contactProjectsService: contacts,
+  });
+
+  const snapshot = await reader.selectContact({ id: damaged.id });
+  assert.equal(snapshot.status, "ready");
+  assert.equal(snapshot.activeContact.id, damaged.id);
+  assert.deepEqual(snapshot.contacts.map((contact) => contact.id), [healthy.id, damaged.id]);
+  assert.equal(snapshot.history.status, "unavailable");
+  assert.equal(snapshot.history.code, "AGENT_SESSION_INVALID");
+  assert.match(snapshot.error, /聊天记录暂不可用/u);
+  assert.deepEqual(snapshot.messages, []);
+
+  const returned = await reader.selectContact({ id: healthy.id });
+  assert.equal(returned.activeContact.id, healthy.id);
+  assert.equal(returned.history.status, "ready");
+});
+
 test("DSH reader renders cached conversation media instead of a placeholder image block", () => {
   const dataRoot = "D:\\Suzu Lives\\dsh\\data";
   const imagePath = path.join(dataRoot, "agents", "agent-a", "conversations", "session-a", "attachments", "photo.png");

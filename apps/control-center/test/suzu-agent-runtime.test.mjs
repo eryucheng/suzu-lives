@@ -167,21 +167,21 @@ test("Suzu Agent Runtime owns one shared process and routes public session/histo
     sessionId: "contact-session",
     contactId: "contact-1",
     cwd: workspaceDirectory,
-    presentation: { agentPreset: SUZU_COMPANION_AGENT_PRESET },
+    presentation: { agentPreset: SUZU_COMPANION_AGENT_PRESET, permissionMode: SUZU_COMPANION_PERMISSION_MODE },
   }]);
   const softwareAssistantWorkspace = path.join(dataRoot, "software-assistant", "workspace");
   await fs.mkdir(softwareAssistantWorkspace, { recursive: true });
   const softwareAssistantSession = await runtime.ensureSession({
     sessionId: "suzu-software-assistant",
     cwd: softwareAssistantWorkspace,
-    presentation: { agentPreset: SUZU_SOFTWARE_ASSISTANT_AGENT_PRESET },
+    presentation: { agentPreset: SUZU_SOFTWARE_ASSISTANT_AGENT_PRESET, permissionMode: SUZU_COMPANION_PERMISSION_MODE },
   });
   assert.equal(softwareAssistantSession.created, true);
   assert.deepEqual(fake.calls.createSession.at(-1), {
     sessionId: "suzu-software-assistant",
     contactId: "",
     cwd: softwareAssistantWorkspace,
-    presentation: { agentPreset: SUZU_SOFTWARE_ASSISTANT_AGENT_PRESET },
+    presentation: { agentPreset: SUZU_SOFTWARE_ASSISTANT_AGENT_PRESET, permissionMode: SUZU_COMPANION_PERMISSION_MODE },
   });
   await assert.rejects(
     runtime.ensureSession({ sessionId: "unknown-preset", cwd: workspaceDirectory, presentation: { agentPreset: "third-party" } }),
@@ -453,7 +453,7 @@ test("Suzu Agent Runtime sends memory's schema work only to the owned child brid
     sessionId: "memory-session",
     contactId: "contact-suzu",
     cwd: workspaceDirectory,
-    presentation: { agentPreset: SUZU_COMPANION_AGENT_PRESET },
+    presentation: { agentPreset: SUZU_COMPANION_AGENT_PRESET, permissionMode: SUZU_COMPANION_PERMISSION_MODE },
   }]);
   assert.deepEqual(fake.calls.requestLifecycleCommand, [{
     event: "StructuredGenerate",

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Button, Dialog, Empty, GlassPanel, Input, PageHeader, Select, Status, Switch, Textarea } from "suzu-design-system";
 
 import { dateTime } from "../core/formatters.mjs";
+import { PageScaffold } from "./page-scaffold.jsx";
 import "./plans-page.css";
 
 const PLAN_STAGES = [
@@ -394,48 +395,55 @@ export function PlansPage({ actions = {}, snapshot = null }) {
   const contacts = Array.isArray(currentSnapshot?.contacts) ? currentSnapshot.contacts : [];
 
   return (
-    <div className="plans-react-page">
-      <PageHeader
-        action={(
-          <div className="plans-page-actions">
-            <Button className="plans-history-button" disabled={loading} onClick={() => setHistoryOpen(true)} variant="secondary">计划历史</Button>
-            <Button className="plans-create-button" disabled={loading} onClick={() => setEditorOpen(true)} variant="secondary">新增计划</Button>
-          </div>
+    <>
+      <PageScaffold
+        canvasClassName="page-canvas--stack"
+        className="plans-react-page"
+        header={(
+          <PageHeader
+            action={(
+              <div className="plans-page-actions">
+                <Button className="plans-history-button" disabled={loading} onClick={() => setHistoryOpen(true)} variant="secondary">计划历史</Button>
+                <Button className="plans-create-button" disabled={loading} onClick={() => setEditorOpen(true)} variant="secondary">新增计划</Button>
+              </div>
+            )}
+            eyebrow="PLANS"
+            subtitle="管理本机保存的定时器、每日任务与系统脚本。"
+            title="计划"
+          />
         )}
-        eyebrow="PLANS"
-        subtitle="管理本机保存的定时器、每日任务与系统脚本。"
-        title="计划"
-      />
+      >
 
-      <ol className="plans-flow" aria-label="可创建的计划类型">
-        {PLAN_STAGES.map((stage) => (
-          <li className="plans-flow__step" key={stage.title}>
-            <strong>{stage.title}</strong>
-            <span>{stage.description}</span>
-          </li>
-        ))}
-      </ol>
-
-      {loading ? (
-        <PlansEmpty contacts={contacts} loading onCreate={() => setEditorOpen(true)} />
-      ) : tasks.length ? (
-        <section className="plans-task-list" aria-label="已保存的自动任务">
-          {tasks.map((task, index) => (
-            <PlansTaskCard
-              actions={pageActions}
-              key={task?.id || `${task?.kind || "task"}-${index}`}
-              onRemove={setRemovingTask}
-              task={task}
-            />
+        <ol className="plans-flow" aria-label="可创建的计划类型">
+          {PLAN_STAGES.map((stage) => (
+            <li className="plans-flow__step" key={stage.title}>
+              <strong>{stage.title}</strong>
+              <span>{stage.description}</span>
+            </li>
           ))}
-        </section>
-      ) : (
-        <PlansEmpty contacts={contacts} loading={false} onCreate={() => setEditorOpen(true)} />
-      )}
+        </ol>
+
+        {loading ? (
+          <PlansEmpty contacts={contacts} loading onCreate={() => setEditorOpen(true)} />
+        ) : tasks.length ? (
+          <section className="plans-task-list" aria-label="已保存的自动任务">
+            {tasks.map((task, index) => (
+              <PlansTaskCard
+                actions={pageActions}
+                key={task?.id || `${task?.kind || "task"}-${index}`}
+                onRemove={setRemovingTask}
+                task={task}
+              />
+            ))}
+          </section>
+        ) : (
+          <PlansEmpty contacts={contacts} loading={false} onCreate={() => setEditorOpen(true)} />
+        )}
+      </PageScaffold>
 
       {editorOpen ? <PlanEditor actions={pageActions} contacts={contacts} onClose={() => setEditorOpen(false)} /> : null}
       {historyOpen ? <PlansHistoryDialog history={history} onClose={() => setHistoryOpen(false)} /> : null}
       {removingTask ? <DeletePlanDialog actions={pageActions} onClose={() => setRemovingTask(null)} task={removingTask} /> : null}
-    </div>
+    </>
   );
 }

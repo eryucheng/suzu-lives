@@ -9,9 +9,12 @@ import { appendUsageEvent } from "@suzu-lives/cost-ledger";
 import {
   normalizeTtsAdapter,
   resolveTtsAdapterForService,
+  ttsAdapterEndpointCompatibilityError,
+  ttsAdapterVoiceCompatibilityError,
   ttsAdapterDefinition,
   ttsAdapterLabel,
   ttsAdapterSupportsConnection,
+  ttsProtocolForRuntime,
 } from "./tts-adapters.mjs";
 
 const MAX_RESPONSE_BYTES = 100 * 1024 * 1024;
@@ -451,12 +454,20 @@ function resolveTts(localConfig, {
   if (requireCredentials && !baseUrl) {
     throw failure("tts_base_url_missing", `缺少${ttsAdapterLabel(adapter)}服务地址：请检查“语音消息”选择的 API。`);
   }
+  const endpointCompatibilityError = ttsAdapterEndpointCompatibilityError({ adapter, baseUrl });
+  if (endpointCompatibilityError) {
+    throw failure("tts_endpoint_incompatible", endpointCompatibilityError, 10);
+  }
   const model = configuredModel || definition.defaultModel;
   if (requireCredentials && !model) {
     throw failure("tts_model_missing", `缺少${ttsAdapterLabel(adapter)}模型：请在声音设置中填写模型，或为所选 API 设置默认模型。`);
   }
   if (requireCredentials && !voice) {
     throw failure("tts_voice_missing", "缺少音色：请在 Suzu 的语音设置中选择一个音色。");
+  }
+  const voiceCompatibilityError = ttsAdapterVoiceCompatibilityError({ adapter, model, voiceId: voice });
+  if (voiceCompatibilityError) {
+    throw failure("tts_voice_model_incompatible", voiceCompatibilityError, 10);
   }
   return {
     adapter,
@@ -465,6 +476,7 @@ function resolveTts(localConfig, {
     baseUrl,
     model,
     voice,
+    protocol: ttsProtocolForRuntime({ adapter, model }),
     maxTextLength: Math.round(positiveNumber(config.maxTextLength || config.max_text_len || tts.maxTextLength || tts.max_text_len, 300)),
     languageType: adapter === "dashscope-qwen" ? clean(config.languageType || tts.languageType) : "",
     connectionName: clean(connectionName),
@@ -529,6 +541,7 @@ function safeInspection(runtime) {
       adapter: runtime.tts.adapter,
       provider: runtime.tts.provider,
       model: runtime.tts.model,
+      protocol: runtime.tts.protocol,
       connectionName: runtime.tts.connectionName,
       connectionType: runtime.tts.connectionType,
       voiceConfigured: Boolean(runtime.tts.voice),
@@ -581,6 +594,114 @@ async function fetchJson(fetchImpl, url, options, timeoutMs, label, abortSignal 
     }
     if (error instanceof DirectVoiceMessageError) throw error;
     throw failure("tts_network_error", label + "请求失败：" + (clean(error?.message) || "未知错误"), 5);
+  } finally {
+    timeout.cancel();
+  }
+}
+
+function responseHeader(response, name) {
+  try {
+    return clean(response?.headers?.get?.(name)).toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
+async function* responseChunks(response, label) {
+  const body = response?.body;
+  if (body?.getReader) {
+    const reader = body.getReader();
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) return;
+        if (value) yield Buffer.from(value);
+      }
+    } finally {
+      try { reader.releaseLock?.(); } catch { /* A consumed stream needs no cleanup. */ }
+    }
+    return;
+  }
+  if (body?.[Symbol.asyncIterator]) {
+    for await (const value of body) {
+      if (value) yield Buffer.from(value);
+    }
+    return;
+  }
+  if (typeof response?.arrayBuffer === "function") {
+    yield await readResponseBytes(response, label);
+    return;
+  }
+  throw failure("tts_response_invalid", `${label}响应不可读取。`, 5);
+}
+
+function ssePayload(frame, label) {
+  const data = frame
+    .split(/\r?\n/u)
+    .filter((line) => line.startsWith("data:"))
+    .map((line) => line.slice(5).trimStart())
+    .join("\n")
+    .trim();
+  if (!data || data === "[DONE]") return null;
+  try {
+    return JSON.parse(data);
+  } catch (error) {
+    throw failure("tts_response_invalid", `${label}返回了无法解析的 SSE 数据：${clean(error?.message) || "未知错误"}`, 5);
+  }
+}
+
+async function readSseJson(response, label) {
+  const decoder = new TextDecoder();
+  let received = 0;
+  let pending = "";
+  let finalResult = null;
+  const consume = (frame) => {
+    const value = ssePayload(frame, label);
+    if (!value) return;
+    if (clean(value?.code) || Number(value?.status_code || 0) >= 400) {
+      finalResult = value;
+      return;
+    }
+    const output = objectValue(value?.output);
+    if (clean(output.audio?.url) || clean(output.finish_reason).toLowerCase() === "stop") finalResult = value;
+  };
+  for await (const chunk of responseChunks(response, label)) {
+    received += chunk.length;
+    if (received > MAX_RESPONSE_BYTES) throw failure("tts_response_invalid", `${label}响应超过${MAX_RESPONSE_BYTES}字节`, 5);
+    pending += decoder.decode(chunk, { stream: true });
+    const frames = pending.split(/\r?\n\r?\n/u);
+    pending = frames.pop() || "";
+    for (const frame of frames) consume(frame);
+  }
+  pending += decoder.decode();
+  if (pending.trim()) consume(pending);
+  if (!finalResult) throw failure("tts_response_invalid", `${label}没有返回完成的音频结果。`, 5);
+  return finalResult;
+}
+
+async function fetchSseJson(fetchImpl, url, options, timeoutMs, label, abortSignal = null) {
+  const timeout = withTimeout(timeoutMs, abortSignal);
+  try {
+    const response = await fetchImpl(url, { ...options, signal: timeout.signal });
+    if (!response?.ok) {
+      const body = response ? await readResponseBytes(response, label) : Buffer.alloc(0);
+      throw failure("tts_http_error", `${label} HTTP ${response?.status || 0}：${body.toString("utf8").slice(0, 800)}`, 5);
+    }
+    if (!responseHeader(response, "content-type").includes("text/event-stream")) {
+      const body = await readResponseBytes(response, label);
+      try {
+        return JSON.parse(body.toString("utf8") || "{}");
+      } catch (error) {
+        throw failure("tts_response_invalid", `${label}返回的不是有效 JSON 或 SSE：${clean(error?.message) || "未知错误"}`, 5);
+      }
+    }
+    return await readSseJson(response, label);
+  } catch (error) {
+    if (error?.name === "AbortError") {
+      throw failure(timeout.timedOut() ? "tts_timeout" : "tts_aborted", timeout.timedOut() ? `${label}超时` : `${label}已取消`, 5);
+    }
+    if (error instanceof DirectVoiceMessageError) throw error;
+    throw failure("tts_network_error", `${label}请求失败：${clean(error?.message) || "未知错误"}`, 5);
   } finally {
     timeout.cancel();
   }
@@ -672,22 +793,24 @@ async function synthesizeCosyVoice({ text, runtime, fetchImpl, ledgerPath, agent
   }
   if (typeof fetchImpl !== "function") throw failure("tts_fetch_unavailable", "没有可用的 TTS HTTP 客户端。", 5);
   const endpoint = runtime.tts.baseUrl.replace(/\/+$/u, "") + "/services/audio/tts/SpeechSynthesizer";
-  const result = await fetchJson(
+  const request = {
+    method: "POST",
+    headers: {
+      Authorization: "Bearer " + runtime.tts.apiKey,
+      "Content-Type": "application/json",
+      ...(runtime.tts.protocol === "dashscope-sse" ? { "X-DashScope-SSE": "enable" } : {}),
+    },
+    body: JSON.stringify({
+      model: runtime.tts.model,
+      input: { text, voice: runtime.tts.voice, format: "mp3", sample_rate: 24000 },
+    }),
+  };
+  const result = await (runtime.tts.protocol === "dashscope-sse" ? fetchSseJson : fetchJson)(
     fetchImpl,
     endpoint,
-    {
-      method: "POST",
-      headers: {
-        Authorization: "Bearer " + runtime.tts.apiKey,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: runtime.tts.model,
-        input: { text, voice: runtime.tts.voice, format: "mp3", sample_rate: 24000 },
-      }),
-    },
+    request,
     runtime.timeoutMs,
-    "百炼 CosyVoice TTS",
+    runtime.tts.protocol === "dashscope-sse" ? "百炼 CosyVoice SSE" : "百炼 CosyVoice TTS",
     abortSignal,
   );
   if (clean(result.code) || Number(result.status_code || 200) >= 400) {

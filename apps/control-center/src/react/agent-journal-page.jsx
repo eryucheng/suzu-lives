@@ -1,5 +1,6 @@
 import { Banner, Button, Empty, GlassPanel, PageHeader, Status } from "suzu-design-system";
 
+import { PageScaffold } from "./page-scaffold.jsx";
 import "./agent-journal-page.css";
 
 function clean(value) {
@@ -74,13 +75,18 @@ export function AgentJournalPage({ actions = {}, error = "", loading = false, sn
   const ready = Boolean(snapshot);
 
   return (
-    <div className="agent-journal-react-page">
-      <PageHeader
-        action={<div className="agent-journal-header-actions"><Button disabled={loading} onClick={() => actions.refresh?.({ contactId: snapshot?.selectedContactId || "" })} type="button" variant="secondary">刷新</Button><Button disabled={loading} onClick={actions.returnToOverview} type="button" variant="secondary">返回关系</Button></div>}
-        eyebrow="AGENT JOURNAL"
-        subtitle="由 Agent 在设定时间写下当天值得记录的事；它与长期记忆、会话压缩器完全分开。你要求时，Agent 可以只读查看自己的日记。"
-        title="查看日记"
-      />
+    <PageScaffold
+      canvasClassName="page-canvas--stack"
+      className="agent-journal-react-page"
+      header={(
+        <PageHeader
+          action={<div className="agent-journal-header-actions"><Button disabled={loading} onClick={() => actions.refresh?.({ contactId: snapshot?.selectedContactId || "" })} type="button" variant="secondary">刷新</Button><Button disabled={loading} onClick={actions.returnToOverview} type="button" variant="secondary">返回关系</Button></div>}
+          eyebrow="AGENT JOURNAL"
+          subtitle="由 Agent 在设定时间写下当天值得记录的事；它与长期记忆、会话压缩器完全分开。你要求时，Agent 可以只读查看自己的日记。"
+          title="查看日记"
+        />
+      )}
+    >
 
       {error ? <Banner className="agent-journal-page-error" tone="danger">{error}</Banner> : null}
       {!ready ? (
@@ -99,6 +105,6 @@ export function AgentJournalPage({ actions = {}, error = "", loading = false, sn
           </GlassPanel>
         </section>
       )}
-    </div>
+    </PageScaffold>
   );
 }

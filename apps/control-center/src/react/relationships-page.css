@@ -1,8 +1,5 @@
 .relationships-react-page {
   --relationships-layout-max-width:1200px;
-  display:grid;
-  align-content:start;
-  gap:clamp(18px,2cqw,28px);
   container-type:inline-size;
   width:100%;
   min-width:0;
@@ -14,7 +11,7 @@
   display:grid;
   grid-template-columns:minmax(0,1.45fr) minmax(255px,.9fr);
   grid-template-rows:repeat(3,minmax(148px,1fr));
-  gap:var(--space-lg);
+  gap:var(--page-card-gap);
 }
 
 .relationships-card {

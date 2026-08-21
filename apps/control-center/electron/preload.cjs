@@ -67,6 +67,7 @@ contextBridge.exposeInMainWorld("suzuConsole", {
     setPreferredContact: (value) => ipcRenderer.invoke("conversation:set-preferred-contact", value),
     updateContactPresentation: (value) => ipcRenderer.invoke("conversation:update-contact-presentation", value),
     updateContactLongTermMemoryEnabled: (value) => ipcRenderer.invoke("conversation:update-contact-long-term-memory", value),
+    updateContactPermissionMode: (value) => ipcRenderer.invoke("conversation:update-contact-permission-mode", value),
     removeContact: (value) => ipcRenderer.invoke("conversation:remove-contact", value),
     attachments: {
       select: (value) => ipcRenderer.invoke("conversation:select-attachments", value),

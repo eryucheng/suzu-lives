@@ -1,10 +1,6 @@
 .today-react-page {
   --today-layout-max-width:1480px;
   --today-insight-min-height:188px;
-  display:grid;
-  min-height:0;
-  height:100%;
-  grid-template-rows:auto minmax(0,1fr);
   container-type:inline-size;
   width:100%;
   min-width:0;
@@ -18,14 +14,13 @@
   min-height:0;
   height:100%;
   grid-template-rows:minmax(0,2fr) minmax(var(--today-insight-min-height),1fr);
-  gap:clamp(12px,1.6cqw,23px);
+  gap:var(--page-card-gap);
 }
 
 #content.content--today {
   display:flex;
   min-height:0;
   flex-direction:column;
-  padding:34px clamp(17px,2.5vw,36px) clamp(20px,3.8dvh,36px);
 }
 
 #content.content--today > #todayReactRoot {
@@ -38,14 +33,6 @@
   font-size:clamp(32px,2.4vw,38px);
 }
 
-@media (max-width:1100px) {
-  #content.content--today { padding-top:28px; }
-}
-
-@media (max-width:820px) {
-  #content.content--today { padding-top:23px; }
-}
-
 .today-glass-workspace {
   display:grid;
   grid-template-columns:repeat(2,minmax(0,1fr));
@@ -53,7 +40,7 @@
   height:100%;
   grid-template-rows:minmax(0,1fr);
   align-items:stretch;
-  gap:clamp(14px,1.55cqw,24px);
+  gap:var(--page-card-gap);
   width:100%;
 }
 
@@ -63,7 +50,7 @@
   min-height:0;
   height:100%;
   grid-template-rows:minmax(0,2fr) minmax(92px,1fr);
-  gap:clamp(14px,1.55cqw,24px);
+  gap:var(--page-card-gap);
 }
 
 .today-react-page .today-calendar-panel,
@@ -71,8 +58,6 @@
 .today-react-page .today-insight-card,
 .today-react-page .today-journal-panel {
   min-width:0;
-  /* Match the resting elevation of the Create overview cards. */
-  box-shadow:0 15px 42px rgba(0,0,0,.16), inset 0 1px rgba(255,255,255,.035);
 }
 
 .today-calendar-panel {
@@ -314,7 +299,7 @@
   height:100%;
   grid-template-columns:minmax(0,.72fr) minmax(0,1.4fr);
   align-items:stretch;
-  gap:clamp(10px,1.25cqw,20px);
+  gap:var(--page-card-gap);
   width:100%;
 }
 

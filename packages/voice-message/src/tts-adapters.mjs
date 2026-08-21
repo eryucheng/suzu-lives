@@ -69,6 +69,32 @@ const LEGACY_ADAPTERS = Object.freeze({
   qwen: "dashscope-qwen",
 });
 
+// These are the original bare CosyVoice v1 system-voice IDs.  Later
+// CosyVoice generations use versioned IDs such as `longwan_v2` and
+// `longanhuan_v3`, so treating the bare IDs as v1-only is unambiguous.
+const COSYVOICE_V1_VOICE_IDS = new Set([
+  "longwan",
+  "longcheng",
+  "longhua",
+  "longxiaochun",
+  "longxiaoxia",
+  "longxiaocheng",
+  "longxiaobai",
+  "longlaotie",
+  "longshu",
+  "longshuo",
+  "longjing",
+  "longmiao",
+  "longyue",
+  "longyuan",
+  "longfei",
+  "longjielidou",
+  "longtong",
+  "longxiang",
+  "loongstella",
+  "loongbella",
+]);
+
 export function normalizeTtsAdapter(value, { fallback = "" } = {}) {
   const candidate = clean(value).toLowerCase();
   if (Object.hasOwn(TTS_ADAPTERS, candidate)) return candidate;
@@ -85,17 +111,24 @@ export function ttsAdapterLabel(value, { fallback = "" } = {}) {
   return ttsAdapterDefinition(value, { fallback })?.label || "未识别的语音适配器";
 }
 
-function hostnameFromUrl(value) {
+function isOfficialDashScopeEndpoint(value) {
   try {
     const url = new URL(clean(value));
-    return ["http:", "https:"].includes(url.protocol) ? url.hostname.toLowerCase() : "";
+    const hostname = url.hostname.toLowerCase();
+    const nativeHost = hostname === "dashscope.aliyuncs.com"
+      || hostname === "dashscope-intl.aliyuncs.com"
+      || hostname.endsWith(".maas.aliyuncs.com");
+    return nativeHost && url.pathname.replace(/\/+$/u, "") === "/api/v1";
   } catch {
-    return "";
+    return false;
   }
 }
 
-function isOfficialDashScopeEndpoint(value) {
-  return hostnameFromUrl(value) === "dashscope.aliyuncs.com";
+function dashscopeAdapterForModel(model) {
+  const identity = clean(model).toLowerCase();
+  if (identity.startsWith("cosyvoice-") || identity.startsWith("qwen-audio-")) return "dashscope-cosyvoice";
+  if (identity.startsWith("qwen3-tts") || identity.startsWith("qwen-tts")) return "dashscope-qwen";
+  return "";
 }
 
 /**
@@ -108,11 +141,44 @@ function isOfficialDashScopeEndpoint(value) {
  */
 export function resolveTtsAdapterForService({ adapter, baseUrl = "", model = "", voiceId = "" } = {}) {
   const configured = normalizeTtsAdapter(adapter);
-  if (configured !== "openai-speech" || !isOfficialDashScopeEndpoint(baseUrl)) return configured;
-  const identity = `${clean(model)} ${clean(voiceId)}`.toLowerCase();
-  if (identity.includes("cosyvoice")) return "dashscope-cosyvoice";
-  if (identity.includes("qwen3-tts") || identity.includes("qwen-tts")) return "dashscope-qwen";
+  if (!isOfficialDashScopeEndpoint(baseUrl)) return configured;
+  const inferred = dashscopeAdapterForModel(model) || dashscopeAdapterForModel(voiceId);
+  if (inferred) return inferred;
   return configured;
+}
+
+export function ttsAdapterEndpointCompatibilityError({ adapter, baseUrl = "" } = {}) {
+  const normalized = normalizeTtsAdapter(adapter);
+  if (!normalized || !["dashscope-qwen", "dashscope-cosyvoice"].includes(normalized)) return "";
+  try {
+    const url = new URL(clean(baseUrl));
+    if (/\/compatible-mode\/v1\/?$/iu.test(url.pathname)) {
+      return `${ttsAdapterLabel(normalized)}需要百炼原生 API 地址（以 /api/v1 结尾），不能使用 /compatible-mode/v1。`;
+    }
+  } catch {
+    // The caller validates whether an address is required.  This helper only
+    // identifies the known incompatible DashScope-compatible URL shape.
+  }
+  return "";
+}
+
+export function ttsProtocolForRuntime({ adapter, model = "" } = {}) {
+  const normalized = normalizeTtsAdapter(adapter);
+  if (normalized === "dashscope-cosyvoice" && clean(model).toLowerCase() === "cosyvoice-v1") {
+    return "dashscope-sse";
+  }
+  return "json";
+}
+
+export function ttsAdapterVoiceCompatibilityError({ adapter, model = "", voiceId = "" } = {}) {
+  const normalized = normalizeTtsAdapter(adapter);
+  if (!normalized || !["dashscope-qwen", "dashscope-cosyvoice"].includes(normalized)) return "";
+  const voice = clean(voiceId).toLowerCase();
+  const selectedModel = clean(model).toLowerCase();
+  if (COSYVOICE_V1_VOICE_IDS.has(voice) && selectedModel !== "cosyvoice-v1") {
+    return `音色“${voice}”属于 cosyvoice-v1，不能与“${selectedModel || "当前模型"}”混用。请选择 cosyvoice-v1，或改用该模型支持的音色。`;
+  }
+  return "";
 }
 
 export function ttsAdapterSupportsConnection(adapter, connectionType) {

@@ -25,7 +25,7 @@ export function PageHeader({
   className,
 }: PageHeaderProps) {
   return (
-    <div className={[styles.header, className].filter(Boolean).join(' ')}>
+    <div className={[styles.header, className].filter(Boolean).join(' ')} data-suzu-page-header>
       <div className={styles.copy}>
         {eyebrow != null && <div className={styles.eyebrow}>{eyebrow}</div>}
         <h1 className={styles.title}>{title}</h1>
