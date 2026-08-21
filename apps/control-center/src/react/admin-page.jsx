@@ -14,9 +14,10 @@ import {
   setAvatarCropZoom,
 } from "../core/avatar-file.mjs";
 import { SUZU_ADMIN_TABS } from "../core/chat-first.mjs";
-import { compactNumber, dateTime, localDateTimeInput, money, startOfTodayInput } from "../core/formatters.mjs";
+import { dateTime, localDateTimeInput, money, startOfTodayInput } from "../core/formatters.mjs";
 import { getIdentity, profileInitial } from "../core/identity.mjs";
 import { TEXT_MODEL_PROVIDERS } from "../features/agent/runtime.mjs";
+import { usageAmountLabel, usageCostLabel } from "../features/usage/usage-display.mjs";
 
 import "./admin-page.css";
 
@@ -735,9 +736,19 @@ function PriceModelCard({ actions, model }) {
 function UsageEventTable({ events }) {
   return (
     <table className="admin-usage-table">
-      <thead><tr><th>时间</th><th>联系人</th><th>来源</th><th>类型</th><th>模型</th><th>Token</th><th>估算费用</th></tr></thead>
+      <thead><tr><th>时间</th><th>联系人</th><th>来源</th><th>类型</th><th>模型</th><th>用量</th><th>估算费用</th></tr></thead>
       <tbody>
-        {events.length ? events.map((event, index) => <tr key={(event.contactId || "contact") + ":" + (event.id || event.requestId || event.timestamp || "event") + "-" + index}><td>{dateTime(event.timestamp)}</td><td><Status label={event.contactName || "未归属联系人"} tone="muted" /></td><td>{event.source}</td><td>{event.feature}</td><td>{event.model || "未知"}</td><td>{compactNumber(event.units?.totalInputTokens || event.units?.totalTokens || 0)}</td><td>{money(event.amountCny)}</td></tr>) : <tr><td colSpan="7"><div className="admin-empty-copy">没有符合条件的已识别调用。</div></td></tr>}
+        {events.length ? events.map((event, index) => (
+          <tr key={(event.contactId || "contact") + ":" + (event.id || event.requestId || event.timestamp || "event") + "-" + index}>
+            <td>{dateTime(event.timestamp)}</td>
+            <td><Status label={event.contactName || "未归属联系人"} tone="muted" /></td>
+            <td>{event.source}</td>
+            <td>{event.feature}</td>
+            <td>{event.model || "未知"}</td>
+            <td>{usageAmountLabel(event.units)}</td>
+            <td>{usageCostLabel(event)}</td>
+          </tr>
+        )) : <tr><td colSpan="7"><div className="admin-empty-copy">没有符合条件的已识别调用。</div></td></tr>}
       </tbody>
     </table>
   );

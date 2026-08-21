@@ -69,6 +69,10 @@ test("Electron preload exposes the memory bridge", async () => {
   assert.equal(typeof bridge?.conversation?.call?.commit, "function");
   assert.equal(typeof bridge?.conversation?.call?.interrupt, "function");
   assert.equal(typeof bridge?.conversation?.call?.stop, "function");
+  assert.equal(typeof bridge?.conversation?.voiceInput?.start, "function");
+  assert.equal(typeof bridge?.conversation?.voiceInput?.audio, "function");
+  assert.equal(typeof bridge?.conversation?.voiceInput?.commit, "function");
+  assert.equal(typeof bridge?.conversation?.voiceInput?.stop, "function");
   assert.equal(typeof bridge?.conversation?.renameContact, "function");
   assert.equal(typeof bridge?.conversation?.updateContactPresentation, "function");
   assert.equal(typeof bridge?.conversation?.updateContactApprovalMode, "undefined");
@@ -204,4 +208,16 @@ test("Electron preload exposes the memory bridge", async () => {
     "settings:install-update",
     "settings:system-status",
   ]);
+  await bridge.conversation.voiceInput.start();
+  bridge.conversation.voiceInput.audio({ inputId: "voice-input-1", audio: new ArrayBuffer(0) });
+  await bridge.conversation.voiceInput.commit({ inputId: "voice-input-1" });
+  await bridge.conversation.voiceInput.stop({ inputId: "voice-input-1" });
+  assert.deepEqual(calls.slice(-4).map((call) => call.channel), [
+    "conversation:voice-input-start",
+    "conversation:voice-input-audio",
+    "conversation:voice-input-commit",
+    "conversation:voice-input-stop",
+  ]);
+  assert.deepEqual(JSON.parse(JSON.stringify(calls.at(-2).args[0])), { inputId: "voice-input-1" });
+  assert.deepEqual(JSON.parse(JSON.stringify(calls.at(-1).args[0])), { inputId: "voice-input-1" });
 });

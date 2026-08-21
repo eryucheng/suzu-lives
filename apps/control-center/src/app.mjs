@@ -104,6 +104,7 @@ function setView(view) {
   }
   render();
   if (nextView === "today") void refreshTodayCalendar();
+  if (nextView === "today") void loadUsageLedger();
   if (nextView === "plans") void loadSchedules();
   if (nextView === "capabilities") void loadCapabilities(context);
   if (nextView === "settings" && state.settingsTab === "api") void loadApiServices(context);
@@ -830,7 +831,7 @@ async function removeExternalCapability(id) {
   render();
 }
 
-const context = { api, applyTheme, loadAgentRuntimeConfig, loadSchedules, onContactCreated: advanceOnboardingAfterContact, refreshData, refreshTodayCalendar, render, setAdminTab, setCapabilityPage, setCreatePage, setNotice, setRelationshipPage, setSettingsTab, setView, state };
+const context = { api, applyTheme, loadAgentRuntimeConfig, loadSchedules, onContactCreated: advanceOnboardingAfterContact, refreshData, refreshTodayCalendar, refreshUsageLedger: loadUsageLedger, render, setAdminTab, setCapabilityPage, setCreatePage, setNotice, setRelationshipPage, setSettingsTab, setView, state };
 
 function conversationInterfaceIsOpen() {
   return state.view === "relationships" && state.relationshipPage === "conversation";
@@ -976,10 +977,26 @@ function observeIncomingConversationMessages() {
 
 observeIncomingConversationMessages();
 
+let todayCalendarRefreshId = 0;
+
+function visibleCalendarYear() {
+  const month = String(state.todayMonth || "");
+  const match = month.match(/^(\d{4})-(0[1-9]|1[0-2])$/u);
+  if (match) return Number(match[1]);
+  const selected = String(state.todaySelectedDate || "");
+  const selectedMatch = selected.match(/^(\d{4})-/u);
+  return selectedMatch ? Number(selectedMatch[1]) : new Date().getFullYear();
+}
+
 async function refreshTodayCalendar() {
+  const refreshId = ++todayCalendarRefreshId;
+  const year = visibleCalendarYear();
   try {
-    state.todayCalendar = await api.todayCalendar.snapshot();
+    const calendar = await api.todayCalendar.snapshot({ year });
+    if (refreshId !== todayCalendarRefreshId) return;
+    state.todayCalendar = calendar;
   } catch (error) {
+    if (refreshId !== todayCalendarRefreshId) return;
     state.todayCalendar = { status: "invalid", events: [], canEdit: false, message: error?.message || String(error) };
   }
   if (state.view === "today") render();
@@ -990,6 +1007,7 @@ function setTodayMonth(value) {
   if (!/^\d{4}-(0[1-9]|1[0-2])$/u.test(month)) return;
   state.todayMonth = month;
   render();
+  void refreshTodayCalendar();
 }
 
 function selectTodayDate(value) {
@@ -1000,6 +1018,7 @@ function selectTodayDate(value) {
   state.todaySelectedDate = date;
   state.todayMonth = date.slice(0, 7);
   render();
+  void refreshTodayCalendar();
 }
 
 function goToToday() {
@@ -1007,6 +1026,7 @@ function goToToday() {
   state.todaySelectedDate = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
   state.todayMonth = state.todaySelectedDate.slice(0, 7);
   render();
+  void refreshTodayCalendar();
 }
 
 function openTodayEventEditor() {
@@ -1034,8 +1054,9 @@ function closeTodayEventEditor() {
 
 async function saveTodayEvent(value) {
   try {
-    state.todayCalendar = await api.todayCalendar.saveEvent(value || {});
+    await api.todayCalendar.saveEvent(value || {});
     state.todayEventEditor = null;
+    await refreshTodayCalendar();
     setNotice("纪念日已保存。");
     render();
   } catch (error) {
@@ -1049,8 +1070,9 @@ async function removeTodayEvent({ id = "", contactId = "", name = "这项纪念�
   const eventName = String(name || "这项纪念日");
   if (!eventId || !ownerId || !window.confirm(`删除“${eventName}”？`)) return;
   try {
-    state.todayCalendar = await api.todayCalendar.removeEvent({ contactId: ownerId, id: eventId });
+    await api.todayCalendar.removeEvent({ contactId: ownerId, id: eventId });
     state.todayEventEditor = null;
+    await refreshTodayCalendar();
     setNotice("纪念日已删除。");
     render();
   } catch (error) {
@@ -1058,9 +1080,9 @@ async function removeTodayEvent({ id = "", contactId = "", name = "这项纪念�
   }
 }
 
-function openTodayConversation() {
+function openTodayJournal() {
   setView("relationships");
-  setRelationshipPage("conversation");
+  setRelationshipPage("journal");
 }
 
 function openTodayUsage() {
@@ -1084,7 +1106,7 @@ async function loadUsageLedger() {
   } catch (error) {
     state.data = { status: "needs-project", warning: `无法读取费用统计：${error?.message || error}` };
   }
-  if (state.view === "admin" && state.adminTab === "usage") render();
+  if ((state.view === "admin" && state.adminTab === "usage") || state.view === "today") render();
 }
 
 async function updateSchedule(request) {
@@ -1268,7 +1290,7 @@ function routeForCurrentView() {
           closeEditor: closeTodayEventEditor,
           editEvent: editTodayEvent,
           goToday: goToToday,
-          openConversation: openTodayConversation,
+          openJournal: openTodayJournal,
           openEditor: openTodayEventEditor,
           openUsage: openTodayUsage,
           removeEvent: removeTodayEvent,
@@ -1571,11 +1593,11 @@ async function refreshData() {
     ]);
     state.releaseAnnouncementOpen = state.releaseAnnouncement?.pending === true;
     if (!state.onboardingInitialized) await prepareOnboarding({ open: true });
-    // The chat route is now the initial route rather than a route entered by
-    // clicking the old relationship overview, so start its data/event loop
-    // explicitly after the first bootstrap snapshot.
-    if (state.view === "relationships" && state.relationshipPage === "conversation") {
-      startConversationPolling(context);
+    // Today is the startup page. Fetch its independent snapshots without
+    // starting a conversation or changing the active route.
+    if (state.view === "today") {
+      void refreshTodayCalendar();
+      void loadUsageLedger();
     }
   } catch (error) {
     state.data = { status: "needs-project", warning: `读取失败：${error?.message || error}` };

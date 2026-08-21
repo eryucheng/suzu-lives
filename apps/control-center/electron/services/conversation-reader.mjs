@@ -678,6 +678,7 @@ export function createConversationReader({
   contactProjectsService = null,
   dataRoot = "",
   onContactCreated = null,
+  onAgentUsageEvents = null,
   runtime,
   settingsService,
 } = {}) {
@@ -686,6 +687,7 @@ export function createConversationReader({
   if (typeof runtime?.history !== "function") throw new ConversationReaderError("Agent 会话读取需要运行时历史接口。", { code: "RUNTIME_REQUIRED" });
 
   let selectionVersion = 0;
+  const reconciledUsageHistoryBySession = new Map();
 
   const contactsSnapshot = async () => contactProjectsService.snapshot();
 
@@ -729,6 +731,34 @@ export function createConversationReader({
     }
   };
 
+  const reconcileUsageHistory = async (catalog, events, highestSequence) => {
+    if (typeof onAgentUsageEvents !== "function"
+      || !catalog.activeContact?.agentId
+      || !catalog.projectRoot
+      || !catalog.sessionId) return;
+    const previous = reconciledUsageHistoryBySession.get(catalog.sessionId);
+    if (Number.isSafeInteger(previous) && previous >= highestSequence) return;
+    try {
+      const result = await onAgentUsageEvents({
+        contact: {
+          contactId: clean(catalog.activeContact.id),
+          agentId: clean(catalog.activeContact.agentId),
+          projectRoot: catalog.projectRoot,
+          sessionId: catalog.sessionId,
+        },
+        events,
+      });
+      if (result?.completed === false) return;
+      reconciledUsageHistoryBySession.set(catalog.sessionId, highestSequence);
+      // A person can create many contacts over time. Keep only a small cache:
+      // deduplication itself is durable in the unified usage ledger.
+      if (reconciledUsageHistoryBySession.size > 160) reconciledUsageHistoryBySession.clear();
+    } catch {
+      // History must stay readable even if a local cost-ledger repair fails.
+      // A later snapshot will retry because this sequence was not recorded.
+    }
+  };
+
   const context = async () => {
     const catalog = await activeCatalog();
     const contactsVersion = JSON.stringify(catalog.contacts.map((contact) => [
@@ -767,6 +797,7 @@ export function createConversationReader({
       draft: events.length === 0,
     };
     const highestSequence = events.reduce((maximum, entry) => Math.max(maximum, Number(historyEvent(entry).seq) || 0), 0);
+    await reconcileUsageHistory(catalog, events, highestSequence);
     return {
       status: "ready",
       ...catalog,

@@ -63,8 +63,8 @@ function normalizedStoredEvent(value, index) {
   return { id, contactId, agentId, date, name, type, enabled: source.enabled !== false, source: "personal", editable: true };
 }
 
-function publicEvents() {
-  return publicCalendarEvents().map((event) => ({ ...event, enabled: true, source: "holiday", editable: false }));
+function publicEvents(year) {
+  return publicCalendarEvents({ year }).map((event) => ({ ...event, enabled: true, source: "holiday", editable: false }));
 }
 
 function compareEvents(left, right) {
@@ -220,7 +220,8 @@ export function createTodayCalendarService({ contactProjectsService, settingsSer
     throw new Error("今天日历需要软件设置和联系人项目服务。");
   }
 
-  const snapshot = async () => {
+  const snapshot = async (value = {}) => {
+    const { year } = plainObject(value);
     const context = await calendarContext({ contactProjectsService, settingsService });
     const stored = await readCalendar(context.filePath);
     const contacts = context.catalog.contacts.map(publicContactCalendar).filter((contact) => contact.id);
@@ -228,7 +229,7 @@ export function createTodayCalendarService({ contactProjectsService, settingsSer
     const hasContacts = clean(context.catalog.contactsSnapshot?.status) === "ready" && contacts.length > 0;
     return {
       status: stored.status === "invalid" ? "invalid" : hasContacts ? "ready" : "needs-agent",
-      events: [...publicEvents(), ...personal].sort(compareEvents),
+      events: [...publicEvents(year), ...personal].sort(compareEvents),
       contacts,
       defaultContactId: defaultContactId(context.catalog.contactsSnapshot, context.catalog.contacts),
       canEdit: stored.status === "ready" && hasContacts,

@@ -28,6 +28,7 @@ test("the software shell keeps core navigation while deferring only capability v
   assert.match(source, /item\.view === "conversation" && conversationUnread/u);
   assert.doesNotMatch(source, /label: "聊天"|label: "相处设定"|label: "模型"/u);
   assert.match(application, /if \(nextView === "today"\) void refreshTodayCalendar\(\);/u);
+  assert.match(application, /if \(nextView === "today"\) void loadUsageLedger\(\);/u);
   assert.match(application, /if \(nextView === "plans"\) void loadSchedules\(\);/u);
   assert.match(application, /if \(nextPage === "overview"\) void loadMemoryScope\(\);/u);
   assert.match(application, /if \(nextPage === "memory"\) void loadMemoryScope\(\);/u);

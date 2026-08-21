@@ -662,7 +662,10 @@ export function registerIpcHandlers({ app, appUpdateService = null, dataStorageS
           scheduleSource,
           requestId,
           displayAsSystem: phase === "planning",
-          deliverToWechat: phase !== "planning",
+          // Scheduled work is local unless it is the A-phase result of the
+          // proactive-contact chain. This prevents task envelopes and the
+          // internal B-phase scheduling turn from crossing into WeChat.
+          deliverToWechat: phase === "check",
         });
         if (requestId && result?.accepted !== true) {
           proactiveChainRequests.delete(requestId);

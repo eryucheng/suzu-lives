@@ -48,6 +48,7 @@
     "@suzu-memory/service": "0.1.0",
     "electron-updater": "^6.8.9",
     "emoji-mart": "^5.6.0",
+    "lunar-typescript": "1.8.6",
     "qrcode": "1.5.4",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",

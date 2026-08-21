@@ -6,8 +6,9 @@ import WebSocket from "ws";
 
 import { appendUsageEvent } from "@suzu-lives/cost-ledger";
 import { resolveDirectVoiceRuntime, synthesizeDirectVoiceAudio } from "@suzu-lives/voice-message/direct-voice-message";
+import { DEFAULT_REALTIME_ASR_MODEL, realtimeAsrWebSocketUrl } from "./realtime-asr.mjs";
 
-const DEFAULT_ASR_MODEL = "qwen3-asr-flash-realtime";
+const DEFAULT_ASR_MODEL = DEFAULT_REALTIME_ASR_MODEL;
 const MAX_AUDIO_CHUNK_BYTES = 48 * 1024;
 const MAX_TRANSCRIPT_LENGTH = 4_000;
 const MAX_QUEUED_AUDIO_BYTES = 256 * 1024;
@@ -118,18 +119,7 @@ function waitForCallTts(delayMs, signal) {
   });
 }
 
-/**
- * DashScope accepts the generic public endpoint as well as a workspace-hosted
- * endpoint.  Deriving the host from the already configured DashScope URL keeps
- * voice calls on the same regional endpoint as the rest of Suzu.
- */
-export function realtimeAsrWebSocketUrl(baseUrl = "", model = DEFAULT_ASR_MODEL) {
-  let parsed = null;
-  try { parsed = new URL(clean(baseUrl)); } catch { /* Use the public China endpoint below. */ }
-  const protocol = parsed?.protocol === "http:" ? "ws:" : "wss:";
-  const host = parsed?.host || "dashscope.aliyuncs.com";
-  return `${protocol}//${host}/api-ws/v1/realtime?model=${encodeURIComponent(clean(model) || DEFAULT_ASR_MODEL)}&heartbeat=true`;
-}
+export { realtimeAsrWebSocketUrl };
 
 /**
  * Keeps synthesis ahead of playback without speaking partial words.  Unlike

@@ -30,10 +30,12 @@ async function fixture({ contacts = [
 
 test("today calendar stores one global event list and labels each event with its contact", async () => {
   const { contacts, dataRoot, service } = await fixture();
-  const initial = await service.snapshot();
+  const initial = await service.snapshot({ year: 2026 });
   assert.equal(initial.status, "ready");
   assert.ok(initial.events.some((event) => event.name === "国庆节" && event.date === "10-01" && event.editable === false));
   assert.ok(initial.events.some((event) => event.name === "儿童节" && event.date === "06-01" && event.type === "公共节日"));
+  assert.ok(initial.events.some((event) => event.name === "七夕节" && event.date === "2026-08-19" && event.type === "传统节日"));
+  assert.ok(initial.events.some((event) => event.name === "清明" && event.date === "2026-04-05" && event.type === "二十四节气"));
   assert.deepEqual(initial.contacts, [{ id: "contact-suzu", name: "Suzu" }, { id: "contact-work", name: "工作" }]);
 
   const first = await service.saveEvent({

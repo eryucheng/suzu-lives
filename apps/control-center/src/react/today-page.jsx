@@ -243,110 +243,112 @@ export function TodayPage({ actions = {}, snapshot = {} }) {
       <PageHeader
         className="today-page-header"
         eyebrow="TODAY"
+        subtitle="把握当下"
         title="今天"
       />
 
-      <section className="today-glass-workspace" aria-label="今日日历">
-        <GlassPanel as="section" className="today-calendar-panel" intensity="soft">
-          <Calendar
-            events={calendarMarks}
-            layout="fill"
-            month={month.getMonth()}
-            onGoToday={() => actions.goToday?.()}
-            onNextMonth={() => actions.setMonth?.(shiftMonth(month, 1))}
-            onPrevMonth={() => actions.setMonth?.(shiftMonth(month, -1))}
-            onSelect={(date) => actions.selectDate?.(date)}
-            selected={selectedDate}
-            year={month.getFullYear()}
-          />
-          <footer className="today-calendar-legend" aria-label="日历标记说明">
-            <span><i className="is-personal" />联系人日期</span>
-            <span><i className="is-holiday" />节日</span>
-          </footer>
-        </GlassPanel>
-        <div className="today-side-stack">
-          <GlassPanel as="aside" className="today-day-panel" intensity="soft">
-            <header className="today-day-panel__header">
-              <div>
-                <span className="today-section-kicker">{selectedDate === today ? "今天" : "选中日期"}</span>
-                <h2>{dateLabel(selectedDate)}</h2>
-              </div>
-              <div className="today-day-panel__actions">
-                <Button size="sm" variant="secondary" disabled={!canEdit} onClick={() => actions.openEditor?.()}>添加日期</Button>
-                <Status label={`${selectedEvents.length} 项`} tone={selectedEvents.length ? "info" : "muted"} />
-              </div>
-            </header>
-            <div className="today-day-panel__events">
-              {snapshot.calendar?.status === "needs-agent" ? (
-                <Banner tone="info">先创建联系人，再把各自的重要日子保存在总日历里。</Banner>
-              ) : null}
-              {snapshot.calendar?.status === "invalid" ? (
-                <Banner tone="danger">纪念日数据暂时无法读取。为避免覆盖原有内容，编辑已暂停。</Banner>
-              ) : null}
-              <TodayEvents actions={actions} canEdit={canEdit} events={selectedEvents} />
-            </div>
+      <div className="today-page-content">
+        <section className="today-glass-workspace" aria-label="今日日历">
+          <GlassPanel as="section" className="today-calendar-panel" intensity="soft">
+            <Calendar
+              events={calendarMarks}
+              layout="fill"
+              month={month.getMonth()}
+              onGoToday={() => actions.goToday?.()}
+              onNextMonth={() => actions.setMonth?.(shiftMonth(month, 1))}
+              onPrevMonth={() => actions.setMonth?.(shiftMonth(month, -1))}
+              onSelect={(date) => actions.selectDate?.(date)}
+              selected={selectedDate}
+              year={month.getFullYear()}
+            />
+            <footer className="today-calendar-legend" aria-label="日历标记说明">
+              <span><i className="is-personal" />联系人日期</span>
+              <span><i className="is-holiday" />节日</span>
+            </footer>
           </GlassPanel>
-          <GlassPanel as="section" className="today-conversation-panel" intensity="soft">
+          <div className="today-side-stack">
+            <GlassPanel as="aside" className="today-day-panel" intensity="soft">
+              <header className="today-day-panel__header">
+                <div>
+                  <span className="today-section-kicker">{selectedDate === today ? "今天" : "选中日期"}</span>
+                  <h2>{dateLabel(selectedDate)}</h2>
+                </div>
+                <div className="today-day-panel__actions">
+                  <Button size="sm" variant="secondary" disabled={!canEdit} onClick={() => actions.openEditor?.()}>添加日期</Button>
+                  <Status label={`${selectedEvents.length} 项`} tone={selectedEvents.length ? "info" : "muted"} />
+                </div>
+              </header>
+              <div className="today-day-panel__events">
+                {snapshot.calendar?.status === "needs-agent" ? (
+                  <Banner tone="info">先创建联系人，再把各自的重要日子保存在总日历里。</Banner>
+                ) : null}
+                {snapshot.calendar?.status === "invalid" ? (
+                  <Banner tone="danger">纪念日数据暂时无法读取。为避免覆盖原有内容，编辑已暂停。</Banner>
+                ) : null}
+                <TodayEvents actions={actions} canEdit={canEdit} events={selectedEvents} />
+              </div>
+            </GlassPanel>
+            <GlassPanel as="section" className="today-journal-panel" intensity="soft">
+              <button
+                type="button"
+                className="today-journal-panel__action"
+                aria-label="打开日记"
+                onClick={() => actions.openJournal?.()}
+              >
+                <span className="today-journal-panel__copy">
+                  <span className="today-section-kicker">AGENT JOURNAL</span>
+                  <span className="today-journal-panel__title">日记</span>
+                </span>
+              </button>
+            </GlassPanel>
+          </div>
+        </section>
+
+        <section className="today-insight-grid" aria-label="今日概览">
+          <GlassPanel as="article" className="today-insight-card today-cost-card" intensity="soft">
             <button
               type="button"
-              className="today-conversation-panel__action"
-              aria-label="打开对话"
-              onClick={() => actions.openConversation?.()}
+              className="today-cost-card__action"
+              aria-label="查看今日用量"
+              onClick={() => actions.openUsage?.()}
             >
-              <span className="today-conversation-panel__copy">
-                <span className="today-section-kicker">CONVERSATION</span>
-                <span className="today-conversation-panel__title">对话</span>
-              </span>
-              <span className="today-conversation-panel__arrow" aria-hidden="true">→</span>
+              <div className="today-insight-head">
+                <span className="today-section-kicker">USAGE</span>
+                <Status label={ready ? "今日" : "等待数据"} tone={ready ? "success" : "muted"} />
+              </div>
+              <h2>今日成本</h2>
+              <strong className="today-cost-value">{costLabel(snapshot.data?.summary?.today, ready)}</strong>
+              <p>{costDetail(snapshot.data?.summary?.today, ready)}</p>
+              <span className="today-text-action">查看用量</span>
             </button>
           </GlassPanel>
-        </div>
-      </section>
 
-      <section className="today-insight-grid" aria-label="今日概览">
-        <GlassPanel as="article" className="today-insight-card today-cost-card" intensity="soft">
-          <button
-            type="button"
-            className="today-cost-card__action"
-            aria-label="查看今日用量"
-            onClick={() => actions.openUsage?.()}
-          >
+          <GlassPanel as="article" className="today-insight-card today-activity-card" intensity="soft">
             <div className="today-insight-head">
-              <span className="today-section-kicker">USAGE</span>
-              <Status label={ready ? "今日" : "等待数据"} tone={ready ? "success" : "muted"} />
+              <div>
+                <span className="today-section-kicker">RECENT</span>
+                <h2>最近活动</h2>
+              </div>
+              <button className="today-text-action" type="button" onClick={() => actions.openUsage?.()}>全部记录</button>
             </div>
-            <h2>今日成本</h2>
-            <strong className="today-cost-value">{costLabel(snapshot.data?.summary?.today, ready)}</strong>
-            <p>{costDetail(snapshot.data?.summary?.today, ready)}</p>
-            <span className="today-text-action">查看用量</span>
-          </button>
-        </GlassPanel>
-
-        <GlassPanel as="article" className="today-insight-card today-activity-card" intensity="soft">
-          <div className="today-insight-head">
-            <div>
-              <span className="today-section-kicker">RECENT</span>
-              <h2>最近活动</h2>
-            </div>
-            <button className="today-text-action" type="button" onClick={() => actions.openUsage?.()}>全部记录</button>
-          </div>
-          {recentEvents.length ? (
-            <div className="today-activity-list">
-              {recentEvents.map((event, index) => (
-                <div className="today-activity-row" key={`${event.timestamp || "activity"}-${index}`}>
-                  <div>
-                    <strong>{event.feature || "已识别调用"}</strong>
-                    <span>{event.source || "调用记录"} · {dateTime(event.timestamp)}</span>
+            {recentEvents.length ? (
+              <div className="today-activity-list">
+                {recentEvents.map((event, index) => (
+                  <div className="today-activity-row" key={`${event.timestamp || "activity"}-${index}`}>
+                    <div>
+                      <strong>{event.feature || "已识别调用"}</strong>
+                      <span>{event.source || "调用记录"} · {dateTime(event.timestamp)}</span>
+                    </div>
+                    <b>{activityCost(event.amountCny)}</b>
                   </div>
-                  <b>{activityCost(event.amountCny)}</b>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <div className="today-activity-empty">{ready ? "还没有可显示的活动。" : "进入联系人后显示最近活动。"}</div>
-          )}
-        </GlassPanel>
-      </section>
+                ))}
+              </div>
+            ) : (
+              <div className="today-activity-empty">{ready ? "还没有可显示的活动。" : "进入联系人后显示最近活动。"}</div>
+            )}
+          </GlassPanel>
+        </section>
+      </div>
 
       <TodayEventEditor actions={actions} canEdit={canEdit} contacts={contacts} defaultContactId={defaultContactId} editor={snapshot.editor} selectedDate={selectedDate} />
     </div>

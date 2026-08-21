@@ -1,5 +1,5 @@
 export const state = {
-  view: "relationships",
+  view: "today",
   adminTab: "agent",
   agentRuntime: null,
   agentModels: [],
@@ -32,7 +32,7 @@ export const state = {
   scheduleSnapshot: null,
   timelineFilter: "all",
   timelineQuery: "",
-  relationshipPage: "conversation",
+  relationshipPage: "overview",
   unavailableFeature: null,
   relationshipFiles: null,
   relationshipFilePath: "",

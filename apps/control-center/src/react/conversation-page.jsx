@@ -7,6 +7,7 @@ import { ChatVoice, Select } from "suzu-design-system";
 
 import { shouldSubmitConversationOnEnter } from "../features/conversation/index.mjs";
 import { useConversationCall } from "./conversation-call.jsx";
+import { useConversationVoiceInput } from "./conversation-voice-input.jsx";
 import "./conversation-page.css";
 
 let activeConversationAudio = null;
@@ -310,7 +311,7 @@ function ConversationEmojiPicker({ actions }) {
   );
 }
 
-function ConversationComposer({ actions, composer, focusRequest = 0 }) {
+function ConversationComposer({ actions, callActive = false, composer, focusRequest = 0, voiceInput }) {
   const inputRef = useRef(null);
   const unavailable = Boolean(composer.unavailable);
   const attachments = Array.isArray(composer.attachments) ? composer.attachments : [];
@@ -372,7 +373,15 @@ function ConversationComposer({ actions, composer, focusRequest = 0 }) {
             <button aria-label="添加图片" className="conversation-composer__tool" disabled={unavailable || composer.attachmentPicking} onClick={() => { void actions.selectComposerAttachments("image"); }} title="添加图片" type="button"><ConversationIcon name="box" /></button>
             <button aria-label="添加文件" className="conversation-composer__tool" disabled={unavailable || composer.attachmentPicking} onClick={() => { void actions.selectComposerAttachments("file"); }} title="添加文件" type="button"><ConversationIcon name="folder" /></button>
             <StaticTool icon="scissors" label="截图" />
-            <StaticTool icon="mic" label="语音输入" />
+            <button
+              aria-label={voiceInput?.label || "语音输入"}
+              aria-pressed={voiceInput?.active === true}
+              className={`conversation-composer__tool${voiceInput?.active ? " is-active" : ""}`}
+              disabled={(!voiceInput?.active && (unavailable || callActive)) || !voiceInput?.available}
+              onClick={() => { void voiceInput?.toggle?.(); }}
+              title={callActive && !voiceInput?.active ? "语音通话中，暂时不能使用语音输入" : (voiceInput?.label || "语音输入")}
+              type="button"
+            ><ConversationIcon name="mic" /></button>
           </div>
           <div className="conversation-composer__submit-area">
             <StaticTool icon="sound" label="语音消息" />
@@ -779,7 +788,7 @@ function ConversationOverlays({ actions, overlays }) {
   </>;
 }
 
-export function ConversationPage({ actions, incomingCall = null, snapshot = {} }) {
+export function ConversationPage({ actions, api = null, incomingCall = null, snapshot = {} }) {
   const callControl = useConversationCall();
   const acceptedIncomingCall = useRef("");
   const incomingCallDialingSeen = useRef("");
@@ -793,6 +802,14 @@ export function ConversationPage({ actions, incomingCall = null, snapshot = {} }
   const permissions = Array.isArray(snapshot.permissions) ? snapshot.permissions : [];
   const ui = snapshot.ui || {};
   const contactContextMenu = snapshot.contactContextMenu || null;
+  const voiceInput = useConversationVoiceInput({
+    active: Boolean(activeContactId),
+    api,
+    onError: actions.reportVoiceInputError,
+    onStart: actions.clearVoiceInputError,
+    onTranscript: actions.appendVoiceInputTranscript,
+    scopeKey: activeContactId,
+  });
   useEffect(() => {
     const requestId = String(incomingCall?.requestId || "").trim();
     const contactId = String(incomingCall?.contactId || "").trim();
@@ -879,7 +896,7 @@ export function ConversationPage({ actions, incomingCall = null, snapshot = {} }
           <ConversationPermissions actions={actions} permissions={permissions} />
           <div aria-label={snapshot.listLabel || "Suzu 的聊天记录"} aria-live="polite" className="conversation-list" data-conversation-list="" onScroll={(event) => actions.setListScroll(event.currentTarget)} ref={listRef} role="log"><ConversationMessageList onOpenFile={actions.openMediaFile} onPreview={actions.openMediaPreview} rows={messageRows} /></div>
           {snapshot.unread ? <button className="conversation-latest" onClick={actions.jumpToLatest} type="button">回到最新消息</button> : null}
-          <ConversationComposer actions={actions} composer={composer} focusRequest={ui.composerFocusRequest} />
+          <ConversationComposer actions={actions} callActive={callControl.active} composer={composer} focusRequest={ui.composerFocusRequest} voiceInput={voiceInput} />
         </div>
         <ConversationSearchPanel actions={actions} focusRequest={ui.searchFocusRequest} search={snapshot.search} />
         <ConversationCallDialing call={callControl.call} onEnd={callControl.end} />

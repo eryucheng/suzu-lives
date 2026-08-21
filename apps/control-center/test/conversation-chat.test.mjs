@@ -184,6 +184,7 @@ test("Agent Core chat keeps an internal journal turn system-marked and local-onl
   assert.equal(agentReply?.contactId, "contact-suzu");
   assert.equal(agentReply?.displayAsSystem, true);
   assert.equal(agentReply?.deliverToWechat, false);
+  assert.equal(agentReply?.scheduleSource, "agent-journal");
   assert.ok(agentReply?.timestamp);
   assert.equal(events.find((event) => event.type === "turn-complete")?.displayAsSystem, true);
   assert.equal(events.find((event) => event.type === "turn-complete")?.deliverToWechat, false);
@@ -559,6 +560,7 @@ test("Agent Core forwards a completed attachment receipt to the existing linked-
     contactId: "contact-suzu",
     sessionId: "contact-session",
     projectRoot,
+    deliverToWechat: true,
   });
   runtime.emit({ type: "turn-started", sessionId: "contact-session", turnId: accepted.requestId });
   const receipt = {
@@ -604,7 +606,7 @@ test("Agent Core forwards a completed attachment receipt to the existing linked-
     fileName: "report.txt",
     size: 12,
   }]);
-  assert.equal(mediaEvents[0].deliverToWechat, undefined);
+  assert.equal(mediaEvents[0].deliverToWechat, true);
   chat.dispose();
 });
 

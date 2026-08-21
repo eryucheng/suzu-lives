@@ -35,6 +35,47 @@ test("maps a Suzu session to one runtime session and emits ordered product event
   await runtime.closeRuntime();
 });
 
+test("forwards driver model usage so the product can record live Agent costs", async () => {
+  const driver = createFakeAgentRuntimeDriver();
+  const runtime = createAgentRuntime({ driver, createId: fixedIds() });
+  const received = [];
+  runtime.subscribe((event) => received.push(event));
+
+  const session = await runtime.createSession({ sessionId: "contact-session", cwd: "D:\\Suzu\\contact" });
+  const turn = await runtime.sendTurn({ sessionId: session.sessionId, input: "你好" });
+  const usage = {
+    coreSequence: 42,
+    coreTime: 1_726_000_000_000,
+    purpose: "agent-step",
+    provider: "DeepSeek",
+    model: "deepseek-v4-flash",
+    usage: { inputTokens: 100, cacheReadTokens: 20, outputTokens: 30 },
+    coreTurn: 1,
+    step: 1,
+  };
+
+  driver.emit({
+    type: "model-usage",
+    runtimeSessionId: session.runtimeSessionId,
+    turnId: turn.turnId,
+    data: usage,
+  });
+
+  assert.deepEqual(received, [{
+    type: "model-usage",
+    sessionId: session.sessionId,
+    runtimeSessionId: session.runtimeSessionId,
+    turnId: turn.turnId,
+    approvalId: "",
+    sequence: 1,
+    text: "",
+    toolName: "",
+    error: "",
+    data: usage,
+  }]);
+  await runtime.closeRuntime();
+});
+
 test("coalesces concurrent creation requests for one persistent Suzu session", async () => {
   const driver = createFakeAgentRuntimeDriver();
   const runtime = createAgentRuntime({ driver, createId: fixedIds() });

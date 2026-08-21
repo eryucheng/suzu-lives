@@ -1215,27 +1215,29 @@ function be({ columns: e, data: r, striped: i = !1, className: a, style: o }) {
 	});
 }
 var $ = {
-	board: "_board_1w5mi_5",
-	"layout-fill": "_layout-fill_1w5mi_15",
-	head: "_head_1w5mi_29",
-	title: "_title_1w5mi_43",
-	controls: "_controls_1w5mi_57",
-	navButton: "_navButton_1w5mi_69",
-	todayButton: "_todayButton_1w5mi_109",
-	iconButton: "_iconButton_1w5mi_147",
-	weekdays: "_weekdays_1w5mi_179",
-	grid: "_grid_1w5mi_181",
-	"grid-fill": "_grid-fill_1w5mi_233",
-	day: "_day_1w5mi_247",
-	blank: "_blank_1w5mi_249",
-	today: "_today_1w5mi_1",
-	dayToday: "_dayToday_1w5mi_311",
-	selected: "_selected_1w5mi_321",
-	daySelected: "_daySelected_1w5mi_323",
-	dots: "_dots_1w5mi_345",
-	dot: "_dot_1w5mi_345",
-	holiday: "_holiday_1w5mi_379",
-	dotHoliday: "_dotHoliday_1w5mi_381"
+	board: "_board_1o22z_5",
+	"layout-fill": "_layout-fill_1o22z_15",
+	head: "_head_1o22z_26",
+	title: "_title_1o22z_40",
+	controls: "_controls_1o22z_54",
+	navButton: "_navButton_1o22z_66",
+	todayButton: "_todayButton_1o22z_106",
+	iconButton: "_iconButton_1o22z_144",
+	weekdays: "_weekdays_1o22z_176",
+	grid: "_grid_1o22z_178",
+	"grid-fill": "_grid-fill_1o22z_230",
+	day: "_day_1o22z_240",
+	blank: "_blank_1o22z_242",
+	dayWithDots: "_dayWithDots_1o22z_278",
+	dayNumber: "_dayNumber_1o22z_283",
+	today: "_today_1o22z_1",
+	dayToday: "_dayToday_1o22z_308",
+	selected: "_selected_1o22z_318",
+	daySelected: "_daySelected_1o22z_320",
+	dots: "_dots_1o22z_341",
+	dot: "_dot_1o22z_341",
+	holiday: "_holiday_1o22z_366",
+	dotHoliday: "_dotHoliday_1o22z_368"
 };
 //#endregion
 //#region src/components/Calendar/Calendar.tsx
@@ -1262,16 +1264,20 @@ function xe({ year: e, month: r, events: i = {}, selected: a, onSelect: o, onPre
 		"aria-hidden": !0
 	}, `b${e}`));
 	for (let e = 1; e <= g; e++) {
-		let r = b(e), s = r === v, c = r === a, l = i[r] ?? [];
+		let r = b(e), s = r === v, c = r === a, l = i[r] ?? [], u = l.length > 0;
 		x.push(/* @__PURE__ */ n("button", {
 			type: "button",
 			className: [
 				$.day,
+				u && $.dayWithDots,
 				s && $.dayToday,
 				c && $.daySelected
 			].filter(Boolean).join(" "),
 			onClick: () => o?.(r),
-			children: [/* @__PURE__ */ t("span", { children: e }), l.length > 0 && /* @__PURE__ */ t("i", {
+			children: [/* @__PURE__ */ t("span", {
+				className: $.dayNumber,
+				children: e
+			}), u && /* @__PURE__ */ t("i", {
 				className: $.dots,
 				children: l.map((e, n) => /* @__PURE__ */ t("b", { className: [$.dot, e === "holiday" && $.dotHoliday].filter(Boolean).join(" ") }, n))
 			})]

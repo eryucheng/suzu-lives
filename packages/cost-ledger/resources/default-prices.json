@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "updatedAt": "2026-08-17",
+  "updatedAt": "2026-08-21",
   "models": {
     "deepseek-v4-pro": {
       "label": "DeepSeek V4 Pro",
@@ -249,6 +249,33 @@
           "label": "当前官方公开价",
           "rates": {
             "inputCharacters": 0.8
+          }
+        }
+      ]
+    },
+    "cosyvoice-v3.5-plus": {
+      "label": "CosyVoice V3.5 Plus",
+      "provider": "阿里云百炼",
+      "currency": "CNY",
+      "aliases": [
+        "cosyvoice-v3.5-plus"
+      ],
+      "sourceUrl": "https://help.aliyun.com/zh/model-studio/cosyvoice-v3-5-plus",
+      "rateDefinitions": {
+        "inputCharacters": {
+          "label": "输入字符",
+          "unitLabel": "元 / 万字符",
+          "per": 10000
+        }
+      },
+      "revisions": [
+        {
+          "id": "official-current",
+          "effectiveFrom": "1970-01-01T00:00:00.000Z",
+          "publishedAt": "2026-08-21",
+          "label": "华北2（北京）当前官方公开价",
+          "rates": {
+            "inputCharacters": 1.5
           }
         }
       ]

@@ -191,6 +191,7 @@ export function createConversationChatService({
   runtime,
   settingsService,
   capabilityRuntime = null,
+  usageLedger = null,
   memoryRuntime = null,
   lifecycle = null,
   fsOps = fs,
@@ -210,7 +211,7 @@ export function createConversationChatService({
       throw new ConversationChatError(`Suzu 生命周期缺少 ${method}()。`, { code: "LIFECYCLE_CONTRACT_INVALID" });
     }
   }
-  const agentUsageLedger = createAgentUsageLedger({
+  const agentUsageLedger = typeof usageLedger?.record === "function" ? usageLedger : createAgentUsageLedger({
     capabilityRuntime,
     reader,
     settingsService,
@@ -308,7 +309,10 @@ export function createConversationChatService({
   // external transports never have to infer it from prompt text.
   const eventPresentation = (turn) => ({
     ...(turn?.displayAsSystem === true ? { displayAsSystem: true } : {}),
-    ...(turn?.deliverToWechat === false ? { deliverToWechat: false } : {}),
+    // External transports must never need to infer the safe default. Every
+    // event explicitly says whether the originating turn may leave Suzu.
+    deliverToWechat: turn?.deliverToWechat === true,
+    ...(clean(turn?.scheduleSource) ? { scheduleSource: clean(turn.scheduleSource) } : {}),
   });
 
   const emitReply = (turn, type, done = false) => {
@@ -893,7 +897,7 @@ export function createConversationChatService({
       scheduleSource: clean(request.scheduleSource),
       sessionId: request.sessionId,
       displayAsSystem: request.displayAsSystem === true,
-      deliverToWechat: request.deliverToWechat !== false,
+      deliverToWechat: request.deliverToWechat === true,
       state: "starting",
       text: "",
       toolNames: new Set(),
@@ -1097,7 +1101,7 @@ export function createConversationChatService({
   const send = ({ content, media = [], mediaSource = "", memoryText = "", queued = false } = {}) => (
     enqueue({ content, media, mediaSource, memoryText, deliverToWechat: false, requestQueue: queued })
   );
-  const sendToSession = ({ content, contactId = "", sessionId, projectRoot, hasTranscript = false, kind = "message", callDirection = "", media = [], mediaSource = "", memoryText = "", requestId = "", scheduleSource = "", displayAsSystem = false, deliverToWechat = true, queued = false } = {}) => (
+  const sendToSession = ({ content, contactId = "", sessionId, projectRoot, hasTranscript = false, kind = "message", callDirection = "", media = [], mediaSource = "", memoryText = "", requestId = "", scheduleSource = "", displayAsSystem = false, deliverToWechat = false, queued = false } = {}) => (
     enqueue({ content, contactId, kind, callDirection, media, mediaSource, memoryText, requestId, scheduleSource, displayAsSystem, deliverToWechat, requestQueue: queued, session: { sessionId, projectRoot, hasTranscript } })
   );
 
@@ -1133,6 +1137,7 @@ export function createConversationChatService({
           projectRoot: queued.projectRoot,
           kind: queued.kind,
           message: "已从 Agent 队列中移除这次回复。",
+          ...eventPresentation(queued),
           timestamp: new Date().toISOString(),
         });
         return { accepted: true, stopped: true, sessionId: id, message: "已从队列中移除这次回复。" };

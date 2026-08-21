@@ -6,7 +6,7 @@ import {
   resolveSuzuLivesDataRoot,
   stableAgentId,
 } from "@suzu-lives/agent-registry";
-import { PUBLIC_CALENDAR_EVENTS } from "../services/public-calendar-events.mjs";
+import { publicCalendarEvents } from "../services/public-calendar-events.mjs";
 
 const WEEKDAYS = ["星期日", "星期一", "星期二", "星期三", "星期四", "星期五", "星期六"];
 const DEFAULT_TIME_AWARENESS_INTERVAL_MINUTES = 10;
@@ -94,7 +94,7 @@ function readContactEvents(filePath, now, agentId) {
 function readPublicEvents(now) {
   const date = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
   const recurring = date.slice(5);
-  return PUBLIC_CALENDAR_EVENTS
+  return publicCalendarEvents({ year: now.getFullYear() })
     .filter((event) => clean(event.date) === date || clean(event.date) === recurring)
     .map((event) => clean(event.name).slice(0, 120))
     .filter(Boolean);

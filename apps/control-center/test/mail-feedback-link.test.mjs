@@ -99,6 +99,7 @@ test("mail receiver uses a local event stream and delivers one message to every 
   ]);
   assert.ok(deliveries.every((delivery) => delivery.kind === "mail-feedback" && delivery.mediaSource === "mail"));
   assert.ok(deliveries.every((delivery) => delivery.hasTranscript === true));
+  assert.ok(deliveries.every((delivery) => delivery.deliverToWechat === false));
   assert.equal(deliveries[0].media[0].fileName, "mail-photo.png");
   assert.deepEqual(JSON.parse(child.input.trim()), { type: "ack", uid: 17, accepted: true, message: "" });
   service.dispose();

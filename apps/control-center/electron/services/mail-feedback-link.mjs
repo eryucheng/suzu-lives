@@ -199,6 +199,7 @@ export function createMailFeedbackLinkService({
             kind: "mail-feedback",
             media,
             mediaSource: "mail",
+            deliverToWechat: false,
           })));
           const failure = deliveries.find((item) => item.status === "rejected");
           if (failure?.status === "rejected") throw failure.reason;

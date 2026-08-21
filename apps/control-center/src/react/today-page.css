@@ -1,15 +1,24 @@
 .today-react-page {
   --today-layout-max-width:1480px;
+  --today-insight-min-height:188px;
   display:grid;
   min-height:0;
   height:100%;
-  grid-template-rows:auto minmax(0,2fr) minmax(0,1fr);
-  gap:clamp(12px,1.6cqw,23px);
+  grid-template-rows:auto minmax(0,1fr);
   container-type:inline-size;
   width:100%;
   min-width:0;
   max-width:var(--today-layout-max-width);
   margin:0 auto;
+}
+
+.today-page-content {
+  display:grid;
+  min-width:0;
+  min-height:0;
+  height:100%;
+  grid-template-rows:minmax(0,2fr) minmax(var(--today-insight-min-height),1fr);
+  gap:clamp(12px,1.6cqw,23px);
 }
 
 #content.content--today {
@@ -60,7 +69,7 @@
 .today-react-page .today-calendar-panel,
 .today-react-page .today-day-panel,
 .today-react-page .today-insight-card,
-.today-react-page .today-conversation-panel {
+.today-react-page .today-journal-panel {
   min-width:0;
   /* Match the resting elevation of the Create overview cards. */
   box-shadow:0 15px 42px rgba(0,0,0,.16), inset 0 1px rgba(255,255,255,.035);
@@ -170,13 +179,13 @@
   letter-spacing:-.35px;
 }
 
-.today-conversation-panel {
+.today-journal-panel {
   overflow:hidden;
   padding:0;
   transition:border-color .2s ease, box-shadow .2s ease, transform .2s ease;
 }
 
-.today-conversation-panel__action {
+.today-journal-panel__action {
   display:flex;
   width:100%;
   min-height:0;
@@ -193,51 +202,32 @@
   font:inherit;
 }
 
-.today-conversation-panel__copy {
+.today-journal-panel__copy {
   display:grid;
   min-width:0;
   gap:4px;
 }
 
-.today-conversation-panel__title {
+.today-journal-panel__title {
   color:var(--text);
   font-size:var(--font-size-3xl);
   font-weight:var(--font-weight-bold);
   letter-spacing:-.6px;
 }
 
-.today-conversation-panel__arrow {
-  display:grid;
-  width:clamp(32px,3.1cqw,44px);
-  height:clamp(32px,3.1cqw,44px);
-  flex:0 0 auto;
-  place-items:center;
-  border:1px solid color-mix(in srgb, var(--accent-300) 28%, var(--glass-border));
-  border-radius:var(--radius-pill);
-  background:color-mix(in srgb, var(--accent-300) 9%, transparent);
-  color:var(--accent-300);
-  font-size:clamp(18px,1.7cqw,23px);
-  line-height:1;
-  transition:background .2s ease, transform .2s ease;
-}
-
-.today-conversation-panel__action:focus-visible {
+.today-journal-panel__action:focus-visible {
   outline:2px solid color-mix(in srgb, var(--accent-300) 75%, transparent);
   outline-offset:-4px;
   border-radius:inherit;
 }
 
 @media (hover:hover) {
-  .today-conversation-panel:hover {
+  .today-journal-panel:hover {
     border-color:color-mix(in srgb, var(--accent-300) 48%, var(--glass-border));
     box-shadow:0 18px 38px color-mix(in srgb, var(--brand-700) 18%, transparent);
     transform:translateY(-2px);
   }
 
-  .today-conversation-panel:hover .today-conversation-panel__arrow {
-    background:color-mix(in srgb, var(--accent-300) 17%, transparent);
-    transform:translateX(3px);
-  }
 }
 
 .today-event-list {

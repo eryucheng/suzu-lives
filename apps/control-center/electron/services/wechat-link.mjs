@@ -13,6 +13,10 @@ const MAX_INBOUND_TEXT_LENGTH = 20_000;
 const MAX_RECENT_MESSAGE_IDS = 160;
 const MAX_WECHAT_TEXT_RUNES = 3800;
 const POLL_BACKOFF_MAX_MS = 30_000;
+const TYPING_REFRESH_MS = 5_000;
+const INTERNAL_SCHEDULE_MARKER = /<\/?suzu-schedule-task\b[^>]*>|<!--\s*suzu-lives:display-system\s*-->/iu;
+const LEADING_REASONING_BLOCK = /^\s*<(?:think|thinking|analysis|reasoning)\b[^>]*>[\s\S]*?<\/(?:think|thinking|analysis|reasoning)\s*>\s*/iu;
+const REASONING_TAG = /<\/?(?:think|thinking|analysis|reasoning)\b[^>]*>/iu;
 export const MAX_WECHAT_AGENT_MEDIA_BYTES = 50 * 1024 * 1024;
 export const MAX_WECHAT_INBOUND_MEDIA_BYTES = 50 * 1024 * 1024;
 const MAX_WECHAT_INBOUND_MEDIA_ITEMS = 24;
@@ -36,6 +40,23 @@ export class WeChatLinkError extends Error {
 
 function clean(value) {
   return String(value ?? "").trim();
+}
+
+// Agent Core's native reasoning is emitted separately. Some compatible
+// providers can still put a <think> block or an internal task envelope inside
+// the visible completion, so enforce the final external boundary here too.
+function publicAgentReply(value) {
+  const source = clean(value);
+  if (!source || /^NO_REPLY$/iu.test(source) || INTERNAL_SCHEDULE_MARKER.test(source)) return "";
+  const visible = source.replace(LEADING_REASONING_BLOCK, "").trim();
+  return REASONING_TAG.test(visible) || /^NO_REPLY$/iu.test(visible) ? "" : visible;
+}
+
+function isWechatEligibleEvent(event = {}) {
+  if (event.deliverToWechat !== true || event.displayAsSystem === true) return false;
+  // The only scheduled turn intended to initiate external contact is the
+  // user-facing A phase. General timers and the internal B phase remain local.
+  return event.kind !== "schedule" || clean(event.scheduleSource) === "proactive-chain";
 }
 
 function wechatPermissionDecision(value) {
@@ -365,6 +386,8 @@ export function createWeChatLinkService({
   fsOps = fs,
   now = () => new Date(),
   reader,
+  setIntervalImpl = setInterval,
+  clearIntervalImpl = clearInterval,
   sleepImpl = sleep,
 } = {}) {
   if (!chat?.sendToSession || !chat?.steer || !chat?.stop || !chat?.subscribe) throw new WeChatLinkError("微信连接需要本机 Agent Core 会话服务。");
@@ -386,6 +409,10 @@ export function createWeChatLinkService({
   const deliveryChains = new Map();
   const loops = new Map();
   const removedContactIds = new Set();
+  // Typing tickets are deliberately runtime-only. They are short-lived
+  // transport credentials, so a restart simply obtains a fresh ticket.
+  const typingTickets = new Map();
+  const typingStates = new Map();
 
   const emit = (event) => {
     const payload = { ...event, timestamp: event?.timestamp || nowIso(now) };
@@ -729,6 +756,126 @@ export function createWeChatLinkService({
 
   const queueDelivery = (link, text, options = {}) => queueTask(link, () => deliverText(link, text, options));
 
+  const clearTypingTimer = (state) => {
+    if (!state || state.timer === null || state.timer === undefined) return;
+    clearIntervalImpl(state.timer);
+    state.timer = null;
+  };
+
+  const typingTicketFor = async (link, { contextToken = "" } = {}) => {
+    const cached = clean(typingTickets.get(link.id));
+    if (cached) return cached;
+    const activeContextToken = clean(contextToken) || credentialsFor(link.id).contextToken;
+    const response = await apiPost(link, "ilink/bot/getconfig", {
+      ilink_user_id: link.linkedUserId,
+      ...(activeContextToken ? { context_token: activeContextToken } : {}),
+      base_info: { channel_version: CHANNEL_VERSION },
+    });
+    if (Number(response?.ret ?? 0) !== 0) {
+      throw new WeChatLinkError(`微信输入状态凭证获取失败：${clean(response?.errmsg) || `ret=${response?.ret}`}`);
+    }
+    const ticket = clean(response?.typing_ticket ?? response?.typingTicket);
+    if (!ticket) throw new WeChatLinkError("微信没有返回输入状态凭证。 ");
+    typingTickets.set(link.id, ticket);
+    return ticket;
+  };
+
+  const sendTypingStatus = async (link, ticket, status) => {
+    const response = await apiPost(link, "ilink/bot/sendtyping", {
+      ilink_user_id: link.linkedUserId,
+      typing_ticket: ticket,
+      status,
+      base_info: { channel_version: CHANNEL_VERSION },
+    });
+    if (Number(response?.ret ?? 0) !== 0) {
+      throw new WeChatLinkError(`微信输入状态更新失败：${clean(response?.errmsg) || `ret=${response?.ret}`}`);
+    }
+  };
+
+  const refreshTyping = (link, state) => {
+    if (typingStates.get(link.id) !== state) return;
+    void queueTask(link, async () => {
+      if (typingStates.get(link.id) !== state) return;
+      try {
+        const ticket = state.ticket || await typingTicketFor(link, { contextToken: state.contextToken });
+        if (typingStates.get(link.id) !== state) return;
+        state.ticket = ticket;
+        state.mayHaveStarted = true;
+        await sendTypingStatus(link, ticket, 1);
+      } catch {
+        // Typing is only a native transport affordance. A failed refresh must
+        // never block, fail, or visibly contaminate the actual Agent reply.
+        typingTickets.delete(link.id);
+        state.ticket = "";
+      }
+    }).catch(() => undefined);
+  };
+
+  const stopTyping = (link, { requestId = "" } = {}) => {
+    const state = typingStates.get(link.id);
+    const expectedRequestId = clean(requestId);
+    if (!state || (expectedRequestId && state.requestId !== expectedRequestId)) return Promise.resolve(false);
+    typingStates.delete(link.id);
+    clearTypingTimer(state);
+    if (!state.mayHaveStarted || !state.ticket) return Promise.resolve(false);
+    return queueTask(link, async () => {
+      try {
+        await sendTypingStatus(link, state.ticket, 2);
+        return true;
+      } catch {
+        typingTickets.delete(link.id);
+        return false;
+      }
+    });
+  };
+
+  const startTyping = (link, { requestId, contextToken = "" } = {}) => {
+    const id = clean(requestId);
+    if (!id || !clean(link?.linkedUserId)) return Promise.resolve(false);
+    const existing = typingStates.get(link.id);
+    if (existing?.requestId === id) return existing.startPromise || Promise.resolve(existing.mayHaveStarted === true);
+    const stopPrevious = existing ? stopTyping(link, { requestId: existing.requestId }) : Promise.resolve(false);
+    const state = {
+      requestId: id,
+      contextToken: clean(contextToken),
+      ticket: "",
+      timer: null,
+      mayHaveStarted: false,
+      startPromise: null,
+    };
+    typingStates.set(link.id, state);
+    state.startPromise = Promise.resolve(stopPrevious).catch(() => false).then(() => queueTask(link, async () => {
+      if (typingStates.get(link.id) !== state) return false;
+      try {
+        const ticket = await typingTicketFor(link, { contextToken: state.contextToken });
+        if (typingStates.get(link.id) !== state) return false;
+        state.ticket = ticket;
+        // Mark this before awaiting the request: if a stop races the network
+        // response, its queued cancellation still runs after this request.
+        state.mayHaveStarted = true;
+        await sendTypingStatus(link, ticket, 1);
+        if (typingStates.get(link.id) !== state) return false;
+        const timer = setIntervalImpl(() => refreshTyping(link, state), TYPING_REFRESH_MS);
+        timer?.unref?.();
+        state.timer = timer;
+        return true;
+      } catch {
+        typingTickets.delete(link.id);
+        if (typingStates.get(link.id) === state) {
+          typingStates.delete(link.id);
+          clearTypingTimer(state);
+        }
+        return false;
+      }
+    }));
+    return state.startPromise;
+  };
+
+  const stopAllTyping = async () => {
+    const links = [...publicStore.links];
+    await Promise.allSettled(links.map((link) => stopTyping(link)));
+  };
+
   const commandResponse = async (link, message, contextToken) => {
     try { await queueDelivery(link, message, { contextToken }); }
     catch (error) {
@@ -783,6 +930,12 @@ export function createWeChatLinkService({
         });
         await commandResponse(link, clean(result?.message) || "引导已送达。", contextToken);
       } else {
+        // Give the remote WeChat UI immediate, native feedback without waiting
+        // for the Agent Core to produce its first visible token. Supplying our
+        // own request id lets every later terminal event clean up this exact
+        // typing state, even when a newer WeChat message interrupts the turn.
+        const requestId = `wechat-${randomUUID()}`;
+        void startTyping(link, { requestId, contextToken });
         const request = {
           content: command.content,
           sessionId: session.id,
@@ -790,9 +943,15 @@ export function createWeChatLinkService({
           hasTranscript: session.hasTranscript === true,
           kind: "message",
           deliverToWechat: true,
+          requestId,
         };
         if (media.length) request.media = media;
-        await chat.sendToSession(request);
+        try {
+          await chat.sendToSession(request);
+        } catch (error) {
+          await stopTyping(link, { requestId });
+          throw error;
+        }
       }
       link.recentMessageIds = [...link.recentMessageIds, key].slice(-MAX_RECENT_MESSAGE_IDS);
       link.lastReceivedAt = nowIso(now);
@@ -825,6 +984,8 @@ export function createWeChatLinkService({
               base_info: { channel_version: CHANNEL_VERSION },
             }, { signal: controller.signal });
             if (Number(response?.errcode) === -14) {
+              await stopTyping(link);
+              typingTickets.delete(link.id);
               link.lastError = "微信连接已过期，请在这位联系人的设置中重新扫码。";
               await persist();
               emit({ type: "expired", linkId: link.id, contactId: link.contactId, message: link.lastError });
@@ -892,6 +1053,8 @@ export function createWeChatLinkService({
     const priorLinks = publicStore.links.filter((item) => item.contactId === attempt.contactId);
     for (const prior of priorLinks) {
       loops.get(prior.id)?.abort();
+      await stopTyping(prior);
+      typingTickets.delete(prior.id);
       delete credentialStore.links[prior.id];
     }
     publicStore.links = publicStore.links.filter((item) => item.contactId !== attempt.contactId);
@@ -1000,7 +1163,10 @@ export function createWeChatLinkService({
     if (delivery !== undefined) publicStore.delivery = normalizeDelivery(delivery);
     await persist();
     if (publicStore.enabled) await startStoredLoops();
-    else stopLoops();
+    else {
+      await stopAllTyping();
+      stopLoops();
+    }
     emit({ type: "settings" });
     return snapshot();
   };
@@ -1015,7 +1181,11 @@ export function createWeChatLinkService({
     link.updatedAt = nowIso(now);
     await persist();
     if (link.enabled && publicStore.enabled) startLoop(link.id);
-    else loops.get(link.id)?.abort();
+    else {
+      await stopTyping(link);
+      typingTickets.delete(link.id);
+      loops.get(link.id)?.abort();
+    }
     emit({ type: "status", linkId: link.id, contactId: link.contactId });
     return snapshot({ contactId: id });
   };
@@ -1034,6 +1204,8 @@ export function createWeChatLinkService({
       loops.get(link.id)?.abort();
       loops.delete(link.id);
       deliveryChains.delete(link.id);
+      await stopTyping(link);
+      typingTickets.delete(link.id);
       delete credentialStore.links[link.id];
     }
     if (!links.length) return { removed: 0 };
@@ -1051,6 +1223,8 @@ export function createWeChatLinkService({
     const link = findLinkForContact(id);
     if (!link) return snapshot({ contactId: id });
     loops.get(link.id)?.abort();
+    await stopTyping(link);
+    typingTickets.delete(link.id);
     publicStore.links = publicStore.links.filter((item) => item.id !== link.id);
     delete credentialStore.links[link.id];
     await persist();
@@ -1060,11 +1234,7 @@ export function createWeChatLinkService({
 
   const handleChatEvent = (event) => {
     if (disposed || !event?.sessionId) return;
-    if (event.deliverToWechat === false) return;
-    // A schedule marker is a local conversation-system event.  Its final
-    // Agent reply may still be delivered normally, but task state, tool
-    // details, errors, and usage must never become a WeChat notification.
-    if (event.kind === "schedule" && !["agent-reply", "agent-media"].includes(event.type)) return;
+    if (!isWechatEligibleEvent(event)) return;
     const projectRoot = clean(event.projectRoot);
     if (!projectRoot) return;
     void (async () => {
@@ -1072,6 +1242,17 @@ export function createWeChatLinkService({
       if (!contactId || !publicStore.enabled) return;
       const links = publicStore.links.filter((link) => link.contactId === contactId && link.enabled !== false);
       if (!links.length) return;
+      const requestId = clean(event.requestId);
+      const clearsTyping = requestId && ["agent-reply", "agent-media", "turn-complete", "turn-stopped", "error"].includes(event.type);
+      // A native typing indicator is an ephemeral prelude to the reply. Stop
+      // it before the first outward-facing result, and also at every terminal
+      // path so an aborted or failed turn cannot leave it stuck on WeChat.
+      if (clearsTyping) await Promise.allSettled(links.map((link) => stopTyping(link, { requestId })));
+      if (event.type === "turn-complete") return;
+      // A schedule marker is a local conversation-system event. Its final
+      // Agent reply may still be delivered normally, but task state, tool
+      // details, errors, and usage must never become a WeChat notification.
+      if (event.kind === "schedule" && !["agent-reply", "agent-media"].includes(event.type)) return;
       if (event.type === "agent-media") {
         const media = Array.isArray(event.media) ? event.media : [];
         if (!media.length) return;
@@ -1091,7 +1272,7 @@ export function createWeChatLinkService({
         let allowed = false;
         if (event.type === "agent-reply") {
           allowed = publicStore.delivery.agent === true;
-          content = clean(event.content);
+          content = publicAgentReply(event.content);
         } else if (event.type === "attachment") {
           allowed = publicStore.delivery.attachments === true;
           content = clean(event.content);
@@ -1131,6 +1312,8 @@ export function createWeChatLinkService({
       disposed = true;
       for (const attempt of attempts.values()) attempt.controller.abort();
       attempts.clear();
+      void stopAllTyping();
+      typingTickets.clear();
       stopLoops();
       unsubscribeChat?.();
       listeners.clear();

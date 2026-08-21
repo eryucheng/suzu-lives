@@ -77,12 +77,14 @@ export function Calendar({
     const isToday = key === todayStr;
     const isSelected = key === selected;
     const dots = events[key] ?? [];
+    const hasDots = dots.length > 0;
     cells.push(
       <button
         key={key}
         type="button"
         className={[
           styles.day,
+          hasDots && styles.dayWithDots,
           isToday && styles.dayToday,
           isSelected && styles.daySelected,
         ]
@@ -90,8 +92,8 @@ export function Calendar({
           .join(' ')}
         onClick={() => onSelect?.(key)}
       >
-        <span>{day}</span>
-        {dots.length > 0 && (
+        <span className={styles.dayNumber}>{day}</span>
+        {hasDots && (
           <i className={styles.dots}>
             {dots.map((kind, j) => (
               <b

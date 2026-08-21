@@ -9,13 +9,13 @@ test("today calendar IPC forwards scoped event operations", async () => {
   registerTodayCalendarIpc({
     ipcMain: { handle: (name, handler) => handlers.set(name, handler) },
     todayCalendarService: {
-      snapshot: async () => ({ status: "ready" }),
+      snapshot: async (value) => { calls.push(["snapshot", value]); return { status: "ready" }; },
       saveEvent: async (value) => { calls.push(["save", value]); return { status: "ready" }; },
       removeEvent: async (id) => { calls.push(["remove", id]); return { status: "ready" }; },
     },
   });
-  assert.deepEqual(await handlers.get("today-calendar:snapshot")(), { status: "ready" });
+  assert.deepEqual(await handlers.get("today-calendar:snapshot")(null, { year: 2027 }), { status: "ready" });
   await handlers.get("today-calendar:save-event")(null, { name: "纪念日" });
   await handlers.get("today-calendar:remove-event")(null, { contactId: "contact-suzu", id: "event-1" });
-  assert.deepEqual(calls, [["save", { name: "纪念日" }], ["remove", { contactId: "contact-suzu", id: "event-1" }]]);
+  assert.deepEqual(calls, [["snapshot", { year: 2027 }], ["save", { name: "纪念日" }], ["remove", { contactId: "contact-suzu", id: "event-1" }]]);
 });

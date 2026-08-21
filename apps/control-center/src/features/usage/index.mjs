@@ -1,5 +1,4 @@
 import {
-  compactNumber,
   dateTime,
   escapeHtml,
   localDateTimeInput,
@@ -9,6 +8,7 @@ import {
 import { isReady } from "../../core/state.mjs";
 import { card, emptyBlock, status } from "../../components/panel.mjs";
 import { icons } from "../shell/index.mjs";
+import { usageAmountLabel, usageCostLabel } from "./usage-display.mjs";
 
 function filteredTimeline(state) {
   const query = state.timelineQuery.trim().toLocaleLowerCase("zh-CN");
@@ -20,7 +20,7 @@ function filteredTimeline(state) {
 
 function eventRows(events, limit) {
   if (!events.length) return '<tr><td colspan="6"><div class="activity-empty">没有符合条件的已识别调用。</div></td></tr>';
-  return events.slice(-limit).reverse().map((event) => `<tr><td>${escapeHtml(dateTime(event.timestamp))}</td><td>${escapeHtml(event.source)}</td><td>${escapeHtml(event.feature)}</td><td>${escapeHtml(event.model || "未知")}</td><td>${escapeHtml(compactNumber(event.units?.totalInputTokens || event.units?.totalTokens || 0))}</td><td>${money(event.amountCny)}</td></tr>`).join("");
+  return events.slice(-limit).reverse().map((event) => `<tr><td>${escapeHtml(dateTime(event.timestamp))}</td><td>${escapeHtml(event.source)}</td><td>${escapeHtml(event.feature)}</td><td>${escapeHtml(event.model || "未知")}</td><td>${escapeHtml(usageAmountLabel(event.units))}</td><td>${escapeHtml(usageCostLabel(event))}</td></tr>`).join("");
 }
 
 function conversationRows(rows) {
@@ -39,7 +39,7 @@ export function renderUsage({ state }) {
   const filtered = filteredTimeline(state);
   return `<section class="usage-summary"><article class="metric-card"><span>今日估算</span><strong>${money(summary.today.amountCny)}</strong><p>${summary.today.requestCount} 次已识别调用</p></article><article class="metric-card"><span>本月估算</span><strong>${money(summary.month.amountCny)}</strong><p>按当前价格规则估算</p></article><article class="metric-card"><span>可统计来源</span><strong>${sources.filter((item) => item.tracked && item.status === "ready").length} / ${sources.length}</strong><p>没有记录不等于零费用</p></article></section>
     <details class="usage-scope"><summary><div><span class="reference-kicker">DETAILS</span><h2>费用统计范围</h2><p>按需查看已纳入统计的来源。</p></div><span class="usage-scope__control">查看 <b aria-hidden="true">⌄</b></span></summary><div class="usage-scope__content"><div class="source-card-list">${sources.map((source) => `<div class="source-card"><div><strong>${escapeHtml(source.name)}</strong><p>${escapeHtml(source.detail)}</p></div>${status(source.status === "ready" ? "已纳入统计" : source.status === "not-instrumented" ? "尚未纳入统计" : "未找到", source.status === "ready" ? "ready" : "warning")}</div>`).join("") || '<div class="activity-empty">尚无来源信息。</div>'}</div></div></details>
-    ${card("调用流水", `最近扫描于 ${dateTime(state.data.scannedAt)}，共 ${events.length.toLocaleString("zh-CN")} 条已识别记录。`, `<div class="toolbar"><div class="filters"><button class="filter-button ${state.timelineFilter === "all" ? "active" : ""}" data-filter="all">全部</button>${[...new Set(events.map((event) => event.source))].map((source) => `<button class="filter-button ${state.timelineFilter === source ? "active" : ""}" data-filter="${escapeHtml(source)}">${escapeHtml(source)}</button>`).join("")}</div><input id="timelineSearch" class="search-input" type="search" placeholder="搜索模型、请求 ID、会话内容" value="${escapeHtml(state.timelineQuery)}"></div><div class="table-scroll"><table class="data-table"><thead><tr><th>时间</th><th>来源</th><th>类型</th><th>模型</th><th>Token</th><th>估算费用</th></tr></thead><tbody>${eventRows(filtered, 12_000)}</tbody></table></div>`)}
+    ${card("调用流水", `最近扫描于 ${dateTime(state.data.scannedAt)}，共 ${events.length.toLocaleString("zh-CN")} 条已识别记录。`, `<div class="toolbar"><div class="filters"><button class="filter-button ${state.timelineFilter === "all" ? "active" : ""}" data-filter="all">全部</button>${[...new Set(events.map((event) => event.source))].map((source) => `<button class="filter-button ${state.timelineFilter === source ? "active" : ""}" data-filter="${escapeHtml(source)}">${escapeHtml(source)}</button>`).join("")}</div><input id="timelineSearch" class="search-input" type="search" placeholder="搜索模型、请求 ID、会话内容" value="${escapeHtml(state.timelineQuery)}"></div><div class="table-scroll"><table class="data-table"><thead><tr><th>时间</th><th>来源</th><th>类型</th><th>模型</th><th>用量</th><th>估算费用</th></tr></thead><tbody>${eventRows(filtered, 12_000)}</tbody></table></div>`)}
     ${card("会话费用", "一次用户输入可能触发多次模型请求和工具循环。", conversationRows(summary.conversations || []))}
     ${renderPriceSettings(state.data)}`;
 }

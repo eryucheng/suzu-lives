@@ -31,7 +31,7 @@ contextBridge.exposeInMainWorld("suzuConsole", {
     scan: () => ipcRenderer.invoke("ledger:scan"),
   },
   todayCalendar: {
-    snapshot: () => ipcRenderer.invoke("today-calendar:snapshot"),
+    snapshot: (value) => ipcRenderer.invoke("today-calendar:snapshot", value),
     saveEvent: (value) => ipcRenderer.invoke("today-calendar:save-event", value),
     removeEvent: (value) => ipcRenderer.invoke("today-calendar:remove-event", value),
   },
@@ -88,6 +88,12 @@ contextBridge.exposeInMainWorld("suzuConsole", {
       commit: (value) => ipcRenderer.invoke("conversation:call-commit", value),
       interrupt: (value) => ipcRenderer.invoke("conversation:call-interrupt", value),
       stop: (value) => ipcRenderer.invoke("conversation:call-stop", value),
+    },
+    voiceInput: {
+      start: () => ipcRenderer.invoke("conversation:voice-input-start"),
+      audio: (value) => ipcRenderer.send("conversation:voice-input-audio", value),
+      commit: (value) => ipcRenderer.invoke("conversation:voice-input-commit", value),
+      stop: (value) => ipcRenderer.invoke("conversation:voice-input-stop", value),
     },
     respondPermission: (value) => ipcRenderer.invoke("conversation:respond-permission", value),
     onEvent: (callback) => {

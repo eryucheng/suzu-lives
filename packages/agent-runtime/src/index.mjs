@@ -12,6 +12,11 @@ const RUNTIME_EVENT_TYPES = new Set([
   "tool-started",
   "tool-completed",
   "tool-failed",
+  // Model use is emitted by the selected execution driver for every assistant
+  // response (and native compaction).  It is not a renderer event, but it
+  // must pass through the product runtime so the unified cost ledger can
+  // durably record the same usage that the conversation UI displays.
+  "model-usage",
   "compaction-started",
   "compaction-completed",
   "compaction-failed",

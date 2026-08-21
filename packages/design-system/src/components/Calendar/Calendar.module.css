@@ -6,6 +6,7 @@
 
 /* 父容器有确定高度时，日历撑满剩余空间，日期行均分高度。 */
 .layout-fill {
+  --calendar-fill-row-min-height: clamp(34px, min(4.1cqw, 4dvh), 54px);
   display: flex;
   min-height: 0;
   flex: 1;
@@ -117,8 +118,10 @@
 .grid-fill {
   min-height: 0;
   flex: 1;
-  grid-auto-rows: minmax(0, 1fr);
+  grid-auto-rows: minmax(var(--calendar-fill-row-min-height), 1fr);
   margin-top: clamp(4px, 0.5cqw, 7px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .day,
@@ -131,19 +134,35 @@
 
 .layout-fill .day,
 .layout-fill .blank {
-  min-height: clamp(27px, min(4.1cqw, 4dvh), 54px);
+  min-height: var(--calendar-fill-row-min-height);
 }
 
 .day {
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr);
+  place-items: center;
   background: transparent;
   color: var(--text-secondary);
   cursor: pointer;
   font-family: inherit;
   font-size: var(--font-size-sm);
   transition: background-color 0.15s ease, color 0.15s ease, transform 0.15s ease;
+}
+
+/* Markers participate in layout rather than floating over the number. */
+.dayWithDots {
+  grid-template-rows: minmax(0, 1fr) auto;
+  padding: 3px 0 4px;
+}
+
+.dayNumber {
+  grid-row: 1;
+  display: block;
+  line-height: 1;
+}
+
+.dayWithDots .dayNumber {
+  align-self: end;
 }
 
 .day:hover {
@@ -171,12 +190,11 @@
 
 /* 事件小圆点 */
 .dots {
-  position: absolute;
-  bottom: 6px;
-  left: 50%;
+  grid-row: 2;
   display: flex;
+  min-height: 5px;
   gap: 3px;
-  transform: translateX(-50%);
+  margin-top: 2px;
 }
 
 .dot {

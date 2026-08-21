@@ -1178,7 +1178,10 @@ function handleConversationEvent(context, event) {
   // leak the runtime's internal turn labels into the text composer while a voice
   // turn is running; refresh the normal history after it settles instead.
   if (["call", "call-open"].includes(event?.kind)) {
-    if (["turn-complete", "turn-stopped", "error"].includes(event.type)) void load(context, true);
+    if (["turn-complete", "turn-stopped", "error"].includes(event.type)) {
+      void load(context, true);
+      if (event.type === "turn-complete") void context.refreshUsageLedger?.();
+    }
     return;
   }
   const activeProjectRoot = clean(viewState.snapshot?.projectRoot);
@@ -1296,6 +1299,7 @@ function handleConversationEvent(context, event) {
       viewState.liveTools = viewState.liveTools.filter((item) => item.requestId !== requestId);
       context.render();
     });
+    void context.refreshUsageLedger?.();
     return;
   }
   if (!requestId || !sessionId) return;
@@ -1655,6 +1659,18 @@ function resetConversationForContactChange() {
 
 export function createConversationReactActions(context) {
   return {
+    appendVoiceInputTranscript: (value) => {
+      const text = clean(value);
+      if (!text) return;
+      const draft = String(viewState.draft || "");
+      const separator = draft && !/[\s\n]$/u.test(draft) ? "\n" : "";
+      viewState.draft = `${draft}${separator}${text}`;
+      viewState.error = "";
+      viewState.notice = "";
+      viewState.emojiOpen = false;
+      focusComposer();
+      context.render();
+    },
     closeAvatarCrop: () => {
       viewState.avatarCrop = null;
       context.render();
@@ -1883,6 +1899,18 @@ export function createConversationReactActions(context) {
         viewState.sending = false;
         context.render();
       }
+    },
+    reportVoiceInputError: (message) => {
+      const detail = clean(message);
+      if (!detail) return;
+      viewState.error = detail;
+      viewState.notice = "";
+      context.render();
+    },
+    clearVoiceInputError: () => {
+      if (!viewState.error) return;
+      viewState.error = "";
+      context.render();
     },
     resizeAvatarCrop: resizeConversationAvatarCrop,
     respondPermission: async (requestId, behavior) => {

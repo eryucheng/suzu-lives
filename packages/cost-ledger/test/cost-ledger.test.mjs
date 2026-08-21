@@ -130,6 +130,19 @@ test("falls back to raw usage when a compatibility event has empty units", () =>
   assert.equal(result.units.inputTokens, 1_000_000);
 });
 
+test("prices CosyVoice V3.5 Plus by input characters", () => {
+  const result = calculateCost({
+    model: "cosyvoice-v3.5-plus",
+    timestamp: "2026-08-21T00:00:00.000Z",
+    units: {
+      inputCharacters: 10_000,
+    },
+  });
+  assert.equal(result.status, "estimated");
+  assert.equal(result.units.inputCharacters, 10_000);
+  assert.equal(result.amountCny, 1.5);
+});
+
 test("prices one successful Qwen voice design creation", () => {
   const result = calculateCost({
     model: "qwen-voice-design",

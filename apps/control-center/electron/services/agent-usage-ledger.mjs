@@ -1,3 +1,5 @@
+import { readUsageEvents } from "@suzu-lives/cost-ledger";
+
 const MAX_RECORDED_EVENT_IDS = 20_000;
 
 function clean(value) {
@@ -30,11 +32,81 @@ function agentEventData(event) {
   return plainObject(plainObject(event).data);
 }
 
+function historyEvent(entry) {
+  const source = plainObject(entry);
+  const wrapped = plainObject(source.event);
+  return Object.keys(wrapped).length ? wrapped : source;
+}
+
 function safeToolNames(turn) {
   const source = turn?.toolNames instanceof Set
     ? [...turn.toolNames]
     : Array.isArray(turn?.toolNames) ? turn.toolNames : [];
   return source.map(clean).filter(Boolean).slice(0, 100);
+}
+
+function historicalUsageEvent(entry, scope) {
+  const source = historyEvent(entry);
+  const data = plainObject(source.data);
+  const sequence = Number(source.seq);
+  if (!Number.isSafeInteger(sequence) || sequence < 0 || !scope.sessionId) return null;
+
+  const eventData = {
+    coreSequence: sequence,
+    ...(Number.isFinite(Number(source.time)) ? { coreTime: Number(source.time) } : {}),
+  };
+  if (source.type === "assistant/message") {
+    const messageSource = plainObject(plainObject(data.message).source);
+    const usage = plainObject(data.usage);
+    const provider = clean(messageSource.provider);
+    const model = clean(messageSource.model);
+    if (!Object.keys(usage).length || !model) return null;
+    return {
+      runtimeSessionId: scope.sessionId,
+      data: {
+        ...eventData,
+        purpose: "agent-step",
+        usage,
+        provider,
+        model,
+        ...(Number.isInteger(data.turn) ? { coreTurn: data.turn } : {}),
+        ...(Number.isInteger(data.step) ? { step: data.step } : {}),
+      },
+    };
+  }
+  if (source.type === "compaction/summary") {
+    const usage = plainObject(data.usage);
+    const provider = clean(data.provider);
+    const model = clean(data.model);
+    if (!Object.keys(usage).length || !model) return null;
+    return {
+      runtimeSessionId: scope.sessionId,
+      data: {
+        ...eventData,
+        purpose: "compaction",
+        usage,
+        provider,
+        model,
+        compactionId: clean(data.compactionId),
+        ...(Number.isInteger(data.turn) ? { coreTurn: data.turn } : {}),
+      },
+    };
+  }
+  return null;
+}
+
+function trustedContactScope(contact = {}) {
+  const source = plainObject(contact);
+  return {
+    contactId: clean(source.contactId || source.id),
+    agentId: clean(source.agentId),
+    projectRoot: clean(source.projectRoot),
+    sessionId: clean(source.sessionId || source.runtimeSessionId),
+  };
+}
+
+function completedUsageWrite(result) {
+  return Array.isArray(result) && result.some((item) => clean(item?.status) === "completed");
 }
 
 /**
@@ -98,8 +170,9 @@ function modelUsageEvent({ event, scope, contact, turn, now }) {
 }
 
 /**
- * Records only live public Agent Core event data into Suzu's own ledger. It never
- * scans the execution kernel's storage files. The registry-owned usage adapter is the single
+ * Records public Agent Core event data supplied by the live runtime or the
+ * reader's history API into Suzu's own ledger. It never opens execution-kernel
+ * storage files itself. The registry-owned usage adapter remains the single
  * write path, just like image generation and later product capabilities.
  */
 export function createAgentUsageLedger({
@@ -110,6 +183,70 @@ export function createAgentUsageLedger({
 } = {}) {
   const recorded = new Set();
   const recording = new Set();
+  const knownIdsByLedgerPath = new Map();
+
+  const knownIdsFor = async (ledgerPath) => {
+    const key = clean(ledgerPath);
+    const existing = knownIdsByLedgerPath.get(key);
+    if (existing) return await existing;
+    const loading = readUsageEvents(key)
+      .then((stored) => new Set((Array.isArray(stored?.events) ? stored.events : [])
+        .map((entry) => clean(entry?.id || entry?.requestId))
+        .filter(Boolean)))
+      .catch(() => new Set());
+    knownIdsByLedgerPath.set(key, loading);
+    const ids = await loading;
+    knownIdsByLedgerPath.set(key, ids);
+    return ids;
+  };
+
+  const recordResolvedUsage = async ({ event, scope, contact, turn = null } = {}) => {
+    const data = agentEventData(event);
+    const sequence = Number(data.coreSequence);
+    const recordId = scope.sessionId && Number.isSafeInteger(sequence) && sequence >= 0
+      ? `agent-core:${scope.sessionId}:${sequence}`
+      : "";
+    if (!recordId) return Object.freeze({ status: "invalid-agent-usage" });
+    if (recorded.has(recordId)) {
+      return Object.freeze({ status: "duplicate", id: recordId });
+    }
+    // A reader refresh can race the live event by a few milliseconds.  It must
+    // retry later instead of treating an unfinished write as a durable record.
+    if (recording.has(recordId)) return Object.freeze({ status: "recording", id: recordId });
+    recording.add(recordId);
+    try {
+      if (!contact?.agentId || !contact?.projectRoot) {
+        return Object.freeze({ status: "contact-unavailable", id: recordId });
+      }
+      const settings = settingsService.load() || {};
+      const ledgerPath = clean(settingsService.usageLedgerPath({
+        ...settings,
+        agentId: contact.agentId,
+        projectRoot: contact.projectRoot,
+      }));
+      const ledgerEvent = modelUsageEvent({ event, scope, contact, turn, now });
+      if (!ledgerPath || !ledgerEvent) return Object.freeze({ status: "invalid-agent-usage", id: recordId });
+      const knownIds = await knownIdsFor(ledgerPath);
+      if (knownIds.has(recordId)) {
+        recorded.add(recordId);
+        return Object.freeze({ status: "duplicate", id: recordId });
+      }
+      const result = await capabilityRuntime.recordUsage({
+        capabilityId: "conversation-model",
+        ledgerPath,
+        event: ledgerEvent,
+      });
+      if (!completedUsageWrite(result)) {
+        return Object.freeze({ status: "ledger-not-written", id: recordId, result });
+      }
+      knownIds.add(recordId);
+      recorded.add(recordId);
+      return Object.freeze({ status: "recorded", id: recordId, result });
+    } finally {
+      recording.delete(recordId);
+      if (recorded.size > MAX_RECORDED_EVENT_IDS) recorded.clear();
+    }
+  };
 
   const scopeFor = async ({ event, turn } = {}) => {
     const scope = agentEventScope(event, turn);
@@ -141,43 +278,51 @@ export function createAgentUsageLedger({
       return Object.freeze({ status: "ledger-unavailable" });
     }
     const scope = agentEventScope(event, turn);
-    const data = agentEventData(event);
-    const sequence = Number(data.coreSequence);
-    const recordId = scope.sessionId && Number.isSafeInteger(sequence) && sequence >= 0
-      ? `agent-core:${scope.sessionId}:${sequence}`
-      : "";
-    if (!recordId) return Object.freeze({ status: "invalid-agent-usage" });
-    if (recorded.has(recordId) || recording.has(recordId)) {
-      return Object.freeze({ status: "duplicate", id: recordId });
-    }
-    recording.add(recordId);
-    try {
-      const contact = await scopeFor({ event, turn });
-      if (!contact?.agentId || !contact?.projectRoot) {
-        return Object.freeze({ status: "contact-unavailable", id: recordId });
-      }
-      const settings = settingsService.load() || {};
-      const ledgerPath = clean(settingsService.usageLedgerPath({
-        ...settings,
-        agentId: contact.agentId,
-        projectRoot: contact.projectRoot,
-      }));
-      const ledgerEvent = modelUsageEvent({ event, scope, contact, turn, now });
-      if (!ledgerPath || !ledgerEvent) return Object.freeze({ status: "invalid-agent-usage", id: recordId });
-      const result = await capabilityRuntime.recordUsage({
-        capabilityId: "conversation-model",
-        ledgerPath,
-        event: ledgerEvent,
-      });
-      recorded.add(recordId);
-      return Object.freeze({ status: "recorded", id: recordId, result });
-    } catch (error) {
-      throw error;
-    } finally {
-      recording.delete(recordId);
-      if (recorded.size > MAX_RECORDED_EVENT_IDS) recorded.clear();
-    }
+    const contact = await scopeFor({ event, turn });
+    return recordResolvedUsage({ event, scope, contact, turn });
   };
 
-  return Object.freeze({ record });
+  /**
+   * Live model-usage notifications are the fast path.  The same source data is
+   * also durable in Agent Core's session log, so reconcile it when the reader
+   * opens a conversation.  This repairs an interrupted Electron process or a
+   * previous build that rendered the usage but failed before writing Suzu's
+   * own ledger.  Event ids use the immutable Core sequence and are checked
+   * against the persisted ledger before appending.
+   */
+  const reconcile = async ({ contact, events = [] } = {}) => {
+    if (typeof capabilityRuntime?.recordUsage !== "function"
+      || typeof settingsService?.load !== "function"
+      || typeof settingsService?.usageLedgerPath !== "function") {
+      return Object.freeze({ completed: false, status: "ledger-unavailable", scanned: 0, recorded: 0, duplicates: 0 });
+    }
+    const trusted = trustedContactScope(contact);
+    if (!trusted.agentId || !trusted.projectRoot || !trusted.sessionId) {
+      return Object.freeze({ completed: false, status: "contact-unavailable", scanned: 0, recorded: 0, duplicates: 0 });
+    }
+    const scope = { sessionId: trusted.sessionId, projectRoot: trusted.projectRoot };
+    let scanned = 0;
+    let recordedCount = 0;
+    let duplicates = 0;
+    let skipped = 0;
+    for (const entry of Array.isArray(events) ? events : []) {
+      const event = historicalUsageEvent(entry, scope);
+      if (!event) continue;
+      scanned += 1;
+      const result = await recordResolvedUsage({ event, scope, contact: trusted });
+      if (result.status === "recorded") recordedCount += 1;
+      else if (result.status === "duplicate") duplicates += 1;
+      else skipped += 1;
+    }
+    return Object.freeze({
+      completed: skipped === 0,
+      status: skipped === 0 ? "completed" : "incomplete",
+      scanned,
+      recorded: recordedCount,
+      duplicates,
+      skipped,
+    });
+  };
+
+  return Object.freeze({ record, reconcile });
 }

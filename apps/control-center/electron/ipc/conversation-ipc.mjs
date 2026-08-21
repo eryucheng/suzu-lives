@@ -5,6 +5,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { createSuzuAgentLifecycle } from "@suzu-lives/agent-lifecycle";
 import { createConversationReader } from "../services/conversation-reader.mjs";
 import { createConversationChatService } from "../services/conversation-chat.mjs";
+import { createAgentUsageLedger } from "../services/agent-usage-ledger.mjs";
 import { createConversationAttachmentService } from "../services/conversation-attachment-service.mjs";
 import { createConversationCompactorService } from "../services/conversation-compactor-service.mjs";
 import { createSuzuAgentRuntime } from "../services/suzu-agent-runtime.mjs";
@@ -16,6 +17,7 @@ import {
 } from "../services/emoji-sticker-library.mjs";
 import { createConversationSessionSettingsService } from "../services/conversation-session-settings.mjs";
 import { createRealtimeVoiceCallService } from "../services/realtime-voice-call.mjs";
+import { createConversationVoiceInputService } from "../services/conversation-voice-input.mjs";
 
 const STICKER_SELECTION_TTL_MS = 10 * 60 * 1_000;
 const ATTACHMENT_SELECTION_TTL_MS = 10 * 60 * 1_000;
@@ -185,11 +187,21 @@ export function registerConversationIpc({
     policy: "critical",
     timeoutMs: 5_000,
   });
+  let usageLedger = null;
   const reader = createConversationReader({
     contactProjectsService,
     dataRoot,
     onContactCreated: initializeContactCapabilities,
+    onAgentUsageEvents: (value) => usageLedger?.reconcile(value) || Object.freeze({
+      completed: false,
+      status: "ledger-unavailable",
+    }),
     runtime: agentRuntime,
+    settingsService,
+  });
+  usageLedger = createAgentUsageLedger({
+    capabilityRuntime,
+    reader,
     settingsService,
   });
   const compactor = createConversationCompactorService({
@@ -253,10 +265,12 @@ export function registerConversationIpc({
   };
   let sender = null;
   let callSender = null;
+  let voiceInputSender = null;
   const chat = createConversationChatService({
     attachmentService,
     compactor,
     capabilityRuntime,
+    usageLedger,
     settingsService,
     reader,
     runtime: agentRuntime,
@@ -276,8 +290,19 @@ export function registerConversationIpc({
       if (target && !target.isDestroyed()) target.send("conversation:event", payload);
     },
   });
+  const voiceInput = createConversationVoiceInputService({
+    connectionsService,
+    reader,
+    settingsService,
+    onEvent: (payload) => {
+      const target = voiceInputSender && !voiceInputSender.isDestroyed() ? voiceInputSender : sender;
+      if (target && !target.isDestroyed()) target.send("conversation:event", payload);
+      if (payload?.type === "voice-input-ended") voiceInputSender = null;
+    },
+  });
   app?.once?.("before-quit", () => {
     call.dispose();
+    voiceInput.dispose();
     chat.dispose();
     agentHooks.dispose();
     agentLifecycle.close();
@@ -493,5 +518,24 @@ export function registerConversationIpc({
     if (result?.stopped) callSender = null;
     return result;
   });
-  return { agentLifecycle, agentRuntime, attachmentService, call, chat, compactor, reader, sessionSettings };
+  ipcMain.handle("conversation:voice-input-start", async (event) => {
+    sender = event.sender;
+    const result = await voiceInput.start({ senderId: String(event.sender.id) });
+    voiceInputSender = event.sender;
+    return result;
+  });
+  ipcMain.on("conversation:voice-input-audio", (event, value) => {
+    voiceInput.pushAudio({ ...(value && typeof value === "object" ? value : {}), senderId: String(event.sender.id) });
+  });
+  ipcMain.handle("conversation:voice-input-commit", async (event, value) => {
+    sender = event.sender;
+    return voiceInput.commit({ ...(value && typeof value === "object" ? value : {}), senderId: String(event.sender.id) });
+  });
+  ipcMain.handle("conversation:voice-input-stop", async (event, value) => {
+    sender = event.sender;
+    const result = await voiceInput.stop({ ...(value && typeof value === "object" ? value : {}), senderId: String(event.sender.id) });
+    if (result?.stopped) voiceInputSender = null;
+    return result;
+  });
+  return { agentLifecycle, agentRuntime, attachmentService, call, chat, compactor, reader, sessionSettings, voiceInput };
 }

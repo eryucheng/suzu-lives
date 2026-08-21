@@ -177,6 +177,7 @@ test("WeChat approval prompts stay separate from tool delivery and accept a scop
     requestId: "permission-1",
     sessionId: "permission-session",
     projectRoot,
+    deliverToWechat: true,
     toolName: "Bash",
     preview: '{"command":"git status"}',
   });
@@ -203,9 +204,14 @@ test("WeChat links persist a contact scope and relay through its fixed DSH sessi
   const outgoing = [];
   const uploadRequests = [];
   const uploadedBodies = [];
+  const typingConfigs = [];
+  const typingRequests = [];
+  const typingTimers = [];
   const chatSubscribers = new Set();
   let releaseConfirmation = null;
+  let releaseSecondInbound = null;
   const confirmation = new Promise((resolve) => { releaseConfirmation = resolve; });
+  const secondInbound = new Promise((resolve) => { releaseSecondInbound = resolve; });
   let getUpdates = 0;
   const chat = {
     sendToSession: async (value) => { deliveredToSession.push(value); return { accepted: true }; },
@@ -253,10 +259,31 @@ test("WeChat links persist a contact scope and relay through its fixed DSH sessi
           }],
         });
       }
+      if (getUpdates === 2) {
+        await secondInbound;
+        return jsonResponse({
+          get_updates_buf: "cursor-2",
+          msgs: [{
+            from_user_id: "owner-1",
+            message_id: "message-2",
+            context_token: "context-2",
+            message_type: 1,
+            item_list: [{ type: 1, text_item: { text: "第二条微信消息" } }],
+          }],
+        });
+      }
       return new Promise((_resolve, reject) => {
         if (init.signal?.aborted) { reject(new Error("aborted")); return; }
         init.signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
       });
+    }
+    if (url.pathname.endsWith("/getconfig")) {
+      typingConfigs.push(JSON.parse(init.body));
+      return jsonResponse({ ret: 0, typing_ticket: "typing-ticket-1" });
+    }
+    if (url.pathname.endsWith("/sendtyping")) {
+      typingRequests.push(JSON.parse(init.body));
+      return jsonResponse({ ret: 0 });
     }
     if (url.pathname.endsWith("/getuploadurl")) {
       uploadRequests.push(JSON.parse(init.body));
@@ -277,21 +304,50 @@ test("WeChat links persist a contact scope and relay through its fixed DSH sessi
     }
     throw new Error(`Unexpected iLink route: ${url.pathname}`);
   };
-  const service = createWeChatLinkService({ chat, dataRoot: root, fetchImpl, reader });
+  const service = createWeChatLinkService({
+    chat,
+    dataRoot: root,
+    fetchImpl,
+    reader,
+    setIntervalImpl: (callback, delay) => {
+      const timer = { callback, delay, cleared: false };
+      typingTimers.push(timer);
+      return timer;
+    },
+    clearIntervalImpl: (timer) => { timer.cleared = true; },
+  });
 
   assert.equal((await service.snapshot()).enabled, true);
   const pending = await service.begin({ contactId: "contact-suzu" });
   assert.match(pending.pendingQr?.imageDataUrl || "", /^data:image\/png;base64,/u);
   releaseConfirmation();
   await waitFor(() => deliveredToSession.length === 1, "微信入站消息没有进入 DSH 会话队列");
-  assert.deepEqual(deliveredToSession[0], {
+  const inboundRequest = deliveredToSession[0];
+  assert.match(inboundRequest.requestId, /^wechat-/u);
+  assert.deepEqual({ ...inboundRequest, requestId: undefined }, {
     content: "从微信发来的文字",
     sessionId: "session-1",
     projectRoot,
     hasTranscript: true,
     kind: "message",
     deliverToWechat: true,
+    requestId: undefined,
   });
+  await waitFor(() => typingRequests.some((item) => item.status === 1), "微信入站消息没有触发原生输入状态");
+  assert.deepEqual(typingConfigs, [{
+    ilink_user_id: "owner-1",
+    context_token: "context-1",
+    base_info: { channel_version: "suzu-lives-wechat/1.0" },
+  }]);
+  assert.deepEqual(typingRequests[0], {
+    ilink_user_id: "owner-1",
+    typing_ticket: "typing-ticket-1",
+    status: 1,
+    base_info: { channel_version: "suzu-lives-wechat/1.0" },
+  });
+  assert.equal(typingTimers[0]?.delay, 5_000);
+  typingTimers[0].callback();
+  await waitFor(() => typingRequests.filter((item) => item.status === 1).length === 2, "微信输入状态没有保持刷新");
 
   for (const listener of chatSubscribers) listener({
     type: "agent-reply",
@@ -306,14 +362,44 @@ test("WeChat links persist a contact scope and relay through its fixed DSH sessi
 
   for (const listener of chatSubscribers) listener({
     type: "agent-reply",
-    requestId: "reply-1",
+    requestId: inboundRequest.requestId,
     sessionId: "session-1",
     projectRoot,
+    deliverToWechat: true,
     content: "工具前的说明\n\n分开的一段",
   });
   await waitFor(() => outgoing.length === 2, "DSH 回复没有按段发回微信");
   assert.deepEqual(outgoing.map((item) => item.msg.item_list[0].text_item.text), ["工具前的说明", "分开的一段"]);
   assert.ok(outgoing.every((item) => item.msg.context_token === "context-1"));
+  assert.deepEqual(typingRequests.map((item) => item.status), [1, 1, 2]);
+  assert.equal(typingTimers[0].cleared, true);
+
+  for (const listener of chatSubscribers) listener({
+    type: "thinking",
+    requestId: "thinking-local-only",
+    sessionId: "session-1",
+    projectRoot,
+    deliverToWechat: true,
+    content: "这是一段不该默认投递的思考。",
+  });
+  await flush();
+  assert.equal(outgoing.length, 2, "关闭“思考内容”时不应向微信投递思考消息");
+
+  await waitFor(() => typeof releaseSecondInbound === "function", "微信没有继续等待下一条入站消息");
+  releaseSecondInbound();
+  await waitFor(() => deliveredToSession.length === 2, "第二条微信消息没有进入 DSH 会话队列");
+  const failedRequest = deliveredToSession[1];
+  await waitFor(() => typingRequests.filter((item) => item.status === 1).length === 3, "第二条微信消息没有开启输入状态");
+  for (const listener of chatSubscribers) listener({
+    type: "error",
+    requestId: failedRequest.requestId,
+    sessionId: "session-1",
+    projectRoot,
+    deliverToWechat: true,
+    message: "Agent Core 暂时不可用。",
+  });
+  await waitFor(() => typingRequests.filter((item) => item.status === 2).length === 2, "失败的 Agent 轮次没有取消输入状态");
+  assert.equal(typingTimers[1].cleared, true);
 
   await service.saveSettings({ delivery: { system: true } });
   for (const listener of chatSubscribers) listener({
@@ -322,6 +408,7 @@ test("WeChat links persist a contact scope and relay through its fixed DSH sessi
     requestId: "schedule-error",
     sessionId: "session-1",
     projectRoot,
+    deliverToWechat: true,
     message: "定时器内部状态",
   });
   await flush();
@@ -332,10 +419,45 @@ test("WeChat links persist a contact scope and relay through its fixed DSH sessi
     requestId: "schedule-reply",
     sessionId: "session-1",
     projectRoot,
+    deliverToWechat: true,
     content: "这是定时任务真正要告诉你的内容",
   });
-  await waitFor(() => outgoing.length === 3, "定时任务的最终 Agent 回复没有发回微信");
-  assert.equal(outgoing[2].msg.item_list[0].text_item.text, "这是定时任务真正要告诉你的内容");
+  await flush();
+  assert.equal(outgoing.length, 2, "未标记为主动联系的定时任务不应投递到微信");
+  for (const listener of chatSubscribers) listener({
+    type: "agent-reply",
+    kind: "schedule",
+    scheduleSource: "proactive-chain",
+    requestId: "proactive-reply",
+    sessionId: "session-1",
+    projectRoot,
+    deliverToWechat: true,
+    content: "<think>先判断是否应该联系对方。</think>\n\n晚上好，今天过得怎么样？",
+  });
+  await waitFor(() => outgoing.length === 3, "链式主动联系的最终回复没有发回微信");
+  assert.equal(outgoing[2].msg.item_list[0].text_item.text, "晚上好，今天过得怎么样？");
+  for (const listener of chatSubscribers) listener({
+    type: "agent-reply",
+    kind: "schedule",
+    scheduleSource: "proactive-chain",
+    requestId: "proactive-no-reply",
+    sessionId: "session-1",
+    projectRoot,
+    deliverToWechat: true,
+    content: "NO_REPLY",
+  });
+  for (const listener of chatSubscribers) listener({
+    type: "agent-reply",
+    kind: "schedule",
+    scheduleSource: "proactive-chain",
+    requestId: "proactive-envelope",
+    sessionId: "session-1",
+    projectRoot,
+    deliverToWechat: true,
+    content: "<suzu-schedule-task>内部安排</suzu-schedule-task>",
+  });
+  await flush();
+  assert.equal(outgoing.length, 3, "NO_REPLY 和内部任务包不应投递到微信");
 
   const agentFile = path.join(root, "agent-report.txt");
   const agentImage = path.join(root, "agent-image.png");
@@ -348,6 +470,7 @@ test("WeChat links persist a contact scope and relay through its fixed DSH sessi
     requestId: "media-1",
     sessionId: "session-1",
     projectRoot,
+    deliverToWechat: true,
     media: [
       { kind: "file", path: agentFile },
       { kind: "image", path: agentImage },
@@ -440,6 +563,12 @@ test("WeChat images and files enter the bound DSH session while only supplied vo
         init.signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
       });
     }
+    if (url.pathname.endsWith("/getconfig")) {
+      return jsonResponse({ ret: 0, typing_ticket: "typing-ticket-media" });
+    }
+    if (url.pathname.endsWith("/sendtyping")) {
+      return jsonResponse({ ret: 0 });
+    }
     if (url.pathname.endsWith("/download")) {
       const query = url.searchParams.get("encrypted_query_param");
       downloads.push(query);
@@ -512,6 +641,7 @@ test("an agent attachment without a matching WeChat link stays local and is not 
     requestId: "media-unlinked",
     sessionId: "session-unlinked",
     projectRoot,
+    deliverToWechat: true,
     media: [{ kind: "file", path: path.join(projectRoot, "already-local.txt"), size: 1 }],
   });
   await flush();
