@@ -404,7 +404,7 @@ export function PlansPage({ actions = {}, snapshot = null }) {
         )}
         eyebrow="PLANS"
         subtitle="管理本机保存的定时器、每日任务与系统脚本。"
-        title="计划，不只是待办列表"
+        title="计划"
       />
 
       <ol className="plans-flow" aria-label="可创建的计划类型">

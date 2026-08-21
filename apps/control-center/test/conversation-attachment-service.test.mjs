@@ -54,6 +54,34 @@ test("conversation attachment service caches files per DSH session and builds na
   assert.equal(Buffer.from(prepared.input[2].data, "base64").equals(ONE_PIXEL_PNG), true);
 });
 
+test("conversation attachment service keeps media cards while preparing image and video for the existing understanding capabilities", async () => {
+  const root = await temporaryRoot();
+  const dataRoot = path.join(root, "data");
+  const projectRoot = path.join(root, "contact");
+  const image = path.join(root, "reference.png");
+  const video = path.join(root, "moment.mp4");
+  await fs.mkdir(projectRoot, { recursive: true });
+  await fs.writeFile(image, ONE_PIXEL_PNG);
+  await fs.writeFile(video, Buffer.from([0x00, 0x00, 0x00, 0x18, 0x66, 0x74, 0x79, 0x70]));
+
+  const prepared = await createConversationAttachmentService({ dataRoot }).prepare({
+    content: "看看这些媒体",
+    includeNativeImages: false,
+    media: [
+      { kind: "image", path: image },
+      { kind: "file", path: video },
+    ],
+    projectRoot,
+    sessionId: "contact-session",
+  });
+
+  assert.deepEqual(prepared.media.map((item) => item.kind), ["image", "file"]);
+  assert.equal(prepared.media[1].mimeType, "video/mp4");
+  assert.deepEqual(prepared.understandingMedia.map((item) => item.kind), ["image", "video"]);
+  assert.deepEqual(prepared.input.map((part) => part.type), ["text", "text"]);
+  assert.match(prepared.input[1].text, /已启用的图像理解能力/u);
+});
+
 test("conversation attachment service keeps unsupported images as local files instead of sending invalid DSH image parts", async () => {
   const root = await temporaryRoot();
   const dataRoot = path.join(root, "data");

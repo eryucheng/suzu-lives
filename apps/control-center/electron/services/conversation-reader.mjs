@@ -4,6 +4,7 @@ import { pathToFileURL } from "node:url";
 import {
   conversationAttachmentReceipt,
   conversationMediaManifest,
+  conversationMediaUnderstandingContext,
 } from "./conversation-attachment-service.mjs";
 
 const MAX_MESSAGES = 500;
@@ -262,8 +263,55 @@ function attachmentReceiptBlocks(value, options = {}) {
     .filter(Boolean);
 }
 
-function mediaBlocksFromText(value, options = {}) {
+function isInternalMediaUnderstandingContext(raw) {
+  try {
+    const value = JSON.parse(String(raw ?? "").trim());
+    const data = plainObject(value);
+    return data.version === 1
+      && clean(data.source) === "suzu-lives-media-understanding"
+      && Array.isArray(data.items);
+  } catch {
+    return false;
+  }
+}
+
+// Image/video understanding is persisted with the user turn so Agent Core can
+// reproduce the same reply after a restart. It is software-generated context,
+// not text the person typed, so strip only a valid reserved-envelope shape
+// before projecting a bubble. Malformed or ordinary user-authored markup stays
+// visible as normal text.
+function withoutInternalMediaUnderstandingContext(value) {
   const text = String(value ?? "");
+  let cursor = 0;
+  let visible = "";
+  while (cursor < text.length) {
+    const open = text.indexOf(conversationMediaUnderstandingContext.open, cursor);
+    if (open < 0) {
+      visible += text.slice(cursor);
+      break;
+    }
+    const close = text.indexOf(
+      conversationMediaUnderstandingContext.close,
+      open + conversationMediaUnderstandingContext.open.length,
+    );
+    if (close < 0) {
+      visible += text.slice(cursor);
+      break;
+    }
+    const end = close + conversationMediaUnderstandingContext.close.length;
+    const raw = text.slice(open + conversationMediaUnderstandingContext.open.length, close);
+    if (!isInternalMediaUnderstandingContext(raw)) {
+      visible += text.slice(cursor, end);
+    } else {
+      visible += text.slice(cursor, open);
+    }
+    cursor = end;
+  }
+  return visible;
+}
+
+function mediaBlocksFromText(value, options = {}) {
+  const text = withoutInternalMediaUnderstandingContext(value);
   const output = [];
   let cursor = 0;
   let visible = "";

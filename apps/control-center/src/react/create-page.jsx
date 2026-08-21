@@ -21,7 +21,7 @@ function CreateSpaceCard({ onOpen, space }) {
 export function CreatePage({ actions = {} }) {
   return (
     <>
-      <PageHeader eyebrow="CREATE" subtitle="把视觉灵感与声音方向整理成可以继续推进的创作现场。" title="创作" />
+      <PageHeader eyebrow="CREATE" subtitle="把视觉灵感与声音方向整理成可以继续推进的创作现场。" title="创造" />
       <section aria-label="创作空间" className="create-space-grid">
         {CREATE_SPACES.map((space) => (
           <CreateSpaceCard

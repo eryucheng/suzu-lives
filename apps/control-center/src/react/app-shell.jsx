@@ -31,9 +31,9 @@ const PRIMARY_NAVIGATION = [
   { view: "today", label: "今天", icon: "spark" },
   { view: "conversation", label: "对话", icon: "chat" },
   { view: "relationships", label: "关系", icon: "people" },
+  { view: "capabilities", label: "能力", icon: "sliders" },
   { view: "plans", label: "计划", icon: "calendar" },
   { view: "create", label: "创造", icon: "palette" },
-  { view: "capabilities", label: "能力", icon: "sliders" },
 ];
 
 const UTILITY_NAVIGATION = [
@@ -239,7 +239,6 @@ export function AppShell() {
             <Avatar className="shell-brand-avatar" name="Suzu Lives" size="lg" src="./app-icon.png" />
             <div className="shell-brand-copy">
               <div className="shell-brand-name">Suzu Lives</div>
-              <div className="shell-brand-subtitle">A life with agents</div>
             </div>
           </div>
           <Navigation items={PRIMARY_NAVIGATION} activeView={activeView} conversationUnread={conversationUnread} onNavigate={navigate} className="shell-primary-nav" />

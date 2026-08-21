@@ -16,13 +16,13 @@ test("the software shell keeps core navigation while deferring only capability v
     'view: "today", label: "今天", icon: "spark"',
     'view: "conversation", label: "对话", icon: "chat"',
     'view: "relationships", label: "关系", icon: "people"',
+    'view: "capabilities", label: "能力", icon: "sliders"',
     'view: "plans", label: "计划", icon: "calendar"',
     'view: "create", label: "创造", icon: "palette"',
-    'view: "capabilities", label: "能力", icon: "sliders"',
     'view: "admin", label: "管理", icon: "sliders"',
     'view: "settings", label: "设置", icon: "gear"',
   ]) assert.match(source, new RegExp(entry, "u"));
-  assert.match(source, /view: "today"[\s\S]*?view: "conversation"[\s\S]*?view: "relationships"/u);
+  assert.match(source, /view: "today"[\s\S]*?view: "conversation"[\s\S]*?view: "relationships"[\s\S]*?view: "capabilities"[\s\S]*?view: "plans"[\s\S]*?view: "create"/u);
   assert.match(source, /view === "conversation"[\s\S]*?openSuzuSearchItem\?\.\("conversation"\)/u);
   assert.match(source, /route\?\.kind === "conversation"[\s\S]*?\? "conversation"/u);
   assert.match(source, /item\.view === "conversation" && conversationUnread/u);
@@ -33,6 +33,19 @@ test("the software shell keeps core navigation while deferring only capability v
   assert.match(application, /if \(nextPage === "overview"\) void loadMemoryScope\(\);/u);
   assert.match(application, /if \(nextPage === "memory"\) void loadMemoryScope\(\);/u);
   assert.deepEqual(SUZU_ADMIN_TABS, ["agent", "usage"]);
+});
+
+test("top-level page headers use their corresponding navigation labels", async () => {
+  const relationships = await readFile(new URL("../src/react/relationships-page.jsx", import.meta.url), "utf8");
+  const plans = await readFile(new URL("../src/react/plans-page.jsx", import.meta.url), "utf8");
+  const create = await readFile(new URL("../src/react/create-page.jsx", import.meta.url), "utf8");
+
+  assert.match(relationships, /title="关系"/u);
+  assert.doesNotMatch(relationships, /title="让关系有连续的记忆"/u);
+  assert.match(plans, /title="计划"/u);
+  assert.doesNotMatch(plans, /title="计划，不只是待办列表"/u);
+  assert.match(create, /title="创造"/u);
+  assert.doesNotMatch(create, /title="创作"/u);
 });
 
 test("relationship navigation keeps the original overview before its editor", () => {

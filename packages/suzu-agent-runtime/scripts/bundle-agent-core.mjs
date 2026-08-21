@@ -328,6 +328,15 @@ function ownAgentCoreDiagnostics(code) {
 
 function ownAgentCoreExecutionSource(code, id) {
   let next = ownAgentCoreDiagnostics(code);
+  if (/[/\\]dsh-home-paths[/\\]lib[/\\]index\.js$/u.test(id)) {
+    const before = next;
+    next = next
+      .replace(/(["'`])DSH_HOME\1/gu, "$1SUZU_AGENT_HOME$1")
+      .replace(/(["'`])\.dsh\1/gu, "$1.suzu-agent$1");
+    if (next === before || !next.includes("SUZU_AGENT_HOME") || !next.includes(".suzu-agent")) {
+      throw new Error("Cannot apply Suzu Agent Core home-path bundle patch: upstream layout changed.");
+    }
+  }
   if (/[/\\]dsh-subprocess[/\\]lib[/\\]index\.js$/u.test(id)) {
     next = next
       .replace('const DSH_ENV_PREFIX = "DSH_";', 'const DSH_ENV_PREFIX = "SUZU_AGENT_";')

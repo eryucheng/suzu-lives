@@ -11,7 +11,6 @@ import {
   importSuzuAgentCoreModule,
   resolveSuzuAgentCoreBundleAnchor,
 } from "./core-bundle.mjs";
-import { applySuzuUpstreamCompatibilityEnvironment } from "./upstream-compatibility.mjs";
 
 const {
   boot,
@@ -249,16 +248,21 @@ export class SuzuAgentHost {
     const selection = {
       get current() {
         if (chosen) return chosen;
-        const logged = modelSelection(plainObject(agent.session.requestHeader?.()).config);
-        if (logged) return logged;
-        // The Core settings service can refresh its live default-model source
-        // while an already-created Agent is waiting for its first turn.  The
-        // product passed a validated selection into agentOptions at creation
-        // time, so it is the stable per-session source of truth here.
+        // The product's main-model setting is a live, product-wide choice.
+        // It must win over an old request header: otherwise changing the
+        // setting after a contact's first turn would leave that contact
+        // permanently pinned to its original provider/model.
+        const live = modelSelection(agent.ctx.agentDefaultModel?.currentSelection?.());
+        if (live) return live;
+        // agentOptions is the selection captured while this Agent was
+        // created or resumed. Keep it as the fallback when the Core's live
+        // settings source is temporarily unavailable.
         const configured = modelSelection(agent.options);
         if (configured) return configured;
-        const fallback = modelSelection(agent.ctx.agentDefaultModel?.currentSelection?.());
-        if (fallback) return fallback;
+        // Older persisted sessions may predate either product-owned source.
+        // Their recorded request header is still a safe last-resort route.
+        const logged = modelSelection(plainObject(agent.session.requestHeader?.()).config);
+        if (logged) return logged;
         throw new Error("Suzu Agent 缺少可用的主模型配置；请在“设置 → 主模型”保存后重试。 ");
       },
       set current(next) { chosen = next; },
@@ -503,7 +507,6 @@ export function parseEmbeddedSuzuAgentHostArguments(values = []) {
 }
 
 export async function runEmbeddedSuzuAgentHost({ argv = process.argv.slice(2), send = (message) => process.send?.(message) } = {}) {
-  applySuzuUpstreamCompatibilityEnvironment();
   const startup = parseEmbeddedSuzuAgentHostArguments(argv);
   const patches = [
     ...loadOverlayPatches("suzu-agent-core", CORE_PATCH_FILE),

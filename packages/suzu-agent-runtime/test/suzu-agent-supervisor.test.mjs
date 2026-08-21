@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import { existsSync } from "node:fs";
+import { readFile, readdir } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { afterEach, test } from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -18,6 +19,16 @@ import { SUZU_AGENT_LIFECYCLE_IPC_PROTOCOL } from "../src/lifecycle-ipc.mjs";
 import { resolveSuzuAgentCoreNativeAnchor } from "../src/core-bundle.mjs";
 
 const TEST_DIRECTORY = dirname(fileURLToPath(import.meta.url));
+const CORE_CHUNKS_DIRECTORY = resolve(TEST_DIRECTORY, "..", "vendor", "core", "modules", "chunks");
+
+async function findCoreChunk(predicate) {
+  for (const name of await readdir(CORE_CHUNKS_DIRECTORY)) {
+    if (!name.endsWith(".mjs")) continue;
+    const source = await readFile(join(CORE_CHUNKS_DIRECTORY, name), "utf8");
+    if (predicate(source)) return source;
+  }
+  return "";
+}
 
 function waitBriefly(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, Math.min(milliseconds, 2)));
@@ -68,7 +79,7 @@ afterEach(async () => {
   await Promise.all(supervisors.splice(0).map((supervisor) => supervisor.stop()));
 });
 
-function makeSupervisor({ ready = true, patchFiles = [], exitsImmediately = false, resourcesPath = "" } = {}) {
+function makeSupervisor({ ready = true, patchFiles = [], exitsImmediately = false, resourcesPath = "", environment = {} } = {}) {
   const calls = { spawn: [] };
   const child = createFakeChild();
   const supervisor = createSuzuAgentCoreSupervisor({
@@ -95,6 +106,7 @@ function makeSupervisor({ ready = true, patchFiles = [], exitsImmediately = fals
     stopTimeoutMs: 25,
     patchFiles,
     resourcesPath,
+    environment,
   });
   supervisors.push(supervisor);
   return { supervisor, calls, child };
@@ -119,6 +131,7 @@ test("supervisor launches an owned Suzu IPC child with explicit data paths", asy
   assert.equal(calls.spawn[0].options.shell, false);
   assert.deepEqual(calls.spawn[0].options.stdio, ["ignore", "pipe", "pipe", "ipc"]);
   assert.equal(calls.spawn[0].options.env.SUZU_AGENT_HOME, process.cwd());
+  assert.equal(calls.spawn[0].options.env.DSH_HOME, undefined);
   assert.equal(calls.spawn[0].options.env.TEMP, process.cwd());
   assert.equal(calls.spawn[0].options.env.TMPDIR, process.cwd());
   assert.equal(calls.spawn[0].options.env.npm_config_cache, `${process.cwd()}${process.platform === "win32" ? "\\" : "/"}npm-cache`);
@@ -128,6 +141,31 @@ test("supervisor launches an owned Suzu IPC child with explicit data paths", asy
   assert.equal(stopped.state, "stopped");
   assert.equal(child.kills.length >= 1, true);
   assert.equal(events.includes("stopped"), true);
+});
+
+test("supervisor strips settings from an independently installed DSH", async () => {
+  const { supervisor, calls } = makeSupervisor({
+    environment: {
+      DSH_HOME: join(process.cwd(), "another-dsh-installation"),
+      DSH_AGENTS_HOME: join(process.cwd(), "another-dsh-agents"),
+      DSH_PERMISSION_MODE: "workspace-write",
+    },
+  });
+
+  await supervisor.start();
+
+  assert.equal(calls.spawn[0].options.env.DSH_HOME, undefined);
+  assert.equal(calls.spawn[0].options.env.DSH_AGENTS_HOME, undefined);
+  assert.equal(calls.spawn[0].options.env.DSH_PERMISSION_MODE, undefined);
+});
+
+test("vendored Core home paths use only Suzu's product-owned key", async () => {
+  const source = await findCoreChunk((candidate) => candidate.includes("SUZU_AGENT_HOME") && candidate.includes(".suzu-agent"));
+
+  assert.notEqual(source, "");
+  assert.doesNotMatch(source, /DSH_HOME/u);
+  assert.match(source, /SUZU_AGENT_HOME/u);
+  assert.match(source, /\.suzu-agent/u);
 });
 
 test("supervisor exposes native session compaction as a long-running IPC request", async () => {
@@ -354,6 +392,27 @@ test("embedded host keeps the create-time model selection when Core's live defau
     provider: "suzu-test-provider",
     model: "suzu-test-model",
   });
+});
+
+test("embedded host applies a changed live main model to a persisted contact session", () => {
+  let liveSelection = { provider: "deepseek-official", model: "deepseek-v4-flash" };
+  const host = new SuzuAgentHost({}, { send: () => true });
+  const agent = {
+    options: { provider: "deepseek-official", model: "deepseek-v4-flash" },
+    session: {
+      requestHeader: () => ({ config: { provider: "deepseek-official", model: "deepseek-v4-flash" } }),
+    },
+    ctx: {
+      agentDefaultModel: { currentSelection: () => liveSelection },
+      on: () => () => undefined,
+    },
+  };
+
+  const selection = host.selectionFor(agent);
+  assert.deepEqual(selection.current, liveSelection);
+
+  liveSelection = { provider: "suzu-kimi", model: "kimi-for-coding" };
+  assert.deepEqual(selection.current, liveSelection);
 });
 
 test("embedded Suzu host and private resolver are concrete", async () => {

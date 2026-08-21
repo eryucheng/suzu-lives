@@ -15,6 +15,8 @@ const MAX_AGENT_CORE_IMAGES_PER_MESSAGE = 20;
 const CONVERSATION_ATTACHMENT_RECEIPT = "suzu-conversation-attachment";
 const MEDIA_MANIFEST_OPEN = "<conversation-media>";
 const MEDIA_MANIFEST_CLOSE = "</conversation-media>";
+const MEDIA_UNDERSTANDING_CONTEXT_OPEN = "<suzu-media-understanding>";
+const MEDIA_UNDERSTANDING_CONTEXT_CLOSE = "</suzu-media-understanding>";
 
 const IMAGE_MIME_BY_EXTENSION = Object.freeze({
   ".gif": "image/gif",
@@ -42,6 +44,24 @@ const AGENT_IMAGE_MIME_BY_EXTENSION = Object.freeze({
   ".webp": "image/webp",
 });
 const AGENT_CORE_IMAGE_MEDIA_TYPES = new Set(Object.values(IMAGE_MIME_BY_EXTENSION));
+const VIDEO_MIME_BY_EXTENSION = Object.freeze({
+  ".3g2": "video/3gpp2",
+  ".3gp": "video/3gpp",
+  ".avi": "video/x-msvideo",
+  ".flv": "video/x-flv",
+  ".m4v": "video/x-m4v",
+  ".m2ts": "video/mp2t",
+  ".mkv": "video/x-matroska",
+  ".mov": "video/quicktime",
+  ".mp4": "video/mp4",
+  ".mpeg": "video/mpeg",
+  ".mpg": "video/mpeg",
+  ".mts": "video/mp2t",
+  ".ogv": "video/ogg",
+  ".ts": "video/mp2t",
+  ".webm": "video/webm",
+  ".wmv": "video/x-ms-wmv",
+});
 const AGENT_ATTACHMENT_KINDS = new Set(["audio", "file", "image"]);
 const KNOWN_MEDIA_SOURCES = new Set(["mail", "sticker", "wechat"]);
 
@@ -79,6 +99,19 @@ function nativeImageMime(value, fileName) {
   const declared = clean(value).toLowerCase().split(";", 1)[0];
   if (AGENT_CORE_IMAGE_MEDIA_TYPES.has(declared)) return declared;
   return IMAGE_MIME_BY_EXTENSION[path.extname(clean(fileName)).toLowerCase()] || "";
+}
+
+function videoMime(value, fileName) {
+  const declared = clean(value).toLowerCase().split(";", 1)[0];
+  if (declared.startsWith("video/")) return declared;
+  return VIDEO_MIME_BY_EXTENSION[path.extname(clean(fileName)).toLowerCase()] || "";
+}
+
+function attachmentMime(value, fileName) {
+  return nativeImageMime(value, fileName)
+    || videoMime(value, fileName)
+    || clean(value).toLowerCase().split(";", 1)[0]
+    || "application/octet-stream";
 }
 
 function mediaSource(value) {
@@ -196,6 +229,11 @@ function mediaKind(entry, mimeType) {
   return requested === "image" && AGENT_CORE_IMAGE_MEDIA_TYPES.has(mimeType) ? "image" : "file";
 }
 
+function understandingKind({ kind, fileName, mimeType }) {
+  if (kind === "image") return "image";
+  return videoMime(mimeType, fileName) ? "video" : "";
+}
+
 function displayItem({ kind, fileName, filePath, mimeType, size, source }) {
   return Object.freeze({
     kind,
@@ -208,11 +246,15 @@ function displayItem({ kind, fileName, filePath, mimeType, size, source }) {
   });
 }
 
-function promptManifest(items, source) {
+function promptManifest(items, source, { nativeImages = true } = {}) {
   const files = items.filter((item) => item.kind === "file");
   const images = items.filter((item) => item.kind === "image");
   const note = [
-    images.length ? `用户附上了 ${images.length} 张图片；图片已作为原生视觉输入传入。` : "",
+    images.length
+      ? nativeImages
+        ? `用户附上了 ${images.length} 张图片；图片已作为原生视觉输入传入。`
+        : `用户附上了 ${images.length} 张图片；系统会通过已启用的图像理解能力提供识图结果。`
+      : "",
     files.length ? `用户附上了 ${files.length} 个本地文件；需要内容时请使用文件工具读取以下缓存路径，不要臆造文件内容。` : "",
   ].filter(Boolean).join(" ");
   return [
@@ -254,17 +296,24 @@ export function createConversationAttachmentService({ dataRoot, fsOps = fs } = {
     const entry = plainObject(value);
     const source = await inspectPath(entry.path || entry.source, fsOps);
     const fileName = safeFileName(entry.fileName || path.basename(source.path));
-    const mimeType = nativeImageMime(entry.mimeType, fileName);
+    const mimeType = attachmentMime(entry.mimeType, fileName);
     return Object.freeze({
       fileName,
       kind: mediaKind(entry, mimeType),
-      mimeType: mimeType || "application/octet-stream",
+      mimeType,
       path: source.path,
       size: source.size,
     });
   };
 
-  const prepare = async ({ content = "", media = [], mediaSource: sourceValue = "", projectRoot, sessionId } = {}) => {
+  const prepare = async ({
+    content = "",
+    includeNativeImages = true,
+    media = [],
+    mediaSource: sourceValue = "",
+    projectRoot,
+    sessionId,
+  } = {}) => {
     const entries = Array.isArray(media) ? media : [];
     if (!entries.length) {
       const text = String(content ?? "");
@@ -283,6 +332,7 @@ export function createConversationAttachmentService({ dataRoot, fsOps = fs } = {
     await fsOps.mkdir(directory, { recursive: true });
     const source = mediaSource(sourceValue);
     const saved = [];
+    const nativeImages = includeNativeImages !== false;
     let imageCount = 0;
 
     for (const rawEntry of entries) {
@@ -301,7 +351,7 @@ export function createConversationAttachmentService({ dataRoot, fsOps = fs } = {
       const fileName = safeFileName(entry.fileName || (sourceInfo ? path.basename(sourceInfo.path) : "attachment.bin"));
       const imageMime = nativeImageMime(entry.mimeType, fileName);
       const kind = mediaKind(entry, imageMime);
-      if (kind === "image") {
+      if (kind === "image" && nativeImages) {
         imageCount += 1;
         if (imageCount > MAX_AGENT_CORE_IMAGES_PER_MESSAGE) {
           throw new ConversationAttachmentError(`一次最多发送 ${MAX_AGENT_CORE_IMAGES_PER_MESSAGE} 张图片。`, { code: "AGENT_CORE_IMAGE_LIMIT_EXCEEDED" });
@@ -322,20 +372,35 @@ export function createConversationAttachmentService({ dataRoot, fsOps = fs } = {
         kind,
         fileName,
         filePath: target,
-        mimeType: kind === "image" ? imageMime : clean(entry.mimeType) || "application/octet-stream",
+        mimeType: attachmentMime(entry.mimeType, fileName),
         size,
         source,
       });
-      saved.push({ ...item, ...(kind === "image" ? { data: await fsOps.readFile(target) } : {}) });
+      saved.push({
+        ...item,
+        ...(kind === "image" && nativeImages ? { data: await fsOps.readFile(target) } : {}),
+        ...(understandingKind(item) ? { understandingKind: understandingKind(item) } : {}),
+      });
     }
 
-    const publicMedia = Object.freeze(saved.map(({ data, ...item }) => Object.freeze(item)));
+    const publicMedia = Object.freeze(saved.map(({ data, understandingKind: _understandingKind, ...item }) => Object.freeze(item)));
+    const understandingMedia = Object.freeze(saved.flatMap((item) => (
+      item.understandingKind
+        ? [Object.freeze({
+          fileName: item.fileName,
+          filePath: item.filePath,
+          kind: item.understandingKind,
+          mimeType: item.mimeType,
+          size: item.size,
+        })]
+        : []
+    )));
     const promptParts = [];
     const text = String(content ?? "");
     if (text.trim()) promptParts.push({ type: "text", text });
-    promptParts.push({ type: "text", text: promptManifest(publicMedia, source) });
+    promptParts.push({ type: "text", text: promptManifest(publicMedia, source, { nativeImages }) });
     for (const item of saved) {
-      if (item.kind !== "image") continue;
+      if (!nativeImages || item.kind !== "image") continue;
       promptParts.push({
         type: "image",
         mediaType: item.mimeType,
@@ -348,6 +413,7 @@ export function createConversationAttachmentService({ dataRoot, fsOps = fs } = {
       input: Object.freeze(promptParts.map((part) => Object.freeze({ ...part }))),
       media: publicMedia,
       memoryText: clean(content) || `用户发送了附件：${labels}`,
+      understandingMedia,
     });
   };
 
@@ -418,6 +484,11 @@ export function createConversationAttachmentService({ dataRoot, fsOps = fs } = {
 export const conversationMediaManifest = Object.freeze({
   close: MEDIA_MANIFEST_CLOSE,
   open: MEDIA_MANIFEST_OPEN,
+});
+
+export const conversationMediaUnderstandingContext = Object.freeze({
+  close: MEDIA_UNDERSTANDING_CONTEXT_CLOSE,
+  open: MEDIA_UNDERSTANDING_CONTEXT_OPEN,
 });
 
 export const conversationAttachmentReceipt = Object.freeze({

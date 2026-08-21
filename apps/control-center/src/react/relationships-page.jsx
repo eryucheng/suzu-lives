@@ -18,7 +18,7 @@ export function RelationshipsPage({ actions = {}, snapshot = {} }) {
 
   return (
     <div className="relationships-react-page">
-      <PageHeader eyebrow="RELATIONSHIPS" subtitle="在这里查看对话、记忆与重要关系。" title="让关系有连续的记忆" />
+      <PageHeader eyebrow="RELATIONSHIPS" subtitle="在这里查看对话、记忆与重要关系。" title="关系" />
 
       <section aria-label="关系功能" className="relationships-overview">
         <RelationshipCard

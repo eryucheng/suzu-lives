@@ -432,8 +432,7 @@ export function createSuzuAgentCoreSupervisor({
     const childEnvironment = {
       ...process.env,
       ...extraEnvironment,
-      // Product-owned child settings. `embedded-agent-host` translates the
-      // handful required by the selected source immediately before boot.
+      // Product-owned child settings.
       SUZU_AGENT_HOME: home,
       TEMP: temp,
       TMP: temp,
@@ -443,6 +442,12 @@ export function createSuzuAgentCoreSupervisor({
       ...(packagedNativeRuntimeRoot ? { SUZU_AGENT_CORE_NATIVE_ROOT: packagedNativeRuntimeRoot } : {}),
       ...(process.versions.electron ? { ELECTRON_RUN_AS_NODE: "1" } : {}),
     };
+    // Suzu Core owns its storage and does not adopt configuration from a
+    // separately installed DSH. Removing inherited legacy keys also makes a
+    // future vendor update unable to silently cross this product boundary.
+    for (const key of Object.keys(childEnvironment)) {
+      if (key.toUpperCase().startsWith("DSH_")) delete childEnvironment[key];
+    }
     let child;
     try {
       child = spawnImpl(executable, [

@@ -624,7 +624,7 @@ async function fetchAdminAgentModels(value = {}) {
 async function saveAdminModelConfiguration(value) {
   state.agentRuntime = await api.agentRuntime.saveModelConfiguration(value);
   state.agentModelNotice = state.agentRuntime.status === "ready"
-    ? "已保存。新开的 Suzu 陪伴会话会使用这项服务。"
+    ? "已保存。下一次 Suzu 回复会使用这项服务。"
     : "已保存设置；填写 API Key 后再保存服务。";
   setNotice(state.agentModelNotice);
   render();

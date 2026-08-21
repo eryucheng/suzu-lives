@@ -797,6 +797,109 @@ test("Agent Core chat bridges tool approvals and sends image attachments through
   lifecycle.close();
 });
 
+test("Agent Core chat sends enabled image and video understanding results to the main model instead of native media", async () => {
+  const root = await temporaryRoot();
+  const dataRoot = path.join(root, "data");
+  const projectRoot = path.join(root, "contact");
+  const image = path.join(root, "reference.png");
+  const video = path.join(root, "moment.mp4");
+  await fs.mkdir(projectRoot, { recursive: true });
+  await fs.writeFile(image, Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl+jh0AAAAASUVORK5CYII=", "base64"));
+  await fs.writeFile(video, Buffer.from([0x00, 0x00, 0x00, 0x18, 0x66, 0x74, 0x79, 0x70]));
+  const runtime = createFakeRuntime();
+  const invocations = [];
+  const capabilityRuntime = {
+    availableActions({ capabilityId, contactId, projectRoot: scope, sessionId }) {
+      assert.equal(contactId, "contact-suzu");
+      assert.equal(scope, projectRoot);
+      assert.equal(sessionId, "contact-session");
+      return [{ capabilityId, action: "analyze" }];
+    },
+    async invoke(value) {
+      invocations.push(value);
+      return value.capabilityId === "image-vision"
+        ? { status: "completed", value: { answer: "图片里有一只橘猫。" } }
+        : { status: "completed", value: { summary: "视频里有人向镜头挥手。" } };
+    },
+  };
+  const chat = createConversationChatService({
+    attachmentService: createConversationAttachmentService({ dataRoot }),
+    capabilityRuntime,
+    settingsService: { load: () => ({}) },
+    reader: fakeReader(projectRoot),
+    runtime,
+  });
+
+  const accepted = await chat.send({
+    content: "这两个媒体是什么？",
+    media: [
+      { kind: "image", path: image },
+      { kind: "file", path: video },
+    ],
+  });
+
+  assert.deepEqual(accepted.media.map((item) => item.kind), ["image", "file"]);
+  assert.equal(runtime.calls.sendTurn.length, 1);
+  const input = runtime.calls.sendTurn[0].input;
+  assert.deepEqual(input.map((part) => part.type), ["text", "text", "text"]);
+  assert.equal(input.some((part) => part.type === "image"), false);
+  assert.match(input[1].text, /已启用的图像理解能力/u);
+  assert.match(input[2].text, /<suzu-media-understanding>/u);
+  assert.match(input[2].text, /图片里有一只橘猫/u);
+  assert.match(input[2].text, /视频里有人向镜头挥手/u);
+  assert.deepEqual(invocations.map((item) => [item.capabilityId, item.action]), [
+    ["image-vision", "analyze"],
+    ["video-understanding", "analyze"],
+  ]);
+  assert.match(invocations[0].input.path, /[\\/]attachments[\\/]/u);
+  assert.match(invocations[1].input.source, /[\\/]attachments[\\/]/u);
+
+  const messages = conversationDisplayMessages([{
+    event: {
+      type: "user/message",
+      seq: 1,
+      time: 1_000,
+      surfaceOp: "append",
+      data: {
+        id: "user-media-understanding",
+        source: { kind: "user" },
+        content: input,
+      },
+    },
+  }], 500, { dataRoot });
+  assert.deepEqual(messages[0].blocks.map((block) => block.kind), ["text", "media", "media"]);
+  assert.equal(messages[0].blocks.some((block) => String(block.text || "").includes("suzu-media-understanding")), false);
+  chat.dispose();
+});
+
+test("Agent Core chat does not submit the main-model turn when enabled media understanding fails", async () => {
+  const root = await temporaryRoot();
+  const projectRoot = path.join(root, "contact");
+  const image = path.join(root, "reference.png");
+  await fs.mkdir(projectRoot, { recursive: true });
+  await fs.writeFile(image, Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl+jh0AAAAASUVORK5CYII=", "base64"));
+  const runtime = createFakeRuntime();
+  const chat = createConversationChatService({
+    attachmentService: createConversationAttachmentService({ dataRoot: path.join(root, "data") }),
+    capabilityRuntime: {
+      availableActions: ({ capabilityId }) => [{ capabilityId, action: "analyze" }],
+      async invoke() {
+        return { status: "failed", error: { code: "VISION_UNAVAILABLE", message: "图像服务暂时不可用。" } };
+      },
+    },
+    settingsService: { load: () => ({}) },
+    reader: fakeReader(projectRoot),
+    runtime,
+  });
+
+  await assert.rejects(
+    chat.send({ content: "看看图片", media: [{ kind: "image", path: image }] }),
+    (error) => error?.code === "VISION_UNAVAILABLE" && /图片理解失败：图像服务暂时不可用/u.test(error.message),
+  );
+  assert.equal(runtime.calls.sendTurn.length, 0);
+  chat.dispose();
+});
+
 test("Agent Core reader renders the full append-only human transcript after model-surface replacement, searches, and focuses", async () => {
   const projectRoot = "D:\\Contacts\\suzu";
   const history = {
