@@ -43,6 +43,9 @@ test("desktop packaging keeps the private Agent Core native runtime beside its u
     manifest.build?.asarUnpack?.includes("node_modules/@suzu-lives/suzu-agent-runtime/**"),
     "Agent Core JavaScript bundle 必须位于 asar 外，供子进程解析。",
   );
+  await fs.access(
+    new URL("../../packages/suzu-agent-runtime/vendor/core/node_modules/sharp/dist/index.mjs", root),
+  );
 });
 
 test("desktop packaging uses Suzu Lives as its public product name", async () => {

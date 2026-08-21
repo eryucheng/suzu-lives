@@ -61,7 +61,8 @@ jobs:
             "app-update.yml",
             "LICENSE.md",
             "NOTICE",
-            "release-provenance/eryuchengye.ed25519.pub"
+            "release-provenance/eryuchengye.ed25519.pub",
+            "agent-core-native/node_modules/sharp/dist/index.mjs"
           )
           foreach ($relativePath in $requiredResources) {
             $candidate = Join-Path $resourcesRoot $relativePath

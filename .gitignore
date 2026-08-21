@@ -6,6 +6,11 @@ node_modules/
 !packages/suzu-agent-runtime/vendor/**
 __pycache__/
 dist/
+# The selected Agent Core runtime intentionally vendors Sharp's JavaScript
+# entrypoint. Keep this package's dist directory despite the generic build
+# output rule above; an installer without it cannot start the Core.
+!packages/suzu-agent-runtime/vendor/core/node_modules/sharp/dist/
+!packages/suzu-agent-runtime/vendor/core/node_modules/sharp/dist/**
 dist-*/
 apps/*/dist/
 apps/*/dist-preview/
