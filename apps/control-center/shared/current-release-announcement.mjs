@@ -2,13 +2,12 @@
 // its version range and copy before packaging a release; it is only presented
 // after an upgrade.
 export const CURRENT_RELEASE_ANNOUNCEMENT = Object.freeze({
-  title: "Suzu Lives v0.1.x → v0.2.1",
+  title: "Suzu Lives v0.2.1 → v0.2.2",
   summary: "本次更新内容：",
   items: [
-    "底层已切换为由 Suzu 自己管理的本机 Agent Core 运行时，不再需要 Claude Code。",
-    "从 0.1.x 升级时，安装器会提供一次性迁移助手：旧对话会转换为原生 Agent Core 会话，验证成功后才清理对应旧 JSONL。",
-    "兼容的联系人资料、长期记忆和可验证的连接会保留或接管；无法安全映射的数据不会被静默删除。",
-    "修复了会话压缩、联系人切换、语音通话和调用记录等稳定性问题；调整聊天显示设置时会留在当前阅读位置。",
-    "旧 Claude 登录状态不会迁移到新版；请在新版的“主模型”中配置所用模型服务和 API Key。",
+    "修复主模型切换：联系人会按当前选择的服务、模型和 API Key 连接，不再错误沿用旧的服务配置。",
+    "图片和视频会优先交给联系人启用的理解能力处理，再将理解结果提供给主模型；不支持视觉输入的主模型也能正常聊天。",
+    "完善会话读取和内部上下文过滤，避免自动任务等非用户消息直接显示在聊天记录中。",
+    "持续改善由 Suzu 自己管理的 Agent Core 会话与桌面交互稳定性，包括联系人切换、聊天滚动定位和启动流程。",
   ],
 });
