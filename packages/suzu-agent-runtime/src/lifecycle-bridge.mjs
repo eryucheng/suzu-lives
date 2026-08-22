@@ -637,8 +637,10 @@ export function createSuzuAgentLifecycleBridge({
     const startIndex = nodes.indexOf(start);
     const endIndex = nodes.indexOf(end);
     if (startIndex < 0 || endIndex < startIndex) return false;
+    const sourceEventSeqs = nodes.slice(startIndex, endIndex + 1);
     session.append("user/message", cleanupMessage(), {
       surfaceOp: { op: "replace", start, end },
+      sourceEventSeqs,
     });
     return true;
   };

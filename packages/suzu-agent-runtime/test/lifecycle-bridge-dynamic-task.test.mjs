@@ -54,6 +54,7 @@ function createPublishingSession(ctx) {
         time: events.length,
         data,
         ...(options.surfaceOp === undefined ? {} : { surfaceOp: options.surfaceOp }),
+        ...(options.sourceEventSeqs === undefined ? {} : { sourceEventSeqs: options.sourceEventSeqs }),
       };
       if (options.surfaceOp === "append") {
         surfaceNodes.push(event.seq);
@@ -61,6 +62,11 @@ function createPublishingSession(ctx) {
         const start = surfaceNodes.indexOf(options.surfaceOp.start);
         const end = surfaceNodes.indexOf(options.surfaceOp.end);
         assert.ok(start >= 0 && end >= start, "cleanup must replace an active surface range");
+        const shadowedSurfaceNodes = surfaceNodes.slice(start, end + 1);
+        const sourceEventSeqs = new Set(options.sourceEventSeqs);
+        for (const sequence of shadowedSurfaceNodes) {
+          assert.ok(sourceEventSeqs.has(sequence), `cleanup must include shadowed surface event ${sequence} in sourceEventSeqs`);
+        }
         surfaceNodes.splice(start, end - start + 1, event.seq);
       }
       events.push(event);
@@ -138,6 +144,7 @@ test("bridge tracks a dynamic task after Core has removed its empty trigger", as
   assert.equal(cleanup.type, "user/message");
   assert.equal(cleanup.data.source.form, "task-cleanup");
   assert.deepEqual(cleanup.surfaceOp, { op: "replace", start: dynamic.seq, end: noReply.seq });
+  assert.deepEqual(cleanup.sourceEventSeqs, [dynamic.seq, noReply.seq]);
   assert.deepEqual(surfaceNodes, [cleanup.seq]);
   transport.dispose();
 });

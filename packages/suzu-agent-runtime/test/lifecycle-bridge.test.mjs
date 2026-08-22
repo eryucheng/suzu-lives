@@ -69,6 +69,11 @@ function createPublishingSession(ctx, {
         const start = surfaceNodes.indexOf(options.surfaceOp.start);
         const end = surfaceNodes.indexOf(options.surfaceOp.end);
         assert.ok(start >= 0 && end >= start, "replacement must target an active surface event");
+        const shadowedSurfaceNodes = surfaceNodes.slice(start, end + 1);
+        const sourceEventSeqs = new Set(options.sourceEventSeqs);
+        for (const sequence of shadowedSurfaceNodes) {
+          assert.ok(sourceEventSeqs.has(sequence), `replacement must include shadowed surface event ${sequence} in sourceEventSeqs`);
+        }
         surfaceNodes.splice(start, end - start + 1, event.seq);
       }
       events.push(event);
@@ -345,6 +350,7 @@ test("bridge injects an internal task only for its current turn and removes a si
   const cleanup = events.at(-1);
   assert.equal(cleanup.type, "user/message");
   assert.deepEqual(cleanup.surfaceOp, { op: "replace", start: dynamic.seq, end: reply.seq });
+  assert.deepEqual(cleanup.sourceEventSeqs, [dynamic.seq, reply.seq]);
   assert.equal(cleanup.data.source.kind, "plugin");
   assert.equal(cleanup.data.source.plugin, "suzu-lifecycle-bridge");
   assert.equal(cleanup.data.source.form, "task-cleanup");
@@ -398,6 +404,7 @@ test("bridge also removes an external task when its terminal result is NO_REPLY"
   const cleanup = events.at(-1);
   assert.equal(cleanup.data.source.form, "task-cleanup");
   assert.deepEqual(cleanup.surfaceOp, { op: "replace", start: dynamic.seq, end: noReply.seq });
+  assert.deepEqual(cleanup.sourceEventSeqs, [dynamic.seq, noReply.seq]);
   assert.deepEqual(surfaceNodes, [cleanup.seq]);
   transport.dispose();
 });
@@ -453,6 +460,7 @@ test("bridge repairs a legacy B task from active model surface before it reads t
   const cleanup = events.at(-1);
   assert.equal(cleanup.type, "user/message");
   assert.deepEqual(cleanup.surfaceOp, { op: "replace", start: legacyInput.seq, end: legacyReply.seq });
+  assert.deepEqual(cleanup.sourceEventSeqs, [legacyInput.seq, legacyReply.seq]);
   assert.equal(cleanup.data.source.form, "task-cleanup");
   assert.deepEqual(surfaceNodes, [cleanup.seq]);
   transport.dispose();
