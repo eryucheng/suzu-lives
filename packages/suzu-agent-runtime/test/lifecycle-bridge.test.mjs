@@ -278,6 +278,186 @@ test("bridge removes dynamic context from the next model history after a success
   transport.dispose();
 });
 
+test("bridge injects an internal task only for its current turn and removes a silent task surface before the next user turn", async () => {
+  const channel = createParentChannel((request) => {
+    if (request.event === "ContextCollect") return { blocks: [] };
+    if (request.event === "DynamicContextCollect") {
+      return { blocks: [{
+        id: "automation-task:task-turn",
+        kind: "automation-task",
+        text: "这是本轮自动任务：安排下一次主动关心。",
+      }] };
+    }
+    assert.fail(`unexpected bridge request: ${request.event}`);
+  });
+  const transport = createSuzuAgentLifecycleBridgeTransport({ processRef: channel, requestTimeoutMs: 50 });
+  const created = [];
+  const bridge = createSuzuAgentLifecycleBridge({
+    transport,
+    createMessage(input) {
+      created.push(input);
+      return { ...input, id: `message-${created.length}`, role: "user" };
+    },
+  });
+  const ctx = createContext();
+  bridge.apply(ctx, { timeoutMs: 50 });
+  const { events, session, surfaceNodes } = createPublishingSession(ctx, { id: "task-session" });
+  session.append("turn/start", { turn: 12 });
+  session.append("step/start", { turn: 12, step: 1 });
+
+  const trigger = {
+    id: "task-trigger",
+    role: "user",
+    content: [],
+    source: {
+      kind: "plugin",
+      plugin: "suzu-lifecycle-bridge",
+      form: "task-trigger",
+      outputPolicy: "silent",
+    },
+  };
+  const outcome = await ctx.listeners.get("agent/pre-step").callback({
+    agent: { id: session.id, session },
+    turn: 12,
+    step: 1,
+    signal: { aborted: false },
+  }, async () => ({ kind: "enter", messages: [trigger] }));
+
+  assert.equal(outcome.messages.some((message) => message === trigger), false);
+  assert.equal(outcome.messages.length, 1);
+  assert.match(created[0].content[0].text, /安排下一次主动关心/u);
+  assert.match(created[0].content[0].text, /不是用户新消息/u);
+
+  const dynamic = session.append("user/message", outcome.messages[0], { surfaceOp: "append" });
+  const reply = session.append("assistant/message", {
+    turn: 12,
+    step: 1,
+    message: {
+      id: "silent-task-reply",
+      role: "assistant",
+      content: [{ type: "text", text: "内部安排完成。" }],
+      source: { kind: "model", provider: "deepseek", model: "deepseek-chat" },
+    },
+  }, { surfaceOp: "append" });
+  session.append("turn/end", { turn: 12, reason: { kind: "completed" } });
+  await flushDeferredSessionWork();
+
+  const cleanup = events.at(-1);
+  assert.equal(cleanup.type, "user/message");
+  assert.deepEqual(cleanup.surfaceOp, { op: "replace", start: dynamic.seq, end: reply.seq });
+  assert.equal(cleanup.data.source.kind, "plugin");
+  assert.equal(cleanup.data.source.plugin, "suzu-lifecycle-bridge");
+  assert.equal(cleanup.data.source.form, "task-cleanup");
+  assert.deepEqual(surfaceNodes, [cleanup.seq]);
+  transport.dispose();
+});
+
+test("bridge also removes an external task when its terminal result is NO_REPLY", async () => {
+  const channel = createParentChannel((request) => {
+    if (request.event === "ContextCollect") return { blocks: [] };
+    if (request.event === "DynamicContextCollect") {
+      return { blocks: [{ id: "task-check", kind: "automation-task", text: "判断是否主动关心。" }] };
+    }
+    assert.fail(`unexpected bridge request: ${request.event}`);
+  });
+  const transport = createSuzuAgentLifecycleBridgeTransport({ processRef: channel, requestTimeoutMs: 50 });
+  const bridge = createSuzuAgentLifecycleBridge({
+    transport,
+    createMessage: (input) => ({ ...input, id: "dynamic-check", role: "user" }),
+  });
+  const ctx = createContext();
+  bridge.apply(ctx, { timeoutMs: 50 });
+  const { events, session, surfaceNodes } = createPublishingSession(ctx, { id: "task-no-reply" });
+  session.append("turn/start", { turn: 13 });
+  session.append("step/start", { turn: 13, step: 1 });
+  const outcome = await ctx.listeners.get("agent/pre-step").callback({
+    agent: { id: session.id, session },
+    turn: 13,
+    step: 1,
+    signal: { aborted: false },
+  }, async () => ({ kind: "enter", messages: [{
+    id: "task-trigger",
+    role: "user",
+    content: [],
+    source: { kind: "plugin", plugin: "suzu-lifecycle-bridge", form: "task-trigger", outputPolicy: "external" },
+  }] }));
+  const dynamic = session.append("user/message", outcome.messages[0], { surfaceOp: "append" });
+  const noReply = session.append("assistant/message", {
+    turn: 13,
+    step: 1,
+    message: {
+      id: "check-no-reply",
+      role: "assistant",
+      content: [{ type: "text", text: "NO_REPLYNO_REPLY" }],
+      source: { kind: "model", provider: "deepseek", model: "deepseek-chat" },
+    },
+  }, { surfaceOp: "append" });
+  session.append("turn/end", { turn: 13, reason: { kind: "completed" } });
+  await flushDeferredSessionWork();
+
+  const cleanup = events.at(-1);
+  assert.equal(cleanup.data.source.form, "task-cleanup");
+  assert.deepEqual(cleanup.surfaceOp, { op: "replace", start: dynamic.seq, end: noReply.seq });
+  assert.deepEqual(surfaceNodes, [cleanup.seq]);
+  transport.dispose();
+});
+
+test("bridge repairs a legacy B task from active model surface before it reads the next human message", async () => {
+  const channel = createParentChannel((request) => {
+    if (request.event === "ContextCollect" || request.event === "DynamicContextCollect") return { blocks: [] };
+    assert.fail(`unexpected bridge request: ${request.event}`);
+  });
+  const transport = createSuzuAgentLifecycleBridgeTransport({ processRef: channel, requestTimeoutMs: 50 });
+  const bridge = createSuzuAgentLifecycleBridge({ transport });
+  const ctx = createContext();
+  bridge.apply(ctx, { timeoutMs: 50 });
+  const { events, session, surfaceNodes } = createPublishingSession(ctx, { id: "legacy-task-session" });
+  session.append("turn/start", { turn: 9 });
+  const legacyPrompt = [
+    "<suzu-schedule-task>",
+    "这是链式主动关心的内部安排阶段（B）。",
+    "<!-- suzu-lives:display-system -->",
+    "</suzu-schedule-task>",
+  ].join("\n");
+  const legacyInput = session.append("user/message", {
+    id: "legacy-b-input",
+    role: "user",
+    content: [{ type: "text", text: legacyPrompt }],
+    source: { kind: "user" },
+  }, { surfaceOp: "append" });
+  const legacyReply = session.append("assistant/message", {
+    turn: 9,
+    step: 1,
+    message: {
+      id: "legacy-b-reply",
+      role: "assistant",
+      content: [{ type: "text", text: "NO_REPLY" }],
+      source: { kind: "model", provider: "deepseek", model: "deepseek-chat" },
+    },
+  }, { surfaceOp: "append" });
+  session.append("turn/end", { turn: 9, reason: { kind: "completed" } });
+
+  const outcome = await ctx.listeners.get("agent/pre-step").callback({
+    agent: { id: session.id, session },
+    turn: 10,
+    step: 1,
+    signal: { aborted: false },
+  }, async () => ({ kind: "enter", messages: [{
+    id: "real-user-message",
+    role: "user",
+    content: [{ type: "text", text: "不要" }],
+    source: { kind: "user" },
+  }] }));
+
+  assert.equal(outcome.messages.at(-1).id, "real-user-message");
+  const cleanup = events.at(-1);
+  assert.equal(cleanup.type, "user/message");
+  assert.deepEqual(cleanup.surfaceOp, { op: "replace", start: legacyInput.seq, end: legacyReply.seq });
+  assert.equal(cleanup.data.source.form, "task-cleanup");
+  assert.deepEqual(surfaceNodes, [cleanup.seq]);
+  transport.dispose();
+});
+
 test("bridge asks PreToolUse at the real pre-body tool seam and honors a denial", async () => {
   const channel = createParentChannel((request) => {
     assert.equal(request.event, "PreToolUse");

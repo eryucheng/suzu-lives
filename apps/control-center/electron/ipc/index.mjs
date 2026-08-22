@@ -1,4 +1,4 @@
-import { dialog, ipcMain, nativeImage, safeStorage, shell } from "electron";
+import { clipboard, dialog, ipcMain, nativeImage, safeStorage, shell } from "electron";
 import path from "node:path";
 
 import { appendUsageEvent } from "@suzu-lives/cost-ledger";
@@ -257,6 +257,7 @@ export function registerIpcHandlers({ app, appUpdateService = null, dataStorageS
   registerAgentJournalIpc({ agentJournalService, ipcMain });
   conversation = registerConversationIpc({
     app,
+    clipboard,
     contactProjectsService,
     connectionsService,
     dialog,
@@ -567,28 +568,38 @@ export function registerIpcHandlers({ app, appUpdateService = null, dataStorageS
       const target = await conversation.reader.resolveContactSession(contactId);
       if (requestId) proactiveChainRequests.set(requestId, { contactId, phase });
       try {
-        const result = await conversation.chat.sendToSession({
-          content: scheduledTaskContent(task, {
-            prompt: phase === "check"
-              ? proactiveCheckTaskPrompt(proactiveSettings?.chainPrompt)
-              : phase === "planning"
-                ? proactivePlanningTaskPrompt()
-                : "",
-            displayAsSystem: phase === "planning",
-          }),
-          contactId,
-          sessionId: target.id,
-          projectRoot: target.projectRoot,
-          hasTranscript: target.hasTranscript === true,
-          kind: "schedule",
-          scheduleSource,
-          requestId,
-          displayAsSystem: phase === "planning",
-          // Scheduled work is local unless it is the A-phase result of the
-          // proactive-contact chain. This prevents task envelopes and the
-          // internal B-phase scheduling turn from crossing into WeChat.
-          deliverToWechat: phase === "check",
-        });
+        const result = phase
+          ? await conversation.chat.sendTaskToSession({
+            taskContext: {
+              id: task.id,
+              text: phase === "check"
+                ? proactiveCheckTaskPrompt(proactiveSettings?.chainPrompt)
+                : proactivePlanningTaskPrompt(),
+            },
+            contactId,
+            sessionId: target.id,
+            projectRoot: target.projectRoot,
+            hasTranscript: target.hasTranscript === true,
+            kind: "schedule",
+            scheduleSource,
+            requestId,
+            // A is a real outreach decision; B is only the follow-up schedule
+            // operation. The runtime owns B's silence instead of making the
+            // model leave a durable NO_REPLY marker in chat history.
+            deliverToWechat: phase === "check",
+            outputPolicy: phase === "planning" ? "silent" : "external",
+          })
+          : await conversation.chat.sendToSession({
+            content: scheduledTaskContent(task),
+            contactId,
+            sessionId: target.id,
+            projectRoot: target.projectRoot,
+            hasTranscript: target.hasTranscript === true,
+            kind: "schedule",
+            scheduleSource,
+            requestId,
+            deliverToWechat: false,
+          });
         if (requestId && result?.accepted !== true) {
           proactiveChainRequests.delete(requestId);
           void queueProactiveChainTransition(() => createRecoveryCheck(contactId)).catch(() => undefined);

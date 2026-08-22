@@ -1,6 +1,7 @@
 {
   "schema": "suzu-lives-public-export-policy/v1",
   "privateOnlyPaths": [
+    ".github/workflows/package-windows.yml",
     "docs/capability-registry.md",
     "docs/suzu-agent-definition.md",
     "docs/suzu-agent-lifecycle.md",

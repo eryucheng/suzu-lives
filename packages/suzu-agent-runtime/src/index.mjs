@@ -1,5 +1,6 @@
 import { SuzuAgentRuntimeError } from "./runtime-error.mjs";
 import { isSuzuAgentPermissionMode } from "./permission-modes.mjs";
+import { normalizeSuzuAgentTaskOutputPolicy } from "./task-trigger.mjs";
 
 export { SuzuAgentRuntimeError };
 export {
@@ -60,6 +61,7 @@ function assertApi(api) {
   const required = [
     [source.sessions, "create"],
     [source.sessions, "prompt"],
+    [source.sessions, "task"],
     [source.sessions, "cancel"],
     [source.sessions, "history"],
     [source.events, "mux"],
@@ -113,6 +115,15 @@ function promptContent(input) {
     "AGENT_CORE_INPUT_UNSUPPORTED",
     "Suzu Agent Core 消息只接受文本和 PNG、JPEG、WebP、GIF 图片内容。",
   );
+}
+
+function taskRequest(value) {
+  const source = plainObject(value);
+  const id = clean(source.id);
+  return Object.freeze({
+    ...(id ? { id: identifier(id, "内部任务标识") } : {}),
+    outputPolicy: normalizeSuzuAgentTaskOutputPolicy(source.outputPolicy),
+  });
 }
 
 function textFromMessage(message) {
@@ -193,11 +204,35 @@ export function createSuzuAgentRuntimeDriver({
     }
   };
 
+  const detachUnavailableTurn = (record) => {
+    const active = record.activeTurn || null;
+    if (active) {
+      active.state = "failed";
+      if (Number.isInteger(active.coreTurn)) record.coreTurns.delete(active.coreTurn);
+      if (record.activeTurn === active) record.activeTurn = null;
+      for (const [approvalId, approval] of record.approvals) {
+        if (approval.turnId === active.turnId) record.approvals.delete(approvalId);
+      }
+      return active;
+    }
+    const pendingIndex = record.pendingTurns.findIndex((turn) => (
+      turn.state === "submitting" || turn.state === "accepted"
+    ));
+    if (pendingIndex < 0) return null;
+    const [pending] = record.pendingTurns.splice(pendingIndex, 1);
+    pending.state = "failed";
+    return pending;
+  };
+
   const emitUnavailable = (record, error, stream) => {
+    // A host-side failure can occur after `turn/start` but before a durable
+    // `turn/end`.  Drop the driver mapping before emitting the terminal event
+    // so a later valid Core turn is not blocked by the failed predecessor.
+    const affectedTurn = detachUnavailableTurn(record);
     emit({
       type: "runtime-unavailable",
       runtimeSessionId: record.runtimeSessionId,
-      turnId: record.activeTurn?.turnId || "",
+      turnId: affectedTurn?.turnId || "",
       approvalId: "",
       text: "",
       toolName: "",
@@ -650,6 +685,44 @@ export function createSuzuAgentRuntimeDriver({
         // The execution kernel may publish turn/start before the prompt receipt resolves.
         // Do not regress that already-mapped running turn back to accepted, or
         // a visible tool call could no longer be stopped.
+        if (turn.state === "submitting") turn.state = "accepted";
+        return { accepted: true, queued: true };
+      });
+      record.promptTail = submit.catch(() => undefined);
+      try {
+        return await submit;
+      } catch (error) {
+        const index = record.pendingTurns.indexOf(turn);
+        if (index >= 0) record.pendingTurns.splice(index, 1);
+        throw error;
+      }
+    },
+
+    async sendTask({ runtimeSessionId, turnId, task = {}, placement = "queue" } = {}) {
+      assertOpen();
+      const record = recordFor(runtimeSessionId);
+      if (clean(placement) !== "queue") {
+        throw new SuzuAgentRuntimeError(
+          "AGENT_RUNTIME_TASK_PLACEMENT_INVALID",
+          "Agent Core 的内部任务只能按顺序执行。",
+        );
+      }
+      const turn = {
+        turnId: identifier(turnId, "Suzu 轮次标识"),
+        state: "submitting",
+        coreTurn: null,
+        streamedText: "",
+        lastAssistantText: "",
+      };
+      record.pendingTurns.push(turn);
+      const submit = record.promptTail.then(async () => {
+        const value = unwrapRpc(await coreApi.sessions.task({
+          sessionId: record.runtimeSessionId,
+          task: taskRequest(task),
+        }), "投递内部任务");
+        if (plainObject(value).accepted !== true) {
+          throw new SuzuAgentRuntimeError("AGENT_CORE_TASK_REJECTED", "Agent Core 没有接受这项内部任务。 ");
+        }
         if (turn.state === "submitting") turn.state = "accepted";
         return { accepted: true, queued: true };
       });

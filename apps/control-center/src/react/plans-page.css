@@ -1,10 +1,7 @@
 .plans-react-page {
-  --plans-layout-max-width:1200px;
   container-type:inline-size;
   width:100%;
   min-width:0;
-  max-width:var(--plans-layout-max-width);
-  margin:0 auto;
 }
 
 .plans-flow {
@@ -20,7 +17,7 @@
   display:grid;
   min-width:0;
   gap:5px;
-  padding:0 clamp(14px,2cqw,28px);
+  padding:0 var(--space-xl);
   text-align:center;
 }
 
@@ -49,10 +46,10 @@
   display:grid;
   grid-template-columns:minmax(0,1fr) auto;
   align-items:center;
-  column-gap:clamp(16px,2cqw,28px);
+  column-gap:var(--space-xl);
   row-gap:var(--space-sm);
   min-width:0;
-  padding:clamp(14px,1.4cqw,19px) clamp(16px,1.8cqw,24px);
+  padding:var(--space-lg) var(--space-xl);
   transition:border-color .18s ease;
 }
 
@@ -66,7 +63,7 @@
   margin:0;
   overflow:hidden;
   color:var(--text);
-  font-size:clamp(16px,1.35cqw,19px);
+  font-size:var(--font-size-lg);
   letter-spacing:-.3px;
   text-overflow:ellipsis;
   white-space:nowrap;
@@ -186,7 +183,7 @@
   align-items:center;
   gap:var(--space-md);
   min-width:0;
-  padding:clamp(12px,1.2cqw,16px) clamp(14px,1.5cqw,20px);
+  padding:var(--space-md) var(--space-lg);
 }
 
 .plans-history-card__summary { display:grid; min-width:0; gap:5px; }

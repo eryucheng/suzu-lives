@@ -9,6 +9,10 @@ import {
 } from "node:zlib";
 
 import { Session } from "@suzu-lives/suzu-agent-runtime/core/session";
+import {
+  DEFAULT_SUZU_COMPACTION_RETAIN_TOKENS,
+  DEFAULT_SUZU_COMPACTION_TOKEN_THRESHOLD,
+} from "@suzu-lives/suzu-agent-runtime/compaction-defaults";
 
 import { resolveAgentSessionStoragePaths } from "./agent-session-storage.mjs";
 import { resolveSuzuAgentRuntimePaths } from "./suzu-agent-runtime.mjs";
@@ -1133,11 +1137,17 @@ export function createLegacyMigrationService({
       prompt: clean(source.value.prompt),
       automatic: {
         enabled: automatic.enabled === true,
-        tokenThreshold: Number.isSafeInteger(automatic.tokenThreshold) && automatic.tokenThreshold > 0 ? automatic.tokenThreshold : 15_000,
-        retainTokens: Number.isSafeInteger(automatic.retainTokens) && automatic.retainTokens > 0 ? automatic.retainTokens : 5_000,
+        tokenThreshold: Number.isSafeInteger(automatic.tokenThreshold) && automatic.tokenThreshold > 0
+          ? automatic.tokenThreshold
+          : DEFAULT_SUZU_COMPACTION_TOKEN_THRESHOLD,
+        retainTokens: Number.isSafeInteger(automatic.retainTokens) && automatic.retainTokens > 0
+          ? automatic.retainTokens
+          : DEFAULT_SUZU_COMPACTION_RETAIN_TOKENS,
       },
       manual: {
-        retainTokens: Number.isSafeInteger(manual.retainTokens) && manual.retainTokens > 0 ? manual.retainTokens : 5_000,
+        retainTokens: Number.isSafeInteger(manual.retainTokens) && manual.retainTokens > 0
+          ? manual.retainTokens
+          : DEFAULT_SUZU_COMPACTION_RETAIN_TOKENS,
       },
       updatedAt: clean(source.value.updatedAt) || new Date(now()).toISOString(),
     };

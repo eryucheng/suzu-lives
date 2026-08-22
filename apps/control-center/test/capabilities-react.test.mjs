@@ -4,7 +4,12 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 
-import { WECHAT_DELIVERY_OPTIONS, wechatConnectionSettings } from "../src/features/capabilities/overview.mjs";
+import {
+  capabilityOverview,
+  createWechatConnectionCapability,
+  WECHAT_DELIVERY_OPTIONS,
+  wechatConnectionSettings,
+} from "../src/features/capabilities/overview.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -40,6 +45,7 @@ test("capability inner pages reuse every existing save and switch boundary", asy
     assert.match(detail, new RegExp(`function ${setting}`, "u"));
   }
   assert.match(detail, /WechatSettings/u);
+  assert.match(detail, /capabilityVisibleInCatalog/u);
   assert.match(detail, /ExternalCapabilitiesPage/u);
   assert.match(detail, /CapabilitySettingsForm/u);
   assert.match(detail, /actions\.setContactEnabled/u);
@@ -56,6 +62,7 @@ test("capability inner pages reuse every existing save and switch boundary", asy
   assert.doesNotMatch(detail, /TravelingMerchantSettings/u);
   assert.match(detail, /actions\.selectApiBinding/u);
   assert.doesNotMatch(overview, /当前联系人|联系人项目/u);
+  assert.doesNotMatch(overview, /当前已启用/u);
   assert.doesNotMatch(detail, /当前联系人|联系人项目/u);
 
   assert.match(app, /api\.capabilities\.setActive/u);
@@ -67,4 +74,24 @@ test("capability inner pages reuse every existing save and switch boundary", asy
   assert.match(app, /api\.externalCapabilities\.remove/u);
   assert.match(app, /api\.connections\.bindNamedApiConnection/u);
   assert.doesNotMatch(app, /api\.capabilities\.openTravelingMerchantPage/u);
+});
+
+test("companion catalog keeps WeChat and mail while moving proactive contact into contact settings", () => {
+  const overview = capabilityOverview({
+    capabilitySnapshot: {
+      capabilities: [
+        { category: "companion", id: "mail-bridge", name: "邮箱通道" },
+        { category: "companion", id: "proactive-contact", name: "主动关心" },
+        { category: "act", id: "agent-journal", name: "日记" },
+      ],
+    },
+    wechatSnapshot: { enabled: true },
+  });
+
+  assert.equal(createWechatConnectionCapability({}).category, "companion");
+  assert.deepEqual(
+    overview.capabilities.filter((capability) => capability.category === "companion").map((capability) => capability.id),
+    ["mail-bridge", "wechat-connection"],
+  );
+  assert.equal(overview.capabilities.some((capability) => capability.id === "proactive-contact"), false);
 });

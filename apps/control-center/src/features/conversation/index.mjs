@@ -14,6 +14,10 @@ import {
 import { getAgentProfile, getIdentity, profileInitial } from "../../core/identity.mjs";
 import { endActiveConversationCall } from "../../react/conversation-call-coordinator.mjs";
 import { parseSuzuConversationCommand } from "../../../shared/conversation-command.mjs";
+import {
+  hasConversationMarkdownFormatting,
+  splitConversationReplyBuffer,
+} from "../../../shared/conversation-reply-segmentation.mjs";
 
 export { parseSuzuConversationCommand } from "../../../shared/conversation-command.mjs";
 
@@ -27,6 +31,7 @@ const viewState = {
   contactCreateOpen: false,
   contactContextMenu: null,
   contactRenameOpen: false,
+  fileContextMenu: null,
   draft: "",
   emojiOpen: false,
   error: "",
@@ -59,17 +64,26 @@ const viewState = {
   timer: null,
   unread: false,
   unsubscribe: null,
+  contactCapabilitiesSnapshot: null,
   wechatSnapshot: null,
   wechatQrOpen: false,
   wechatUnsubscribe: null,
 };
 
 const TRANSCRIPT_MATCH_GRACE_MS = 5_000;
+const MAX_COMPOSER_ATTACHMENTS = 24;
+const MAX_COMPOSER_IMAGES = 20;
+const CLIPBOARD_IMAGE_EXTENSION_BY_MIME = Object.freeze({
+  "image/gif": "gif",
+  "image/jpeg": "jpg",
+  "image/png": "png",
+  "image/webp": "webp",
+});
 
 // Direct terminal work should be inspectable in the normal chat flow.  Other
 // optional diagnostic blocks remain opt-in, but tool calls/results are shown
 // unless the user explicitly hides them.
-const defaults = { attachments: false, tools: true, thinking: false, system: false, tokens: false, timeDisplay: "center" };
+const defaults = { attachments: false, dynamicContext: false, tools: true, thinking: false, system: false, tokens: false, timeDisplay: "center" };
 const CENTER_TIME_GAP_MS = 5 * 60 * 1_000;
 
 function preferences(settings) {
@@ -78,6 +92,90 @@ function preferences(settings) {
 
 function clean(value) {
   return String(value ?? "").trim();
+}
+
+export function hasMarkdownFormatting(value) {
+  return hasConversationMarkdownFormatting(value);
+}
+
+function clipboardImageMimeType(value, fileName = "") {
+  const mimeType = clean(value).toLowerCase().split(";", 1)[0];
+  if (mimeType === "image/jpg") return "image/jpeg";
+  if (mimeType) return mimeType;
+  const sourceName = clean(fileName).toLowerCase();
+  if (/\.gif$/u.test(sourceName)) return "image/gif";
+  if (/\.jpe?g$/u.test(sourceName)) return "image/jpeg";
+  if (/\.png$/u.test(sourceName)) return "image/png";
+  if (/\.webp$/u.test(sourceName)) return "image/webp";
+  return "";
+}
+
+function releaseComposerAttachmentPreview(item) {
+  const fileUrl = clean(item?.fileUrl);
+  if (!fileUrl.startsWith("blob:") || typeof URL === "undefined" || typeof URL.revokeObjectURL !== "function") return;
+  try {
+    URL.revokeObjectURL(fileUrl);
+  } catch {
+    // A browser may have already released the local preview while the turn ended.
+  }
+}
+
+function releaseComposerAttachmentPreviews(items) {
+  for (const item of Array.isArray(items) ? items : []) releaseComposerAttachmentPreview(item);
+}
+
+function composerAttachmentSelections(items, previews = []) {
+  return (Array.isArray(items) ? items : []).flatMap((item, index) => {
+    const token = clean(item?.selectionToken);
+    const fileName = clean(item?.fileName);
+    const kind = clean(item?.kind).toLowerCase();
+    const size = Number(item?.size);
+    if (!token || !fileName || !new Set(["file", "image"]).has(kind) || !Number.isSafeInteger(size) || size <= 0) return [];
+    return [{
+      fileName,
+      fileUrl: clean(previews[index]?.fileUrl) || clean(item?.fileUrl),
+      kind,
+      mimeType: clean(item?.mimeType),
+      selectionToken: token,
+      size,
+    }];
+  });
+}
+
+function appendComposerAttachments(items) {
+  const existing = new Set(viewState.attachments.map((item) => clean(item?.selectionToken)));
+  const appended = [];
+  for (const item of Array.isArray(items) ? items : []) {
+    if (existing.has(item.selectionToken) || viewState.attachments.length + appended.length >= MAX_COMPOSER_ATTACHMENTS) continue;
+    existing.add(item.selectionToken);
+    appended.push(item);
+  }
+  viewState.attachments = [...viewState.attachments, ...appended];
+  return appended;
+}
+
+async function clipboardImageAttachment(value, { index, pastedAt }) {
+  const source = value && typeof value === "object" ? value : {};
+  const mimeType = clipboardImageMimeType(source.type || source.mimeType, source.name || source.fileName);
+  const extension = CLIPBOARD_IMAGE_EXTENSION_BY_MIME[mimeType];
+  if (!extension) throw new Error("剪贴板图片格式只支持 PNG、JPG、GIF 或 WebP。");
+  let data = null;
+  if (source.data instanceof Uint8Array) data = source.data;
+  else if (source.data instanceof ArrayBuffer) data = new Uint8Array(source.data);
+  else if (typeof source.arrayBuffer === "function") data = new Uint8Array(await source.arrayBuffer());
+  if (!data?.byteLength) throw new Error("剪贴板图片内容无效。");
+  let fileUrl = clean(source.fileUrl);
+  if (!fileUrl && typeof URL !== "undefined" && typeof URL.createObjectURL === "function" && typeof Blob !== "undefined" && source instanceof Blob) {
+    fileUrl = URL.createObjectURL(source);
+  }
+  return {
+    data,
+    fileName: `clipboard-image-${pastedAt}-${index + 1}.${extension}`,
+    fileUrl,
+    kind: "image",
+    mimeType,
+    size: data.byteLength,
+  };
 }
 
 function unreadCount(contact) {
@@ -91,15 +189,23 @@ export function isScheduledAgentReply(event) {
     && Boolean(clean(event?.content));
 }
 
-function contactContextMenuPosition(point = {}) {
+function contextMenuPosition(point = {}, { height: menuHeight, width: menuWidth } = {}) {
   const width = typeof window === "undefined" ? 0 : Number(window.innerWidth) || 0;
   const height = typeof window === "undefined" ? 0 : Number(window.innerHeight) || 0;
   const x = Math.round(Number(point?.x));
   const y = Math.round(Number(point?.y));
   return {
-    x: Math.max(12, Math.min(Number.isFinite(x) ? x : 12, width ? Math.max(12, width - 208) : Number.POSITIVE_INFINITY)),
-    y: Math.max(12, Math.min(Number.isFinite(y) ? y : 12, height ? Math.max(12, height - 252) : Number.POSITIVE_INFINITY)),
+    x: Math.max(12, Math.min(Number.isFinite(x) ? x : 12, width ? Math.max(12, width - (Number(menuWidth) || 208)) : Number.POSITIVE_INFINITY)),
+    y: Math.max(12, Math.min(Number.isFinite(y) ? y : 12, height ? Math.max(12, height - (Number(menuHeight) || 252)) : Number.POSITIVE_INFINITY)),
   };
+}
+
+function contactContextMenuPosition(point = {}) {
+  return contextMenuPosition(point, { height: 252, width: 208 });
+}
+
+function fileContextMenuPosition(point = {}) {
+  return contextMenuPosition(point, { height: 112, width: 176 });
 }
 
 function sameProjectRoot(left, right) {
@@ -256,11 +362,25 @@ function insertLiveReplyAtTimestamp(items, reply) {
     : [...items.slice(0, index), reply, ...items.slice(index)];
 }
 
+function insertPendingMessageAtTimestamp(items, message) {
+  const timestamp = Date.parse(message?.timestamp);
+  if (!Number.isFinite(timestamp)) return [...items, message];
+  const index = items.findIndex((item) => {
+    const itemTimestamp = Date.parse(item?.timestamp);
+    return Number.isFinite(itemTimestamp) && itemTimestamp > timestamp;
+  });
+  return index < 0
+    ? [...items, message]
+    : [...items.slice(0, index), message, ...items.slice(index)];
+}
+
 function liveReplySentences(item) {
-  const recorded = Array.isArray(item?.sentences)
-    ? item.sentences.map((value) => String(value ?? "")).filter((value) => clean(value))
-    : [];
-  if (recorded.length) return recorded;
+  // Projected live replies always carry `sentences`: an empty array means the
+  // current token buffer is intentionally still hidden. The content fallback
+  // is only for older/foreign reply records that predate sentence projection.
+  if (Array.isArray(item?.sentences)) {
+    return item.sentences.map((value) => String(value ?? "")).filter((value) => clean(value));
+  }
   const fallback = String(item?.content ?? "");
   return clean(fallback) ? [fallback] : [];
 }
@@ -284,6 +404,9 @@ export function companionPeerLabel(contactName, activeSessionId = "", liveReplyI
 function liveReplyMessages(item) {
   const id = clean(item?.requestId) || "reply";
   return liveReplySentences(item).map((text, index) => ({
+    // This message only exists while the live reply is being projected. Mark
+    // it as new so the renderer can play one entrance animation on mount.
+    animateIn: true,
     id: `reply-${id}-sentence-${index + 1}`,
     kind: "assistant",
     sourceMessageId: `reply-${id}`,
@@ -301,6 +424,7 @@ export function mergeConversationMessages(items, pendingItems = [], liveReplyIte
   const pending = (Array.isArray(pendingItems) ? pendingItems : [])
     .filter((item) => item.sessionId === sessionId && !messageMatches(source, "user", item.content, item.timestamp, item.media))
     .map((item) => ({
+      animateIn: Boolean(item.animateIn),
       id: item.id,
       kind: "user",
       pending: !item.accepted,
@@ -340,7 +464,16 @@ export function mergeConversationMessages(items, pendingItems = [], liveReplyIte
       // exact local duplicate once the stored conversation has caught up.
       && (item.kind !== "system" || !messageMatches(source, "system", messageText(item), item.timestamp))
   ));
-  const appended = [...source, ...pending, ...localMessages];
+  // Agent Core can durably expose an assistant step before its input event is
+  // visible in a refreshed snapshot.  The input is still represented by its
+  // local pending bubble at that point.  Place that bubble into the snapshot
+  // timeline instead of appending it after every stored row, so an early
+  // assistant step cannot appear above the message that prompted it.
+  const sourceWithPending = pending.reduce(
+    (result, message) => insertPendingMessageAtTimestamp(result, message),
+    source,
+  );
+  const appended = [...sourceWithPending, ...localMessages];
   // Source rows are already in the transcript's append order.  Preserve that
   // order for special turns such as calls; only place a local unfinished reply
   // back between normal chronological rows so a later message can push it up.
@@ -363,7 +496,9 @@ function displayedMessages(items) {
 export function filterConversationItems(items, configuredPreferences = {}) {
   const prefs = { ...defaults, ...configuredPreferences };
   return (items || []).flatMap((item) => {
-    if ((item.kind === "attachment" && !prefs.attachments) || (item.kind === "system" && !prefs.system)) return [];
+    if ((item.kind === "attachment" && !prefs.attachments)
+      || (item.kind === "dynamic-context" && !prefs.dynamicContext)
+      || (item.kind === "system" && !prefs.system)) return [];
     const blocks = (item.blocks || []).filter((value) => {
       if (value.kind === "thinking") return prefs.thinking;
       return !((value.kind === "tool_use" || value.kind === "tool_result") && !prefs.tools);
@@ -372,61 +507,8 @@ export function filterConversationItems(items, configuredPreferences = {}) {
   });
 }
 
-function sentenceBoundaryEnd(text, index) {
-  const character = text[index];
-  if (character === "\n") {
-    const blankLine = text.slice(index).match(/^\n[ \t]*\n+/u);
-    return blankLine ? index + blankLine[0].length : 0;
-  }
-
-  let end = 0;
-  if ("。！？!?…".includes(character)) {
-    end = index + 1;
-  } else if (character === ".") {
-    if (text.startsWith("...", index)) {
-      const next = text[index + 3] || "";
-      if (!next || /\s/u.test(next) || "\"”’）)]}".includes(next)) end = index + 3;
-    } else {
-      const next = text[index + 1] || "";
-      if (!next || /\s/u.test(next) || "\"”’）)]}".includes(next)) end = index + 1;
-    }
-  }
-  if (!end) return 0;
-
-  while (text[end] && "。！？!?…".includes(text[end])) end += 1;
-  while (text[end] && "\"'”’）)]}".includes(text[end])) end += 1;
-  return end;
-}
-
-/**
- * Turn a companion reply into durable chat bubbles without exposing a token
- * stream.  Until `final` is set, trailing unfinished text stays in
- * `remainder` and therefore never reaches the renderer.
- */
 export function splitCompanionReplyBuffer(value, { final = false } = {}) {
-  const text = String(value ?? "").replace(/\r\n?/gu, "\n");
-  const sentences = [];
-  let start = 0;
-  let inCodeFence = false;
-
-  for (let index = 0; index < text.length; index += 1) {
-    if (text.startsWith("```", index)) {
-      inCodeFence = !inCodeFence;
-      index += 2;
-      continue;
-    }
-    if (inCodeFence) continue;
-    const end = sentenceBoundaryEnd(text, index);
-    if (!end) continue;
-    const sentence = text.slice(start, text[index] === "\n" ? index : end).trim();
-    if (sentence) sentences.push(sentence);
-    start = end;
-    index = end - 1;
-  }
-
-  const remainder = text.slice(start);
-  if (final && remainder.trim()) sentences.push(remainder.trim());
-  return { remainder: final ? "" : remainder, sentences };
+  return splitConversationReplyBuffer(value, { final });
 }
 
 function mergeLiveReplyContent(previous, next) {
@@ -442,7 +524,7 @@ function liveReplyTimestamp(previous, event) {
   return clean(previous?.timestamp) || clean(event?.timestamp) || new Date().toISOString();
 }
 
-function projectedLiveReply(previous, event, { final = false } = {}) {
+export function projectedLiveReply(previous, event, { final = false } = {}) {
   const content = mergeLiveReplyContent(previous?.content, event?.content);
   const delivery = splitCompanionReplyBuffer(content, { final });
   const previousCount = Array.isArray(previous?.sentences) ? previous.sentences.length : 0;
@@ -458,6 +540,24 @@ function projectedLiveReply(previous, event, { final = false } = {}) {
     sessionId: clean(event?.sessionId) || clean(previous?.sessionId),
     timestamp: liveReplyTimestamp(previous, event),
   };
+}
+
+function sameLiveReplySentences(previous, next) {
+  const previousSentences = liveReplySentences(previous);
+  const nextSentences = liveReplySentences(next);
+  return previousSentences.length === nextSentences.length
+    && previousSentences.every((sentence, index) => sentence === nextSentences[index]);
+}
+
+function liveReplyMessagesChanged(previous, next) {
+  return !sameLiveReplySentences(previous, next);
+}
+
+export function liveReplyPresentationChanged(previous, next) {
+  if (!previous || !next) return previous !== next;
+  return Boolean(previous.done) !== Boolean(next.done)
+    || clean(previous.phase) !== clean(next.phase)
+    || liveReplyMessagesChanged(previous, next);
 }
 
 function finishedLiveReply(reply) {
@@ -555,7 +655,6 @@ function messageBlock(value, prefs, message) {
       preview: imageItem,
       size: attachmentSize(value.size),
       type: "media",
-      typeLabel: sticker ? "表情包" : value.mediaKind === "image" ? "图片" : "文件",
     };
   }
   if (value.kind === "thinking" && !prefs.thinking) return null;
@@ -594,9 +693,19 @@ function messageBlocks(message, prefs) {
   });
 }
 
+// The product-use assistant has its own session and avatars, but its transcript
+// still uses the exact same text, media, and tool-detail blocks as a normal
+// conversation. Keep that conversion here so it cannot drift into a second
+// renderer with subtly different tool cards.
+export function conversationMessageBlocks(message, configuredPreferences = {}) {
+  return messageBlocks(message, { ...defaults, ...configuredPreferences });
+}
+
 function messageRow(message, context, showTimestamp = true) {
   const prefs = preferences(context.state.settings);
-  if ((message.kind === "attachment" && !prefs.attachments) || (message.kind === "system" && !prefs.system)) return null;
+  if ((message.kind === "attachment" && !prefs.attachments)
+    || (message.kind === "dynamic-context" && !prefs.dynamicContext)
+    || (message.kind === "system" && !prefs.system)) return null;
   const profile = message.kind === "user"
     ? getIdentity(context.state.settings).owner
     : message.kind === "assistant"
@@ -617,6 +726,7 @@ function messageRow(message, context, showTimestamp = true) {
     anchorId,
     avatar: profile ? avatarPayload(profile, profile.displayName) : null,
     blocks,
+    entering: Boolean(message.animateIn),
     focused,
     kind: clean(message.kind),
     lineNumber,
@@ -821,6 +931,16 @@ function activeSession(payload) {
   return (payload?.sessions || []).find((session) => session.id === id) || null;
 }
 
+function proactiveContactEnabled(contactId) {
+  const id = clean(contactId);
+  const capabilities = Array.isArray(viewState.contactCapabilitiesSnapshot?.capabilities)
+    ? viewState.contactCapabilitiesSnapshot.capabilities
+    : [];
+  const proactiveContact = capabilities.find((capability) => clean(capability?.id) === "proactive-contact");
+  if (!proactiveContact || !Array.isArray(proactiveContact?.savedSettings?.enabledContactIds)) return true;
+  return proactiveContact.savedSettings.enabledContactIds.map(clean).includes(id);
+}
+
 function sessionSettingsSnapshot(context, selected, prefs) {
   const contact = viewState.snapshot?.activeContact || null;
   const contactId = clean(contact?.id);
@@ -857,13 +977,17 @@ function sessionSettingsSnapshot(context, selected, prefs) {
     hasSession: Boolean(sessionId),
     preferences: Object.entries({
       attachments: "显示 Hook / 上下文",
+      dynamicContext: "显示动态上下文",
       tools: "显示工具调用",
       thinking: "显示思考内容",
       system: "显示系统消息",
       tokens: "显示 Token 用量",
     }).map(([key, label]) => ({ checked: Boolean(prefs[key]), key, label })),
     longTermMemoryEnabled: longTermMemoryEnabled(contact?.longTermMemoryEnabled),
+    proactiveContactEnabled: proactiveContactEnabled(contactId),
+    permissionMode: clean(contact?.permissionMode) || "danger-full-access",
     removeContactAvatar: Boolean(agent.avatarDataUrl),
+    saving: viewState.sending,
     sessionId,
     timeDisplay: timeDisplay(prefs),
     visible: viewState.settingsOpen,
@@ -1003,6 +1127,15 @@ export function conversationReactSnapshot(context) {
       y: Number(contextMenuState?.y) || 12,
     }
     : null;
+  const fileContextMenuState = viewState.fileContextMenu;
+  const fileContextMenu = clean(fileContextMenuState?.fileUrl)
+    ? {
+      fileName: clean(fileContextMenuState?.fileName) || "附件",
+      fileUrl: clean(fileContextMenuState?.fileUrl),
+      x: Number(fileContextMenuState?.x) || 12,
+      y: Number(fileContextMenuState?.y) || 12,
+    }
+    : null;
   return {
     call: {
       available: callAvailable,
@@ -1021,6 +1154,7 @@ export function conversationReactSnapshot(context) {
       unavailable: !ready || viewState.sending,
     },
     contactContextMenu,
+    fileContextMenu,
     contacts: contactRows,
     error: viewState.error ? conversationInfo(payload) : clean(snapshot.error || payload?.error),
     focus: viewState.mode === "focus",
@@ -1039,8 +1173,10 @@ export function conversationReactSnapshot(context) {
     peer,
     permissions: permissionPromptSnapshot(clean(snapshot.activeSessionId)),
     rosterEmpty: hasContactsRoot
-      ? contacts.length ? "所有联系人都已隐藏。可在“设置 > 隐私”中恢复。" : "还没有联系人。点击右上角“＋”创建。"
+      ? contacts.length ? "所有联系人都已隐藏。可在“设置 > 隐私”中恢复。" : "还没有联系人。点击“＋”创建。"
       : "软件数据目录尚未准备好，请稍后重试。",
+    composerHeight: context.state.settings?.conversationComposerHeight,
+    rosterWidth: context.state.settings?.conversationRosterWidth,
     search: conversationSearchSnapshot(),
     searchOpen: viewState.searchOpen,
     sessionSettings: sessionSettingsSnapshot(context, selected, prefs),
@@ -1059,6 +1195,7 @@ function resetSessionSettings() {
   viewState.contactRenameOpen = false;
   viewState.mediaPreview = null;
   viewState.avatarCrop = null;
+  viewState.contactCapabilitiesSnapshot = null;
   viewState.wechatSnapshot = null;
   viewState.wechatQrOpen = false;
 }
@@ -1071,10 +1208,12 @@ async function refreshCurrentSessionSettings(context) {
   }
   viewState.settingsLoading = true;
   try {
-    const wechatSnapshot = context.api.wechat?.snapshot
-      ? await context.api.wechat.snapshot({ contactId })
-      : null;
+    const [contactCapabilitiesSnapshot, wechatSnapshot] = await Promise.all([
+      context.api.capabilities?.snapshot ? context.api.capabilities.snapshot() : null,
+      context.api.wechat?.snapshot ? context.api.wechat.snapshot({ contactId }) : null,
+    ]);
     if (clean(viewState.snapshot?.activeContact?.id) !== contactId) return;
+    viewState.contactCapabilitiesSnapshot = contactCapabilitiesSnapshot;
     viewState.wechatSnapshot = wechatSnapshot;
   } catch (error) {
     if (clean(viewState.snapshot?.activeContact?.id) === contactId) {
@@ -1140,6 +1279,7 @@ function handleConversationEvent(context, event) {
     ].join("\u0000");
     if (viewState.transientSystemMessages.some((item) => item.id === id)) return;
     viewState.transientSystemMessages.push({
+      animateIn: true,
       blocks: [{ kind: "text", text: `通话 · 我：${transcript}` }],
       id,
       kind: "system",
@@ -1166,6 +1306,7 @@ function handleConversationEvent(context, event) {
     ].join("-");
     if (viewState.transientSystemMessages.some((item) => item.id === id)) return;
     viewState.transientSystemMessages.push({
+      animateIn: true,
       blocks: [{ kind: "text", text: message }],
       id,
       kind: "system",
@@ -1226,6 +1367,7 @@ function handleConversationEvent(context, event) {
     const toolName = clean(event.toolName) || "Agent 工具";
     const isStart = phase === "started";
     viewState.liveTools.push({
+      animateIn: true,
       blocks: [isStart
         ? { kind: "tool_use", name: toolName, summary: content.slice(0, 80), detail: content }
         : { kind: "tool_result", error: phase === "failed", summary: content.slice(0, 80), detail: content }],
@@ -1253,7 +1395,7 @@ function handleConversationEvent(context, event) {
   if (event?.type === "thinking" && requestId && sessionId) {
     const previous = viewState.liveReplies.get(requestId);
     if (previous?.done) return;
-    viewState.liveReplies.set(requestId, {
+    const next = {
       ...previous,
       content: String(previous?.content ?? ""),
       done: false,
@@ -1263,8 +1405,9 @@ function handleConversationEvent(context, event) {
       sentences: Array.isArray(previous?.sentences) ? previous.sentences : [],
       sessionId,
       timestamp: liveReplyTimestamp(previous, event),
-    });
-    context.render();
+    };
+    viewState.liveReplies.set(requestId, next);
+    if (liveReplyPresentationChanged(previous, next)) context.render();
     return;
   }
   if (event?.type === "error" && requestId) {
@@ -1308,12 +1451,17 @@ function handleConversationEvent(context, event) {
   if (!requestId || !sessionId) return;
   if (event.type === "reply" || event.type === "reply-stream") {
     const previous = viewState.liveReplies.get(requestId);
-    viewState.liveReplies.set(requestId, projectedLiveReply(previous, event, {
+    const next = projectedLiveReply(previous, event, {
       final: event.type === "reply" || event.done === true,
-    }));
-    if (!viewState.shouldStickToLatest) viewState.unread = true;
-    scheduleScrollToLatest();
-    context.render();
+    });
+    const messagesChanged = liveReplyMessagesChanged(previous, next);
+    const presentationChanged = liveReplyPresentationChanged(previous, next);
+    viewState.liveReplies.set(requestId, next);
+    if (messagesChanged) {
+      if (!viewState.shouldStickToLatest) viewState.unread = true;
+      scheduleScrollToLatest();
+    }
+    if (presentationChanged) context.render();
     if (event.type === "reply" || event.done === true) load(context, true);
   }
 }
@@ -1354,10 +1502,11 @@ export function stopConversationPolling() {
 
 export function dismissConversationOverlays(target = viewState) {
   const state = target && typeof target === "object" ? target : viewState;
-  const open = Boolean(state.contactCreateOpen || state.contactContextMenu || state.contactRenameOpen || state.menuOpen || state.searchOpen || state.settingsOpen || state.emojiOpen || state.wechatQrOpen || state.mediaPreview || state.avatarCrop);
+  const open = Boolean(state.contactCreateOpen || state.contactContextMenu || state.contactRenameOpen || state.fileContextMenu || state.menuOpen || state.searchOpen || state.settingsOpen || state.emojiOpen || state.wechatQrOpen || state.mediaPreview || state.avatarCrop);
   state.contactCreateOpen = false;
   state.contactContextMenu = null;
   state.contactRenameOpen = false;
+  state.fileContextMenu = null;
   state.menuOpen = false;
   state.searchOpen = false;
   state.settingsOpen = false;
@@ -1371,7 +1520,7 @@ export function dismissConversationOverlays(target = viewState) {
 async function sendMessage(context) {
   const raw = clean(viewState.draft);
   const selectedAttachments = Array.isArray(viewState.attachments) ? viewState.attachments : [];
-  if ((!raw && !selectedAttachments.length) || viewState.sending) return;
+  if ((!raw && !selectedAttachments.length) || viewState.sending || viewState.attachmentPicking) return;
   const command = raw ? parseSuzuConversationCommand(raw) : { action: "message", content: "" };
   if (selectedAttachments.length && command.action !== "message") {
     viewState.error = "图片和文件只能作为普通消息发送。";
@@ -1418,6 +1567,7 @@ async function sendMessage(context) {
   const content = command.content;
   const pending = {
     accepted: false,
+    animateIn: true,
     content,
     media: selectedAttachments,
     id: `pending-${Date.now()}-${Math.random().toString(36).slice(2)}`,
@@ -1455,6 +1605,7 @@ async function sendMessage(context) {
     pending.requestId = clean(result?.requestId);
     pending.sessionId = clean(result?.sessionId);
     if (Array.isArray(result?.media) && result.media.length) pending.media = result.media;
+    releaseComposerAttachmentPreviews(selectedAttachments);
     viewState.attachments = [];
     if (pending.sessionId) viewState.busySessions.add(pending.sessionId);
     if (command.action === "steer") viewState.notice = clean(result?.message);
@@ -1474,7 +1625,7 @@ async function sendMessage(context) {
 
 async function saveCurrentContactAvatar(context, avatarDataUrl) {
   const settings = context.state.settings || {};
-  const agentId = clean(settings.agentId);
+  const agentId = clean(viewState.snapshot?.activeContact?.agentId) || clean(settings.agentId);
   if (!agentId) throw new Error("请先选择联系人。 ");
   const identity = getIdentity(settings);
   const nextIdentity = {
@@ -1482,7 +1633,7 @@ async function saveCurrentContactAvatar(context, avatarDataUrl) {
     defaultAgent: { ...identity.defaultAgent },
     agents: Object.fromEntries(Object.entries(identity.agents || {}).map(([id, profile]) => [id, { ...profile }])),
   };
-  nextIdentity.agents[agentId] = { ...getAgentProfile(settings), avatarDataUrl };
+  nextIdentity.agents[agentId] = { ...(identity.agents?.[agentId] || getAgentProfile(settings)), avatarDataUrl };
   context.state.settings = await context.api.settings.update({ identity: nextIdentity });
   viewState.error = "";
   viewState.notice = avatarDataUrl ? "联系人头像已保存。" : "联系人头像已移除。";
@@ -1641,9 +1792,11 @@ async function openConversationMediaPreviewForItem(context, value = {}) {
 
 function resetConversationForContactChange() {
   resetSessionSettings();
+  releaseComposerAttachmentPreviews(viewState.attachments);
   viewState.attachments = [];
   viewState.attachmentPicking = false;
   viewState.contactContextMenu = null;
+  viewState.fileContextMenu = null;
   viewState.transientSystemMessages.length = 0;
   viewState.liveTools = [];
   viewState.pending = [];
@@ -1689,6 +1842,11 @@ export function createConversationReactActions(context) {
     closeContactContextMenu: () => {
       if (!viewState.contactContextMenu) return;
       viewState.contactContextMenu = null;
+      context.render();
+    },
+    closeFileContextMenu: () => {
+      if (!viewState.fileContextMenu) return;
+      viewState.fileContextMenu = null;
       context.render();
     },
     closeMediaPreview: () => {
@@ -1771,6 +1929,7 @@ export function createConversationReactActions(context) {
       if (viewState.sending) return;
       viewState.contactCreateOpen = true;
       viewState.contactContextMenu = null;
+      viewState.fileContextMenu = null;
       viewState.error = "";
       viewState.menuOpen = false;
       viewState.searchOpen = false;
@@ -1782,6 +1941,7 @@ export function createConversationReactActions(context) {
       const contacts = Array.isArray(viewState.snapshot?.contacts) ? viewState.snapshot.contacts : [];
       if (!id || !contacts.some((contact) => clean(contact?.id) === id)) return;
       viewState.contactContextMenu = { contactId: id, ...contactContextMenuPosition(point) };
+      viewState.fileContextMenu = null;
       viewState.menuOpen = false;
       viewState.searchOpen = false;
       viewState.emojiOpen = false;
@@ -1792,6 +1952,7 @@ export function createConversationReactActions(context) {
       if (!id || id !== clean(viewState.snapshot?.activeContact?.id) || viewState.sending) return;
       viewState.contactRenameOpen = true;
       viewState.contactContextMenu = null;
+      viewState.fileContextMenu = null;
       viewState.error = "";
       context.render();
     },
@@ -1805,15 +1966,46 @@ export function createConversationReactActions(context) {
         context.render();
       }
     },
+    openFileContextMenu: (block, point) => {
+      const fileUrl = clean(block?.fileUrl);
+      if (!fileUrl) return;
+      viewState.fileContextMenu = {
+        fileName: clean(block?.fileName) || "附件",
+        fileUrl,
+        ...fileContextMenuPosition(point),
+      };
+      viewState.contactContextMenu = null;
+      viewState.menuOpen = false;
+      viewState.searchOpen = false;
+      viewState.emojiOpen = false;
+      context.render();
+    },
+    copyMediaFile: async (block) => {
+      const fileUrl = clean(block?.fileUrl);
+      if (!fileUrl || !context.api.conversation.copyMediaFile) return;
+      const fileName = clean(block?.fileName) || "附件";
+      viewState.fileContextMenu = null;
+      context.render();
+      try {
+        await context.api.conversation.copyMediaFile({ fileUrl });
+        viewState.error = "";
+        viewState.notice = `已复制“${fileName}”，可在资源管理器中粘贴。`;
+      } catch (error) {
+        viewState.error = `无法复制附件：${error?.message || error}`;
+      }
+      context.render();
+    },
     openMediaFile: async (block) => {
       const fileUrl = clean(block?.fileUrl);
       if (!fileUrl || !context.api.conversation.openMediaFile) return;
+      viewState.fileContextMenu = null;
+      context.render();
       try {
         await context.api.conversation.openMediaFile({ fileUrl });
       } catch (error) {
-        viewState.error = `无法打开附件：${error?.message || error}`;
-        context.render();
+        viewState.error = `无法打开附件所在位置：${error?.message || error}`;
       }
+      context.render();
     },
     openMediaPreview: (item) => void openConversationMediaPreviewForItem(context, item),
     openSessionSettings: async () => {
@@ -1826,7 +2018,7 @@ export function createConversationReactActions(context) {
     },
     openWechatCapability: () => {
       context.setView?.("capabilities");
-      context.setCapabilityPage?.("detail", "act", "wechat-connection");
+      context.setCapabilityPage?.("detail", "companion", "wechat-connection");
     },
     previousMediaPreview: () => {
       const preview = viewState.mediaPreview;
@@ -1843,6 +2035,7 @@ export function createConversationReactActions(context) {
       const removed = viewState.attachments.filter((item) => clean(item?.selectionToken) === token);
       if (!removed.length) return;
       viewState.attachments = viewState.attachments.filter((item) => clean(item?.selectionToken) !== token);
+      releaseComposerAttachmentPreviews(removed);
       const discard = context.api.conversation.attachments?.discard;
       if (typeof discard === "function") void discard({ attachmentTokens: removed.map((item) => item.selectionToken) }).catch(() => undefined);
       context.render();
@@ -1929,6 +2122,26 @@ export function createConversationReactActions(context) {
       context.render();
     },
     runSearch: (query) => void runConversationSearchForQuery(context, viewState.searchCategory, query),
+    setConversationComposerHeight: async (height) => {
+      if (typeof context.api.settings?.update !== "function") return context.state.settings;
+      try {
+        context.state.settings = await context.api.settings.update({ conversationComposerHeight: height });
+      } catch (error) {
+        viewState.error = `无法保存聊天框高度：${error?.message || error}`;
+      }
+      context.render();
+      return context.state.settings;
+    },
+    setConversationRosterWidth: async (width) => {
+      if (typeof context.api.settings?.update !== "function") return context.state.settings;
+      try {
+        context.state.settings = await context.api.settings.update({ conversationRosterWidth: width });
+      } catch (error) {
+        viewState.error = `无法保存联系人栏宽度：${error?.message || error}`;
+      }
+      context.render();
+      return context.state.settings;
+    },
     setPreferredContact: async (contactId) => {
       const id = clean(contactId);
       if (!id || !context.api.conversation.setPreferredContact) return;
@@ -2006,26 +2219,68 @@ export function createConversationReactActions(context) {
       try {
         const result = await context.api.conversation.attachments.select({ kind: attachmentKind });
         if (!result?.canceled) {
-          const selected = (Array.isArray(result?.items) ? result.items : []).flatMap((item) => {
-            const token = clean(item?.selectionToken);
-            const fileName = clean(item?.fileName);
-            const itemKind = clean(item?.kind).toLowerCase();
-            const size = Number(item?.size);
-            if (!token || !fileName || !new Set(["file", "image"]).has(itemKind) || !Number.isSafeInteger(size) || size <= 0) return [];
-            return [{
-              fileName,
-              fileUrl: clean(item?.fileUrl),
-              kind: itemKind,
-              mimeType: clean(item?.mimeType),
-              selectionToken: token,
-              size,
-            }];
-          });
-          const existing = new Set(viewState.attachments.map((item) => clean(item?.selectionToken)));
-          viewState.attachments = [...viewState.attachments, ...selected.filter((item) => !existing.has(item.selectionToken))].slice(0, 24);
+          appendComposerAttachments(composerAttachmentSelections(result?.items));
         }
       } catch (error) {
         viewState.error = `无法选择附件：${error?.message || error}`;
+      } finally {
+        viewState.attachmentPicking = false;
+        context.render();
+      }
+    },
+    pasteComposerImages: async (files) => {
+      const sources = Array.isArray(files) ? files : [];
+      const currentAttachments = Array.isArray(viewState.attachments) ? viewState.attachments : [];
+      const imageCount = currentAttachments.filter((item) => clean(item?.kind).toLowerCase() === "image").length;
+      if (!sources.length || viewState.sending || viewState.attachmentPicking || !context.api.conversation.attachments?.paste) return;
+      if (currentAttachments.length + sources.length > MAX_COMPOSER_ATTACHMENTS) {
+        viewState.error = `一次最多发送 ${MAX_COMPOSER_ATTACHMENTS} 个附件。`;
+        context.render();
+        return;
+      }
+      if (imageCount + sources.length > MAX_COMPOSER_IMAGES) {
+        viewState.error = `一次最多发送 ${MAX_COMPOSER_IMAGES} 张图片。`;
+        context.render();
+        return;
+      }
+      const contactId = clean(viewState.snapshot?.activeContact?.id);
+      const candidates = [];
+      viewState.attachmentPicking = true;
+      viewState.error = "";
+      context.render();
+      try {
+        const pastedAt = Date.now();
+        for (const [index, source] of sources.entries()) {
+          candidates.push(await clipboardImageAttachment(source, { index, pastedAt }));
+        }
+        const result = await context.api.conversation.attachments.paste({
+          items: candidates.map(({ data, fileName, mimeType }) => ({ data, fileName, mimeType })),
+        });
+        if (result?.canceled) {
+          releaseComposerAttachmentPreviews(candidates);
+          return;
+        }
+        const selected = composerAttachmentSelections(result?.items, candidates);
+        if (selected.length !== candidates.length) {
+          const discard = context.api.conversation.attachments?.discard;
+          if (typeof discard === "function" && selected.length) void discard({ attachmentTokens: selected.map((item) => item.selectionToken) }).catch(() => undefined);
+          throw new Error("剪贴板图片没有全部加入待发送附件。");
+        }
+        if (contactId !== clean(viewState.snapshot?.activeContact?.id)) {
+          releaseComposerAttachmentPreviews(candidates);
+          const discard = context.api.conversation.attachments?.discard;
+          if (typeof discard === "function") void discard({ attachmentTokens: selected.map((item) => item.selectionToken) }).catch(() => undefined);
+          return;
+        }
+        const appended = appendComposerAttachments(selected);
+        if (appended.length !== selected.length) {
+          const discard = context.api.conversation.attachments?.discard;
+          if (typeof discard === "function") void discard({ attachmentTokens: selected.map((item) => item.selectionToken) }).catch(() => undefined);
+          throw new Error("待发送附件已达到上限。");
+        }
+      } catch (error) {
+        releaseComposerAttachmentPreviews(candidates);
+        viewState.error = `无法粘贴图片：${error?.message || error}`;
       } finally {
         viewState.attachmentPicking = false;
         context.render();
@@ -2050,6 +2305,25 @@ export function createConversationReactActions(context) {
       void runConversationSearchForQuery(context, next, viewState.searchQuery);
     },
     setAvatarCropZoom: zoomConversationAvatarCrop,
+    setContactPermissionMode: async (permissionMode) => {
+      const contactId = clean(viewState.snapshot?.activeContact?.id);
+      const nextPermissionMode = clean(permissionMode);
+      const currentPermissionMode = clean(viewState.snapshot?.activeContact?.permissionMode) || "danger-full-access";
+      if (!contactId || !nextPermissionMode || nextPermissionMode === currentPermissionMode || viewState.sending || !context.api.conversation.updateContactPermissionMode) return;
+      viewState.sending = true;
+      context.render();
+      try {
+        viewState.snapshot = await context.api.conversation.updateContactPermissionMode({ id: contactId, permissionMode: nextPermissionMode });
+        viewState.lastVersion = viewState.snapshot.version;
+        viewState.error = "";
+        viewState.notice = "已更新这位联系人的审批模式。";
+      } catch (error) {
+        viewState.error = `无法更新联系人审批模式：${error?.message || error}`;
+      } finally {
+        viewState.sending = false;
+        context.render();
+      }
+    },
     setLongTermMemoryEnabled: async (enabled) => {
       const contactId = clean(viewState.snapshot?.activeContact?.id);
       if (!contactId || viewState.sending || !context.api.conversation.updateContactLongTermMemoryEnabled) return;
@@ -2066,12 +2340,35 @@ export function createConversationReactActions(context) {
         context.render();
       }
     },
+    setProactiveContactEnabled: async (enabled) => {
+      const contactId = clean(viewState.snapshot?.activeContact?.id);
+      if (!contactId || viewState.sending || !context.api.capabilities?.saveSettings) return;
+      viewState.sending = true;
+      context.render();
+      try {
+        const response = await context.api.capabilities.saveSettings("proactive-contact", {
+          contactEnabled: Boolean(enabled),
+          contactId,
+        });
+        if (!response?.ok) throw new Error(response?.error?.message || "无法更新联系人主动关心。");
+        viewState.contactCapabilitiesSnapshot = response.value;
+        context.state.capabilitySnapshot = response.value;
+        viewState.error = "";
+        viewState.notice = enabled ? "已开启这位联系人的主动关心。" : "已关闭这位联系人的主动关心。";
+      } catch (error) {
+        viewState.error = `无法更新联系人主动关心：${error?.message || error}`;
+      } finally {
+        viewState.sending = false;
+        context.render();
+      }
+    },
     setDisplayPreference: async (key, checked) => {
       const preference = clean(key);
       if (!Object.hasOwn(defaults, preference)) return;
       try {
         const next = { ...preferences(context.state.settings), [preference]: Boolean(checked) };
         context.state.settings = await context.api.settings.update({ conversationPreferences: next });
+        if (preference === "dynamicContext") await load(context, true);
       } catch (error) {
         viewState.error = `无法更新聊天显示：${error?.message || error}`;
       }
@@ -2081,7 +2378,6 @@ export function createConversationReactActions(context) {
       const next = String(value ?? "");
       if (viewState.draft === next) return;
       viewState.draft = next;
-      context.render();
     },
     setListScroll: ({ clientHeight, scrollHeight, scrollTop } = {}) => {
       const top = Number(scrollTop);

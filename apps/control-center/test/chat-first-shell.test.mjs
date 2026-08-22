@@ -62,3 +62,27 @@ test("relationship overview keeps active memory and settings cards", () => {
   assert.deepEqual(resolveSuzuRelationshipPage("settings"), { page: "settings", unavailable: null });
   assert.deepEqual(resolveSuzuRelationshipPage("memory"), { page: "memory", unavailable: null });
 });
+
+test("relationship overview no longer duplicates the sidebar conversation entry", async () => {
+  const [page, styles] = await Promise.all([
+    readFile(new URL("../src/react/relationships-page.jsx", import.meta.url), "utf8"),
+    readFile(new URL("../src/react/relationships-page.css", import.meta.url), "utf8"),
+  ]);
+
+  assert.doesNotMatch(page, /打开对话：查看并继续当前会话|按联系人查看会话|relationships-card--conversation|actions\.openConversation/u);
+  assert.match(page, /actions\.openCompactor[\s\S]*?actions\.openMemory[\s\S]*?actions\.openSettings[\s\S]*?actions\.openJournal/u);
+  assert.match(styles, /\.relationships-overview\s*\{[\s\S]*?grid-template-columns:repeat\(2,minmax\(0,1fr\)\);[\s\S]*?grid-template-rows:repeat\(2,minmax\(188px,1fr\)\);/u);
+  assert.doesNotMatch(styles, /relationships-card--conversation|relationships-card__conversation-copy/u);
+});
+
+test("relationship overview uses the same compact card size as capabilities", async () => {
+  const [relationships, capabilities] = await Promise.all([
+    readFile(new URL("../src/react/relationships-page.css", import.meta.url), "utf8"),
+    readFile(new URL("../src/react/capabilities-page.css", import.meta.url), "utf8"),
+  ]);
+
+  assert.match(relationships, /\.relationships-overview\s*\{[\s\S]*?grid-template-rows:repeat\(2,minmax\(188px,1fr\)\);[\s\S]*?gap:14px;/u);
+  assert.match(relationships, /\.relationships-card__action\s*\{[\s\S]*?min-height:188px;/u);
+  assert.match(capabilities, /\.capabilities-overview-grid\s*\{[\s\S]*?gap:14px;/u);
+  assert.match(capabilities, /\.capability-overview-card\s*\{[\s\S]*?min-height:188px;/u);
+});

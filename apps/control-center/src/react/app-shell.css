@@ -5,12 +5,51 @@
 }
 
 .desktop-shell > .app-shell {
+  position:relative;
   display:grid;
-  --shell-command-center-offset:-108px;
-  grid-template-columns:216px minmax(0,1fr);
+  --shell-command-center-offset:-120px;
+  --shell-main-center-offset:120px;
+  --shell-sidebar-width:240px;
+  /* Application chrome is one continuous surface; the workspace begins below it. */
+  --shell-chrome-bg:var(--bg-elevated);
+  --shell-topbar-height:40px;
+  --shell-bottombar-height:8px;
+  --shell-workspace-corner:14px;
+  --shell-page-scrollbar-size:12px;
+  grid-template-columns:var(--shell-sidebar-width) minmax(0,1fr);
   min-height:0;
   height:100%;
   transition:grid-template-columns .26s cubic-bezier(.22,.72,.2,1);
+}
+
+.shell-sidebar-resizer {
+  position:absolute;
+  z-index:40;
+  top:var(--shell-topbar-height);
+  bottom:var(--shell-bottombar-height);
+  left:calc(var(--shell-sidebar-width) - 7px);
+  width:14px;
+  -webkit-app-region:no-drag;
+  cursor:col-resize;
+  touch-action:none;
+}
+
+.shell-sidebar-resizer:focus-visible {
+  outline:2px solid color-mix(in srgb,var(--accent) 72%,#fff);
+  outline-offset:-3px;
+  border-radius:9px;
+}
+
+.desktop-shell > .app-shell.is-resizing-sidebar,
+.desktop-shell > .app-shell.is-resizing-sidebar .shell-sidebar,
+.desktop-shell > .app-shell.is-resizing-sidebar .shell-brand,
+.desktop-shell > .app-shell.is-resizing-sidebar .shell-brand-copy,
+.desktop-shell > .app-shell.is-resizing-sidebar .shell-command-slot,
+.desktop-shell > .app-shell.is-resizing-sidebar .shell-nav-item,
+.desktop-shell > .app-shell.is-resizing-sidebar .shell-nav-item > span:last-child {
+  cursor:col-resize;
+  transition:none;
+  user-select:none;
 }
 
 .shell-sidebar {
@@ -20,10 +59,16 @@
   flex-direction:column;
   overflow-x:clip;
   overflow-y:auto;
-  border-right:1px solid var(--border);
-  background:linear-gradient(180deg,color-mix(in srgb,var(--bg-elevated) 94%,var(--bg)),color-mix(in srgb,var(--bg-elevated) 82%,var(--bg)));
-  padding:25px 16px 17px;
+  border-right:0;
+  background:var(--shell-chrome-bg);
+  /* Keep the brand and navigation visually below the full-width top chrome. */
+  padding:var(--shell-topbar-height) 16px 17px;
   transition:padding-inline .26s cubic-bezier(.22,.72,.2,1);
+}
+
+/* This is the visible surface through the workspace's rounded cutout. */
+.shell-main {
+  background:var(--shell-chrome-bg);
 }
 
 .shell-brand {
@@ -109,16 +154,47 @@
   position:relative;
   display:grid;
   grid-template-columns:minmax(120px,1fr) minmax(280px,620px) minmax(120px,1fr);
-  height:64px;
-  flex:0 0 64px;
+  height:var(--shell-topbar-height);
+  flex:0 0 var(--shell-topbar-height);
   align-items:center;
   gap:20px;
   border-bottom:0;
-  background:color-mix(in srgb,var(--bg) 82%,transparent);
+  background:var(--shell-chrome-bg);
+  backdrop-filter:none;
   /* Window controls are absolutely positioned, so reserving their width here
      would shift the command field left. Keep the grid symmetrical instead. */
   padding:0 28px;
   -webkit-app-region:drag;
+}
+
+/* A manually collapsed sidebar uses the same icon rail as the automatic
+   narrow-window layout, while retaining the user-selected width in settings. */
+.desktop-shell > .app-shell[data-sidebar-compact="true"] .shell-sidebar {
+  padding:var(--shell-topbar-height) 9px 17px;
+}
+
+.desktop-shell > .app-shell[data-sidebar-compact="true"] .shell-brand {
+  gap:0;
+  padding:0 calc((100% - 40px)/2) 31px;
+}
+
+.desktop-shell > .app-shell[data-sidebar-compact="true"] .shell-brand-copy,
+.desktop-shell > .app-shell[data-sidebar-compact="true"] .shell-nav-item > span:last-child {
+  max-width:0;
+  opacity:0;
+  pointer-events:none;
+  transform:translateX(-6px);
+}
+
+.desktop-shell > .app-shell[data-sidebar-compact="true"] .shell-nav-item {
+  gap:0;
+  padding-right:0;
+  padding-left:calc((100% - 19px)/2);
+}
+
+/* Override the legacy light-theme .topbar paint so both chrome regions match. */
+:root[data-theme="light"] .shell-topbar {
+  background:var(--shell-chrome-bg);
 }
 
 .shell-topbar-edge { min-width:0; }
@@ -142,14 +218,14 @@
   top:0;
   right:0;
   display:flex;
-  height:64px;
+  height:var(--shell-topbar-height);
   -webkit-app-region:no-drag;
 }
 
 .shell-window-control {
   display:grid;
   width:52px;
-  height:64px;
+  height:var(--shell-topbar-height);
   place-items:center;
   border:0;
   background:transparent;
@@ -188,14 +264,31 @@
   font:10px Consolas,monospace;
 }
 
+/* The rounded corners belong to the shell-level workspace, not PageCanvas. */
+.shell-main > .content {
+  border-radius:var(--shell-workspace-corner) 0 0 var(--shell-workspace-corner);
+  background:var(--bg);
+}
+
+/* A thin shell edge gives scrollable pages a deliberate visual endpoint. */
+.shell-bottombar {
+  min-height:var(--shell-bottombar-height);
+  flex:0 0 var(--shell-bottombar-height);
+  background:var(--shell-chrome-bg);
+  pointer-events:none;
+}
+
 .notice {
   position:fixed;
   z-index:110;
   pointer-events:none;
-  top:76px;
-  left:calc(50% + 108px);
+  top:calc(var(--shell-topbar-height) + 12px);
+  left:calc(50% + var(--shell-main-center-offset));
   right:auto;
-  width:min(520px,calc(100vw - 272px));
+  width:min(
+    calc(100vw - var(--shell-sidebar-width) - 32px),
+    clamp(360px,42vw,680px)
+  );
   margin:0;
   box-shadow:var(--shadow-lg);
   transform:translateX(-50%);
@@ -205,7 +298,7 @@
 .incoming-conversation-notice {
   position:fixed;
   z-index:111;
-  top:76px;
+  top:calc(var(--shell-topbar-height) + 12px);
   left:calc(50% + 108px);
   right:auto;
   display:flex;
@@ -424,35 +517,10 @@
   stroke-width:1.7;
 }
 
-/* Electron keeps the desktop window at least 1080px wide, so the compact
-   navigation must begin before the mobile-only breakpoint. */
+/* Compact navigation is controlled by the shell's state. A narrow window
+   starts compact, but the splitter remains available for a manual expansion. */
 @media (max-width:1180px) {
-  .desktop-shell > .app-shell {
-    --shell-command-center-offset:-35px;
-    grid-template-columns:70px minmax(0,1fr);
-  }
-  .shell-sidebar { padding:25px 9px 17px; }
-  .shell-brand { gap:0; padding:0 calc((100% - 40px)/2) 31px; }
-  .shell-brand-copy {
-    max-width:0;
-    opacity:0;
-    pointer-events:none;
-    transform:translateX(-6px);
-  }
-  .shell-nav-item {
-    gap:0;
-    padding-right:0;
-    padding-left:calc((100% - 19px)/2);
-  }
-  .shell-nav-item > span:last-child {
-    max-width:0;
-    overflow:hidden;
-    opacity:0;
-    pointer-events:none;
-    transform:translateX(-6px);
-  }
-  .notice { top:76px; left:calc(50% + 35px); right:auto; width:calc(100vw - 104px); }
-  .incoming-conversation-notice { top:76px; left:calc(50% + 35px); right:auto; width:calc(100vw - 104px); }
+  .incoming-conversation-notice { top:calc(var(--shell-topbar-height) + 12px); left:calc(50% + 35px); right:auto; width:calc(100vw - 104px); }
   .incoming-voice-call { left:calc(50% + 35px); width:min(360px,calc(100vw - 104px)); }
 }
 

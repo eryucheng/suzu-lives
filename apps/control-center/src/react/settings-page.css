@@ -11,12 +11,9 @@
 }
 
 .settings-react-page {
-  --settings-layout-max-width:1480px;
   container-type:inline-size;
   width:100%;
   min-width:0;
-  max-width:var(--settings-layout-max-width);
-  margin:0 auto;
 }
 
 .settings-page-tabs {
@@ -33,14 +30,14 @@
 
 .settings-card {
   min-width:0;
-  padding:clamp(17px,1.8cqw,25px);
+  padding:var(--space-xl);
 }
 
 .settings-card__layout {
   display:grid;
   grid-template-columns:minmax(0,1fr) auto;
   align-items:center;
-  gap:clamp(16px,2.2cqw,30px);
+  gap:var(--space-xl);
 }
 
 .settings-card__copy {
@@ -67,7 +64,7 @@
 .settings-card h2 {
   margin:0;
   color:var(--text);
-  font-size:clamp(17px,1.6cqw,21px);
+  font-size:var(--font-size-2xl);
   letter-spacing:-.3px;
 }
 
@@ -82,7 +79,7 @@
 .settings-directory-card__path {
   display:block;
   width:min(100%,860px);
-  margin-top:clamp(6px,.7cqw,10px);
+  margin-top:var(--space-sm);
   overflow:hidden;
   color:var(--text-muted);
   font:var(--font-size-xs) Consolas,"Microsoft YaHei UI",monospace;
@@ -124,7 +121,7 @@
 
 .settings-privacy-card {
   display:grid;
-  gap:clamp(14px,1.5cqw,19px);
+  gap:var(--space-lg);
 }
 
 .settings-privacy-card__status {
@@ -169,7 +166,7 @@
 
 .settings-system-status-card {
   display:grid;
-  gap:clamp(14px,1.6cqw,20px);
+  gap:var(--space-lg);
 }
 
 .settings-system-status-card__summary {

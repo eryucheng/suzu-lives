@@ -3,13 +3,13 @@ import {
   MEMORY_RECALL_HOOK_MOUNT,
 } from "./memory-recall-hook.mjs";
 import {
-  createConversationAttachmentDeliveryHook,
-  ATTACHMENT_DELIVERY_HOOK_MOUNT,
-} from "./conversation-attachment-delivery-hook.mjs";
-import {
   createTimeAwarenessContextHook,
   TIME_AWARENESS_HOOK_MOUNT,
 } from "./time-awareness-hook.mjs";
+import {
+  createAutomationTaskContextHook,
+  AUTOMATION_TASK_CONTEXT_HOOK_MOUNT,
+} from "./automation-task-context-hook.mjs";
 
 /**
  * A capability describes a product feature; resources describe the concrete
@@ -483,7 +483,7 @@ export const CAPABILITY_DEFINITIONS = freezeArray([
     id: "mail-bridge",
     name: "邮箱通道",
     description: "通过已配置的 SMTP/IMAP 邮箱发送请求，并接收按主题路由的回信。",
-    category: "act",
+    category: "companion",
     runtimeStatus: "agent-capability-bridge",
     config: { path: ["automation", "mail-bridge", "config.json"], contactScoped: true, contactFields: CONTACT_SCOPE_FIELDS },
     resources: [
@@ -546,6 +546,23 @@ export const CAPABILITY_DEFINITIONS = freezeArray([
     ],
   }),
   defineCapability({
+    id: "automation-task-context",
+    name: "自动任务上下文",
+    description: "仅在软件发起的自动任务当前轮次中注入任务说明。",
+    category: "system",
+    internal: true,
+    runtimeStatus: "agent-core-context-hook",
+    resources: [
+      {
+        id: "dynamic-context",
+        kind: "hook",
+        implementation: "automation-task-context",
+        mount: AUTOMATION_TASK_CONTEXT_HOOK_MOUNT,
+        lifecycle: ["mount"],
+      },
+    ],
+  }),
+  defineCapability({
     id: "conversation-attachment",
     name: "聊天附件交付",
     description: "将 Agent 已生成的本地图片、音频或文件作为聊天附件交付给用户。",
@@ -554,13 +571,6 @@ export const CAPABILITY_DEFINITIONS = freezeArray([
     runtimeStatus: "agent-core-native",
     resources: [
       {
-        id: "delivery-instruction",
-        kind: "hook",
-        implementation: "conversation-attachment-delivery",
-        mount: ATTACHMENT_DELIVERY_HOOK_MOUNT,
-        lifecycle: ["mount"],
-      },
-      {
         id: "agent-delivery",
         kind: "runtime",
         driver: "conversation-attachment",
@@ -568,7 +578,7 @@ export const CAPABILITY_DEFINITIONS = freezeArray([
         agentAction: {
           id: "deliver",
           name: "发送聊天附件",
-          description: "将已生成或已确认的本机绝对路径交付到当前聊天。input 必须是 { items: [{ path: \"绝对路径\", kind: \"image\" | \"audio\" | \"file\" }] }；图片支持 AVIF/BMP/GIF/HEIC/ICO/JPG/PNG/SVG/TIFF/WebP，音频仅支持 MP3。",
+          description: "将已生成或已确认的本机绝对路径交付到当前聊天。input 必须是 { items: [{ path: \"绝对路径\", kind: \"image\" | \"audio\" | \"file\" }] }；图片支持 AVIF/BMP/GIF/HEIC/ICO/JPG/PNG/SVG/TIFF/WebP，音频仅支持 MP3。动作成功后，附件会出现在当前聊天；已绑定微信的会话会自动转发同一附件。",
         },
       },
     ],
@@ -608,7 +618,7 @@ function catalogEntry(definition) {
 
 function defaultHookFactories() {
   return {
-    "conversation-attachment-delivery": createConversationAttachmentDeliveryHook,
+    "automation-task-context": createAutomationTaskContextHook,
     "time-awareness": createTimeAwarenessContextHook,
     "memory-recall": createMemoryRecallContextHook,
   };

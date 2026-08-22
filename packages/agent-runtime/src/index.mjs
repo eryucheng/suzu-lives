@@ -86,7 +86,7 @@ function runtimeEvent(value) {
 
 function assertDriver(driver) {
   const source = plainObject(driver);
-  for (const method of ["createSession", "sendTurn", "cancelTurn", "resolveApproval", "resumeSession", "subscribe", "close"]) {
+  for (const method of ["createSession", "sendTurn", "sendTask", "cancelTurn", "resolveApproval", "resumeSession", "subscribe", "close"]) {
     if (typeof source[method] !== "function") {
       throw new AgentRuntimeError("DRIVER_CONTRACT_INVALID", `运行时驱动缺少 ${method}()。`);
     }
@@ -269,7 +269,44 @@ export function createAgentRuntime({ driver, createId = (prefix) => `${prefix}-$
         placement: normalizedPlacement,
         metadata: plainObject(metadata),
       }), { turnId: suzuTurnId }), "发送消息");
-      turn.state = "accepted";
+      // A concrete runtime can publish turn-started before its enqueue receipt
+      // resolves. Preserve that running state so a following human message can
+      // still interrupt the active task.
+      if (turn.state === "submitting") turn.state = "accepted";
+      return { accepted: true, sessionId: record.sessionId, runtimeSessionId: record.runtimeSessionId, turnId: suzuTurnId, queued: result.queued === true };
+    } catch (error) {
+      record.turns.delete(suzuTurnId);
+      throw error;
+    }
+  };
+
+  /**
+   * Wakes a provider-owned task turn without serializing the task body as a
+   * user message. The product injects that body through a one-turn dynamic
+   * context hook after the runtime has started the turn.
+   */
+  const sendTask = async ({ sessionId, task = {}, placement = "queue", turnId = "", metadata = {} } = {}) => {
+    assertOpen();
+    const record = recordFor(sessionId);
+    const normalizedPlacement = clean(placement) || "queue";
+    if (normalizedPlacement !== "queue") {
+      throw new AgentRuntimeError("INVALID_TASK_PLACEMENT", "内部任务只能按顺序投递。 ");
+    }
+    const suzuTurnId = turnId ? stableIdentifier(turnId, "Suzu 轮次标识") : generatedId("task", createId);
+    if (record.turns.has(suzuTurnId)) {
+      throw new AgentRuntimeError("TURN_CONFLICT", "Suzu 轮次标识已经存在。 ");
+    }
+    const turn = { turnId: suzuTurnId, state: "submitting", cancelTask: null };
+    record.turns.set(suzuTurnId, turn);
+    try {
+      const result = acceptedResult(await callDriver(record, "投递内部任务", () => runtimeDriver.sendTask({
+        runtimeSessionId: record.runtimeSessionId,
+        turnId: suzuTurnId,
+        task: plainObject(task),
+        placement: normalizedPlacement,
+        metadata: plainObject(metadata),
+      }), { turnId: suzuTurnId }), "投递内部任务");
+      if (turn.state === "submitting") turn.state = "accepted";
       return { accepted: true, sessionId: record.sessionId, runtimeSessionId: record.runtimeSessionId, turnId: suzuTurnId, queued: result.queued === true };
     } catch (error) {
       record.turns.delete(suzuTurnId);
@@ -356,6 +393,7 @@ export function createAgentRuntime({ driver, createId = (prefix) => `${prefix}-$
   return Object.freeze({
     createSession,
     sendTurn,
+    sendTask,
     cancelTurn,
     resolveApproval,
     resumeSession,
@@ -379,6 +417,7 @@ export function createFakeAgentRuntimeDriver() {
   const calls = {
     createSession: [],
     sendTurn: [],
+    sendTask: [],
     cancelTurn: [],
     resolveApproval: [],
     resumeSession: [],
@@ -395,6 +434,10 @@ export function createFakeAgentRuntimeDriver() {
     },
     async sendTurn(request) {
       calls.sendTurn.push(request);
+      return { accepted: true, queued: request.placement === "queue" };
+    },
+    async sendTask(request) {
+      calls.sendTask.push(request);
       return { accepted: true, queued: request.placement === "queue" };
     },
     async cancelTurn(request) {

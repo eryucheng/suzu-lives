@@ -4,7 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { createSettingsService, normalizeConversationPreferences, normalizeMemoryRecallEnabled, normalizeOnboardingCompleted, normalizeOnboardingMultimodalCompleted, registerSettingsIpc } from "../electron/ipc/settings-ipc.mjs";
+import { legacyStableAgentId } from "@suzu-lives/agent-registry";
+import { createSettingsService, normalizeConversationComposerHeight, normalizeConversationPreferences, normalizeConversationRosterWidth, normalizeMemoryRecallEnabled, normalizeOnboardingCompleted, normalizeOnboardingMultimodalCompleted, normalizeShellSidebarWidth, registerSettingsIpc } from "../electron/ipc/settings-ipc.mjs";
 import { createContactProjectsService } from "../electron/services/contact-projects.mjs";
 import { renderManagedAgentRuntimeSettings, renderSettings } from "../src/features/settings/index.mjs";
 
@@ -40,6 +41,49 @@ test("the first settings snapshot materializes the managed contacts directory", 
   assert.equal(snapshot.contactsRoot, contactsRoot);
   assert.equal(settingsService.load().contactsRoot, contactsRoot);
   assert.equal(fs.statSync(contactsRoot).isDirectory(), true);
+});
+
+test("settings reads migrate an old path-derived contact avatar to its persistent contact identity", async () => {
+  const handlers = new Map();
+  const projectRoot = "D:/Suzu contacts/contact-legacy-avatar";
+  const legacyAgentId = legacyStableAgentId(projectRoot);
+  let saves = 0;
+  let stored = {
+    contactsRoot: "D:/Suzu contacts",
+    identity: {
+      owner: { displayName: "我", avatarDataUrl: "", gender: "", signature: "" },
+      defaultAgent: { displayName: "Suzu", avatarDataUrl: "" },
+      agents: {
+        [legacyAgentId]: { displayName: "旧联系人", avatarDataUrl: "data:image/png;base64,AAAA" },
+      },
+    },
+  };
+  registerSettingsIpc({
+    app: { relaunch: () => {}, exit: () => {} },
+    contactProjectsService: {
+      snapshot: async () => ({
+        contacts: [{ agentId: "agent-contact-legacy-avatar", projectRoot }],
+      }),
+    },
+    dataStorageService: null,
+    dialog: { showOpenDialog: async () => ({ canceled: true }), showMessageBox: async () => ({ response: 1 }) },
+    getMainWindow: () => null,
+    ipcMain: { handle: (name, handler) => handlers.set(name, handler) },
+    shell: { showItemInFolder: () => {}, openPath: () => {} },
+    settingsService: {
+      load: () => stored,
+      save: (next) => { saves += 1; stored = next; return stored; },
+      response: (settings) => settings,
+    },
+  });
+
+  const result = await handlers.get("settings:get")();
+  assert.deepEqual(result.identity.agents["agent-contact-legacy-avatar"], {
+    displayName: "旧联系人",
+    avatarDataUrl: "data:image/png;base64,AAAA",
+  });
+  assert.equal(Object.hasOwn(result.identity.agents, legacyAgentId), false);
+  assert.equal(saves, 1);
 });
 
 test("data settings show one unified storage location and a migration action", () => {
@@ -183,6 +227,7 @@ test("changing the owner display name syncs managed user profile titles", async 
 test("conversation time display defaults to the centered mode and migrates the old enum", () => {
   assert.deepEqual(normalizeConversationPreferences({ timeDisplay: "center" }), {
     attachments: true,
+    dynamicContext: false,
     tools: true,
     thinking: true,
     system: true,
@@ -192,6 +237,7 @@ test("conversation time display defaults to the centered mode and migrates the o
   assert.equal(normalizeConversationPreferences({ timeDisplay: "wechat" }).timeDisplay, "center");
   assert.equal(normalizeConversationPreferences().timeDisplay, "center");
   assert.equal(normalizeConversationPreferences({ timeDisplay: "bubble" }).timeDisplay, "bubble");
+  assert.equal(normalizeConversationPreferences({ dynamicContext: true }).dynamicContext, true);
 });
 
 test("migration IPC schedules a restart only after directory and confirmation dialogs succeed", async () => {
@@ -306,6 +352,84 @@ test("system status IPC delegates only to the read-only status service", async (
 
   assert.deepEqual(await handlers.get("settings:system-status")(), expected);
   assert.equal(calls, 1);
+});
+
+test("sidebar width is stored as a bounded full sidebar or compact icon rail", () => {
+  assert.equal(normalizeShellSidebarWidth(undefined), 240);
+  assert.equal(normalizeShellSidebarWidth(120), 70);
+  assert.equal(normalizeShellSidebarWidth(216), 240);
+  assert.equal(normalizeShellSidebarWidth(151), 240);
+  assert.equal(normalizeShellSidebarWidth(999), 360);
+
+  const userData = fs.mkdtempSync(path.join(os.tmpdir(), "suzu-settings-sidebar-width-"));
+  try {
+    const settings = createSettingsService({ app: { getPath: () => userData } });
+    assert.equal(settings.load().shellSidebarWidth, 240);
+    assert.equal(settings.update({ shellSidebarWidth: 120 }).shellSidebarWidth, 70);
+    assert.equal(settings.update({ shellSidebarWidth: 216 }).shellSidebarWidth, 240);
+    assert.equal(settings.update({ shellSidebarWidth: 284 }).shellSidebarWidth, 284);
+  } finally {
+    fs.rmSync(userData, { recursive: true, force: true });
+  }
+});
+
+test("conversation roster width stays within its usable search-and-contact range", () => {
+  assert.equal(normalizeConversationRosterWidth(undefined), 246);
+  assert.equal(normalizeConversationRosterWidth(100), 192);
+  assert.equal(normalizeConversationRosterWidth(246), 246);
+  assert.equal(normalizeConversationRosterWidth(999), 340);
+
+  const userData = fs.mkdtempSync(path.join(os.tmpdir(), "suzu-settings-roster-width-"));
+  try {
+    const settings = createSettingsService({ app: { getPath: () => userData } });
+    assert.equal(settings.load().conversationRosterWidth, 246);
+    assert.equal(settings.update({ conversationRosterWidth: 180 }).conversationRosterWidth, 192);
+    assert.equal(settings.update({ conversationRosterWidth: 288 }).conversationRosterWidth, 288);
+  } finally {
+    fs.rmSync(userData, { recursive: true, force: true });
+  }
+});
+
+test("conversation composer height stays within its usable writing range", () => {
+  assert.equal(normalizeConversationComposerHeight(undefined), 168);
+  assert.equal(normalizeConversationComposerHeight(100), 168);
+  assert.equal(normalizeConversationComposerHeight(268), 268);
+  assert.equal(normalizeConversationComposerHeight(999), 420);
+
+  const userData = fs.mkdtempSync(path.join(os.tmpdir(), "suzu-settings-composer-height-"));
+  try {
+    const settings = createSettingsService({ app: { getPath: () => userData } });
+    assert.equal(settings.load().conversationComposerHeight, 168);
+    assert.equal(settings.update({ conversationComposerHeight: 120 }).conversationComposerHeight, 168);
+    assert.equal(settings.update({ conversationComposerHeight: 332 }).conversationComposerHeight, 332);
+  } finally {
+    fs.rmSync(userData, { recursive: true, force: true });
+  }
+});
+
+test("chat Markdown links open in the system browser through the controlled shell route", async () => {
+  const handlers = new Map();
+  const opened = [];
+  registerSettingsIpc({
+    app: { relaunch: () => {}, exit: () => {} },
+    contactProjectsService: {},
+    dataStorageService: null,
+    dialog: { showOpenDialog: async () => ({ canceled: true }), showMessageBox: async () => ({ response: 1 }) },
+    getMainWindow: () => null,
+    ipcMain: { handle: (name, handler) => handlers.set(name, handler) },
+    shell: {
+      showItemInFolder: () => {},
+      openPath: () => {},
+      openExternal: async (url) => { opened.push(url); },
+    },
+    settingsService: { load: () => ({}), save: (next) => next, response: () => ({}) },
+  });
+
+  assert.equal(await handlers.get("shell:open-external")(null, "https://example.com/guide"), true);
+  assert.equal(await handlers.get("shell:open-external")(null, "mailto:help@example.com"), true);
+  assert.equal(await handlers.get("shell:open-external")(null, "file:///C:/private.txt"), false);
+  assert.equal(await handlers.get("shell:open-external")(null, "javascript:alert(1)"), false);
+  assert.deepEqual(opened, ["https://example.com/guide", "mailto:help@example.com"]);
 });
 
 test("default system status IPC normalizes its configured data root before scanning", async () => {

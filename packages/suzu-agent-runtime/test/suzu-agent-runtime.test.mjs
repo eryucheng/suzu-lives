@@ -46,6 +46,7 @@ function createFakeAgentCoreApi() {
   const calls = {
     create: [],
     prompt: [],
+    task: [],
     cancel: [],
     history: [],
     respond: [],
@@ -59,6 +60,10 @@ function createFakeAgentCoreApi() {
       async prompt(request) {
         calls.prompt.push(request);
         await beforePromptResponse?.(request);
+        return ok({ accepted: true });
+      },
+      async task(request) {
+        calls.task.push(request);
         return ok({ accepted: true });
       },
       async cancel(request) {
@@ -161,6 +166,56 @@ test("Agent Core driver maps one public FIFO text turn into neutral stream event
     coreTurn: 7,
     step: 1,
   });
+});
+
+test("Agent Core driver wakes an internal task without serializing its body as a prompt", async () => {
+  const { driver, fake } = setup();
+  const { runtimeSessionId } = await createSession(driver);
+
+  await driver.sendTask({
+    runtimeSessionId,
+    turnId: "task-1",
+    task: { id: "schedule-1", outputPolicy: "silent" },
+  });
+
+  assert.deepEqual(fake.calls.prompt, []);
+  assert.deepEqual(fake.calls.task, [{
+    sessionId: runtimeSessionId,
+    task: { id: "schedule-1", outputPolicy: "silent" },
+  }]);
+});
+
+test("Agent Core driver turns a host-side failed task into a terminal runtime event", async () => {
+  const { driver, fake } = setup();
+  const events = [];
+  driver.subscribe((event) => events.push(event));
+  const { runtimeSessionId } = await createSession(driver);
+  await driver.sendTask({
+    runtimeSessionId,
+    turnId: "task-failed-before-turn-end",
+    task: { id: "schedule-failed", outputPolicy: "silent" },
+  });
+
+  fake.emitMux({
+    type: "session/event",
+    sessionId: runtimeSessionId,
+    event: { type: "turn/start", seq: 1, time: 1, data: { turn: 21 } },
+  });
+  fake.emitHost({
+    type: "host/agent-error",
+    sessionId: runtimeSessionId,
+    message: "session persistence failed",
+  });
+  await flushEvents();
+
+  assert.deepEqual(events.map((event) => ({ type: event.type, turnId: event.turnId, error: event.error })), [
+    { type: "turn-started", turnId: "task-failed-before-turn-end", error: "" },
+    {
+      type: "runtime-unavailable",
+      turnId: "task-failed-before-turn-end",
+      error: "Agent Core host 事件流不可用：session persistence failed",
+    },
+  ]);
 });
 
 test("Agent Core driver reapplies a contact permission preset when its existing session is reopened", async () => {

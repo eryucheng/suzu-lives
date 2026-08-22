@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -28,6 +29,12 @@ const IMAGE_ATTACHMENT_DIALOG_FILTER = Object.freeze({
 const FILE_ATTACHMENT_DIALOG_FILTER = Object.freeze({
   name: "所有文件",
   extensions: ["*"],
+});
+const CLIPBOARD_IMAGE_EXTENSION_BY_MIME = Object.freeze({
+  "image/gif": "gif",
+  "image/jpeg": "jpg",
+  "image/png": "png",
+  "image/webp": "webp",
 });
 
 function clean(value) {
@@ -128,6 +135,59 @@ function attachmentPickerValue(value) {
   return { kind };
 }
 
+function localAttachmentPath(value) {
+  const fileUrl = clean(plainObject(value).fileUrl);
+  if (!fileUrl) throw new Error("缺少附件文件路径。 ");
+  let url;
+  let filePath;
+  try {
+    url = new URL(fileUrl);
+    if (url.protocol !== "file:") throw new Error("附件不是本地文件。 ");
+    filePath = fileURLToPath(url);
+  } catch (error) {
+    if (error?.message === "附件不是本地文件。 ") throw error;
+    throw new Error("附件路径无效。 ");
+  }
+  if (!path.isAbsolute(filePath)) throw new Error("附件路径无效。 ");
+  if (!existsSync(filePath)) throw new Error("附件文件不存在或已被移动。 ");
+  return filePath;
+}
+
+function clipboardImageData(value) {
+  if (Buffer.isBuffer(value)) return Buffer.from(value);
+  if (value instanceof Uint8Array) return Buffer.from(value);
+  if (value instanceof ArrayBuffer) return Buffer.from(new Uint8Array(value));
+  if (ArrayBuffer.isView(value)) return Buffer.from(new Uint8Array(value.buffer, value.byteOffset, value.byteLength));
+  return null;
+}
+
+function clipboardImageSelectionsValue(value, limits = {}) {
+  const source = plainObject(value);
+  const entries = Array.isArray(source.items) ? source.items : [];
+  const maxItems = Math.min(Number(limits.maxItems) || 24, Number(limits.maxImages) || 20);
+  const maxImageBytes = Math.min(Number(limits.maxBytes) || 50 * 1024 * 1024, Number(limits.maxImageBytes) || 5 * 1024 * 1024);
+  if (!entries.length) throw new Error("剪贴板中没有图片。 ");
+  if (entries.length > maxItems) throw new Error(`一次最多粘贴 ${maxItems} 张图片。 `);
+  const pastedAt = Date.now();
+  return entries.map((entry, index) => {
+    const item = plainObject(entry);
+    const declaredMimeType = clean(item.mimeType).toLowerCase().split(";", 1)[0];
+    const mimeType = declaredMimeType === "image/jpg" ? "image/jpeg" : declaredMimeType;
+    const extension = CLIPBOARD_IMAGE_EXTENSION_BY_MIME[mimeType];
+    if (!extension) throw new Error("剪贴板图片格式只支持 PNG、JPG、GIF 或 WebP。 ");
+    const data = clipboardImageData(item.data);
+    if (!data?.length) throw new Error("剪贴板图片内容无效。 ");
+    if (data.length > maxImageBytes) throw new Error(`单张图片不能超过 ${Math.floor(maxImageBytes / (1024 * 1024))} MiB。 `);
+    return {
+      data,
+      fileName: `clipboard-image-${pastedAt}-${index + 1}.${extension}`,
+      kind: "image",
+      mimeType,
+      size: data.length,
+    };
+  });
+}
+
 function attachmentSendValue(value) {
   const source = plainObject(value);
   const tokens = Array.isArray(source.attachmentTokens) ? source.attachmentTokens : [];
@@ -146,6 +206,7 @@ export function registerConversationIpc({
   app,
   capabilityRegistry = null,
   capabilityRuntime = null,
+  clipboard = null,
   contactProjectsService = null,
   connectionsService,
   dialog,
@@ -350,7 +411,11 @@ export function registerConversationIpc({
     });
     if (result.canceled || !Array.isArray(result.filePaths) || !result.filePaths.length) return { canceled: true, items: [] };
     discardExpiredAttachmentSelections();
-    const inspected = await Promise.all(result.filePaths.slice(0, 24).map((source) => attachmentService.inspect({ kind, path: source })));
+    // The single generic picker replaces the separate image button. It still
+    // classifies native images as images after selection, so they retain their
+    // preview and vision-input behavior instead of degrading into file cards.
+    const inspectedKind = kind === "file" ? "auto" : kind;
+    const inspected = await Promise.all(result.filePaths.slice(0, 24).map((source) => attachmentService.inspect({ kind: inspectedKind, path: source })));
     const items = inspected.map((item) => {
       const selectionToken = randomUUID();
       attachmentSelections.set(selectionToken, {
@@ -360,6 +425,26 @@ export function registerConversationIpc({
       return {
         fileName: item.fileName,
         fileUrl: item.kind === "image" ? pathToFileURL(item.path).toString() : "",
+        kind: item.kind,
+        mimeType: item.mimeType,
+        selectionToken,
+        size: item.size,
+      };
+    });
+    return { canceled: false, items };
+  });
+  ipcMain.handle("conversation:paste-attachments", (event, value) => {
+    sender = event.sender;
+    discardExpiredAttachmentSelections();
+    const pasted = clipboardImageSelectionsValue(value, attachmentService.limits);
+    const items = pasted.map((item) => {
+      const selectionToken = randomUUID();
+      attachmentSelections.set(selectionToken, {
+        expiresAt: Date.now() + ATTACHMENT_SELECTION_TTL_MS,
+        media: item,
+      });
+      return {
+        fileName: item.fileName,
         kind: item.kind,
         mimeType: item.mimeType,
         selectionToken,
@@ -438,18 +523,23 @@ export function registerConversationIpc({
   });
   ipcMain.handle("conversation:open-media-file", async (event, value) => {
     sender = event.sender;
-    if (typeof shell?.openPath !== "function") throw new Error("当前环境无法打开本地文件。 ");
-    const fileUrl = String(value?.fileUrl || "").trim();
-    if (!fileUrl) throw new Error("缺少附件文件路径。 ");
-    let filePath;
-    try {
-      filePath = fileURLToPath(fileUrl);
-    } catch {
-      throw new Error("附件路径无效。 ");
+    const filePath = localAttachmentPath(value);
+    if (typeof shell?.showItemInFolder === "function") {
+      shell.showItemInFolder(filePath);
+      return { revealed: true };
     }
-    const error = await shell.openPath(filePath);
-    if (error) throw new Error(`无法打开附件：${error}`);
-    return { opened: true };
+    if (typeof shell?.openPath !== "function") throw new Error("当前环境无法打开附件所在位置。 ");
+    const error = await shell.openPath(path.dirname(filePath));
+    if (error) throw new Error(`无法打开附件所在位置：${error}`);
+    return { revealed: true };
+  });
+  ipcMain.handle("conversation:copy-media-file", async (event, value) => {
+    sender = event.sender;
+    const filePath = localAttachmentPath(value);
+    const writeFiles = clipboard?._writeFilesForTesting;
+    if (typeof writeFiles !== "function") throw new Error("当前运行环境无法复制本地文件。 ");
+    writeFiles.call(clipboard, [filePath]);
+    return { copied: true };
   });
   ipcMain.handle("conversation:create", async (event) => {
     sender = event.sender;

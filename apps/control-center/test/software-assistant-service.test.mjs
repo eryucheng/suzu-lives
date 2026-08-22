@@ -32,8 +32,9 @@ async function waitFor(check, label) {
   assert.fail(`等待 ${label} 超时。`);
 }
 
-function createFakeRuntime() {
+function createFakeRuntime({ historyEvents = [] } = {}) {
   const listeners = new Set();
+  const state = { historyEvents };
   const calls = {
     cancelTurn: [],
     ensureSession: [],
@@ -50,7 +51,7 @@ function createFakeRuntime() {
       },
       async history(value) {
         calls.history.push(value);
-        return { events: [] };
+        return { events: state.historyEvents };
       },
       async sendTurn(value) {
         calls.sendTurn.push(value);
@@ -71,6 +72,9 @@ function createFakeRuntime() {
     },
     emit(event) {
       for (const listener of listeners) listener(event);
+    },
+    setHistoryEvents(events) {
+      state.historyEvents = Array.isArray(events) ? events : [];
     },
   };
 }
@@ -188,7 +192,22 @@ test("software assistant uses a fixed, non-contact DSH session and injects no me
   assert.match(manual, /- 语音消息（voice-message）：能力 · TTS、ASR、音色与语音通话设置。/u);
   assert.match(manual, /## 语音消息与语音通话/u);
   assert.match(manual, /设置 → API/u);
+  assert.match(manual, /## 想做什么，去哪里/u);
+  assert.match(manual, /主动关心的开关在当前联系人的聊天设置/u);
+  assert.match(manual, /日历里的“联系人日期”和节日用于提醒与查看资料/u);
+  assert.match(manual, /创造.*视觉工作台/u);
+  assert.doesNotMatch(manual, /能力 → 陪伴 → 主动关心/u);
+  assert.doesNotMatch(manual, /声音设计/u);
+  assert.match(manual, /## 上下文整理（记忆压缩器）/u);
+  assert.match(manual, /32,000 Token/u);
+  assert.match(manual, /### 外部能力（Skill \/ MCP）/u);
+  assert.match(manual, /审批模式/u);
+  assert.match(manual, /费用趋势/u);
+  assert.match(manual, /对方正在输入…/u);
   assert.match(manual, /若说明书没有覆盖/u);
+  assert.match(DEFAULT_SUZU_SOFTWARE_ASSISTANT_COMPACTION_PROMPT, /供后续操作使用的工作记录/u);
+  assert.match(DEFAULT_SUZU_SOFTWARE_ASSISTANT_COMPACTION_PROMPT, /## 已完成/u);
+  assert.doesNotMatch(DEFAULT_SUZU_SOFTWARE_ASSISTANT_COMPACTION_PROMPT, /以“我”的第一人称/u);
 
   fake.emit({
     type: "lifecycle-request",
@@ -200,9 +219,68 @@ test("software assistant uses a fixed, non-contact DSH session and injects no me
   assert.deepEqual(responseById(fake.calls, "assistant-compaction").result, {
     available: true,
     prompt: DEFAULT_SUZU_SOFTWARE_ASSISTANT_COMPACTION_PROMPT,
-    automatic: { enabled: true, tokenThreshold: 15_000, retainTokens: 5_000 },
-    manual: { retainTokens: 5_000 },
+    automatic: { enabled: true, tokenThreshold: 32_000, retainTokens: 8_000 },
+    manual: { retainTokens: 8_000 },
   });
+  service.dispose();
+});
+
+test("software assistant snapshot retains native tool calls and results for the chat transcript", async (t) => {
+  const root = await temporaryRoot();
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const fake = createFakeRuntime({
+    historyEvents: [
+      {
+        type: "user/message",
+        seq: 1,
+        time: 1_000,
+        surfaceOp: "append",
+        data: {
+          id: "question",
+          source: { kind: "user" },
+          content: [{ type: "text", text: "帮我确认联系人目录" }],
+        },
+      },
+      {
+        type: "assistant/message",
+        seq: 2,
+        time: 2_000,
+        surfaceOp: "append",
+        data: {
+          message: {
+            id: "tool-call",
+            content: [{ type: "tool-call", name: "pwsh", arguments: "{\"command\":\"Get-ChildItem\"}" }],
+          },
+        },
+      },
+      {
+        type: "tool/result",
+        seq: 3,
+        time: 3_000,
+        surfaceOp: "append",
+        data: {
+          message: {
+            source: { callId: "call-1" },
+            content: [{ type: "tool-result", toolCallId: "call-1", content: [{ type: "text", text: "已读取联系人目录" }], isError: false }],
+          },
+        },
+      },
+    ],
+  });
+  const settings = createSettings();
+  const service = createSoftwareAssistantService({
+    dataRoot: path.join(root, "Suzu Lives"),
+    runtime: fake.runtime,
+    settingsService: settings.service,
+  });
+
+  const snapshot = await service.snapshot();
+
+  assert.deepEqual(snapshot.messages.map((message) => message.kind), ["user", "assistant", "system"]);
+  assert.equal(snapshot.messages[1].blocks[0]?.kind, "tool_use");
+  assert.equal(snapshot.messages[1].blocks[0]?.name, "pwsh");
+  assert.equal(snapshot.messages[2].blocks[0]?.kind, "tool_result");
+  assert.match(snapshot.messages[2].blocks[0]?.detail || "", /已读取联系人目录/u);
   service.dispose();
 });
 

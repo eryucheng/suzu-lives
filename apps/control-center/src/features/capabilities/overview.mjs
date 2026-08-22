@@ -1,9 +1,11 @@
 export const CAPABILITY_CATEGORIES = Object.freeze([
   Object.freeze({ id: "perceive", label: "感知", detail: "图片、视频与时间" }),
-  Object.freeze({ id: "companion", label: "陪伴", detail: "日常互动与游戏" }),
+  Object.freeze({ id: "companion", label: "陪伴", detail: "日常互动、联系与游戏" }),
   Object.freeze({ id: "act", label: "行动", detail: "现实中的工具与联系" }),
   Object.freeze({ id: "create", label: "创作", detail: "图片、声音与视觉资料" }),
 ]);
+
+const HIDDEN_CAPABILITY_IDS = new Set(["proactive-contact"]);
 
 export const WECHAT_DELIVERY_OPTIONS = Object.freeze([
   Object.freeze(["agent", "Agent 的说话内容", "最终回复，默认投递"]),
@@ -29,13 +31,17 @@ export function capabilityCategory(capability) {
   return { category: "act", ...(capability || {}) }.category;
 }
 
+export function capabilityVisibleInCatalog(capability) {
+  return !HIDDEN_CAPABILITY_IDS.has(String(capability?.id || "").trim());
+}
+
 export function createWechatConnectionCapability(snapshot) {
   const current = wechatConnectionSettings(snapshot);
   return {
     id: "wechat-connection",
     name: "连接微信",
-    description: "把指定对话连接到手机微信；不会写入旧版项目 Skill，也不依赖外部桥接器。",
-    category: "act",
+    description: "把指定对话连接到手机微信。",
+    category: "companion",
     enabled: current.enabled,
     softwareConnector: true,
   };
@@ -43,7 +49,8 @@ export function createWechatConnectionCapability(snapshot) {
 
 export function capabilityOverview({ capabilitySnapshot, wechatSnapshot } = {}) {
   const builtIn = Array.isArray(capabilitySnapshot?.capabilities) ? capabilitySnapshot.capabilities : [];
-  const capabilities = [...builtIn, createWechatConnectionCapability(wechatSnapshot)];
+  const capabilities = [...builtIn, createWechatConnectionCapability(wechatSnapshot)]
+    .filter(capabilityVisibleInCatalog);
   const categories = CAPABILITY_CATEGORIES.filter((category) => capabilities.some((capability) => capabilityCategory(capability) === category.id));
   return { capabilities, categories };
 }

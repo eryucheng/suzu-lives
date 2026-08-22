@@ -74,6 +74,7 @@ test("Electron preload exposes the memory bridge", async () => {
   assert.equal(typeof bridge?.conversation?.voiceInput?.commit, "function");
   assert.equal(typeof bridge?.conversation?.voiceInput?.stop, "function");
   assert.equal(typeof bridge?.conversation?.renameContact, "function");
+  assert.equal(typeof bridge?.conversation?.copyMediaFile, "function");
   assert.equal(typeof bridge?.conversation?.updateContactPresentation, "function");
   assert.equal(typeof bridge?.conversation?.updateContactApprovalMode, "undefined");
   assert.equal(typeof bridge?.conversation?.updateContactLongTermMemoryEnabled, "function");
@@ -124,6 +125,9 @@ test("Electron preload exposes the memory bridge", async () => {
   await bridge.conversation.renameContact({ id: "contact-suzu", name: "新备注" });
   assert.equal(calls.at(-1).channel, "conversation:rename-contact");
   assert.deepEqual(JSON.parse(JSON.stringify(calls.at(-1).args[0])), { id: "contact-suzu", name: "新备注" });
+  await bridge.conversation.copyMediaFile({ fileUrl: "file:///D:/Temp/report.txt" });
+  assert.equal(calls.at(-1).channel, "conversation:copy-media-file");
+  assert.deepEqual(JSON.parse(JSON.stringify(calls.at(-1).args[0])), { fileUrl: "file:///D:/Temp/report.txt" });
   await bridge.conversation.updateContactPresentation({ id: "contact-suzu", pinned: true });
   assert.equal(calls.at(-1).channel, "conversation:update-contact-presentation");
   assert.deepEqual(JSON.parse(JSON.stringify(calls.at(-1).args[0])), { id: "contact-suzu", pinned: true });
@@ -192,6 +196,7 @@ test("Electron preload exposes the memory bridge", async () => {
   assert.equal(typeof bridge?.settings?.downloadUpdate, "function");
   assert.equal(typeof bridge?.settings?.installUpdate, "function");
   assert.equal(typeof bridge?.settings?.systemStatus, "function");
+  assert.equal(typeof bridge?.settings?.openExternal, "function");
   await bridge.settings.releaseAnnouncementStatus();
   await bridge.settings.acknowledgeReleaseAnnouncement();
   await bridge.settings.appUpdateStatus();
@@ -208,6 +213,9 @@ test("Electron preload exposes the memory bridge", async () => {
     "settings:install-update",
     "settings:system-status",
   ]);
+  await bridge.settings.openExternal("https://example.com/guide");
+  assert.equal(calls.at(-1).channel, "shell:open-external");
+  assert.equal(calls.at(-1).args[0], "https://example.com/guide");
   await bridge.conversation.voiceInput.start();
   bridge.conversation.voiceInput.audio({ inputId: "voice-input-1", audio: new ArrayBuffer(0) });
   await bridge.conversation.voiceInput.commit({ inputId: "voice-input-1" });

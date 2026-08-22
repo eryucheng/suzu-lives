@@ -6,6 +6,7 @@ import { API_BINDINGS } from "../features/agent/runtime.mjs";
 import {
   CAPABILITY_CATEGORIES,
   capabilityCategory,
+  capabilityVisibleInCatalog,
   createWechatConnectionCapability,
   WECHAT_DELIVERY_OPTIONS,
   wechatConnectionSettings,
@@ -336,7 +337,9 @@ export function CapabilityCategoryPage({ actions = {}, capabilitySnapshot, categ
   const category = categoryFor(categoryId);
   const builtIn = Array.isArray(capabilitySnapshot?.capabilities) ? capabilitySnapshot.capabilities : [];
   const wechat = capabilitySnapshot ? [createWechatConnectionCapability(wechatSnapshot)] : [];
-  const members = [...builtIn, ...wechat].filter((capability) => capabilityCategory(capability) === category.id);
+  const members = [...builtIn, ...wechat]
+    .filter(capabilityVisibleInCatalog)
+    .filter((capability) => capabilityCategory(capability) === category.id);
   return (
     <PageScaffold
       className="capabilities-react-page capabilities-react-page--inner"
@@ -396,7 +399,7 @@ function PhoneCameraSettings({ actions, apiServices, capability, contactsSnapsho
   return (
     <>
     <CapabilitySettingsForm abilityId="phone-camera" actions={actions}>
-      <SettingSurface description="这些偏好会附在已有拍摄规则上，不会替换后置、自拍或镜前的基础画面逻辑。" eyebrow="手机拍照式图片" title="画面偏好">
+      <SettingSurface description="这些偏好会与后置、自拍和镜前的基础画面规则共同生效。" eyebrow="手机拍照式图片" title="画面偏好">
         <FormGrid>
           <FormField label="默认方式"><ChoiceSelect name="defaultBackend" options={[["api", "云端 API"], ["comfyui", "本机 ComfyUI"]]} value={settings.defaultBackend || "api"} /></FormField>
           <ApiBinding actions={actions} apiServices={apiServices} bindingId="image-generation" />
@@ -637,7 +640,7 @@ function WebBrowserSettings({ actions, capability, contactsSnapshot }) {
   const running = browser.status === "ready";
   return (
     <>
-      <SettingSurface description="每位已启用的联系人都通过同一个 Suzu 专用浏览器操作任意已登录网页。网站登录态只保存在本机 profile，不会写进联系人工作目录。" eyebrow="WEB BROWSER" title="专用浏览器">
+      <SettingSurface description="每位已启用的联系人都通过同一个 Suzu 专用浏览器操作任意已登录网页。网站登录态保存在本机专用 profile，与联系人工作目录分开。" eyebrow="WEB BROWSER" title="专用浏览器">
         <Status label={running ? "浏览器正在运行" : "浏览器尚未启动"} tone={running ? "success" : "muted"} />
         {browser.browser ? <p className="capability-settings-note">{browser.browser}</p> : null}
       </SettingSurface>
@@ -690,9 +693,9 @@ function AgentJournalSettings({ actions, capability, contactsSnapshot }) {
   return (
     <>
       <CapabilitySettingsForm abilityId="agent-journal" actions={actions} submitLabel="保存日记时间">
-        <SettingSurface description="每天由软件创建一次内部回合，让对应 Agent 回顾当天值得留下的事。日记单独保存在本机，不会作为普通聊天消息或微信消息发送，也不会进入长期记忆。" eyebrow="AGENT JOURNAL" title="每天写日记">
+        <SettingSurface description="每天由软件创建一次内部回合，让对应 Agent 回顾当天值得留下的事。日记独立保存在本机，供关系页按联系人浏览，并与聊天、微信和长期记忆分开管理。" eyebrow="AGENT JOURNAL" title="每天写日记">
           <FormGrid>
-            <FormField hint="软件未运行时不会补写；默认是每天 00:02。" label="记录时间"><input defaultValue={settings.time || "00:02"} name="time" required type="time" /></FormField>
+            <FormField hint="日记在软件运行时按设定时间写入；默认是每天 00:02。" label="记录时间"><input defaultValue={settings.time || "00:02"} name="time" required type="time" /></FormField>
           </FormGrid>
         </SettingSurface>
       </CapabilitySettingsForm>
@@ -767,10 +770,10 @@ function WechatSettings({ actions, wechatSnapshot }) {
   const settings = wechatConnectionSettings(wechatSnapshot);
   const status = settings.enabled
     ? "软件正在维护已绑定会话的微信长连接；每个聊天可在“··· → 设置”里扫码或断开。"
-    : "关闭后会停止所有微信收发，但不会删除已绑定会话；再次开启即可恢复。";
+    : "关闭后会停止所有微信收发；已绑定会话会保留，再次开启即可恢复。";
   return (
     <section className="capability-settings-stack">
-      <SettingSurface description={status} eyebrow="行动 / 软件连接" title="连接微信">
+      <SettingSurface description={status} eyebrow="陪伴 / 软件连接" title="连接微信">
         <AsyncSwitchRow checked={settings.enabled} label={settings.enabled ? "微信连接已开启" : "微信连接已关闭"} onChange={(enabled) => actions.saveWechatSettings?.({ enabled })} />
       </SettingSurface>
       <SettingSurface description="这组设置独立于聊天页面的显示设置。默认发送 Agent 的最终回复和审批提示；收到提示后可在微信回复“允许”或“拒绝”。" eyebrow="DELIVERY" title="投递到微信的内容">
@@ -822,7 +825,7 @@ export function CapabilityDetailPage({
       <PageScaffold
         canvasClassName="page-canvas--stack"
         className="capabilities-react-page capabilities-react-page--inner"
-        header={<PageHeader action={back} eyebrow="CAPABILITIES / 行动" subtitle={subtitle} title={title} />}
+        header={<PageHeader action={back} eyebrow={"CAPABILITIES / " + category.label} subtitle={subtitle} title={title} />}
       >
         <WechatSettings actions={actions} wechatSnapshot={wechatSnapshot} />
       </PageScaffold>
@@ -855,7 +858,7 @@ function ExternalCapabilityCard({ actions, capability, onRemove }) {
         <div><span>本地来源</span><strong>{source.manifestPath || "来源路径不可用"}</strong></div>
       </div>
       <div className="external-capability-card__host">
-        <div><strong>Agent Core 登记</strong><p>{capability.enabled ? "这项外部能力已登记到 Suzu 管理的 Agent Core。" : "启用后，Skill 会放入受管技能目录，MCP 会作为 Agent Core 工具连接。不会写入旧版项目文件。"}</p></div>
+        <div><strong>Agent Core 登记</strong><p>{capability.enabled ? "这项外部能力已登记到 Suzu 管理的 Agent Core。" : "启用后，Skill 会放入受管技能目录，MCP 会作为 Agent Core 工具连接。"}</p></div>
         <div className="external-capability-card__actions">
           <Button disabled={capability.canEnable !== true} onClick={() => actions.setExternalEnabled?.(capability.id, true)} type="button" variant="secondary">{capability.enabled ? "再次启用以更新登记" : "启用并登记"}</Button>
           <Button disabled={capability.canDisable !== true} onClick={() => actions.setExternalEnabled?.(capability.id, false)} type="button" variant="secondary">停用</Button>
@@ -900,7 +903,7 @@ export function ExternalCapabilitiesPage({ actions = {}, externalSnapshot }) {
         header={<PageHeader action={<Button onClick={actions.returnToOverview} type="button" variant="secondary">返回能力</Button>} eyebrow="CAPABILITIES / EXTERNAL" subtitle="外部 Skill 与 MCP 会以 Agent Core 方式安装到 Suzu 的运行时，可供所有联系人使用。" title="外部能力" />}
       >
         <SettingSurface description={runtimeHome || "Agent Core 会在首次使用时创建。"} eyebrow="全局运行时" title="Suzu Agent Core">
-          <div className="capability-inline-action-react"><p>导入只读取本地 suzu-capability.json；不会下载或运行第三方代码。启用 MCP 后，Agent Core 会在下一次聊天时按清单启动它。</p><Button disabled={importing} onClick={importManifest} type="button" variant="secondary">{importing ? "正在导入…" : "导入 suzu-capability.json"}</Button></div>
+          <div className="capability-inline-action-react"><p>导入阶段会读取本地 suzu-capability.json 并显示静态检查结果。启用 MCP 后，Agent Core 会在下一次聊天时按清单启动它。</p><Button disabled={importing} onClick={importManifest} type="button" variant="secondary">{importing ? "正在导入…" : "导入 suzu-capability.json"}</Button></div>
         </SettingSurface>
         {capabilities.length ? <section className="external-capability-list">{capabilities.map((capability) => <ExternalCapabilityCard actions={actions} capability={capability} key={capability.id} onRemove={setRemoving} />)}</section> : <GlassPanel as="section" className="capability-empty-panel" intensity="soft"><Empty description="导入本地 suzu-capability.json 后，这里会显示 Skill/MCP 的静态诊断与 Agent Core 登记状态。" title="还没有外部能力" /></GlassPanel>}
       </PageScaffold>

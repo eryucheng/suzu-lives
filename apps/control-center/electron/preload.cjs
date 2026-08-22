@@ -26,6 +26,7 @@ contextBridge.exposeInMainWorld("suzuConsole", {
     removePreviousDataCopy: () => ipcRenderer.invoke("settings:remove-previous-data-copy"),
     update: (patch) => ipcRenderer.invoke("settings:update", patch),
     showItemInFolder: (targetPath) => ipcRenderer.invoke("shell:show-item", targetPath),
+    openExternal: (targetUrl) => ipcRenderer.invoke("shell:open-external", targetUrl),
   },
   ledger: {
     scan: () => ipcRenderer.invoke("ledger:scan"),
@@ -60,6 +61,7 @@ contextBridge.exposeInMainWorld("suzuConsole", {
     focus: (value) => ipcRenderer.invoke("conversation:focus", value),
     openMediaDirectory: (value) => ipcRenderer.invoke("conversation:open-media-directory", value),
     openMediaFile: (value) => ipcRenderer.invoke("conversation:open-media-file", value),
+    copyMediaFile: (value) => ipcRenderer.invoke("conversation:copy-media-file", value),
     create: () => ipcRenderer.invoke("conversation:create"),
     createContact: (value) => ipcRenderer.invoke("conversation:create-contact", value),
     renameContact: (value) => ipcRenderer.invoke("conversation:rename-contact", value),
@@ -71,6 +73,7 @@ contextBridge.exposeInMainWorld("suzuConsole", {
     removeContact: (value) => ipcRenderer.invoke("conversation:remove-contact", value),
     attachments: {
       select: (value) => ipcRenderer.invoke("conversation:select-attachments", value),
+      paste: (value) => ipcRenderer.invoke("conversation:paste-attachments", value),
       discard: (value) => ipcRenderer.invoke("conversation:discard-attachments", value),
     },
     emojiStickers: {

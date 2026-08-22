@@ -3,10 +3,10 @@
   z-index:200;
   inset:0;
   display:grid;
-  place-items:start center;
+  place-items:center;
   background:color-mix(in srgb,var(--bg) 42%,rgba(9,12,20,.58));
   backdrop-filter:blur(7px) saturate(1.05);
-  padding:24px 32px 24px calc(216px + 32px);
+  padding:24px 32px;
   animation:software-assistant-overlay-in .14s ease-out;
 }
 
@@ -69,26 +69,6 @@
   padding:22px;
 }
 
-.software-assistant-message { display:grid; max-width:min(78%,610px); gap:5px; }
-.software-assistant-message--user { justify-self:end; }
-.software-assistant-message__name { color:var(--text-muted); font-size:10px; font-weight:650; letter-spacing:.2px; }
-.software-assistant-message--user .software-assistant-message__name { text-align:right; }
-
-.software-assistant-message p {
-  margin:0;
-  border:1px solid var(--border);
-  border-radius:16px;
-  background:var(--panel);
-  color:var(--text);
-  font-size:14px;
-  line-height:1.65;
-  padding:11px 14px;
-  white-space:pre-wrap;
-}
-
-.software-assistant-message--user p { border-color:color-mix(in srgb,var(--accent) 42%,var(--border)); background:color-mix(in srgb,var(--accent) 13%,var(--panel)); }
-.software-assistant-message--pending p { color:var(--text-secondary); }
-
 .software-assistant-dialog__footer { border-top:1px solid var(--border); padding:13px 16px 16px; }
 .software-assistant-dialog__footer form { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:9px; align-items:center; }
 .software-assistant-dialog__footer form > .suzu-design-system-input-wrapper,
@@ -117,11 +97,10 @@
 @keyframes software-assistant-dialog-in { from { opacity:0; transform:translateY(-7px) scale(.985); } to { opacity:1; transform:translateY(0) scale(1); } }
 
 @media (max-width:1180px) {
-  .software-assistant-overlay { padding:20px; padding-left:calc(70px + 20px); }
+  .software-assistant-overlay { padding:20px; }
 }
 
 @media (max-width:760px) {
   .software-assistant-overlay { padding:14px; }
   .software-assistant-dialog { height:calc(100dvh - 28px); }
-  .software-assistant-message { max-width:90%; }
 }

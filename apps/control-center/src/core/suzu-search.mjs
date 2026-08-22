@@ -29,13 +29,13 @@ function item({ detail, featured = false, icon, id, keywords = [], target, title
  */
 export const SUZU_SEARCH_ITEMS = Object.freeze([
   item({ id: "today", title: "今天", detail: "页面 · 日历与重要日期", keywords: ["首页", "日历", "日期", "纪念日", "节日", "日程"], icon: "spark", target: { view: "today" }, featured: true }),
-  item({ id: "conversation", title: "聊天", detail: "联系人 · 对话", keywords: ["会话", "消息", "联系人", "本地附件", "消息免打扰", "置顶", "标为未读"], icon: "chat", target: { view: "relationships", relationshipPage: "conversation" }, featured: true }),
+  item({ id: "conversation", title: "对话", detail: "联系人 · 聊天与当前联系人设置", keywords: ["聊天", "会话", "消息", "联系人", "本地附件", "消息免打扰", "置顶", "标为未读"], icon: "chat", target: { view: "relationships", relationshipPage: "conversation" }, featured: true }),
   item({ id: "conversation-compactor", title: "上下文整理", detail: "联系人 · Agent Core 原生压缩", keywords: ["压缩", "摘要", "rewind", "上下文", "会话整理"], icon: "spark", target: { view: "relationships", relationshipPage: "compactor" } }),
   item({ id: "agent-journal", title: "查看日记", detail: "联系人 · Agent 每日回顾", keywords: ["日记", "写日记", "每日回顾", "agent 日记"], icon: "spark", target: { view: "relationships", relationshipPage: "journal" } }),
   item({ id: "memory", title: "长期记忆", detail: "联系人 · 召回、查看与维护", keywords: ["记忆", "召回", "memory", "长期", "记忆库", "大脑"], icon: "people", target: { view: "relationships", relationshipPage: "memory" } }),
   item({ id: "relationship-files", title: "相处设定", detail: "联系人 · SUZU.md 与资料", keywords: ["suzu", "persona", "user", "markdown", "关系文件", "人设"], icon: "people", target: { view: "relationships", relationshipPage: "settings" }, featured: true }),
   item({ id: "plans", title: "计划", detail: "软件 · 定时任务与自动计划", keywords: ["任务", "定时", "日程", "cron", "计划"], icon: "calendar", target: { view: "plans" } }),
-  item({ id: "create", title: "创造", detail: "软件 · 图片工作台、视觉参考与声音设计", keywords: ["创造", "图片", "图片生成", "生图", "视觉", "参考图", "音色", "声音", "视频"], icon: "palette", target: { view: "create" }, featured: true }),
+  item({ id: "create", title: "创造", detail: "软件 · 视觉工作台与参考资料", keywords: ["创造", "图片", "图片生成", "生图", "视觉", "参考图"], icon: "palette", target: { view: "create" }, featured: true }),
   item({ id: "capabilities", title: "能力", detail: "软件 · 感知、陪伴、行动与创作能力", keywords: ["能力", "插件", "安装", "功能", "skill", "mcp"], icon: "sliders", target: { view: "capabilities" }, featured: true }),
   item({ id: "voice-message", title: "语音消息", detail: "能力 · TTS、ASR、音色与语音通话设置", keywords: ["语音", "tts", "asr", "音色", "声音", "通话", "语音通话"], icon: "sliders", target: { view: "capabilities", capabilityPage: "detail", capabilityCategory: "create", capabilityId: "voice-message" } }),
   item({ id: "image-vision", title: "图像理解", detail: "能力 · 图片理解 API 与读取偏好", keywords: ["图像理解", "图片理解", "看图", "识图"], icon: "sliders", target: { view: "capabilities", capabilityPage: "detail", capabilityCategory: "perceive", capabilityId: "image-vision" } }),

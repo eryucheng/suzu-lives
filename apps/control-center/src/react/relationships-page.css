@@ -1,17 +1,14 @@
 .relationships-react-page {
-  --relationships-layout-max-width:1200px;
   container-type:inline-size;
   width:100%;
   min-width:0;
-  max-width:var(--relationships-layout-max-width);
-  margin:0 auto;
 }
 
 .relationships-overview {
   display:grid;
-  grid-template-columns:minmax(0,1.45fr) minmax(255px,.9fr);
-  grid-template-rows:repeat(3,minmax(148px,1fr));
-  gap:var(--page-card-gap);
+  grid-template-columns:repeat(2,minmax(0,1fr));
+  grid-template-rows:repeat(2,minmax(188px,1fr));
+  gap:14px;
 }
 
 .relationships-card {
@@ -21,35 +18,11 @@
   transition:transform .2s ease, border-color .2s ease, box-shadow .2s ease;
 }
 
-.relationships-card--conversation {
-  grid-row:span 2;
-  border-color:color-mix(in srgb, var(--accent) 34%, var(--glass-border));
-  background:
-    radial-gradient(circle at 87% 13%, color-mix(in srgb, var(--accent2) 22%, transparent), transparent 25%),
-    radial-gradient(circle at 80% 82%, color-mix(in srgb, var(--accent) 24%, transparent), transparent 38%),
-    linear-gradient(145deg, color-mix(in srgb, var(--panel) 91%, var(--brand-950)), var(--panel));
-}
-
-.relationships-card--conversation::after {
-  position:absolute;
-  right:-20px;
-  bottom:-82px;
-  width:260px;
-  height:260px;
-  border:1px solid color-mix(in srgb, var(--accent) 28%, transparent);
-  border-radius:50%;
-  box-shadow:0 0 0 34px color-mix(in srgb, var(--accent) 6%, transparent), 0 0 0 68px color-mix(in srgb, var(--accent2) 5%, transparent);
-  pointer-events:none;
-  content:"";
-}
-
 .relationships-card--memory {
   background:radial-gradient(circle at 92% 8%, color-mix(in srgb, var(--accent) 15%, transparent), transparent 30%), var(--glass-bg);
 }
 
 .relationships-card--compactor {
-  grid-column:1;
-  grid-row:3;
   background:radial-gradient(circle at 90% 10%, color-mix(in srgb, var(--accent2) 13%, transparent), transparent 29%), var(--glass-bg);
 }
 
@@ -58,13 +31,12 @@
   background:radial-gradient(circle at 92% 10%, color-mix(in srgb, var(--accent2) 12%, transparent), transparent 28%), var(--glass-bg);
 }
 
-.relationships-card__action,
-.relationships-card__static {
+.relationships-card__action {
   position:relative;
   z-index:1;
   display:flex;
   width:100%;
-  min-height:148px;
+  min-height:188px;
   box-sizing:border-box;
   flex-direction:column;
   color:var(--text);
@@ -76,12 +48,6 @@
   background:transparent;
   cursor:pointer;
   font:inherit;
-}
-
-.relationships-card--conversation .relationships-card__action {
-  min-height:242px;
-  justify-content:space-between;
-  padding:24px 25px;
 }
 
 .relationships-card--compactor .relationships-card__action,
@@ -99,7 +65,6 @@
     var(--glass-bg);
 }
 
-.relationships-card__topline,
 .relationships-card__secondary-head {
   display:flex;
   align-items:center;
@@ -124,22 +89,6 @@
   letter-spacing:-.25px;
 }
 
-.relationships-card__conversation-copy {
-  display:grid;
-  max-width:390px;
-  gap:8px;
-  margin-top:auto;
-  margin-bottom:17px;
-}
-
-.relationships-card__conversation-copy h2 {
-  margin:0;
-  font-size:30px;
-  font-weight:var(--font-weight-bold);
-  letter-spacing:-.85px;
-}
-
-.relationships-card__conversation-copy p,
 .relationships-card__description {
   margin:0;
   color:var(--text-secondary);
@@ -153,11 +102,6 @@
     box-shadow:0 18px 40px color-mix(in srgb, var(--text) 15%, transparent);
     transform:translateY(-2px);
   }
-
-  .relationships-card--conversation:has(.relationships-card__action:hover) {
-    border-color:color-mix(in srgb, var(--accent2) 58%, var(--glass-border));
-    transform:translateY(-3px);
-  }
 }
 
 .relationships-card__action:focus-visible {
@@ -167,9 +111,6 @@
 
 @media (max-width:820px) {
   .relationships-overview { grid-template-columns:minmax(0,1fr); grid-template-rows:none; }
-  .relationships-card--conversation { grid-row:auto; }
-  .relationships-card--compactor { grid-column:auto; grid-row:auto; }
-  .relationships-card--conversation .relationships-card__action { min-height:285px; }
 }
 
 @media (prefers-reduced-motion:reduce) {

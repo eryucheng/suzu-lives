@@ -1,8 +1,14 @@
 :root {
+  /* 页面级宽度只由骨架决定；页面内部可另行限制阅读、表单或工作台的宽度。 */
+  --page-layout-max-inline-size:1480px;
   --page-titlebar-block-start:22px;
-  --page-titlebar-inline:clamp(17px,2.5vw,36px);
+  /* 左侧直接面对导航栏，需与右侧 Canvas + 滚动槽的实体距离对称。 */
+  --page-canvas-inline-start:23px;
+  --page-canvas-inline-end:var(--space-sm);
+  /* 标题栏与 PageCanvas 共用同一条左侧内容起始线。 */
+  --page-titlebar-inline-start:var(--page-canvas-inline-start);
+  --page-titlebar-inline-end:var(--page-canvas-inline-end);
   --page-titlebar-to-canvas-gap:0;
-  --page-canvas-inline:var(--space-sm);
   /* 与原有标题到内容间距等值，但留在可滚动画布内，供悬停阴影和上浮位移使用。 */
   --page-canvas-block-start:var(--space-sm);
   --page-canvas-block-end:var(--space-sm);
@@ -26,6 +32,7 @@
 }
 
 .page-layout {
+  --page-scrollbar-thumb:rgba(224,230,246,.34);
   display:flex;
   width:100%;
   min-width:0;
@@ -35,7 +42,40 @@
   flex-direction:column;
   overflow:auto;
   overscroll-behavior:contain;
+  scrollbar-color:transparent transparent;
   scrollbar-gutter:stable;
+}
+
+:root[data-theme="light"] .page-layout {
+  --page-scrollbar-thumb:rgba(99,109,139,.25);
+}
+
+.page-layout__frame {
+  display:flex;
+  width:100%;
+  min-width:0;
+  max-width:var(--page-layout-max-inline-size);
+  min-height:100%;
+  height:100%;
+  flex:1 0 auto;
+  flex-direction:column;
+  margin:0 auto;
+}
+
+/*
+ * 短仪表盘页可选择在设计高度处停止继续拉伸。
+ * 普通页面不使用此修饰器，仍由 page-layout 承接完整的页面级滚动。
+ */
+.page-layout__frame--bounded {
+  min-block-size:0;
+  block-size:auto;
+  max-block-size:var(--page-layout-max-block-size);
+  flex:1 1 auto;
+}
+
+/* 有界页面在最小窗口中允许画布收缩，避免仅由末尾留白造成页面级滚动。 */
+.page-layout__frame--bounded > .page-canvas--fill {
+  flex:1 1 auto;
 }
 
 .page-titlebar {
@@ -44,7 +84,7 @@
   border:0;
   background:transparent;
   box-shadow:none;
-  padding:var(--page-titlebar-block-start) var(--page-titlebar-inline) var(--page-titlebar-to-canvas-gap);
+  padding:var(--page-titlebar-block-start) var(--page-titlebar-inline-end) var(--page-titlebar-to-canvas-gap) var(--page-titlebar-inline-start);
 }
 
 .page-titlebar > [data-suzu-page-header] {
@@ -63,7 +103,7 @@
   background:transparent;
   box-shadow:none;
   overflow:visible;
-  padding:var(--page-canvas-block-start) var(--page-canvas-inline) var(--page-canvas-block-end);
+  padding:var(--page-canvas-block-start) var(--page-canvas-inline-end) var(--page-canvas-block-end) var(--page-canvas-inline-start);
 }
 
 .page-canvas > * {
@@ -90,13 +130,29 @@
 }
 
 .page-layout::-webkit-scrollbar {
-  width:8px;
-  height:8px;
+  width:var(--shell-page-scrollbar-size);
+  height:var(--shell-page-scrollbar-size);
+  background:transparent;
+}
+
+.page-layout::-webkit-scrollbar-track {
+  background:transparent;
 }
 
 .page-layout::-webkit-scrollbar-thumb {
   border:2px solid transparent;
   border-radius:99px;
-  background:color-mix(in srgb,var(--muted) 30%,transparent);
+  background:transparent;
+  background-clip:padding-box;
+}
+
+/* WebKit scrollbar pseudos do not reliably paint color-mix(); use resolved RGBA tokens here. */
+/* The page rail stays invisible until the pointer enters the shell workspace. */
+.page-layout:hover {
+  scrollbar-color:var(--page-scrollbar-thumb) transparent;
+}
+
+.page-layout:hover::-webkit-scrollbar-thumb {
+  background:var(--page-scrollbar-thumb);
   background-clip:padding-box;
 }

@@ -22,6 +22,37 @@ test("contact roster places the unread indicator on the avatar and does not dupl
   assert.match(styles, /\.conversation-contact__unread-badge[\s\S]*?background: #fa5151/u);
 });
 
+test("contact roster searches visible contacts by their displayed name", () => {
+  const page = readFileSync(resolve(HERE, "..", "src", "react", "conversation-page.jsx"), "utf8");
+  const styles = readFileSync(resolve(HERE, "..", "src", "styles", "conversation.css"), "utf8");
+
+  assert.match(page, /const \[query, setQuery\] = useState\(""\)/u);
+  assert.match(page, /toLocaleLowerCase\("zh-CN"\)\.includes\(normalizedQuery\)/u);
+  assert.match(page, /aria-label="搜索联系人"/u);
+  assert.match(page, /placeholder="搜索"/u);
+  assert.match(page, /visibleContacts\.map/u);
+  assert.match(styles, /\.conversation-roster__search[\s\S]*?flex: 1/u);
+  assert.match(styles, /\.conversation-roster__heading button[\s\S]*?width: 38px[\s\S]*?height: 38px[\s\S]*?border-radius: 10px/u);
+});
+
+test("contact roster width can be adjusted within a bounded range without collapsing it", () => {
+  const page = readFileSync(resolve(HERE, "..", "src", "react", "conversation-page.jsx"), "utf8");
+  const styles = readFileSync(resolve(HERE, "..", "src", "styles", "conversation.css"), "utf8");
+  const conversation = readFileSync(resolve(HERE, "..", "src", "features", "conversation", "index.mjs"), "utf8");
+
+  assert.match(page, /className="conversation-roster-resizer"/u);
+  assert.match(page, /onPointerDown=\{beginRosterResize\}/u);
+  assert.match(page, /onPointerMove=\{resizeRoster\}/u);
+  assert.match(page, /CONVERSATION_ROSTER_MIN_WIDTH = 192/u);
+  assert.match(page, /CONVERSATION_ROSTER_MAX_WIDTH = 340/u);
+  assert.match(styles, /--conversation-roster-width: 246px;/u);
+  assert.match(styles, /grid-template-columns: var\(--conversation-roster-width\) minmax\(0, 1fr\);/u);
+  assert.match(styles, /\.conversation-roster-resizer\s*\{[\s\S]*?cursor: col-resize;/u);
+  assert.match(styles, /@media \(max-width: 940px\)[\s\S]*?grid-template-columns: 210px minmax\(0, 1fr\);[\s\S]*?\.conversation-roster-resizer\s*\{[\s\S]*?display: none;/u);
+  assert.match(conversation, /rosterWidth: context\.state\.settings\?\.conversationRosterWidth/u);
+  assert.match(conversation, /setConversationRosterWidth: async/u);
+});
+
 test("conversation header names contacts with unread messages beside its actions", () => {
   const page = readFileSync(resolve(HERE, "..", "src", "react", "conversation-page.jsx"), "utf8");
   const styles = readFileSync(resolve(HERE, "..", "src", "styles", "conversation.css"), "utf8");

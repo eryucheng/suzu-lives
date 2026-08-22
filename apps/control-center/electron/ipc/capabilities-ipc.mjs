@@ -792,15 +792,59 @@ export function createCapabilitiesService({
   };
   const initializeDefaultContactCapabilities = async (contact) => {
     const contactId = clean(contact?.id);
+    if (!COMPANION_CONTACT_ID.test(contactId)) {
+      return {
+        initialized: false,
+        contactId,
+        status: "ready",
+        errors: [],
+      };
+    }
+    const settings = settingsService.load();
+    const dataRoot = capabilityDataRoot(settings);
+    if (!dataRoot) {
+      return {
+        initialized: false,
+        contactId,
+        status: "needs-root",
+        errors: [],
+      };
+    }
+    const existing = publicJson(dataRoot, ["automation", "proactive-contact", "config.json"]);
+    const current = proactiveContactSettings(existing);
+    await writeProactiveContactSettings(dataRoot, existing, {
+      ...current,
+      enabledContactIds: withCompanionContact(existing, contactId, true),
+    });
+    await syncCapability("proactive-contact", {
+      reason: "contact-created",
+      scope: current.autoMaintain ? { contactId } : null,
+    });
     return {
-      initialized: false,
+      initialized: true,
       contactId,
       status: "ready",
       errors: [],
     };
   };
   const refreshManagedRegistrations = async () => {
-    return { refreshed: false, status: "ready", errors: [], snapshot: snapshot() };
+    const settings = settingsService.load();
+    const dataRoot = capabilityDataRoot(settings);
+    if (!dataRoot) return { refreshed: false, status: "needs-root", errors: [], snapshot: snapshot() };
+    const existing = publicJson(dataRoot, ["automation", "proactive-contact", "config.json"]);
+    if (Object.hasOwn(plainObject(existing), "enabledContactIds")) {
+      return { refreshed: false, status: "ready", errors: [], snapshot: snapshot() };
+    }
+    const targets = await companionTargets();
+    const enabledContactIds = targets.contacts.map((contact) => contact.id);
+    if (!enabledContactIds.length) return { refreshed: false, status: "ready", errors: [], snapshot: snapshot() };
+    const current = proactiveContactSettings(existing);
+    await writeProactiveContactSettings(dataRoot, existing, {
+      ...current,
+      enabledContactIds,
+    });
+    await syncCapability("proactive-contact", { reason: "default-contact-migration" });
+    return { refreshed: true, status: "ready", errors: [], snapshot: snapshot() };
   };
   const saveSettings = async ({ id, value } = {}) => {
     const capabilityId = clean(id);

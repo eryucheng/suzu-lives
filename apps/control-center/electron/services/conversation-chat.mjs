@@ -3,6 +3,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 import { createSuzuAgentLifecycle } from "@suzu-lives/agent-lifecycle";
+import { hasTerminalNoReply } from "../../shared/agent-reply-markers.mjs";
+import { completedConversationReplyPrefix } from "../../shared/conversation-reply-segmentation.mjs";
 import {
   conversationAttachmentReceipt,
   conversationMediaUnderstandingContext,
@@ -149,7 +151,7 @@ function mergeFullText(previous, next) {
 }
 
 function noReply(value) {
-  return clean(value) === "NO_REPLY";
+  return hasTerminalNoReply(value);
 }
 
 function inputForAgent({ kind, text, callDirection }) {
@@ -324,9 +326,18 @@ function lifecycleScope(value = {}) {
 }
 
 function lifecycleTurnPayload(turn, extra = {}) {
+  const task = plainObject(turn?.taskContext);
+  const taskText = clean(task.text);
   return {
     ...lifecycleScope(turn),
     ...(clean(turn?.userText) ? { userText: bounded(turn.userText, MAX_MESSAGE_LENGTH) } : {}),
+    ...(taskText ? {
+      taskContext: {
+        ...(clean(task.id) ? { id: clean(task.id) } : {}),
+        text: bounded(taskText, MAX_MESSAGE_LENGTH),
+      },
+    } : {}),
+    ...(clean(turn?.outputPolicy) ? { outputPolicy: clean(turn.outputPolicy) } : {}),
     ...(clean(turn?.text) ? { assistantText: bounded(turn.text) } : {}),
     ...extra,
   };
@@ -352,7 +363,7 @@ export function createConversationChatService({
 } = {}) {
   if (!settingsService?.load) throw new ConversationChatError("Agent 聊天需要软件设置服务。", { code: "SETTINGS_REQUIRED" });
   if (!reader?.ensureActiveSession) throw new ConversationChatError("Agent 聊天需要联系人会话读取服务。", { code: "READER_REQUIRED" });
-  for (const method of ["ensureSession", "sendTurn", "cancelTurn", "resolveApproval", "subscribe", "close"]) {
+  for (const method of ["ensureSession", "sendTurn", "sendTask", "cancelTurn", "resolveApproval", "subscribe", "close"]) {
     if (typeof runtime?.[method] !== "function") {
       throw new ConversationChatError(`Agent 聊天运行时缺少 ${method}()。`, { code: "RUNTIME_CONTRACT_INVALID" });
     }
@@ -469,14 +480,22 @@ export function createConversationChatService({
   });
 
   const emitReply = (turn, type, done = false) => {
-    if (!turn.text || (turn.kind === "schedule" && noReply(turn.text))) return;
+    if (turn.outputPolicy === "silent") return;
+    const content = done ? turn.text : completedConversationReplyPrefix(turn.text);
+    if (!content || (turn.kind === "schedule" && noReply(content))) return;
+    // Agent Core reports deltas at token granularity. The local chat, call
+    // synthesizer, and any other reply-stream consumer should only receive a
+    // cumulative, completed-sentence prefix. This keeps the raw token buffer
+    // inside the turn until it becomes a human-readable message.
+    if (!done && content === turn.streamedReplyContent) return;
+    if (!done) turn.streamedReplyContent = content;
     emit({
       type,
       requestId: turn.requestId,
       sessionId: turn.sessionId,
       projectRoot: turn.projectRoot,
       kind: turn.kind,
-      content: turn.text,
+      content,
       done,
       ...eventPresentation(turn),
       timestamp: new Date().toISOString(),
@@ -484,14 +503,20 @@ export function createConversationChatService({
   };
 
   const emitAgentReply = (turn) => {
-    if (!turn.text || (turn.kind === "schedule" && noReply(turn.text))) return;
+    if (turn.outputPolicy === "silent") return;
+    // Core sends assistant-completed only after the full turn has ended. Its
+    // text is the last assistant step, whereas turn.text also contains earlier
+    // streamed steps that may have been tool-planning text. Only the terminal
+    // assistant step is allowed to cross into another transport.
+    const content = clean(turn.finalText) || turn.text;
+    if (!content || (turn.kind === "schedule" && noReply(content))) return;
     emit({
       type: "agent-reply",
       requestId: turn.requestId,
       sessionId: turn.sessionId,
       projectRoot: turn.projectRoot,
       kind: turn.kind,
-      content: turn.text,
+      content,
       ...(clean(turn.contactId) ? { contactId: turn.contactId } : {}),
       ...eventPresentation(turn),
       timestamp: new Date().toISOString(),
@@ -503,6 +528,7 @@ export function createConversationChatService({
   // already consumes it, while the local chat continues to render the durable
   // receipt from Agent Core session history.
   const emitAgentMedia = (turn, receipt) => {
+    if (turn.outputPolicy === "silent") return;
     const source = plainObject(receipt);
     const media = Array.isArray(source.media) ? source.media : [];
     if (!media.length) return;
@@ -522,6 +548,7 @@ export function createConversationChatService({
   };
 
   const emitTool = (turn, { phase = "completed", toolName = "", content = "" } = {}) => {
+    if (turn.outputPolicy === "silent") return;
     const text = clean(content);
     if (!text) return;
     emit({
@@ -892,7 +919,13 @@ export function createConversationChatService({
       return;
     }
     if (type === "assistant-completed") {
-      turn.text = mergeFullText(turn.text, source.text);
+      turn.finalText = clean(source.text);
+      // Scheduled turns never render their intermediate stream in the local
+      // chat. Keeping only the terminal text here also prevents a prior tool
+      // step from turning NO_REPLY into a fake outside-chat reply.
+      turn.text = turn.kind === "schedule"
+        ? bounded(turn.finalText)
+        : mergeFullText(turn.text, source.text);
       if (turn.text && turn.kind !== "schedule") emitReply(turn, "reply", true);
       emitAgentReply(turn);
       void finishTurn(turn);
@@ -1023,7 +1056,12 @@ export function createConversationChatService({
 
     const lifecycleBase = {
       ...lifecycleScope(request),
-      userText: bounded(request.memoryText || request.content, MAX_MESSAGE_LENGTH),
+      ...(request.taskContext?.text
+        ? {
+          taskContext: request.taskContext,
+          outputPolicy: request.outputPolicy,
+        }
+        : { userText: bounded(request.memoryText || request.content, MAX_MESSAGE_LENGTH) }),
     };
     // The instruction bridge is a critical TurnStarting Hook. Context is not
     // collected here: Agent Core asks at every real `agent/pre-step`, where the
@@ -1051,7 +1089,11 @@ export function createConversationChatService({
       sessionId: request.sessionId,
       displayAsSystem: request.displayAsSystem === true,
       deliverToWechat: request.deliverToWechat === true,
+      outputPolicy: request.outputPolicy,
+      taskContext: request.taskContext,
+      finalText: "",
       state: "starting",
+      streamedReplyContent: "",
       text: "",
       toolNames: new Set(),
       usageTasks: [],
@@ -1089,13 +1131,28 @@ export function createConversationChatService({
         await finishTurn(turn, { interrupted: true });
         return;
       }
-      await runtime.sendTurn({
-        sessionId: turn.sessionId,
-        turnId: turn.requestId,
-        input: request.input || inputForAgent({ kind: turn.kind, text: request.content, callDirection: request.callDirection }),
-        placement: "queue",
-      });
-      turn.state = "submitted";
+      if (turn.taskContext?.text) {
+        await runtime.sendTask({
+          sessionId: turn.sessionId,
+          turnId: turn.requestId,
+          task: {
+            ...(clean(turn.taskContext.id) ? { id: clean(turn.taskContext.id) } : {}),
+            outputPolicy: turn.outputPolicy,
+          },
+          placement: "queue",
+        });
+      } else {
+        await runtime.sendTurn({
+          sessionId: turn.sessionId,
+          turnId: turn.requestId,
+          input: request.input || inputForAgent({ kind: turn.kind, text: request.content, callDirection: request.callDirection }),
+          placement: "queue",
+        });
+      }
+      // The Core can report turn-started before its enqueue receipt resolves.
+      // Do not replace that running state, otherwise a following human message
+      // would fail to interrupt the active turn.
+      if (turn.state === "starting") turn.state = "submitted";
     } catch (error) {
       await finishTurn(turn, { error: `无法发送给 Suzu Agent Core：${errorMessage(error, "未知错误。")}` });
     }
@@ -1134,6 +1191,7 @@ export function createConversationChatService({
 
   const enqueue = async ({
     content,
+    taskContext = null,
     contactId = "",
     kind = "message",
     callDirection = "",
@@ -1144,15 +1202,19 @@ export function createConversationChatService({
     scheduleSource = "",
     displayAsSystem = false,
     deliverToWechat = false,
+    outputPolicy = "external",
     requestQueue = false,
     session: requestedSession = null,
   } = {}) => {
     if (disposed) throw new ConversationChatError("Agent 聊天服务已经停止。", { code: "SERVICE_STOPPED" });
     const suppliedMedia = Array.isArray(media) ? media : [];
+    const suppliedTask = plainObject(taskContext);
+    const taskText = clean(suppliedTask.text);
+    const normalizedOutputPolicy = clean(outputPolicy) === "silent" ? "silent" : "external";
     const voiceCallOpening = kind === "call-open";
     const text = clean(content);
-    if (!text && !voiceCallOpening && !suppliedMedia.length) throw new ConversationChatError("消息不能为空。", { code: "EMPTY_MESSAGE" });
-    if (text.length > MAX_MESSAGE_LENGTH) {
+    if (!text && !taskText && !voiceCallOpening && !suppliedMedia.length) throw new ConversationChatError("消息不能为空。", { code: "EMPTY_MESSAGE" });
+    if (text.length > MAX_MESSAGE_LENGTH || taskText.length > MAX_MESSAGE_LENGTH) {
       throw new ConversationChatError(`消息不能超过 ${MAX_MESSAGE_LENGTH.toLocaleString("zh-CN")} 个字符。`, { code: "MESSAGE_TOO_LONG" });
     }
     const session = await resolveSession(requestedSession || {});
@@ -1165,10 +1227,11 @@ export function createConversationChatService({
     if (queue.length >= MAX_QUEUED_TURNS) {
       throw new ConversationChatError(`当前会话最多只能排队 ${MAX_QUEUED_TURNS} 条消息，请等待部分任务完成后再发送。`, { code: "QUEUE_FULL" });
     }
-    let preparedInput = inputForAgent({ kind, text, callDirection });
+    let preparedInput = taskText ? null : inputForAgent({ kind, text, callDirection });
     let preparedMedia = [];
     let preparedMemoryText = "";
     if (suppliedMedia.length) {
+      if (taskText) throw new ConversationChatError("内部任务不能附带聊天附件。", { code: "TASK_MEDIA_UNSUPPORTED" });
       if (typeof attachmentService?.prepare !== "function") {
         throw new ConversationChatError("图片和文件附件服务尚未就绪。", { code: "ATTACHMENT_SERVICE_REQUIRED" });
       }
@@ -1221,19 +1284,32 @@ export function createConversationChatService({
       kind,
       memoryOccurredAt: new Date().toISOString(),
       memoryText: clean(memoryText) || preparedMemoryText || text,
+      outputPolicy: normalizedOutputPolicy,
       projectRoot: session.projectRoot,
       requestId: clean(requestId) || `suzu-${randomUUID()}`,
       scheduleSource: clean(scheduleSource),
       sessionId: session.id,
+      ...(taskText ? {
+        taskContext: Object.freeze({
+          ...(clean(suppliedTask.id) ? { id: clean(suppliedTask.id) } : {}),
+          text: bounded(taskText, MAX_MESSAGE_LENGTH),
+        }),
+      } : {}),
     };
     const queued = activeTurns.has(request.key) || startingSessions.has(request.key) || queue.length > 0;
     const queuePosition = queue.length + 1;
-    const lifecyclePayload = {
-      ...lifecycleScope(request),
-      userText: bounded(request.memoryText || request.content, MAX_MESSAGE_LENGTH),
-    };
+    const lifecyclePayload = request.taskContext?.text
+      ? {
+        ...lifecycleScope(request),
+        taskContext: request.taskContext,
+        outputPolicy: request.outputPolicy,
+      }
+      : {
+        ...lifecycleScope(request),
+        userText: bounded(request.memoryText || request.content, MAX_MESSAGE_LENGTH),
+      };
     try {
-      await agentLifecycle.dispatch("UserPromptSubmit", lifecyclePayload);
+      if (!request.taskContext?.text) await agentLifecycle.dispatch("UserPromptSubmit", lifecyclePayload);
       await agentLifecycle.dispatch("TurnQueued", {
         ...lifecyclePayload,
         queuePosition,
@@ -1247,11 +1323,13 @@ export function createConversationChatService({
     // 请求排队（/suzu queue）或计划任务、引导消息则追加到队尾等待。
     const shouldInterrupt = !requestQueue && ["message", "call", "call-open"].includes(kind);
     const active = activeTurns.get(request.key);
-    if (shouldInterrupt && active && !active.finished && active.state === "running") {
-      active.cancelRequested = true;
-      active.interruptMessage = "已收到新消息，停止当前回复。";
-      dispatchLifecycle("StopRequested", lifecycleTurnPayload(active, { reason: "user" }));
-      void requestCancellation(active);
+    if (shouldInterrupt && active && !active.finished) {
+      if (!active.cancelRequested) {
+        active.cancelRequested = true;
+        active.interruptMessage = "已收到新消息，停止当前回复。";
+        dispatchLifecycle("StopRequested", lifecycleTurnPayload(active, { reason: "user" }));
+      }
+      if (active.state === "running") void requestCancellation(active);
       queue.unshift(request);
     } else {
       queue.push(request);
@@ -1275,6 +1353,20 @@ export function createConversationChatService({
   const sendToSession = ({ content, contactId = "", sessionId, projectRoot, hasTranscript = false, kind = "message", callDirection = "", media = [], mediaSource = "", memoryText = "", requestId = "", scheduleSource = "", displayAsSystem = false, deliverToWechat = false, queued = false } = {}) => (
     enqueue({ content, contactId, kind, callDirection, media, mediaSource, memoryText, requestId, scheduleSource, displayAsSystem, deliverToWechat, requestQueue: queued, session: { sessionId, projectRoot, hasTranscript } })
   );
+  const sendTaskToSession = ({ taskContext, contactId = "", sessionId, projectRoot, hasTranscript = false, kind = "schedule", requestId = "", scheduleSource = "", deliverToWechat = false, outputPolicy = "external", queued = false } = {}) => (
+    enqueue({
+      content: "",
+      taskContext,
+      contactId,
+      kind,
+      requestId,
+      scheduleSource,
+      deliverToWechat,
+      outputPolicy,
+      requestQueue: queued,
+      session: { sessionId, projectRoot, hasTranscript },
+    })
+  );
 
   const stop = async ({ sessionId, projectRoot, requestId } = {}) => {
     const id = clean(sessionId);
@@ -1295,11 +1387,9 @@ export function createConversationChatService({
         if (index < 0) continue;
         const [queued] = queue.splice(index, 1);
         if (!queue.length) pendingTurns.delete(queued.key);
-        dispatchLifecycle("StopRequested", {
-          ...lifecycleScope(queued),
-          userText: bounded(queued.memoryText || queued.content, MAX_MESSAGE_LENGTH),
+        dispatchLifecycle("StopRequested", lifecycleTurnPayload(queued, {
           reason: "removed-from-queue",
-        });
+        }));
         emitQueue(queued.sessionId, queued.projectRoot);
         emit({
           type: "turn-stopped",
@@ -1322,9 +1412,12 @@ export function createConversationChatService({
         message: requestedRequestId ? "这条回复已经结束或不在当前会话中。" : "当前会话没有正在执行的 Agent 任务。",
       };
     }
+    const wasCancellationRequested = turn.cancelRequested;
     turn.cancelRequested = true;
     turn.interruptMessage = "已停止当前 Agent 任务。";
-    dispatchLifecycle("StopRequested", lifecycleTurnPayload(turn, { reason: "user" }));
+    if (!wasCancellationRequested) {
+      dispatchLifecycle("StopRequested", lifecycleTurnPayload(turn, { reason: "user" }));
+    }
     if (turn.state === "running") void requestCancellation(turn);
     return { accepted: true, stopped: true, sessionId: id, message: "正在停止当前 Agent 任务。" };
   };
@@ -1335,12 +1428,20 @@ export function createConversationChatService({
     if (!text) throw new ConversationChatError("消息不能为空。", { code: "EMPTY_MESSAGE" });
     const session = await resolveSession({ sessionId, projectRoot, hasTranscript });
     const active = activeTurns.get(turnKey(session.id, session.projectRoot));
-    const request = await enqueue({ content: text, kind: "steer", session });
+    const request = await enqueue({
+      content: text,
+      kind: "message",
+      session: {
+        sessionId: session.id,
+        projectRoot: session.projectRoot,
+        hasTranscript: session.hasTranscript,
+      },
+    });
     return {
       ...request,
-      delivered: false,
+      delivered: Boolean(active && !active.finished),
       message: active && !active.finished
-        ? "Agent Core 的中途引导尚未接入；已排在当前回复之后。"
+        ? "已收到新消息，正在按新要求继续。"
         : "当前没有运行中的任务，已作为一条新消息发送。",
     };
   };
@@ -1413,6 +1514,7 @@ export function createConversationChatService({
     respondPermission,
     respondPermissionForSession,
     send,
+    sendTaskToSession,
     sendToSession,
     setEventSink: (callback) => { eventSink = typeof callback === "function" ? callback : () => {}; },
     subscribe: (callback) => {

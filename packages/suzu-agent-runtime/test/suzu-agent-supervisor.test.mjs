@@ -377,6 +377,46 @@ test("embedded host keeps a newly created session's contact workspace for its fi
   );
 });
 
+test("embedded host forwards an Agent Core error with its owning session", async () => {
+  const listeners = new Map();
+  const sent = [];
+  const host = new SuzuAgentHost({
+    on(name, listener) {
+      listeners.set(name, listener);
+      return () => listeners.delete(name);
+    },
+  }, {
+    send(message) {
+      sent.push(message);
+      return true;
+    },
+  });
+
+  host.start();
+  listeners.get("agent/error")({
+    agent: { session: { id: "failed-task-session" } },
+    turn: 9,
+    step: 2,
+    error: new Error("session persistence failed"),
+  });
+
+  assert.deepEqual(sent.at(-1), {
+    protocol: SUZU_AGENT_HOST_IPC_PROTOCOL,
+    kind: "event",
+    channel: "host",
+    envelope: {
+      payload: {
+        type: "host/agent-error",
+        sessionId: "failed-task-session",
+        message: "session persistence failed",
+        coreTurn: 9,
+        step: 2,
+      },
+    },
+  });
+  await host.dispose();
+});
+
 test("embedded host writes the requested approval mode to the same contact session", async () => {
   const workspace = resolve(TEST_DIRECTORY, "host-permission-workspace");
   const agents = new Map();

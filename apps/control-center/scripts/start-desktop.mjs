@@ -2,13 +2,26 @@ import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import http from "node:http";
 import { createRequire } from "node:module";
+import net from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { createDesktopStartupDiagnostics } from "./desktop-startup-diagnostics.mjs";
 
 const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const rendererPort = 5173;
+const DEFAULT_RENDERER_PORT = 5173;
+
+function resolveRendererPort(value = process.env.SUZU_LIVES_DEV_PORT) {
+  const raw = String(value ?? "").trim();
+  if (!raw) return DEFAULT_RENDERER_PORT;
+  const port = Number(raw);
+  if (!Number.isInteger(port) || port < 1024 || port > 65535) {
+    throw new Error(`SUZU_LIVES_DEV_PORT 必须是 1024 到 65535 之间的端口，当前值：${raw || "（空）"}`);
+  }
+  return port;
+}
+
+const rendererPort = resolveRendererPort();
 const rendererUrl = `http://127.0.0.1:${rendererPort}`;
 const require = createRequire(import.meta.url);
 const viteCliPath = path.resolve(path.dirname(require.resolve("vite")), "..", "..", "bin", "vite.js");
@@ -17,6 +30,25 @@ const startupDiagnostics = createDesktopStartupDiagnostics();
 
 function delay(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+async function assertRendererPortAvailable(port) {
+  const probe = net.createServer();
+  try {
+    await new Promise((resolve, reject) => {
+      probe.once("error", reject);
+      probe.listen({ host: "127.0.0.1", port }, resolve);
+    });
+  } catch (error) {
+    if (error?.code === "EADDRINUSE") {
+      throw new Error(`本地开发端口 ${port} 已被占用。请先关闭占用它的开发版，或设置另一个 SUZU_LIVES_DEV_PORT。`);
+    }
+    throw error;
+  } finally {
+    if (probe.listening) {
+      await new Promise((resolve) => probe.close(resolve));
+    }
+  }
 }
 
 async function rendererIsReady(url) {
@@ -83,6 +115,7 @@ async function ensureRuntimeFiles() {
 async function main() {
   startupDiagnostics.record("launcher.start", { appRoot, rendererPort });
   await ensureRuntimeFiles();
+  await assertRendererPortAvailable(rendererPort);
   let stopping = false;
   let electronProcess = null;
   const viteProcess = spawn(process.execPath, [

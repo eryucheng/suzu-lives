@@ -1,6 +1,7 @@
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
+import { hasTerminalNoReply, isExactNoReply } from "../../shared/agent-reply-markers.mjs";
 import {
   conversationAttachmentReceipt,
   conversationMediaManifest,
@@ -19,6 +20,9 @@ const VOICE_CALL_OPEN_CLOSE = "</suzu-voice-call-open>";
 const SUZU_SCHEDULE_TASK_OPEN = "<suzu-schedule-task>";
 const SUZU_SCHEDULE_TASK_CLOSE = "</suzu-schedule-task>";
 const SUZU_LOCAL_ONLY_SCHEDULE_MARKER = "<!-- suzu-lives:display-system -->";
+const SUZU_LIFECYCLE_BRIDGE_PLUGIN = "suzu-lifecycle-bridge";
+const SUZU_LIFECYCLE_SNAPSHOT_FORM = "snapshot";
+const AUTOMATION_TASK_CONTEXT_KIND = "automation-task";
 
 function markerSource(content) {
   if (Array.isArray(content)) return content.map((block) => clean(block?.text)).filter(Boolean).join("\n");
@@ -39,8 +43,33 @@ function isLocalOnlySuzuScheduleTask(content) {
     && markerSource(content).includes(SUZU_LOCAL_ONLY_SCHEDULE_MARKER);
 }
 
-function isSilentAgentReply(content) {
-  return markerSource(content).trim() === "NO_REPLY";
+function isDynamicContextSnapshot(source) {
+  const snapshot = plainObject(source);
+  return clean(snapshot.kind) === "plugin"
+    && clean(snapshot.plugin) === SUZU_LIFECYCLE_BRIDGE_PLUGIN
+    && clean(snapshot.form) === SUZU_LIFECYCLE_SNAPSHOT_FORM;
+}
+
+// Newer Agent Core tasks deliberately carry their body through a dynamic
+// context snapshot rather than the legacy <suzu-schedule-task> envelope.
+// The snapshot already persists the task kind and output policy, which is the
+// durable information the human-facing projection needs to group the turn.
+function dynamicAutomationTaskOutputPolicy(source) {
+  const snapshot = plainObject(source);
+  if (!isDynamicContextSnapshot(snapshot)) return "";
+  const sections = Array.isArray(snapshot.sections) ? snapshot.sections : [];
+  let found = false;
+  for (const section of sections) {
+    const candidate = plainObject(section);
+    if (clean(candidate.kind) !== AUTOMATION_TASK_CONTEXT_KIND) continue;
+    found = true;
+    if (clean(plainObject(candidate.metadata).outputPolicy) === "silent") return "silent";
+  }
+  return found ? "external" : "";
+}
+
+function isSilentAgentReply(content, { terminal = false } = {}) {
+  return terminal ? hasTerminalNoReply(content) : isExactNoReply(content);
 }
 
 function markerJson(content, open, close) {
@@ -554,6 +583,30 @@ export function conversationContextRecords(entries, maxRecords = HISTORY_PAGE_SI
   return Object.freeze(anchored.slice(-maximum));
 }
 
+function dynamicContextDiagnosticMessage(event) {
+  const source = plainObject(event);
+  if (clean(source.type) !== "user/message") return null;
+  const message = userMessageFromEvent(source);
+  const messageSource = plainObject(message.source);
+  if (!isDynamicContextSnapshot(messageSource)) return null;
+  const contextBlocks = contextBlocksFromMessage(message, messageSource);
+  if (!contextBlocks.length) return null;
+  return {
+    id: `${clean(message.id) || `agent-core:${source.seq}`}:dynamic-context`,
+    kind: "dynamic-context",
+    label: "动态上下文",
+    timestamp: isoTime(source.time),
+    blocks: [{
+      kind: "text",
+      text: contextBlocks.map((block) => (
+        `【${clean(block.display?.label) || clean(block.kind) || "上下文"}】\n${block.text}`
+      )).join("\n\n"),
+    }],
+    usage: null,
+    lineNumber: Number(source.seq) || 0,
+  };
+}
+
 function surfaceMessage(event, options = {}) {
   const source = plainObject(event);
   const data = plainObject(source.data);
@@ -615,8 +668,12 @@ function surfaceMessage(event, options = {}) {
   }
   if (type === "assistant/message") {
     const message = plainObject(data.message);
-    if (isSilentAgentReply(message.content)) return null;
-    const blocks = blocksFromAgentCoreContent(message.content, options);
+    if (isSilentAgentReply(message.content, { terminal: options?.scheduled === true })) return null;
+    const blocks = blocksFromAgentCoreContent(message.content, options)
+      // A background schedule may take several model/tool steps. Its final
+      // assistant message is the only human-facing part of that whole turn.
+      // Native reasoning or tool blocks in it are not chat messages.
+      .filter((block) => options?.scheduled !== true || ["text", "media"].includes(block.kind));
     if (!blocks.length) return null;
     const inCall = options?.inVoiceCall === true;
     return {
@@ -657,16 +714,33 @@ function surfaceMessage(event, options = {}) {
 
 export function conversationDisplayMessages(entries, maxMessages = MAX_MESSAGES, options = {}) {
   const transcript = [];
+  const includeDynamicContext = options?.includeDynamicContext === true;
   // A voice-call turn is transport-level: its transcript and the assistant
   // reply both render as centered system messages, like the v1 reader.
   let inVoiceCall = false;
-  // Planning and journal turns are local-only. The schedule request itself is
-  // always hidden; this flag additionally hides any tool/result or accidental
-  // model text from a local-only task until the next real person message.
-  let inLocalOnlyScheduleTurn = false;
+  // Agent Core persists a whole scheduled turn (including intermediate model
+  // steps and tool results). Buffer it until its terminal event: a NO_REPLY
+  // must hide the entire turn, and a visible proactive reply must not expose
+  // the scheduling mechanics that led to it.
+  let scheduledTurn = null;
+  const flushScheduledTurn = () => {
+    const pending = scheduledTurn;
+    scheduledTurn = null;
+    if (!pending || pending.localOnly) return;
+    const finalAssistantEvent = pending.events.findLast((event) => clean(event.type) === "assistant/message");
+    if (!finalAssistantEvent) return;
+    const message = surfaceMessage(finalAssistantEvent, { ...options, inVoiceCall, scheduled: true });
+    if (message) transcript.push(message);
+  };
   for (const entry of Array.isArray(entries) ? entries : []) {
     const event = historyEvent(entry);
     const type = clean(event.type);
+    // turn/end is not a surface event, but it is the reliable boundary that
+    // lets us decide whether a scheduled turn had an external reply.
+    if (type === "turn/end") {
+      flushScheduledTurn();
+      continue;
+    }
     if (!new Set(["user/message", "assistant/message", "tool/result"]).has(type)) continue;
     // Agent Core surface replacements are deliberately model-only: a compacted
     // checkpoint replaces older context for the next model request, but must
@@ -676,25 +750,53 @@ export function conversationDisplayMessages(entries, maxMessages = MAX_MESSAGES,
     if (type === "user/message") {
       const userMessage = plainObject(userMessageFromEvent(event));
       const content = userMessage.content;
-      if (isInternalSuzuScheduleTask(content)) {
-        inLocalOnlyScheduleTurn = isLocalOnlySuzuScheduleTask(content);
+      const messageSource = plainObject(userMessage.source);
+      const dynamicTaskPolicy = dynamicAutomationTaskOutputPolicy(messageSource);
+      if (isInternalSuzuScheduleTask(content) || dynamicTaskPolicy) {
+        // A legacy fixture may not contain turn/end; a following schedule
+        // request still establishes a safe boundary for the prior one.
+        flushScheduledTurn();
+        const diagnostic = includeDynamicContext ? dynamicContextDiagnosticMessage(event) : null;
+        // Diagnostics are intentionally projected as a separate, opt-in row.
+        // They remain out of normal chat bubbles and never make NO_REPLY or
+        // task-control text look like an assistant reply.
+        if (diagnostic) transcript.push(diagnostic);
+        scheduledTurn = {
+          localOnly: isInternalSuzuScheduleTask(content)
+            ? isLocalOnlySuzuScheduleTask(content)
+            : dynamicTaskPolicy === "silent",
+          events: [],
+        };
         continue;
       }
-      const messageSource = plainObject(userMessage.source);
-      if (inLocalOnlyScheduleTurn && clean(messageSource.kind) !== "user") continue;
+      const diagnostic = includeDynamicContext ? dynamicContextDiagnosticMessage(event) : null;
+      if (diagnostic) transcript.push(diagnostic);
+      // Plugin context is model-only input inside the active schedule. It is
+      // neither a new human turn nor something to render.
+      if (scheduledTurn && clean(messageSource.kind) !== "user") continue;
+      flushScheduledTurn();
       if (voiceCallOpening(content) || voiceCallTranscript(content)) {
         inVoiceCall = true;
       } else if (clean(messageSource.kind) === "user") {
         inVoiceCall = false;
       }
-      if (clean(messageSource.kind) === "user") inLocalOnlyScheduleTurn = false;
     }
-    if (inLocalOnlyScheduleTurn && (type === "assistant/message" || type === "tool/result")) continue;
+    if (scheduledTurn && (type === "assistant/message" || type === "tool/result")) {
+      scheduledTurn.events.push(event);
+      continue;
+    }
     const message = surfaceMessage(event, { ...options, inVoiceCall });
     if (message) transcript.push(message);
   }
+  flushScheduledTurn();
   const maximum = Number.isSafeInteger(maxMessages) && maxMessages > 0 ? maxMessages : MAX_MESSAGES;
-  return transcript.slice(-maximum);
+  // Diagnostics are opt-in and must not shrink the durable human transcript
+  // merely because every model step injected a dynamic snapshot.
+  const ordinaryIndexes = transcript.flatMap((message, index) => (
+    message.kind === "dynamic-context" ? [] : [index]
+  ));
+  const cutoff = ordinaryIndexes.length > maximum ? ordinaryIndexes.at(-maximum) : 0;
+  return transcript.slice(cutoff);
 }
 
 function searchRequest(value) {
@@ -874,9 +976,12 @@ export function createConversationReader({
       };
     }
     const events = Array.isArray(history.events) ? history.events : [];
-    const messages = conversationDisplayMessages(events, MAX_MESSAGES, { dataRoot });
+    const messages = conversationDisplayMessages(events, MAX_MESSAGES, {
+      dataRoot,
+      includeDynamicContext: catalog.settings?.conversationPreferences?.dynamicContext === true,
+    });
     const contextRecords = conversationContextRecords(events);
-    const last = messages.at(-1) || null;
+    const last = [...messages].reverse().find((message) => ["user", "assistant"].includes(clean(message?.kind))) || null;
     const session = {
       id: catalog.sessionId,
       title: clean(catalog.activeContact?.name) || "对话",

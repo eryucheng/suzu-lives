@@ -86,6 +86,7 @@ test("relationship files reject traversal, managed folders, and symlink escapes"
 
 test("relationship settings select SUZU.md after a contact switch", async () => {
   let renders = 0;
+  let settingsReads = 0;
   const files = { status: "ready", files: [{ path: "SUZU.md", kind: "standard", exists: true, content: "# 阿澈" }] };
   const contacts = { contacts: [{ id: "contact-b", name: "阿澈" }], activeContact: { id: "contact-b", name: "阿澈" } };
   const context = {
@@ -93,7 +94,7 @@ test("relationship settings select SUZU.md after a contact switch", async () => 
     api: {
       conversation: { snapshot: async () => contacts, selectContact: async ({ id }) => { assert.equal(id, "contact-b"); return contacts; } },
       relationshipFiles: { snapshot: async () => files },
-      settings: { get: async () => ({ projectRoot: "D:/contacts/contact-b" }) },
+      settings: { get: async () => { settingsReads += 1; return { projectRoot: "D:/contacts/contact-b" }; } },
     },
     render: () => { renders += 1; },
   };
@@ -103,4 +104,5 @@ test("relationship settings select SUZU.md after a contact switch", async () => 
   await selectRelationshipContact(context, "contact-b");
   assert.equal(context.state.relationshipFilePath, "SUZU.md");
   assert.equal(renders, 2);
+  assert.equal(settingsReads, 2);
 });

@@ -54,6 +54,47 @@ test("conversation attachment service caches files per DSH session and builds na
   assert.equal(Buffer.from(prepared.input[2].data, "base64").equals(ONE_PIXEL_PNG), true);
 });
 
+test("conversation attachment service recognizes images selected through the unified file picker", async () => {
+  const root = await temporaryRoot();
+  const dataRoot = path.join(root, "data");
+  const image = path.join(root, "reference.png");
+  const report = path.join(root, "report.txt");
+  await fs.writeFile(image, ONE_PIXEL_PNG);
+  await fs.writeFile(report, "这是一份普通文件。", "utf8");
+
+  const service = createConversationAttachmentService({ dataRoot });
+  const [recognizedImage, recognizedFile] = await Promise.all([
+    service.inspect({ kind: "auto", path: image }),
+    service.inspect({ kind: "auto", path: report }),
+  ]);
+
+  assert.equal(recognizedImage.kind, "image");
+  assert.equal(recognizedFile.kind, "file");
+});
+
+test("conversation attachment service accepts a pasted image binary through the normal durable attachment path", async () => {
+  const root = await temporaryRoot();
+  const dataRoot = path.join(root, "data");
+  const projectRoot = path.join(root, "contact");
+  await fs.mkdir(projectRoot, { recursive: true });
+
+  const prepared = await createConversationAttachmentService({ dataRoot }).prepare({
+    media: [{
+      data: new Uint8Array(ONE_PIXEL_PNG),
+      fileName: "clipboard-image.png",
+      kind: "image",
+      mimeType: "image/png",
+    }],
+    projectRoot,
+    sessionId: "contact-session",
+  });
+
+  assert.equal(prepared.media.length, 1);
+  assert.equal(prepared.media[0].kind, "image");
+  assert.equal(await fs.readFile(prepared.media[0].filePath).then((data) => data.equals(ONE_PIXEL_PNG)), true);
+  assert.equal(Buffer.from(prepared.input.at(-1).data, "base64").equals(ONE_PIXEL_PNG), true);
+});
+
 test("conversation attachment service keeps media cards while preparing image and video for the existing understanding capabilities", async () => {
   const root = await temporaryRoot();
   const dataRoot = path.join(root, "data");

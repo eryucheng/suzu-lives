@@ -354,12 +354,12 @@ var w = { textarea: "_textarea_rlake_5" }, T = r(function({ className: e, style:
 		...r
 	});
 }), E = {
-	header: "_header_1usjt_5",
-	copy: "_copy_1usjt_22",
-	eyebrow: "_eyebrow_1usjt_30",
-	title: "_title_1usjt_46",
-	subtitle: "_subtitle_1usjt_62",
-	action: "_action_1usjt_78"
+	header: "_header_ah400_5",
+	copy: "_copy_ah400_16",
+	eyebrow: "_eyebrow_ah400_24",
+	title: "_title_ah400_40",
+	subtitle: "_subtitle_ah400_53",
+	action: "_action_ah400_69"
 };
 //#endregion
 //#region src/components/PageHeader/PageHeader.tsx
@@ -1216,29 +1216,31 @@ function be({ columns: e, data: r, striped: i = !1, className: a, style: o }) {
 	});
 }
 var $ = {
-	board: "_board_1o22z_5",
-	"layout-fill": "_layout-fill_1o22z_15",
-	head: "_head_1o22z_26",
-	title: "_title_1o22z_40",
-	controls: "_controls_1o22z_54",
-	navButton: "_navButton_1o22z_66",
-	todayButton: "_todayButton_1o22z_106",
-	iconButton: "_iconButton_1o22z_144",
-	weekdays: "_weekdays_1o22z_176",
-	grid: "_grid_1o22z_178",
-	"grid-fill": "_grid-fill_1o22z_230",
-	day: "_day_1o22z_240",
-	blank: "_blank_1o22z_242",
-	dayWithDots: "_dayWithDots_1o22z_278",
-	dayNumber: "_dayNumber_1o22z_283",
-	today: "_today_1o22z_1",
-	dayToday: "_dayToday_1o22z_308",
-	selected: "_selected_1o22z_318",
-	daySelected: "_daySelected_1o22z_320",
-	dots: "_dots_1o22z_341",
-	dot: "_dot_1o22z_341",
-	holiday: "_holiday_1o22z_366",
-	dotHoliday: "_dotHoliday_1o22z_368"
+	board: "_board_1n3cc_5",
+	"layout-compact": "_layout-compact_1n3cc_10",
+	"layout-fill": "_layout-fill_1n3cc_16",
+	head: "_head_1n3cc_27",
+	title: "_title_1n3cc_36",
+	controls: "_controls_1n3cc_50",
+	navButton: "_navButton_1n3cc_62",
+	todayButton: "_todayButton_1n3cc_102",
+	iconButton: "_iconButton_1n3cc_140",
+	weekdays: "_weekdays_1n3cc_172",
+	grid: "_grid_1n3cc_174",
+	"grid-compact": "_grid-compact_1n3cc_221",
+	"grid-fill": "_grid-fill_1n3cc_226",
+	day: "_day_1n3cc_236",
+	blank: "_blank_1n3cc_238",
+	dayWithDots: "_dayWithDots_1n3cc_280",
+	dayNumber: "_dayNumber_1n3cc_285",
+	selected: "_selected_1n3cc_298",
+	daySelected: "_daySelected_1n3cc_299",
+	today: "_today_1n3cc_1",
+	dayToday: "_dayToday_1n3cc_315",
+	dots: "_dots_1n3cc_345",
+	dot: "_dot_1n3cc_345",
+	holiday: "_holiday_1n3cc_371",
+	dotHoliday: "_dotHoliday_1n3cc_373"
 };
 //#endregion
 //#region src/components/Calendar/Calendar.tsx
@@ -1288,6 +1290,7 @@ function xe({ year: e, month: r, events: i = {}, selected: a, onSelect: o, onPre
 	return /* @__PURE__ */ n("div", {
 		className: [
 			$.board,
+			f === "compact" && $["layout-compact"],
 			f === "fill" && $["layout-fill"],
 			p
 		].filter(Boolean).join(" "),
@@ -1329,7 +1332,11 @@ function xe({ year: e, month: r, events: i = {}, selected: a, onSelect: o, onPre
 				children: m.map((e) => /* @__PURE__ */ t("span", { children: e }, e))
 			}),
 			/* @__PURE__ */ t("div", {
-				className: [$.grid, f === "fill" && $["grid-fill"]].filter(Boolean).join(" "),
+				className: [
+					$.grid,
+					f === "compact" && $["grid-compact"],
+					f === "fill" && $["grid-fill"]
+				].filter(Boolean).join(" "),
 				children: x
 			})
 		]

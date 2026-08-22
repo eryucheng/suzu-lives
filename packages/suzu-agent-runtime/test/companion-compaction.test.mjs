@@ -8,6 +8,11 @@ import {
   SuzuCompanionCompactionEngine,
   suzuContextBudget,
 } from "../src/companion-compaction.mjs";
+import {
+  DEFAULT_SUZU_COMPACTION_RETAIN_TOKENS,
+  DEFAULT_SUZU_COMPACTION_TOKEN_THRESHOLD,
+  adaptiveSuzuCompactionRetainTokens,
+} from "../src/compaction-defaults.mjs";
 
 function sessionWithSurface(nodes, events) {
   return {
@@ -338,6 +343,47 @@ test("the non-disableable safety policy reserves model output before compacting"
   assert.equal(config.thresholdRatio, 0.85904);
   assert.equal(config.retainTokens, 5_000);
   assert.equal(config.auto, true);
+});
+
+test("Suzu compaction defaults keep a larger tail but scale it down for small model windows", async () => {
+  assert.equal(DEFAULT_SUZU_COMPACTION_TOKEN_THRESHOLD, 32_000);
+  assert.equal(DEFAULT_SUZU_COMPACTION_RETAIN_TOKENS, 8_000);
+  assert.equal(adaptiveSuzuCompactionRetainTokens(8_000, 32_000), 8_000);
+  assert.equal(adaptiveSuzuCompactionRetainTokens(8_000, 20_000), 8_000);
+  assert.equal(adaptiveSuzuCompactionRetainTokens(8_000, 3_712), 1_484);
+
+  const baseConfig = Object.freeze({
+    auto: true,
+    thresholdRatio: 0.8,
+    retainTokens: 8_000,
+    maxTokens: 8_192,
+    compactionRetries: 1,
+    maxOverflowRetries: 1,
+    modelPolicies: [],
+  });
+  const engine = {
+    baseConfig,
+    ctx: {
+      llm: {
+        resolveModelInfo: async () => ({ context: { contextWindow: 16_000 } }),
+      },
+    },
+    contextBudgetFor: SuzuCompanionCompactionEngine.prototype.contextBudgetFor,
+  };
+  const agent = {
+    session: {
+      requestHeader: () => ({ config: { provider: "deepseek", model: "small-window" } }),
+    },
+  };
+  const config = await SuzuCompanionCompactionEngine.prototype.automaticConfig.call(
+    engine,
+    agent,
+    { automatic: { enabled: true, tokenThreshold: 32_000, retainTokens: 8_000 } },
+    new AbortController().signal,
+  );
+
+  assert.equal(config.thresholdRatio, 0.232);
+  assert.equal(config.retainTokens, 1_484);
 });
 
 test("Suzu context budget reserves a configured 256k normal-chat completion", () => {

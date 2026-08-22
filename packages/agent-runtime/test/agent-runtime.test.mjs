@@ -35,6 +35,29 @@ test("maps a Suzu session to one runtime session and emits ordered product event
   await runtime.closeRuntime();
 });
 
+test("passes an internal task through the neutral runtime without creating a text prompt", async () => {
+  const driver = createFakeAgentRuntimeDriver();
+  const runtime = createAgentRuntime({ driver, createId: fixedIds() });
+  const session = await runtime.createSession({ sessionId: "contact-session", cwd: "D:\\Suzu\\contact" });
+
+  const task = await runtime.sendTask({
+    sessionId: session.sessionId,
+    turnId: "task-1",
+    task: { id: "schedule-1", outputPolicy: "silent" },
+  });
+
+  assert.equal(task.accepted, true);
+  assert.equal(driver.calls.sendTurn.length, 0);
+  assert.deepEqual(driver.calls.sendTask, [{
+    runtimeSessionId: session.runtimeSessionId,
+    turnId: "task-1",
+    task: { id: "schedule-1", outputPolicy: "silent" },
+    placement: "queue",
+    metadata: {},
+  }]);
+  await runtime.closeRuntime();
+});
+
 test("forwards driver model usage so the product can record live Agent costs", async () => {
   const driver = createFakeAgentRuntimeDriver();
   const runtime = createAgentRuntime({ driver, createId: fixedIds() });

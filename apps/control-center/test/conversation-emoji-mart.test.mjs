@@ -17,10 +17,16 @@ test("conversation uses a local Apple Emoji Mart picker with search, collection,
   assert.match(page, /import \{ Picker \} from "emoji-mart";/);
   assert.match(page, /new Picker\(\{[\s\S]*?data: emojiMartData,[\s\S]*?i18n: emojiMartI18n,/);
   assert.match(page, /getSpritesheetURL: \(\) => appleEmojiSpritesheet,/);
+  assert.match(page, /const APPLE_EMOJI_BY_NATIVE = new Map\(/);
+  assert.match(page, /new Intl\.Segmenter\(undefined, \{ granularity: "grapheme" \}\)/);
+  assert.match(page, /backgroundImage: `url\(\$\{appleEmojiSpritesheet\}\)`,/);
+  assert.match(page, /<ConversationRenderedText onOpenExternal=\{onOpenExternal\} text=\{block\.text\} \/>/);
   assert.match(page, /set: "apple"/);
   assert.match(page, /selectionPendingRef\.current = true;/);
   assert.match(page, /window\.setTimeout\(\(\) => \{/);
   assert.match(page, /categories: mode === "search" \? \[\] : EMOJI_COLLECTION_CATEGORIES,/);
+  assert.match(page, /dynamicWidth: true,/);
+  assert.doesNotMatch(page, /perLine: 8,/);
   assert.match(page, /searchPosition: mode === "search" \? "static" : "none",/);
   assert.match(page, /aria-label="搜索表情"/);
   assert.match(page, /aria-label="全部表情"/);
@@ -29,7 +35,10 @@ test("conversation uses a local Apple Emoji Mart picker with search, collection,
   assert.match(page, /支持 PNG、JPG、WebP、GIF；发送时会标记为表情包。/);
   assert.match(page, /<ConversationEmojiPicker actions=\{actions\} \/>/);
   assert.doesNotMatch(page, /COMMON_EMOJI/);
-  assert.match(styles, /\.conversation-emoji-panel \{[\s\S]*?width: min\(410px, calc\(100vw - 48px\)\);/);
+  assert.match(styles, /\.conversation-emoji-panel \{[\s\S]*?bottom: 54px;[\s\S]*?left: calc\(clamp\(14px, 2vw, 26px\) \+ 26\.5px\);[\s\S]*?translate: -50% 0;[\s\S]*?width: min\(376px, calc\(100vw - 48px\)\);/);
+  assert.match(styles, /\.conversation-pane:has\(\.conversation-emoji-panel\) \{[\s\S]*?overflow: visible;/);
+  assert.match(styles, /\.conversation-chat-shell:has\(\.conversation-emoji-panel\) \{[\s\S]*?overflow: visible;/);
+  assert.match(styles, /\.conversation-inline-emoji \{[\s\S]*?background-repeat: no-repeat;/);
   assert.match(styles, /\.conversation-emoji-picker__tabs \{[\s\S]*?grid-template-columns: repeat\(3, 1fr\);/);
   assert.match(styles, /\.conversation-sticker-favorites__grid \{[\s\S]*?overflow: auto;/);
   assert.match(packageJson, /"emoji-mart": "\^5\.6\.0"/);

@@ -103,7 +103,7 @@ export function createSuzuCapabilityBridge({
     const timeoutMs = timeoutMilliseconds(plainObject(config).timeoutMs);
     ctx.tools.register(defineTool({
       name: "suzu_capability_catalog",
-      description: "List the product-owned Suzu capability actions currently connected for this conversation. Call this before suzu_capability; do not guess capability or action names.",
+      description: "列出当前为此对话已连接的 Suzu 产品能力动作。调用 suzu_capability 前先读取此目录；不要猜测能力或动作名称。",
       parameters: {},
       output: {
         schema: {
@@ -148,21 +148,21 @@ export function createSuzuCapabilityBridge({
 
     ctx.tools.register(defineTool({
       name: "suzu_capability",
-      description: "Run exactly one product-owned Suzu capability action returned by suzu_capability_catalog. Use direct PowerShell/Bash for ordinary terminal work; this tool is for connected Suzu capabilities that need their product adapter.",
+      description: "执行一个由 suzu_capability_catalog 返回的 Suzu 产品能力动作。日常终端工作使用直接 PowerShell/Bash；此工具仅用于需要产品适配器的已连接 Suzu 能力。",
       parameters: {
         capabilityId: {
           type: "string",
           required: true,
-          description: "Exact capabilityId returned by suzu_capability_catalog.",
+          description: "suzu_capability_catalog 返回的准确 capabilityId。",
         },
         action: {
           type: "string",
           required: true,
-          description: "Exact action returned by suzu_capability_catalog.",
+          description: "suzu_capability_catalog 返回的准确动作名称。",
         },
         input: {
           type: "json",
-          description: "Action input required by the catalog entry. Omit when the action needs no input.",
+          description: "该目录项要求的动作输入；动作不需要输入时省略。",
         },
       },
       output: {

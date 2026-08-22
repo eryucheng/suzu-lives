@@ -11,6 +11,7 @@ function applyRelationshipContacts(context, snapshot) {
 
 export async function loadRelationshipFiles(context, { contactSnapshot = null } = {}) {
   try {
+    if (context.api.settings?.get) context.state.settings = await context.api.settings.get().catch(() => context.state.settings);
     applyRelationshipContacts(context, contactSnapshot || await context.api.conversation.snapshot());
     const snapshot = await context.api.relationshipFiles.snapshot();
     context.state.relationshipFiles = snapshot;
@@ -28,15 +29,5 @@ export async function selectRelationshipContact(context, id) {
   const snapshot = await context.api.conversation.selectContact({ id });
   applyRelationshipContacts(context, snapshot);
   context.state.relationshipFilePath = "";
-  if (context.api.settings?.get) context.state.settings = await context.api.settings.get().catch(() => context.state.settings);
   await loadRelationshipFiles(context, { contactSnapshot: snapshot });
-}
-
-export async function updateRelationshipContactPermissionMode(context, { id, permissionMode } = {}) {
-  if (typeof context.api.conversation?.updateContactPermissionMode !== "function") {
-    throw new Error("当前版本未接入联系人审批模式。 ");
-  }
-  const snapshot = await context.api.conversation.updateContactPermissionMode({ id, permissionMode });
-  applyRelationshipContacts(context, snapshot);
-  return snapshot;
 }

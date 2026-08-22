@@ -21,7 +21,7 @@ const APP_ICON = path.join(APP_ROOT, "assets", "app-icon.png");
 const RENDERER_ROOT = path.join(APP_ROOT, "renderer");
 const WINDOW_CHROME_HEIGHT = 64;
 const DEV_RENDERER_URL = String(process.env.SUZU_LIVES_RENDERER_URL || "").trim();
-const DEV_RENDERER_ORIGIN = "http://127.0.0.1:5173";
+const DEV_RENDERER_HOST = "127.0.0.1";
 const LEGACY_MIGRATION_MODE = process.argv.includes("--legacy-migration");
 
 // Keep Electron's own profile alongside Suzu's settings and operational data.
@@ -51,8 +51,9 @@ function trustedDevelopmentRendererUrl(value) {
   try {
     const expected = new URL(DEV_RENDERER_URL);
     const candidate = new URL(String(value || ""));
-    return expected.origin === DEV_RENDERER_ORIGIN
-      && candidate.origin === DEV_RENDERER_ORIGIN;
+    return expected.protocol === "http:"
+      && expected.hostname === DEV_RENDERER_HOST
+      && candidate.origin === expected.origin;
   } catch {
     return false;
   }

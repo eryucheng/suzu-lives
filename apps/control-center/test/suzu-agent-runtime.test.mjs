@@ -263,11 +263,13 @@ test("Suzu Agent Runtime owns one shared process and routes public session/histo
   assert.match(preset, /@suzu-lives\/suzu-agent-runtime\/structured-generator/u);
   assert.match(preset, /@suzu-lives\/suzu-agent-runtime\/companion-compaction/u);
   assert.match(preset, /@suzu-lives\/suzu-agent-runtime\/core\/command-compact/u);
-  assert.match(preset, /SUZU\.md instruction hierarchy is the source of truth/u);
-  assert.doesNotMatch(preset, /You are Suzu/u);
-  assert.doesNotMatch(preset, /do not merely mention its local path/u);
-  assert.doesNotMatch(preset, /chat-attachment delivery/u);
+  assert.match(preset, /以自然的人类对话方式回应：理解语境，表达有分寸，使用具体且贴合当下的语言/u);
   const softwareAssistantPreset = await fs.readFile(path.join(dataRoot, "agent-runtime", "core", ".agent-presets", SUZU_SOFTWARE_ASSISTANT_AGENT_PRESET, "agent.cordis.yml"), "utf8");
+  assert.match(softwareAssistantPreset, /你是 Suzu Lives 的软件使用助手/u);
+  assert.match(softwareAssistantPreset, /围绕用户的目标组织步骤/u);
+  assert.match(softwareAssistantPreset, /当前软件状态中的“软件数据目录”是定位起点/u);
+  assert.match(softwareAssistantPreset, /settings\.json 的 contactsRoot/u);
+  assert.match(softwareAssistantPreset, /\.suzu-lives\/contact\.json，其中 name 是显示名/u);
   assert.match(softwareAssistantPreset, /software-assistant-bridge/u);
   assert.match(softwareAssistantPreset, /suzu-software-assistant-compaction/u);
   assert.doesNotMatch(softwareAssistantPreset, /agent-instructions/u);
@@ -276,6 +278,7 @@ test("Suzu Agent Runtime owns one shared process and routes public session/histo
   assert.match(softwareAssistantPreset, /core\/filesystem-search/u);
   assert.doesNotMatch(softwareAssistantPreset, /capability-bridge/u);
   assert.doesNotMatch(softwareAssistantPreset, /structured-generator/u);
+  assert.doesNotMatch(preset, /当前软件状态中的“软件数据目录”是定位起点/u);
   assert.doesNotMatch(preset, /forwards the successful attachment delivery/u);
 
   await runtime.close();
@@ -468,7 +471,7 @@ test("Suzu Agent Runtime sends memory's schema work only to the owned child brid
   await runtime.close();
 });
 
-test("Suzu companion preset seeds missing files but never overwrites a local agent composition", async () => {
+test("Suzu companion preset refreshes its product-owned composition while keeping user instructions in SUZU.md", async () => {
   const root = await temporaryRoot();
   const runtimeHome = path.join(root, "runtime-home");
   const first = await ensureSuzuCompanionAgentPreset({ runtimeHome });
@@ -478,8 +481,9 @@ test("Suzu companion preset seeds missing files but never overwrites a local age
   await fs.writeFile(target, "name: 用户自定义陪伴模式\n", "utf8");
   const second = await ensureSuzuCompanionAgentPreset({ runtimeHome });
   assert.equal(second.created, false);
-  assert.equal(second.updated, false);
-  assert.equal(await fs.readFile(target, "utf8"), "name: 用户自定义陪伴模式\n");
+  assert.equal(second.updated, true);
+  const refreshedPreset = await fs.readFile(target, "utf8");
+  assert.match(refreshedPreset, /以自然的人类对话方式回应：理解语境，表达有分寸，使用具体且贴合当下的语言/u);
 });
 
 test("Suzu software assistant preset is refreshed as a fixed product composition", async () => {
@@ -497,5 +501,7 @@ test("Suzu software assistant preset is refreshed as a fixed product composition
   const preset = await fs.readFile(target, "utf8");
   assert.match(preset, /software-assistant-bridge/u);
   assert.match(preset, /core\/filesystem-search/u);
+  assert.match(preset, /当前软件状态中的“软件数据目录”是定位起点/u);
+  assert.match(preset, /settings\.json 的 contactsRoot/u);
   assert.doesNotMatch(preset, /agent-instructions/u);
 });

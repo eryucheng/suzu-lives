@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { Avatar, Banner, Button, Dialog, Empty, GlassPanel, Input, PageHeader, Select, Status, Tabs } from "suzu-design-system";
+import { Avatar, Banner, Button, Dialog, Drawer, Empty, GlassPanel, Input, PageHeader, Select, Status, Tabs } from "suzu-design-system";
 
 import {
   AVATAR_CROP_MAX_ZOOM,
@@ -18,6 +18,7 @@ import { dateTime, localDateTimeInput, money, startOfTodayInput } from "../core/
 import { getIdentity, profileInitial } from "../core/identity.mjs";
 import { TEXT_MODEL_PROVIDERS } from "../features/agent/runtime.mjs";
 import { usageAmountLabel, usageCostLabel } from "../features/usage/usage-display.mjs";
+import { usageHistoryRows } from "../features/usage/usage-history.mjs";
 
 import { PageScaffold } from "./page-scaffold.jsx";
 import "./admin-page.css";
@@ -379,7 +380,13 @@ function IdentitySettings({ actions, settings }) {
       <AdminPanel className="admin-identity-panel">
         <PanelHeading description="聊天中显示的我的身份。" eyebrow="IDENTITY" title="我" />
         <div className="admin-identity-card">
-          <Avatar className="admin-identity-card__avatar" fallback={profileInitial(owner, "我")} name={owner.displayName || "我"} size="xl" src={owner.avatarDataUrl || undefined} />
+          <div className="admin-identity-card__avatar-column">
+            <Avatar className="admin-identity-card__avatar" fallback={profileInitial(owner, "我")} name={owner.displayName || "我"} size="xl" src={owner.avatarDataUrl || undefined} />
+            <div className="admin-identity-card__avatar-actions">
+              <Button disabled={pending} onClick={() => fileRef.current?.click()} size="md" type="button" variant="secondary">选择头像</Button>
+              {owner.avatarDataUrl ? <Button disabled={pending} onClick={removeAvatar} size="md" type="button" variant="ghost">移除头像</Button> : null}
+            </div>
+          </div>
           <div className="admin-identity-card__body">
             <div className="admin-identity-card__fields">
               <Field label="显示名">
@@ -392,10 +399,8 @@ function IdentitySettings({ actions, settings }) {
                 <Input disabled={pending} maxLength="120" onChange={(event) => setSignature(event.target.value)} placeholder="写一句介绍自己的话" value={signature} />
               </Field>
             </div>
-            <div className="admin-identity-card__actions">
-              <Button disabled={pending} onClick={() => fileRef.current?.click()} size="md" type="button" variant="secondary">选择头像</Button>
-              <Button disabled={pending} onClick={saveProfile} size="md" type="button" variant="secondary">保存资料</Button>
-              {owner.avatarDataUrl ? <Button disabled={pending} onClick={removeAvatar} size="md" type="button" variant="ghost">移除头像</Button> : null}
+            <div className="admin-identity-card__footer">
+              <Button disabled={pending} onClick={saveProfile} size="md" type="button" variant="primary">保存资料</Button>
             </div>
             <input accept="image/png,image/jpeg,image/webp" hidden onChange={selectAvatar} ref={fileRef} type="file" />
             <InlineError>{error}</InlineError>
@@ -419,20 +424,49 @@ function modelConnectionDraft(config = {}) {
   };
 }
 
-function AgentModelList({ models, onChange, value }) {
-  const candidates = list(models);
+function AgentModelList({ disabled = false, models, onChange, onPickerClose, onPickerOpen, pickerOpen, value }) {
+  const candidates = [...new Set(list(models).map(clean).filter(Boolean))];
+  const choose = (candidate) => {
+    if (disabled || !onChange) return;
+    onChange(candidate);
+    onPickerClose?.();
+  };
   return (
-    <div className="admin-model-combobox">
+    <div className="admin-model-picker">
       <Input
-        disabled={!onChange}
-        list="main-model-candidates"
+        disabled={disabled || !onChange}
         maxLength="200"
         onChange={(event) => onChange?.(event.target.value)}
         placeholder="填写服务商实际支持的模型标识"
         value={value}
       />
-      {candidates.length ? <datalist id="main-model-candidates">{candidates.map((candidate) => <option key={candidate} value={candidate} />)}</datalist> : null}
-      {candidates.length ? <p className="admin-empty-copy">已读取 {candidates.length} 个候选模型；也可以直接填写服务商文档中的模型标识。</p> : null}
+      {candidates.length ? (
+        <>
+          <div className="admin-model-picker__actions">
+            <Button aria-haspopup="dialog" disabled={disabled || !onChange} onClick={() => onPickerOpen?.()} size="md" type="button" variant="secondary">从已获取模型中选择</Button>
+            <p className="admin-model-picker__hint">已读取 {candidates.length} 个候选模型；也可以直接填写服务商文档中的模型标识。</p>
+          </div>
+          <Drawer onClose={() => onPickerClose?.()} open={Boolean(pickerOpen)} title="选择主模型">
+            <div className="admin-model-picker__drawer">
+              <p>从当前服务读取到的候选模型。选中后会填入主模型输入框，仍可手动修改。</p>
+              <div className="admin-model-picker__list">
+                {candidates.map((candidate) => {
+                  const selected = candidate === clean(value);
+                  return (
+                    <article className={`admin-model-picker__row${selected ? " is-selected" : ""}`} key={candidate}>
+                      <div>
+                        <strong>{candidate}</strong>
+                        <span>{selected ? "当前主模型" : "选择后会填入主模型"}</span>
+                      </div>
+                      <Button aria-pressed={selected} disabled={disabled || !onChange} onClick={() => choose(candidate)} size="sm" type="button" variant={selected ? "primary" : "secondary"}>{selected ? "正在使用" : "使用"}</Button>
+                    </article>
+                  );
+                })}
+              </div>
+            </div>
+          </Drawer>
+        </>
+      ) : null}
     </div>
   );
 }
@@ -449,12 +483,14 @@ export function AgentModelSettings({ actions, config, initialModels = [], initia
   const [message, setMessage] = useState(initialNotice);
   const [error, setError] = useState("");
   const [pending, setPending] = useState("");
+  const [modelPickerOpen, setModelPickerOpen] = useState(false);
 
   useEffect(() => {
     setDraft(modelConnectionDraft(config));
     setModels(list(initialModels));
     setMessage(initialNotice);
     setError("");
+    setModelPickerOpen(false);
   }, [config, initialModels, initialNotice]);
 
   const change = (key, value) => setDraft((current) => ({ ...current, [key]: value }));
@@ -468,6 +504,7 @@ export function AgentModelSettings({ actions, config, initialModels = [], initia
       protocol: next.protocol || "anthropic-messages",
     }));
     setModels([]);
+    setModelPickerOpen(false);
     setMessage("");
     setError("");
   };
@@ -478,9 +515,12 @@ export function AgentModelSettings({ actions, config, initialModels = [], initia
     setError("");
     try {
       const result = await actions.fetchModels(draft);
-      setModels(list(result?.models));
+      const nextModels = list(result?.models);
+      setModels(nextModels);
+      setModelPickerOpen(nextModels.length > 0);
       setMessage(clean(result?.message) || "模型列表已更新。");
     } catch (fetchError) {
+      setModelPickerOpen(false);
       setMessage("");
       setError(clean(fetchError?.message) || "无法获取模型列表。");
     } finally {
@@ -544,7 +584,15 @@ export function AgentModelSettings({ actions, config, initialModels = [], initia
           </div>
           <div className="admin-form-grid">
             <Field className="admin-field--wide" label="主模型">
-              <AgentModelList models={models} onChange={(value) => change("model", value)} value={draft.model} />
+              <AgentModelList
+                disabled={Boolean(pending)}
+                models={models}
+                onChange={(value) => change("model", value)}
+                onPickerClose={() => setModelPickerOpen(false)}
+                onPickerOpen={() => setModelPickerOpen(true)}
+                pickerOpen={modelPickerOpen}
+                value={draft.model}
+              />
             </Field>
           </div>
           <div className="admin-form-inline-actions">
@@ -759,6 +807,104 @@ function ConversationCostList({ conversations }) {
   return conversations.length ? <div className="admin-conversation-list">{conversations.map((item, index) => <article key={(item.contactId || "contact") + ":" + (item.turnId || item.firstAt || "conversation") + "-" + index}><div><strong>{item.prompt}</strong><p><Status label={item.contactName || "未归属联系人"} tone="muted" /> · {dateTime(item.firstAt)}{item.tools?.length ? " · 工具：" + item.tools.join("、") : ""}</p></div><span>{item.requestCount} 次请求</span><b>{money(item.amountCny)}</b></article>)}</div> : <p className="admin-empty-copy">还没有可以归属到会话轮次的费用。</p>;
 }
 
+const USAGE_HISTORY_TABS = Object.freeze([
+  { label: "按日", value: "daily" },
+  { label: "按月", value: "monthly" },
+]);
+
+function usageHistoryLabel(period, key) {
+  if (period === "monthly") {
+    const [year, month] = key.split("-");
+    return `${year}年${Number(month)}月`;
+  }
+  const date = new Date(`${key}T12:00:00`);
+  return new Intl.DateTimeFormat("zh-CN", { day: "numeric", month: "long", weekday: "short" }).format(date);
+}
+
+function usageHistoryDetail(item) {
+  if (!item.requestCount) return "没有已识别调用";
+  return `${item.requestCount} 次已识别调用${item.unknownRequestCount ? ` · ${item.unknownRequestCount} 次暂未计价` : ""}`;
+}
+
+function usageHistoryColumnLabel(period, key) {
+  const parts = key.split("-");
+  if (period === "monthly") return `${Number(parts[1])}月`;
+  return `${Number(parts[1])}/${Number(parts[2])}`;
+}
+
+function UsageHistoryChart({ period, rows }) {
+  const latestKey = rows[0]?.key || "";
+  const [selectedKey, setSelectedKey] = useState(latestKey);
+  useEffect(() => setSelectedKey(latestKey), [latestKey, period]);
+  const selected = rows.find((item) => item.key === selectedKey) || rows[0];
+  if (!selected) return null;
+
+  const peak = Math.max(0, ...rows.map((item) => Number(item.amountCny) || 0));
+  const columns = [...rows].reverse();
+  const selectedAmount = Number(selected.amountCny) || 0;
+  const isMonthly = period === "monthly";
+
+  return (
+    <div className="admin-usage-history-chart">
+      <header className="admin-usage-history-chart__summary">
+        <div>
+          <span>{isMonthly ? "选中月份" : "选中日期"}</span>
+          <strong>{usageHistoryLabel(period, selected.key)}</strong>
+          <p>{usageHistoryDetail(selected)}</p>
+        </div>
+        <strong>{money(selectedAmount)}</strong>
+      </header>
+      <div className="admin-usage-history-chart__scroll">
+        <div className="admin-usage-history-chart__plot" role="group" style={{ "--usage-history-column-count": columns.length }}>
+          {columns.map((item) => {
+            const amount = Number(item.amountCny) || 0;
+            const height = peak > 0 && amount > 0 ? Math.max(3, (amount / peak) * 100) : 0;
+            const active = item.key === selected.key;
+            const label = usageHistoryLabel(period, item.key);
+            const detail = usageHistoryDetail(item);
+            return (
+              <button
+                aria-label={`${label}，${money(amount)}，${detail}`}
+                aria-pressed={active}
+                className={`admin-usage-history-chart__column${active ? " is-active" : ""}`}
+                key={item.key}
+                onClick={() => setSelectedKey(item.key)}
+                onFocus={() => setSelectedKey(item.key)}
+                onMouseEnter={() => setSelectedKey(item.key)}
+                title={`${label} · ${money(amount)} · ${detail}`}
+                type="button"
+              >
+                <span className="admin-usage-history-chart__rail"><span style={{ height: `${height}%` }} /></span>
+                <span className="admin-usage-history-chart__label">{usageHistoryColumnLabel(period, item.key)}</span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function UsageHistoryPage({ data, onBack, onPeriodChange, period }) {
+  const rows = usageHistoryRows(data?.summary, { anchor: data?.today, period });
+  const isMonthly = period === "monthly";
+
+  return (
+    <section className="admin-usage-history-page">
+      <PanelHeading
+        actions={<Button onClick={onBack} size="md" type="button" variant="secondary">返回费用与统计</Button>}
+        description={isMonthly ? "按近 12 个月对比费用，柱高代表金额；没有调用的月份也会显示。" : "按近 14 天对比费用，柱高代表金额；没有调用的日期也会显示。"}
+        eyebrow="COST HISTORY"
+        title="费用趋势"
+      />
+      <Tabs active={period} className="admin-usage-history-tabs" items={USAGE_HISTORY_TABS} onChange={onPeriodChange} size="md" />
+      <AdminPanel className="admin-usage-history-panel">
+        <UsageHistoryChart period={period} rows={rows} />
+      </AdminPanel>
+    </section>
+  );
+}
+
 function modelKey(value) {
   return clean(value).replace(/\[[^\]]+\]$/u, "").toLowerCase();
 }
@@ -771,6 +917,7 @@ function UsageSettings({ actions, data }) {
   const [allUsageOpen, setAllUsageOpen] = useState(false);
   const [allConversationCostsOpen, setAllConversationCostsOpen] = useState(false);
   const [customPriceOpen, setCustomPriceOpen] = useState(false);
+  const [historyPeriod, setHistoryPeriod] = useState("");
   const summary = usageSummary(data);
   const events = list(data?.events);
   const filtered = usageEvents(data, filter, query);
@@ -796,11 +943,15 @@ function UsageSettings({ actions, data }) {
     return <Empty action={<Button onClick={actions?.openConversation}>前往会话</Button>} className="admin-usage-empty" description="创建并选择联系人后，Suzu 才能显示费用统计范围和调用流水。" title="等待本地费用数据" />;
   }
 
+  if (historyPeriod) {
+    return <UsageHistoryPage data={data} onBack={() => setHistoryPeriod("")} onPeriodChange={setHistoryPeriod} period={historyPeriod} />;
+  }
+
   return (
     <section className="admin-usage-page">
       <section className="admin-usage-summary">
-        <AdminPanel><span className="admin-kicker">TODAY</span><strong>{money(summary.today.amountCny)}</strong><p>{summary.today.requestCount} 次已识别调用</p></AdminPanel>
-        <AdminPanel><span className="admin-kicker">MONTH</span><strong>{money(summary.month.amountCny)}</strong><p>按当前价格规则估算</p></AdminPanel>
+        <AdminPanel className="admin-usage-summary-card"><button aria-label="查看按日费用趋势" className="admin-usage-summary-card__action" onClick={() => setHistoryPeriod("daily")} type="button"><span className="admin-kicker">TODAY</span><strong>{money(summary.today.amountCny)}</strong><p>{summary.today.requestCount} 次已识别调用</p></button></AdminPanel>
+        <AdminPanel className="admin-usage-summary-card"><button aria-label="查看按月费用趋势" className="admin-usage-summary-card__action" onClick={() => setHistoryPeriod("monthly")} type="button"><span className="admin-kicker">MONTH</span><strong>{money(summary.month.amountCny)}</strong><p>按当前价格规则估算</p></button></AdminPanel>
         <AdminPanel className="admin-usage-source-card">
           <span className="admin-kicker">模型价格</span>
           <strong>{coveredModelCount} / {seenModelEntries.length}</strong>

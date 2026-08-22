@@ -75,7 +75,7 @@ export function createSuzuSoftwareAssistantBridge({
 
     ctx.tools.register(defineTool({
       name: "suzu_software_status",
-      description: "Read the current Suzu Lives software state before explaining or changing a setting. It never exposes API keys or other secrets.",
+      description: "在解释或修改设置前读取当前 Suzu Lives 软件状态。它不会暴露 API Key 或其他密钥。",
       parameters: {},
       output: {
         schema: {
@@ -95,11 +95,11 @@ export function createSuzuSoftwareAssistantBridge({
 
     ctx.tools.register(defineTool({
       name: "suzu_software_manual",
-      description: "Read Suzu Lives' current product manual for a user goal or feature. Use it instead of guessing page names, configuration steps, or supported software actions.",
+      description: "针对用户目标或功能读取当前 Suzu Lives 产品手册。不要猜测页面名称、配置步骤或已支持的软件动作。",
       parameters: {
         query: {
           type: "string",
-          description: "A concise user goal or feature name. Omit only to list the product operation index.",
+          description: "简洁的用户目标或功能名称；只有要列出软件操作索引时才省略。",
         },
       },
       output: {
@@ -127,16 +127,16 @@ export function createSuzuSoftwareAssistantBridge({
 
     ctx.tools.register(defineTool({
       name: "suzu_software_action",
-      description: "Run one documented Suzu Lives software action. Read suzu_software_manual first when the needed action or its input is not already known. Never claim an action succeeded without this tool returning completed.",
+      description: "执行一项已登记的 Suzu Lives 软件动作。当所需动作或输入尚不明确时，先读取 suzu_software_manual。只有此工具返回 completed 时，才能声称动作已成功。",
       parameters: {
         action: {
           type: "string",
           required: true,
-          description: "Exact documented action ID, such as navigate or set-theme.",
+          description: "准确的已登记动作 ID，例如 navigate 或 set-theme。",
         },
         input: {
           type: "json",
-          description: "Documented action input. For example, navigate uses { destinationId }, and set-theme uses { theme: \"light\" | \"dark\" }.",
+          description: "已登记的动作输入。例如 navigate 使用 { destinationId }，set-theme 使用 { theme: \"light\" | \"dark\" }。",
         },
       },
       output: {

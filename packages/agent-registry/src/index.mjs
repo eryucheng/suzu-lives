@@ -74,6 +74,15 @@ function storedContactAgentId(projectRoot) {
   }
 }
 
+// Kept as an explicit compatibility helper so callers can migrate data that
+// predates contact-owned identities. New storage must always use
+// stableAgentId(), which prefers the identity saved in contact metadata.
+export function legacyStableAgentId(projectRoot) {
+  const root = normalizeProjectRoot(projectRoot);
+  if (!root) return "";
+  return `agent-${createHash("sha256").update(root.toLowerCase()).digest("hex").slice(0, 16)}`;
+}
+
 export function stableAgentId(projectRoot) {
   const root = normalizeProjectRoot(projectRoot);
   if (!root) return "";
@@ -81,7 +90,7 @@ export function stableAgentId(projectRoot) {
   // per-contact data does not change when the project directory is moved.
   const persisted = storedContactAgentId(root);
   if (persisted) return persisted;
-  return `agent-${createHash("sha256").update(root.toLowerCase()).digest("hex").slice(0, 16)}`;
+  return legacyStableAgentId(root);
 }
 
 export function suzuLivesDataRootLocatorPath({

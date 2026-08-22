@@ -20,23 +20,9 @@ export function RelationshipsPage({ actions = {}, snapshot = {} }) {
   return (
     <PageScaffold
       className="relationships-react-page"
-      header={<PageHeader eyebrow="RELATIONSHIPS" subtitle="在这里查看对话、记忆与重要关系。" title="关系" />}
+      header={<PageHeader eyebrow="RELATIONSHIPS" subtitle="在这里管理记忆、相处设定与 Agent 日记。" title="关系" />}
     >
       <section aria-label="关系功能" className="relationships-overview">
-        <RelationshipCard
-          ariaLabel="打开对话：查看并继续当前会话"
-          className="relationships-card--conversation"
-          onOpen={actions.openConversation}
-        >
-          <div className="relationships-card__topline">
-            <span className="relationships-card__eyebrow">CONVERSATION</span>
-          </div>
-          <div className="relationships-card__conversation-copy">
-            <h2>对话</h2>
-            <p>按联系人查看会话</p>
-          </div>
-        </RelationshipCard>
-
         <RelationshipCard
           ariaLabel="打开记忆压缩器：按会话整理上下文"
           className="relationships-card--compactor"

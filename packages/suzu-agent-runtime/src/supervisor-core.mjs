@@ -241,6 +241,7 @@ function createAgentCoreApi(record, { requestTimeoutMs = DEFAULT_RPC_TIMEOUT_MS 
       create: (payload = {}) => request("sessions.create", payload),
       history: (payload = {}) => request("sessions.history", payload),
       prompt: (payload = {}) => request("sessions.prompt", payload),
+      task: (payload = {}) => request("sessions.task", payload),
       compact: (payload = {}) => request("sessions.compact", payload, MANUAL_COMPACTION_RPC_TIMEOUT_MS),
       cancel: (payload = {}) => request("sessions.cancel", payload),
     }),

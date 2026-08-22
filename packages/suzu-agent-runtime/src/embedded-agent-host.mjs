@@ -11,6 +11,11 @@ import {
   importSuzuAgentCoreModule,
   resolveSuzuAgentCoreBundleAnchor,
 } from "./core-bundle.mjs";
+import {
+  normalizeSuzuAgentTaskOutputPolicy,
+  SUZU_AGENT_TASK_TRIGGER_FORM,
+  SUZU_AGENT_TASK_TRIGGER_PLUGIN,
+} from "./task-trigger.mjs";
 
 const {
   boot,
@@ -147,6 +152,18 @@ function promptBlocks(value) {
   return blocks;
 }
 
+function taskTriggerSource(value) {
+  const task = plainObject(plainObject(value).task);
+  const id = clean(task.id);
+  return Object.freeze({
+    kind: "plugin",
+    plugin: SUZU_AGENT_TASK_TRIGGER_PLUGIN,
+    form: SUZU_AGENT_TASK_TRIGGER_FORM,
+    taskId: id ? identifier(id, "内部任务标识") : `task-${randomUUID()}`,
+    outputPolicy: normalizeSuzuAgentTaskOutputPolicy(task.outputPolicy),
+  });
+}
+
 /**
  * Product-owned control plane for the selected execution kernel. It exposes a
  * small Node IPC surface; no socket, browser, HTTP proxy, or external desktop
@@ -184,6 +201,25 @@ export class SuzuAgentHost {
         type: "session/event",
         sessionId: session.id,
         event,
+      });
+    }));
+
+    // `AgentLoop.kick()` intentionally catches a failed turn so that a later
+    // inbox item can still wake the Agent.  The session stream is not a
+    // reliable terminal signal in that path: a persistence failure can leave
+    // us with `step/end` but without a durable `turn/end`.  Forward the Core
+    // error explicitly so the product can release its own per-session queue
+    // instead of treating that old turn as active forever.
+    this.disposers.push(this.ctx.on("agent/error", ({ agent, turn, step, error }) => {
+      const sessionId = clean(agent?.session?.id);
+      if (!sessionId) return;
+      const message = clean(error?.message || error) || "Suzu Agent Core 没有完成这次处理。";
+      this.emit("host", {
+        type: "host/agent-error",
+        sessionId,
+        message: message.slice(0, 4_000),
+        ...(Number.isInteger(turn) ? { coreTurn: turn } : {}),
+        ...(Number.isInteger(step) ? { step } : {}),
       });
     }));
 
@@ -417,6 +453,17 @@ export class SuzuAgentHost {
         agent.followup(createUserMessage({
           content: promptBlocks(payload.content),
           source: { kind: "user" },
+        }));
+        return { accepted: true };
+      }
+      case "sessions.task": {
+        const agent = await this.ensureSession(payload);
+        // An Agent needs an inbox item to wake from idle. This marker has no
+        // task text and is removed by the lifecycle bridge before the model
+        // sees durable history; the actual task is supplied by a dynamic Hook.
+        agent.followup(createUserMessage({
+          content: [],
+          source: taskTriggerSource(payload),
         }));
         return { accepted: true };
       }

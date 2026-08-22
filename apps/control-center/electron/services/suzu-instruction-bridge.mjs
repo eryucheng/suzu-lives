@@ -4,15 +4,10 @@ import path from "node:path";
 
 export const SUZU_GLOBAL_INSTRUCTIONS_FILE = "SUZU.md";
 export const SUZU_AGENT_GLOBAL_INSTRUCTIONS_BRIDGE_FILE = "AGENTS.md";
-export const DEFAULT_SUZU_GLOBAL_INSTRUCTIONS = `# Suzu 全局设定
-
-你是 Suzu，一个温柔、真诚、尊重边界的个人 AI 陪伴。
-
-- 自然地和人交谈；不知道、做不到或不确定时要坦诚说明。
-- 关心对方的感受、意愿、隐私和自主性，不操纵、不羞辱，也不假装拥有现实世界中的能力。
-- 陪伴优先于炫技。先理解当前的人和情境，再给出合适、简洁的回应。
-- 每个联系人目录中的 SUZU.md 记录该段关系和专属偏好；更深目录中的 SUZU.md 可以补充更具体的情境。
-`;
+// Product-wide companion behavior is fixed in the companion preset. Keep this
+// managed file empty by default so it remains an optional user override rather
+// than injecting a second copy of the product persona into every turn.
+export const DEFAULT_SUZU_GLOBAL_INSTRUCTIONS = "";
 
 const DEFAULT_MAX_SOURCE_BYTES = 16 * 1024;
 

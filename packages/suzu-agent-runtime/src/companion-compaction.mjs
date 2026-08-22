@@ -19,6 +19,11 @@ import {
 
 import { DEFAULT_SUZU_COMPACTION_PROMPT } from "./companion-compaction-prompt.mjs";
 import {
+  DEFAULT_SUZU_COMPACTION_RETAIN_TOKENS,
+  DEFAULT_SUZU_COMPACTION_TOKEN_THRESHOLD,
+  adaptiveSuzuCompactionRetainTokens,
+} from "./compaction-defaults.mjs";
+import {
   conservativeHeaderTokens,
   conservativeMessageTokens,
 } from "./context-token-estimate.mjs";
@@ -28,8 +33,6 @@ export const name = "suzu-companion-compaction";
 export const inject = [];
 export const Config = BasicCompactionEngine.Config;
 
-const DEFAULT_AUTOMATIC_THRESHOLD_TOKENS = 15_000;
-const DEFAULT_RETAIN_TOKENS = 5_000;
 // The regular per-contact threshold can be disabled, but this model-aware
 // preflight guard cannot.  Leave room for the configured normal-chat output,
 // not merely an arbitrary percentage of the context window.
@@ -234,11 +237,11 @@ function normalizedSettings(value) {
     prompt,
     automatic: Object.freeze({
       enabled: automatic.enabled === true,
-      tokenThreshold: positiveInteger(automatic.tokenThreshold, DEFAULT_AUTOMATIC_THRESHOLD_TOKENS),
-      retainTokens: positiveInteger(automatic.retainTokens, DEFAULT_RETAIN_TOKENS),
+      tokenThreshold: positiveInteger(automatic.tokenThreshold, DEFAULT_SUZU_COMPACTION_TOKEN_THRESHOLD),
+      retainTokens: positiveInteger(automatic.retainTokens, DEFAULT_SUZU_COMPACTION_RETAIN_TOKENS),
     }),
     manual: Object.freeze({
-      retainTokens: positiveInteger(manual.retainTokens, DEFAULT_RETAIN_TOKENS),
+      retainTokens: positiveInteger(manual.retainTokens, DEFAULT_SUZU_COMPACTION_RETAIN_TOKENS),
     }),
   });
 }
@@ -638,10 +641,10 @@ export class SuzuCompanionCompactionEngine extends BasicCompactionEngine {
       settings.automatic.tokenThreshold,
       inputLimitTokens,
     );
-    const retainTokens = settings.automatic.retainTokens;
-    if (retainTokens >= thresholdTokens) {
-      throw new Error(`Suzu compaction cannot retain ${retainTokens} tokens with a ${thresholdTokens}-token threshold`);
-    }
+    const retainTokens = adaptiveSuzuCompactionRetainTokens(
+      settings.automatic.retainTokens,
+      thresholdTokens,
+    );
     const { retainRatio: _retainRatio, ...base } = this.baseConfig;
     return Object.freeze({
       ...base,
@@ -658,10 +661,10 @@ export class SuzuCompanionCompactionEngine extends BasicCompactionEngine {
     const { contextWindow, inputLimitTokens: thresholdTokens } = budget;
     // A contact may have saved a recent-tail size that makes sense for its
     // regular threshold but not for a small model.  The safety path must still
-    // be able to compact, so cap the tail just below its own threshold.
-    const retainTokens = Math.min(
+    // be able to compact, so scale the tail down with its own threshold.
+    const retainTokens = adaptiveSuzuCompactionRetainTokens(
       settings.automatic.retainTokens,
-      Math.max(0, thresholdTokens - 1),
+      thresholdTokens,
     );
     const { retainRatio: _retainRatio, ...base } = this.baseConfig;
     return Object.freeze({
@@ -694,7 +697,7 @@ export class SuzuCompanionCompactionEngine extends BasicCompactionEngine {
     return selectSuzuCompactionRange(
       agent.session,
       conservative,
-      positiveInteger(config?.retainTokens, DEFAULT_RETAIN_TOKENS),
+      positiveInteger(config?.retainTokens, DEFAULT_SUZU_COMPACTION_RETAIN_TOKENS),
     );
   }
 
@@ -803,10 +806,13 @@ export class SuzuCompanionCompactionEngine extends BasicCompactionEngine {
     const maxInputTokens = Number.isFinite(requested)
       ? Math.min(availableInputTokens, Math.max(1, Math.floor(requested)))
       : availableInputTokens;
+    const retainTokens = Number.isFinite(maxInputTokens)
+      ? adaptiveSuzuCompactionRetainTokens(settings.manual.retainTokens, maxInputTokens)
+      : settings.manual.retainTokens;
     return selectSuzuCompactionBatchRange(
       agent.session,
       estimateSuzuContextMeasurement(agent.session),
-      settings.manual.retainTokens,
+      retainTokens,
       maxInputTokens,
     );
   }

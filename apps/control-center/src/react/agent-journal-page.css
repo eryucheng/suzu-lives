@@ -1,8 +1,9 @@
 .agent-journal-react-page {
+  container-type:inline-size;
   width:100%;
   min-width:0;
-  max-width:1280px;
-  margin:0 auto;
+  min-height:0;
+  flex:1;
 }
 
 .agent-journal-header-actions {
@@ -14,33 +15,53 @@
 
 .agent-journal-page-error { margin:0; }
 
+.agent-journal-page-body {
+  display:flex;
+  width:100%;
+  min-width:0;
+  min-height:0;
+  flex:1;
+  flex-direction:column;
+  gap:var(--page-card-gap);
+}
+
 .agent-journal-loading {
+  display:grid;
   min-height:260px;
+  flex:1;
+  place-items:center;
   padding:28px;
 }
 
 .agent-journal-workspace {
   display:grid;
-  grid-template-columns:minmax(210px,.34fr) minmax(0,1fr);
+  grid-template-columns:minmax(210px,.3fr) minmax(0,1fr);
+  align-items:stretch;
+  min-width:0;
+  min-height:0;
+  flex:1;
   gap:var(--page-card-gap);
-  align-items:start;
 }
 
 .agent-journal-contact-rail {
   display:grid;
-  gap:14px;
-  padding:16px;
+  grid-template-rows:auto minmax(0,1fr);
+  align-content:start;
+  min-width:0;
+  min-height:0;
+  gap:var(--space-md);
+  padding:var(--space-md);
 }
 
 .agent-journal-contact-rail__heading {
   display:flex;
-  align-items:center;
+  align-items:flex-end;
   justify-content:space-between;
-  gap:12px;
-  padding:3px 4px 9px;
+  gap:var(--space-sm);
+  padding:4px 4px 7px;
 }
 
-.agent-journal-contact-rail__heading div { display:grid; gap:2px; }
+.agent-journal-contact-rail__heading > div { display:grid; gap:3px; }
 .agent-journal-contact-rail__heading span,
 .agent-journal-main__header > div > span,
 .agent-journal-entry header span {
@@ -50,67 +71,51 @@
   letter-spacing:1.35px;
 }
 
-.agent-journal-contact-rail__heading strong { color:var(--text); font-size:var(--font-size-lg); }
-.agent-journal-contact-rail__heading b {
+.agent-journal-contact-rail__heading strong { color:var(--text); font-size:var(--font-size-md); }
+.agent-journal-contact-rail__heading b { color:var(--text-muted); font-size:var(--font-size-xs); font-weight:var(--font-weight-medium); }
+
+.agent-journal-contact-list {
   display:grid;
-  min-width:28px;
-  height:28px;
-  place-items:center;
-  border-radius:999px;
-  color:var(--accent);
-  background:color-mix(in srgb, var(--accent) 11%, transparent);
-  font-size:var(--font-size-sm);
+  align-content:start;
+  min-width:0;
+  min-height:0;
+  gap:var(--space-xs);
+  overflow:auto;
 }
 
-.agent-journal-contact-list { display:grid; gap:7px; }
-
-.agent-journal-contact {
-  display:grid;
-  width:100%;
-  gap:4px;
-  padding:12px;
-  border:1px solid transparent;
-  border-radius:var(--radius-md);
-  color:var(--text);
-  background:transparent;
-  text-align:left;
-  cursor:pointer;
-  font:inherit;
-  transition:background .16s ease, border-color .16s ease;
-}
-
-.agent-journal-contact:hover:not(:disabled),
-.agent-journal-contact.selected {
-  border-color:color-mix(in srgb, var(--accent) 28%, var(--glass-border));
-  background:color-mix(in srgb, var(--accent) 9%, transparent);
-}
-
-.agent-journal-contact:focus-visible { outline:3px solid color-mix(in srgb, var(--accent2) 35%, transparent); outline-offset:2px; }
-.agent-journal-contact:disabled { cursor:wait; opacity:.62; }
-.agent-journal-contact strong { font-size:var(--font-size-md); font-weight:var(--font-weight-semibold); }
-.agent-journal-contact span { color:var(--text-secondary); font-size:var(--font-size-xs); }
+.agent-journal-contact { width:100%; }
 
 .agent-journal-main {
   display:grid;
-  min-height:460px;
-  gap:22px;
-  padding:clamp(20px,3cqw,32px);
+  grid-template-rows:auto minmax(0,1fr);
+  min-width:0;
+  min-height:0;
+  flex:1;
+  gap:var(--space-md);
+  padding:var(--space-xl);
 }
 
 .agent-journal-main__header {
   display:flex;
   align-items:flex-start;
   justify-content:space-between;
-  gap:16px;
-  padding-bottom:20px;
-  border-bottom:1px solid var(--glass-border);
+  gap:var(--space-md);
+  padding-bottom:var(--space-md);
+  border-bottom:1px solid color-mix(in srgb, var(--glass-border) 72%, transparent);
 }
 
-.agent-journal-main__header > div { display:grid; gap:6px; }
-.agent-journal-main__header h2 { margin:0; color:var(--text); font-size:clamp(24px,3.3cqw,34px); letter-spacing:-.65px; }
+.agent-journal-main__header > div { display:grid; min-width:0; gap:3px; }
+.agent-journal-main__header h2 { overflow:hidden; margin:0; color:var(--text); font-size:var(--font-size-xl); text-overflow:ellipsis; white-space:nowrap; }
 .agent-journal-main__header p { max-width:680px; margin:0; color:var(--text-secondary); font-size:var(--font-size-sm); line-height:1.65; }
 
-.agent-journal-entry-list { display:grid; gap:14px; }
+.agent-journal-entry-list {
+  display:grid;
+  min-height:0;
+  align-content:start;
+  gap:var(--space-md);
+  overflow:auto;
+  padding-right:2px;
+}
 
 .agent-journal-entry {
   display:grid;
@@ -127,15 +132,15 @@
 .agent-journal-entry time { color:var(--text-secondary); font-size:var(--font-size-xs); white-space:nowrap; }
 .agent-journal-entry p { margin:0; color:var(--text); font-size:var(--font-size-md); line-height:1.8; white-space:pre-wrap; }
 
-@media (max-width:820px) {
-  .agent-journal-workspace { grid-template-columns:minmax(0,1fr); }
-  .agent-journal-contact-rail { padding:12px; }
-  .agent-journal-contact-list { grid-template-columns:repeat(auto-fit,minmax(154px,1fr)); }
+/* 与相处设定共用工作台收缩策略：优先保住主编辑区，联系人栏在不足宽时隐藏。 */
+@container (max-width:1140px) {
+  .agent-journal-workspace { grid-template-columns:minmax(0,1fr); min-height:0; }
+  .agent-journal-contact-rail { display:none; }
 }
 
-@media (max-width:560px) {
+@container (max-width:680px) {
   .agent-journal-header-actions { justify-content:flex-start; }
-  .agent-journal-main { padding:20px; }
+  .agent-journal-main { padding:var(--space-sm); }
   .agent-journal-main__header { display:grid; }
   .agent-journal-entry header { display:grid; }
 }

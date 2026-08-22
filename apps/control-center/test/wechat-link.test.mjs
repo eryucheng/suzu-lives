@@ -456,8 +456,18 @@ test("WeChat links persist a contact scope and relay through its fixed DSH sessi
     deliverToWechat: true,
     content: "<suzu-schedule-task>内部安排</suzu-schedule-task>",
   });
+  for (const listener of chatSubscribers) listener({
+    type: "agent-reply",
+    kind: "schedule",
+    scheduleSource: "proactive-chain",
+    requestId: "proactive-duplicated-no-reply",
+    sessionId: "session-1",
+    projectRoot,
+    deliverToWechat: true,
+    content: "先检查一下任务链。\nNO_REPLYNO_REPLY",
+  });
   await flush();
-  assert.equal(outgoing.length, 3, "NO_REPLY 和内部任务包不应投递到微信");
+  assert.equal(outgoing.length, 3, "NO_REPLY、重复 NO_REPLY 和内部任务包不应投递到微信");
 
   const agentFile = path.join(root, "agent-report.txt");
   const agentImage = path.join(root, "agent-image.png");

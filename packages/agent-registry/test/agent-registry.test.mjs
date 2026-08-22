@@ -8,6 +8,7 @@ import {
   resolveAgentDataRoot,
   resolveAgentConversationDataRoot,
   resolveSuzuLivesDataRoot,
+  legacyStableAgentId,
   stableAgentId,
 } from "../src/index.mjs";
 
@@ -21,6 +22,8 @@ test("generates a stable Agent ID from a normalized project path", () => {
   const second = stableAgentId(path.join(root, "."));
   assert.match(first, /^agent-[a-f0-9]{16}$/u);
   assert.equal(first, second);
+  assert.equal(first, legacyStableAgentId(root));
+  assert.equal(legacyStableAgentId(""), "");
   assert.equal(stableAgentId(""), "");
 });
 

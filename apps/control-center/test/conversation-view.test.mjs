@@ -3,10 +3,13 @@ import test from "node:test";
 
 import {
   companionPeerLabel,
+  conversationMessageBlocks,
   conversationMessageRows,
   dismissConversationOverlays,
   filterConversationItems,
+  hasMarkdownFormatting,
   isScheduledAgentReply,
+  liveReplyPresentationChanged,
   mergeConversationMessages,
   parseSuzuConversationCommand,
   conversationReactSnapshot,
@@ -101,6 +104,21 @@ test("local chat overlays reconcile across tool-heavy transcripts without hiding
   }], new Map(), "session-1");
   assert.equal(repeated.filter((item) => item.kind === "user" && item.blocks[0]?.text === "好").length, 2);
 
+  const assistantBeforeDurableInput = mergeConversationMessages([
+    { id: "old-question", kind: "user", timestamp: "2026-08-14T09:58:00.000Z", blocks: [{ kind: "text", text: "上一个问题" }] },
+    { id: "stored-agent-step", kind: "assistant", timestamp: "2026-08-14T10:00:01.000Z", blocks: [{ kind: "text", text: "我先检查当前设置。" }] },
+  ], [{
+    id: "pending-current-question",
+    requestId: "turn-pending-order",
+    sessionId: "session-1",
+    content: "帮我配置识图",
+    timestamp: "2026-08-14T10:00:00.000Z",
+  }], new Map(), "session-1");
+  assert.deepEqual(
+    assistantBeforeDurableInput.map((item) => item.blocks[0]?.text),
+    ["上一个问题", "帮我配置识图", "我先检查当前设置。"],
+  );
+
   const visibleReply = mergeConversationMessages([
     { id: "before", kind: "user", timestamp: sentAt, blocks: [{ kind: "text", text: "第一条" }] },
     { id: "after", kind: "user", timestamp: "2026-08-14T10:02:00.000Z", blocks: [{ kind: "text", text: "下一条" }] },
@@ -137,6 +155,42 @@ test("agent media remains visible as a chat attachment even when tool details ar
   assert.equal(media.mediaKind, "file");
   assert.equal(media.fileName, "agent-report.txt");
   assert.equal(media.size, "2.0 KB");
+});
+
+test("the shared conversation block adapter renders native tool calls and results", () => {
+  const blocks = conversationMessageBlocks({
+    kind: "assistant",
+    blocks: [
+      { kind: "tool_use", name: "pwsh", summary: "{\"command\":\"Get-ChildItem\"}", detail: "{\"command\":\"Get-ChildItem\"}" },
+      { kind: "tool_result", error: false, summary: "已读取联系人目录", detail: "已读取联系人目录" },
+    ],
+  });
+
+  assert.deepEqual(blocks, [
+    { detail: "{\"command\":\"Get-ChildItem\"}", title: "工具调用 · pwsh · {\"command\":\"Get-ChildItem\"}", type: "detail" },
+    { detail: "已读取联系人目录", title: "工具结果 · 已读取联系人目录", type: "detail" },
+  ]);
+});
+
+test("new system and tool records retain the chat-bubble entrance marker", () => {
+  const rows = conversationMessageRows([
+    {
+      animateIn: true,
+      id: "call-status",
+      kind: "system",
+      timestamp: "2026-08-15T10:03:00.000Z",
+      blocks: [{ kind: "text", text: "通话系统：正在连接。" }],
+    },
+    {
+      animateIn: true,
+      id: "tool-status",
+      kind: "assistant",
+      timestamp: "2026-08-15T10:03:01.000Z",
+      blocks: [{ kind: "tool_use", name: "读取文件", summary: "正在读取", detail: "正在读取文件。" }],
+    },
+  ], { state: { settings: { conversationPreferences: { system: true, thinking: true } } } });
+
+  assert.equal(rows.filter((row) => row.type === "message").every((row) => row.entering), true);
 });
 
 test("image attachments render as fixed previews that can be enlarged", () => {
@@ -225,6 +279,48 @@ test("companion reply projection hides unfinished token text and only adds compl
 
   assert.deepEqual(merged.map((item) => item.blocks[0]?.text), ["你好", "第一句。"]);
   assert.equal(merged[1]?.streaming, false);
+  assert.equal(merged[1]?.animateIn, true);
+
+  const rows = conversationMessageRows(merged, { state: { settings: { conversationPreferences: {} } } });
+  assert.equal(rows.find((row) => row.type === "message" && row.blocks[0]?.text === "第一句。")?.entering, true);
+
+  const unfinished = mergeConversationMessages([{
+    id: "user-2",
+    kind: "user",
+    timestamp: "2026-08-15T10:02:00.000Z",
+    blocks: [{ kind: "text", text: "继续" }],
+  }], [], new Map([["turn-2", {
+    content: "还没说完",
+    phase: "thinking",
+    requestId: "turn-2",
+    sentences: [],
+    sessionId: "session-1",
+    timestamp: "2026-08-15T10:02:01.000Z",
+  }]]), "session-1");
+  assert.deepEqual(unfinished.map((item) => item.blocks[0]?.text), ["继续"]);
+});
+
+test("live replies only refresh the conversation when their visible presentation changes", () => {
+  const thinking = {
+    content: "",
+    done: false,
+    phase: "thinking",
+    remainder: "",
+    sentences: [],
+  };
+  const hiddenTokens = { ...thinking, content: "还没说完", remainder: "还没说完" };
+  const firstSentence = {
+    ...hiddenTokens,
+    content: "第一句。第二句还没说完",
+    phase: "delivering",
+    remainder: "第二句还没说完",
+    sentences: ["第一句。"],
+  };
+
+  assert.equal(liveReplyPresentationChanged(thinking, hiddenTokens), false);
+  assert.equal(liveReplyPresentationChanged(hiddenTokens, firstSentence), true);
+  assert.equal(liveReplyPresentationChanged(firstSentence, { ...firstSentence, content: "第一句。第二句仍未说完", remainder: "第二句仍未说完" }), false);
+  assert.equal(liveReplyPresentationChanged(firstSentence, { ...firstSentence, done: true, phase: "idle" }), true);
 });
 
 test("companion header substitutes the contact note only during a real thinking phase", () => {
@@ -241,9 +337,9 @@ test("companion header substitutes the contact note only during a real thinking 
 });
 
 test("conversation overlays close together when the user clicks away or presses Escape", () => {
-  const state = { avatarCrop: { source: "data:image/png;base64,avatar" }, contactCreateOpen: true, contactContextMenu: { contactId: "contact-test" }, contactRenameOpen: true, emojiOpen: true, mediaPreview: { url: "file:///C:/temp/image.png" }, menuOpen: true, searchOpen: false, settingsOpen: true, wechatQrOpen: true };
+  const state = { avatarCrop: { source: "data:image/png;base64,avatar" }, contactCreateOpen: true, contactContextMenu: { contactId: "contact-test" }, contactRenameOpen: true, emojiOpen: true, fileContextMenu: { fileUrl: "file:///C:/temp/report.txt" }, mediaPreview: { url: "file:///C:/temp/image.png" }, menuOpen: true, searchOpen: false, settingsOpen: true, wechatQrOpen: true };
   assert.equal(dismissConversationOverlays(state), true);
-  assert.deepEqual(state, { avatarCrop: null, contactCreateOpen: false, contactContextMenu: null, contactRenameOpen: false, emojiOpen: false, mediaPreview: null, menuOpen: false, searchOpen: false, settingsOpen: false, wechatQrOpen: false });
+  assert.deepEqual(state, { avatarCrop: null, contactCreateOpen: false, contactContextMenu: null, contactRenameOpen: false, emojiOpen: false, fileContextMenu: null, mediaPreview: null, menuOpen: false, searchOpen: false, settingsOpen: false, wechatQrOpen: false });
   assert.equal(dismissConversationOverlays(state), false);
 });
 
@@ -261,6 +357,26 @@ test("Suzu exposes stop and queue while retaining compatible steer parsing witho
     action: "notice",
     message: "可用的 Suzu 命令：/suzu stop 停止；/suzu queue <内容> 排队发送。普通消息会优先处理。",
   });
+});
+
+test("Markdown replies wait for completion and stay in one coherent chat bubble", () => {
+  const markdown = "# 今天的安排\n\n- 回复消息\n- 整理日记\n\n| 项目 | 状态 |\n| --- | --- |\n| 日记 | 进行中 |";
+  assert.equal(hasMarkdownFormatting(markdown), true);
+  assert.deepEqual(splitCompanionReplyBuffer(markdown), {
+    remainder: markdown,
+    sentences: [],
+  });
+  assert.deepEqual(splitCompanionReplyBuffer(markdown, { final: true }), {
+    remainder: "",
+    sentences: [markdown],
+  });
+  const parts = splitAssistantMessageOnBlankLines({
+    id: "markdown-reply",
+    kind: "assistant",
+    blocks: [{ kind: "text", text: markdown }],
+  });
+  assert.equal(parts.length, 1);
+  assert.equal(parts[0].blocks[0].text, markdown);
 });
 
 test("only completed scheduled agent text replies are eligible for an outside-chat notification", () => {

@@ -21,4 +21,10 @@ test("DSH management keeps identity, model configuration, and editable custom pr
   assert.match(page, /usage: "用量与成本"/u);
   assert.match(page, /tab === "agent" \? <IdentitySettings/u);
   assert.match(page, /tab === "usage" \? <UsageSettings/u);
+  assert.match(page, /function UsageHistoryPage/u);
+  assert.match(page, /function UsageHistoryChart/u);
+  assert.match(page, /usageHistoryRows\(data\?\.summary/u);
+  assert.match(page, /admin-usage-history-chart__column/u);
+  assert.match(page, /setHistoryPeriod\("daily"\)/u);
+  assert.match(page, /setHistoryPeriod\("monthly"\)/u);
 });

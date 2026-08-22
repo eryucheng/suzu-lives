@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import {
+  legacyStableAgentId,
   resolveAgentDataRoot,
   stableAgentId,
 } from "@suzu-lives/agent-registry";
@@ -16,6 +17,9 @@ const DEFAULT_SETTINGS = Object.freeze({
   onboardingCompleted: false,
   onboardingMultimodalCompleted: false,
   memoryRecallEnabled: true,
+  conversationComposerHeight: 168,
+  conversationRosterWidth: 246,
+  shellSidebarWidth: 240,
   theme: "light",
   agentId: "",
   customPriceModels: [],
@@ -26,7 +30,7 @@ const DEFAULT_SETTINGS = Object.freeze({
     defaultAgent: { displayName: "Suzu", avatarDataUrl: "" },
     agents: {},
   },
-  conversationPreferences: { attachments: true, tools: true, thinking: true, system: true, tokens: true, timeDisplay: "center" },
+  conversationPreferences: { attachments: true, dynamicContext: false, tools: true, thinking: true, system: true, tokens: true, timeDisplay: "center" },
 });
 
 const MAX_AVATAR_DATA_URL_LENGTH = 2_800_000;
@@ -34,6 +38,15 @@ const AVATAR_DATA_URL_PATTERN = /^data:image\/(?:png|jpeg|webp);base64,[a-z0-9+/
 
 function clean(value) {
   return String(value ?? "").trim();
+}
+
+function externalUrl(value) {
+  try {
+    const url = new URL(clean(value));
+    return ["http:", "https:", "mailto:"].includes(url.protocol) ? url.href : "";
+  } catch {
+    return "";
+  }
 }
 
 function normalizeProfile(value, fallbackName) {
@@ -76,9 +89,51 @@ function ownerDisplayName(settings) {
   return String(settings?.identity?.owner?.displayName || "我").trim() || "我";
 }
 
+const LEGACY_CONTACT_AGENT_ID_PATTERN = /^agent-[a-f0-9]{16}$/iu;
+
+function hasLegacyContactIdentityProfile(settings) {
+  return Object.keys(settings?.identity?.agents || {}).some((agentId) => LEGACY_CONTACT_AGENT_ID_PATTERN.test(clean(agentId)));
+}
+
+async function migrateLegacyContactIdentityProfiles({ contactSnapshot = null, contacts, settingsService } = {}) {
+  const current = settingsService.load();
+  if (!hasLegacyContactIdentityProfile(current) || typeof contacts?.snapshot !== "function") return current;
+
+  let snapshot = contactSnapshot;
+  if (!snapshot) {
+    try {
+      snapshot = await contacts.snapshot();
+    } catch {
+      // A temporary contact-catalog read failure must never make settings
+      // unavailable. The migration will be retried on the next settings read.
+      return current;
+    }
+  }
+
+  const identity = current.identity || {};
+  const agents = { ...(identity.agents || {}) };
+  let migrated = false;
+  for (const contact of Array.isArray(snapshot?.contacts) ? snapshot.contacts : []) {
+    const agentId = clean(contact?.agentId);
+    const legacyAgentId = legacyStableAgentId(contact?.projectRoot);
+    if (!agentId || !legacyAgentId || agentId === legacyAgentId) continue;
+    if (!Object.hasOwn(agents, agentId) && Object.hasOwn(agents, legacyAgentId)) {
+      agents[agentId] = { ...agents[legacyAgentId] };
+      delete agents[legacyAgentId];
+      migrated = true;
+    }
+  }
+  if (!migrated) return current;
+  return settingsService.save({
+    ...current,
+    identity: { ...identity, agents },
+  });
+}
+
 export function normalizeConversationPreferences(value = {}) {
   return {
     attachments: value.attachments !== false,
+    dynamicContext: value.dynamicContext === true,
     tools: value.tools !== false,
     thinking: value.thinking !== false,
     system: value.system !== false,
@@ -89,6 +144,34 @@ export function normalizeConversationPreferences(value = {}) {
 
 export function normalizeMemoryRecallEnabled(value) {
   return value !== false;
+}
+
+const SHELL_SIDEBAR_COMPACT_WIDTH = 70;
+const SHELL_SIDEBAR_MIN_EXPANDED_WIDTH = 240;
+const SHELL_SIDEBAR_MAX_WIDTH = 360;
+const SHELL_SIDEBAR_COLLAPSE_THRESHOLD = 144;
+const CONVERSATION_COMPOSER_MIN_HEIGHT = 168;
+const CONVERSATION_COMPOSER_MAX_HEIGHT = 420;
+const CONVERSATION_ROSTER_MIN_WIDTH = 192;
+const CONVERSATION_ROSTER_MAX_WIDTH = 340;
+
+export function normalizeShellSidebarWidth(value) {
+  const numeric = Math.round(Number(value));
+  if (!Number.isFinite(numeric)) return 240;
+  if (numeric <= SHELL_SIDEBAR_COLLAPSE_THRESHOLD) return SHELL_SIDEBAR_COMPACT_WIDTH;
+  return Math.min(Math.max(numeric, SHELL_SIDEBAR_MIN_EXPANDED_WIDTH), SHELL_SIDEBAR_MAX_WIDTH);
+}
+
+export function normalizeConversationComposerHeight(value) {
+  const numeric = Math.round(Number(value));
+  if (!Number.isFinite(numeric)) return 168;
+  return Math.min(Math.max(numeric, CONVERSATION_COMPOSER_MIN_HEIGHT), CONVERSATION_COMPOSER_MAX_HEIGHT);
+}
+
+export function normalizeConversationRosterWidth(value) {
+  const numeric = Math.round(Number(value));
+  if (!Number.isFinite(numeric)) return 246;
+  return Math.min(Math.max(numeric, CONVERSATION_ROSTER_MIN_WIDTH), CONVERSATION_ROSTER_MAX_WIDTH);
 }
 
 export function normalizeReleaseAnnouncementState(value = {}) {
@@ -135,6 +218,9 @@ function normalizeSettings(value = {}) {
     onboardingCompleted: normalizeOnboardingCompleted(value.onboardingCompleted),
     onboardingMultimodalCompleted: normalizeOnboardingMultimodalCompleted(value.onboardingMultimodalCompleted),
     memoryRecallEnabled: normalizeMemoryRecallEnabled(value.memoryRecallEnabled),
+    conversationComposerHeight: normalizeConversationComposerHeight(value.conversationComposerHeight),
+    conversationRosterWidth: normalizeConversationRosterWidth(value.conversationRosterWidth),
+    shellSidebarWidth: normalizeShellSidebarWidth(value.shellSidebarWidth),
     theme: value.theme === "dark" ? "dark" : "light",
     agentId: stableAgentId(projectRoot),
     customPriceModels,
@@ -157,6 +243,9 @@ function safePatch(value, current = {}) {
   if (Object.hasOwn(value, "onboardingCompleted")) patch.onboardingCompleted = normalizeOnboardingCompleted(value.onboardingCompleted);
   if (Object.hasOwn(value, "onboardingMultimodalCompleted")) patch.onboardingMultimodalCompleted = normalizeOnboardingMultimodalCompleted(value.onboardingMultimodalCompleted);
   if (Object.hasOwn(value, "memoryRecallEnabled")) patch.memoryRecallEnabled = normalizeMemoryRecallEnabled(value.memoryRecallEnabled);
+  if (Object.hasOwn(value, "conversationComposerHeight")) patch.conversationComposerHeight = normalizeConversationComposerHeight(value.conversationComposerHeight);
+  if (Object.hasOwn(value, "conversationRosterWidth")) patch.conversationRosterWidth = normalizeConversationRosterWidth(value.conversationRosterWidth);
+  if (Object.hasOwn(value, "shellSidebarWidth")) patch.shellSidebarWidth = normalizeShellSidebarWidth(value.shellSidebarWidth);
   if (Object.hasOwn(value, "theme")) patch.theme = value.theme === "light" ? "light" : "dark";
   if (Object.hasOwn(value, "customPriceModels")) patch.customPriceModels = customPriceModels;
   if (Object.hasOwn(value, "priceRevisions")) patch.priceRevisions = sanitizePriceRevisions(value.priceRevisions, priceCatalog);
@@ -232,10 +321,12 @@ export function registerSettingsIpc({ app, appUpdateService = null, contactProje
     // A new installation has no materialized contacts path. Materialize the
     // product-owned default before returning the first settings snapshot, so
     // every page sees the same data-root/contacts location from the start.
+    let contactSnapshot = null;
     if (!clean(settingsService.load()?.contactsRoot) && typeof contacts.snapshot === "function") {
-      await contacts.snapshot();
+      contactSnapshot = await contacts.snapshot();
     }
-    return settingsService.response();
+    const settings = await migrateLegacyContactIdentityProfiles({ contactSnapshot, contacts, settingsService });
+    return settingsService.response(settings);
   });
   ipcMain.handle("settings:release-announcement-status", () => announcementService.status());
   ipcMain.handle("settings:acknowledge-release-announcement", () => announcementService.acknowledge());
@@ -325,6 +416,12 @@ export function registerSettingsIpc({ app, appUpdateService = null, contactProje
       fs.mkdirSync(directory, { recursive: true });
       shell.openPath(directory);
     }
+    return true;
+  });
+  ipcMain.handle("shell:open-external", async (_event, targetUrl) => {
+    const url = externalUrl(targetUrl);
+    if (!url || typeof shell?.openExternal !== "function") return false;
+    await shell.openExternal(url);
     return true;
   });
 }

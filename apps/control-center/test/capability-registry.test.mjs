@@ -26,6 +26,7 @@ test("capability registry is the single source for catalog, contact config clean
   assert.equal(registry.isContactScoped("agent-journal"), true);
   assert.equal(registry.runtimeStatus("image-vision"), "agent-capability-bridge");
   assert.equal(registry.runtimeStatus("mail-bridge"), "agent-capability-bridge");
+  assert.equal(registry.get("mail-bridge")?.category, "companion");
   assert.deepEqual(registry.configPath("web-browser"), ["capabilities", "web-browser", "config.json"]);
   assert.equal(registry.runtimeStatus("web-browser"), "agent-capability-bridge");
   assert.deepEqual(
@@ -78,36 +79,54 @@ test("capability registry is the single source for catalog, contact config clean
 test("capability registry builds only declared dynamic Hook modules", () => {
   const registry = createCapabilityRegistry({
     hookFactories: {
+      "automation-task-context": () => ({ collect: () => ({ id: "task", kind: "dynamic", text: "任务" }) }),
       "time-awareness": () => ({ collect: () => ({ id: "time", kind: "dynamic", text: "现在" }) }),
       "memory-recall": () => ({ collect: () => ({ id: "memory", kind: "dynamic", text: "记忆" }) }),
     },
   });
   assert.deepEqual(
     registry.createHookModules({ dataRoot: "D:\\Temp\\suzu-lives-capability-registry" }).map((module) => module.id),
-    ["time-awareness", "conversation-attachment-delivery"],
+    ["time-awareness", "automation-task-context"],
   );
   assert.deepEqual(
     registry.createHookModules({
       dataRoot: "D:\\Temp\\suzu-lives-capability-registry",
       memoryRuntime: { recallForTurn: async () => ({}) },
     }).map((module) => module.id),
-    ["time-awareness", "memory-recall", "conversation-attachment-delivery"],
+    ["time-awareness", "memory-recall", "automation-task-context"],
   );
 });
 
-test("chat attachment delivery stays a queryable current-turn instruction", async () => {
+test("chat attachment delivery stays an on-demand capability action", () => {
+  const registry = createCapabilityRegistry();
+  assert.equal(
+    registry.createHookModules({ dataRoot: "D:\\Temp\\suzu-lives-capability-registry" })
+      .some((module) => module.id === "conversation-attachment-delivery"),
+    false,
+  );
+  const [delivery] = registry.agentActions({ capabilityId: "conversation-attachment" });
+  assert.equal(delivery.action, "deliver");
+  assert.match(delivery.actionDescription, /当前聊天/u);
+  assert.match(delivery.actionDescription, /自动转发/u);
+});
+
+test("automation task context is mounted as a one-turn dynamic Hook, not a contact instruction", async () => {
   const registry = createCapabilityRegistry();
   const hook = registry.createHookModules({ dataRoot: "D:\\Temp\\suzu-lives-capability-registry" })
-    .find((module) => module.id === "conversation-attachment-delivery");
+    .find((module) => module.id === "automation-task-context");
   assert.equal(hook.lifecycleEvent, "DynamicContextCollect");
+  assert.equal(await hook.handler({ sessionId: "session-a", turnId: "turn-a" }), null);
   const block = await hook.handler({
-    projectRoot: "D:\\Contacts\\suzu",
     sessionId: "session-a",
+    turnId: "turn-a",
+    scheduleSource: "proactive-chain-planning",
+    outputPolicy: "silent",
+    taskContext: { id: "schedule-a", text: "安排下一次主动关心。" },
   });
-  assert.equal(block.kind, "conversation-attachment-delivery");
+  assert.equal(block.kind, "automation-task");
   assert.equal(block.display.transcript, false);
-  assert.equal(block.metadata.capabilityId, "conversation-attachment");
-  assert.match(block.text, /suzu_capability_catalog/u);
+  assert.equal(block.metadata.outputPolicy, "silent");
+  assert.match(block.text, /不是用户发来的新消息/u);
 });
 
 test("capability registry rejects a malformed resource before it can create a stray integration", () => {

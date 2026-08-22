@@ -5,7 +5,6 @@ import { conversationReactSnapshot, createConversationReactActions, isScheduledA
 import {
   loadRelationshipFiles,
   selectRelationshipContact,
-  updateRelationshipContactPermissionMode,
 } from "./features/relationship-settings/index.mjs";
 import {
   SUZU_ADMIN_TABS,
@@ -172,6 +171,20 @@ async function setMemoryRecallEnabled(enabled) {
   render();
   return state.settings;
 }
+
+async function setShellSidebarWidth(width) {
+  if (typeof api.settings?.update !== "function") return state.settings;
+  try {
+    state.settings = await api.settings.update({ shellSidebarWidth: width });
+  } catch (error) {
+    setNotice(`无法保存侧边栏宽度：${error?.message || error}`);
+    render();
+    return state.settings;
+  }
+  render();
+  return state.settings;
+}
+
 function setCreatePage(page) {
   if (!["overview", "visual"].includes(page)) return;
   state.createPage = page;
@@ -1169,14 +1182,6 @@ function selectRelationshipFile(path) {
   render();
 }
 
-async function saveRelationshipPermissionMode({ id, permissionMode } = {}) {
-  const snapshot = await updateRelationshipContactPermissionMode(context, { id, permissionMode });
-  state.relationshipFilesError = "";
-  setNotice("已更新联系人审批模式。 ");
-  render();
-  return snapshot;
-}
-
 let conversationCompactorRequest = 0;
 
 async function loadConversationCompactor({ contactId = "" } = {}) {
@@ -1461,7 +1466,6 @@ function routeForCurrentView() {
           createFile: createRelationshipFile,
           returnToOverview: () => setRelationshipPage("overview"),
           saveFile: saveRelationshipFile,
-          savePermissionMode: saveRelationshipPermissionMode,
           selectContact: (id) => selectRelationshipContact(context, id),
           selectFile: selectRelationshipFile,
         },
@@ -1565,7 +1569,7 @@ function routeForCurrentView() {
 
 function buildWorkspace() {
   return {
-    actions: { acknowledgeReleaseAnnouncement, answerIncomingVoiceCall, declineIncomingVoiceCall, navigate: setView, openSuzuSearchItem },
+    actions: { acknowledgeReleaseAnnouncement, answerIncomingVoiceCall, declineIncomingVoiceCall, navigate: setView, openSuzuSearchItem, setShellSidebarWidth },
     activeView: state.view,
     contentClassName: contentClassName(),
     conversationUnread: state.conversationUnread,
@@ -1573,9 +1577,11 @@ function buildWorkspace() {
     incomingVoiceCall: state.incomingVoiceCall,
     notice: currentGlobalNotice(),
     onboarding: onboardingWorkspace(),
+    owner: getIdentity(state.settings).owner,
     releaseAnnouncement: state.releaseAnnouncement,
     releaseAnnouncementOpen: state.releaseAnnouncementOpen,
     route: routeForCurrentView(),
+    shellSidebarWidth: state.settings?.shellSidebarWidth,
   };
 }
 

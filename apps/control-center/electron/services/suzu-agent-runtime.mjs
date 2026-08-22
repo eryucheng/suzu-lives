@@ -71,18 +71,15 @@ function errorMessage(error, fallback) {
   return clean(error?.message || error) || fallback;
 }
 
-function alreadyExists(error) {
-  return clean(error?.code).toUpperCase() === "EEXIST";
-}
-
 function notFound(error) {
   return clean(error?.code).toUpperCase() === "ENOENT";
 }
 
 /**
- * Seeds Suzu's product-owned companion composition only when it is missing.
- * Existing files are always left untouched: cross-version migration is an
- * explicit one-time product workflow, never an implicit runtime side effect.
+ * The companion composition is product-owned; user-authored identity and
+ * relationship instructions live in SUZU.md instead. Refresh its fixed files
+ * on startup so a product update cannot leave an obsolete model contract in
+ * the managed Agent Core home.
  */
 export async function ensureSuzuCompanionAgentPreset({
   runtimeHome,
@@ -106,37 +103,32 @@ export async function ensureSuzuCompanionAgentPreset({
   }));
   const targetDirectory = path.join(home, ".agent-presets", SUZU_COMPANION_AGENT_PRESET);
   await fsOps.mkdir(targetDirectory, { recursive: true });
-  const existing = await Promise.all(SUZU_COMPANION_PRESET_FILES.map(async (fileName) => {
-    try {
-      return [fileName, await fsOps.readFile(path.join(targetDirectory, fileName), "utf8")];
-    } catch (error) {
-      if (notFound(error)) return [fileName, null];
-      throw new SuzuAgentRuntimeServiceError(
-        `无法读取已安装的 Suzu 陪伴 preset：${fileName}。`,
-        { cause: error, code: "PRESET_READ_FAILED" },
-      );
-    }
-  }));
-  const existingByFile = new Map(existing);
   let created = false;
   let updated = false;
   for (const [fileName, content] of contents) {
-    const installed = existingByFile.get(fileName);
-    if (installed !== null) continue;
+    const target = path.join(targetDirectory, fileName);
+    let existing = null;
     try {
-      await fsOps.writeFile(
-        path.join(targetDirectory, fileName),
-        content,
-        { encoding: "utf8", flag: "wx" },
-      );
-      created = true;
+      existing = await fsOps.readFile(target, "utf8");
     } catch (error) {
-      if (installed === null && alreadyExists(error)) continue;
+      if (!notFound(error)) {
+        throw new SuzuAgentRuntimeServiceError(
+          `无法读取已安装的 Suzu 陪伴 preset：${fileName}。`,
+          { cause: error, code: "PRESET_READ_FAILED" },
+        );
+      }
+    }
+    if (existing === content) continue;
+    try {
+      await fsOps.writeFile(target, content, "utf8");
+    } catch (error) {
       throw new SuzuAgentRuntimeServiceError(
         `无法安装 Suzu 陪伴 preset：${fileName}。`,
         { cause: error, code: "PRESET_INSTALL_FAILED" },
       );
     }
+    if (existing === null) created = true;
+    else updated = true;
   }
   return Object.freeze({
     agentPreset: SUZU_COMPANION_AGENT_PRESET,
@@ -734,6 +726,11 @@ export function createSuzuAgentRuntime({
     async sendTurn(value) {
       const facade = await start();
       return facade.sendTurn(value);
+    },
+
+    async sendTask(value) {
+      const facade = await start();
+      return facade.sendTask(value);
     },
 
     async cancelTurn(value) {

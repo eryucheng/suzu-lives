@@ -6,8 +6,8 @@
 .api-connections-settings__card {
   display:grid;
   min-width:0;
-  gap:clamp(16px,1.7cqw,23px);
-  padding:clamp(17px,1.8cqw,25px);
+  gap:var(--space-xl);
+  padding:var(--space-xl);
 }
 
 .api-connections-settings__header {
@@ -33,7 +33,7 @@
 .api-connections-settings h2 {
   margin:0;
   color:var(--text);
-  font-size:clamp(18px,1.7cqw,22px);
+  font-size:var(--font-size-2xl);
   letter-spacing:-.35px;
 }
 

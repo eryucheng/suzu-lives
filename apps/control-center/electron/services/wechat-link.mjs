@@ -4,6 +4,7 @@ import path from "node:path";
 import QRCode from "qrcode";
 
 import { resolveAgentConversationDataRoot } from "@suzu-lives/agent-registry";
+import { hasTerminalNoReply, isExactNoReply } from "../../shared/agent-reply-markers.mjs";
 import { parseSuzuConversationCommand } from "../../shared/conversation-command.mjs";
 
 const DEFAULT_BASE_URL = "https://ilinkai.weixin.qq.com";
@@ -45,9 +46,9 @@ function clean(value) {
 // Agent Core's native reasoning is emitted separately. Some compatible
 // providers can still put a <think> block or an internal task envelope inside
 // the visible completion, so enforce the final external boundary here too.
-function publicAgentReply(value) {
+function publicAgentReply(value, { scheduled = false } = {}) {
   const source = clean(value);
-  if (!source || /^NO_REPLY$/iu.test(source) || INTERNAL_SCHEDULE_MARKER.test(source)) return "";
+  if (!source || (scheduled ? hasTerminalNoReply(source) : isExactNoReply(source)) || INTERNAL_SCHEDULE_MARKER.test(source)) return "";
   const visible = source.replace(LEADING_REASONING_BLOCK, "").trim();
   return REASONING_TAG.test(visible) || /^NO_REPLY$/iu.test(visible) ? "" : visible;
 }
@@ -1272,7 +1273,7 @@ export function createWeChatLinkService({
         let allowed = false;
         if (event.type === "agent-reply") {
           allowed = publicStore.delivery.agent === true;
-          content = publicAgentReply(event.content);
+          content = publicAgentReply(event.content, { scheduled: event.kind === "schedule" });
         } else if (event.type === "attachment") {
           allowed = publicStore.delivery.attachments === true;
           content = clean(event.content);

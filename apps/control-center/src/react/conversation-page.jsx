@@ -1,11 +1,13 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import emojiMartData from "@emoji-mart/data/sets/15/apple.json";
 import emojiMartI18n from "@emoji-mart/data/i18n/zh.json";
 import appleEmojiSpritesheet from "emoji-datasource-apple/img/apple/sheets-128/32.png";
 import { Picker } from "emoji-mart";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { ChatVoice, Select } from "suzu-design-system";
 
-import { shouldSubmitConversationOnEnter } from "../features/conversation/index.mjs";
+import { hasMarkdownFormatting, shouldSubmitConversationOnEnter } from "../features/conversation/index.mjs";
 import { useConversationCall } from "./conversation-call.jsx";
 import { captureConversationViewportAnchor, restoreConversationViewportAnchor } from "./conversation-scroll-anchor.mjs";
 import { useConversationVoiceInput } from "./conversation-voice-input.jsx";
@@ -16,6 +18,165 @@ let activeConversationAudio = null;
 const EMOJI_COLLECTION_CATEGORIES = emojiMartData.categories
   .map((category) => String(category?.id || "").trim())
   .filter(Boolean);
+const APPLE_EMOJI_SHEET_COLUMNS = Number(emojiMartData.sheet?.cols) || 61;
+const APPLE_EMOJI_SHEET_ROWS = Number(emojiMartData.sheet?.rows) || 61;
+const APPLE_EMOJI_BY_NATIVE = new Map(
+  Object.values(emojiMartData.emojis || {}).flatMap((emoji) => (Array.isArray(emoji?.skins) ? emoji.skins : [])
+    .filter((skin) => String(skin?.native || ""))
+    .map((skin) => [skin.native, { ...skin, name: emoji?.name }])),
+);
+const EMOJI_GRAPHEME_SEGMENTER = typeof Intl !== "undefined" && typeof Intl.Segmenter === "function"
+  ? new Intl.Segmenter(undefined, { granularity: "grapheme" })
+  : null;
+const MARKDOWN_EXTERNAL_PROTOCOLS = new Set(["http:", "https:", "mailto:"]);
+const CONTACT_APPROVAL_MODE_OPTIONS = Object.freeze([
+  { label: "全权限", value: "danger-full-access" },
+  { label: "工作目录可写", value: "workspace-write" },
+  { label: "只读", value: "read-only" },
+]);
+const CONVERSATION_COMPOSER_DEFAULT_HEIGHT = 168;
+const CONVERSATION_COMPOSER_MIN_HEIGHT = 168;
+const CONVERSATION_COMPOSER_MAX_HEIGHT = 420;
+const CONVERSATION_ROSTER_DEFAULT_WIDTH = 246;
+const CONVERSATION_ROSTER_MIN_WIDTH = 192;
+const CONVERSATION_ROSTER_MAX_WIDTH = 340;
+const CONVERSATION_ROSTER_FIXED_VIEWPORT = 940;
+const CONVERSATION_ROSTER_NARROW_WIDTH = 210;
+const CONVERSATION_SCROLLBAR_IDLE_MS = 1_800;
+
+function clampConversationRosterWidth(value) {
+  const numeric = Math.round(Number(value));
+  if (!Number.isFinite(numeric)) return CONVERSATION_ROSTER_DEFAULT_WIDTH;
+  return Math.min(Math.max(numeric, CONVERSATION_ROSTER_MIN_WIDTH), CONVERSATION_ROSTER_MAX_WIDTH);
+}
+
+function clampConversationComposerHeight(value) {
+  const numeric = Math.round(Number(value));
+  if (!Number.isFinite(numeric)) return CONVERSATION_COMPOSER_DEFAULT_HEIGHT;
+  return Math.min(Math.max(numeric, CONVERSATION_COMPOSER_MIN_HEIGHT), CONVERSATION_COMPOSER_MAX_HEIGHT);
+}
+
+function conversationScrollbarGeometry(list, rail) {
+  const clientHeight = Math.max(0, Number(list?.clientHeight) || 0);
+  const scrollHeight = Math.max(clientHeight, Number(list?.scrollHeight) || 0);
+  const railHeight = Math.max(0, Number(rail?.clientHeight) || clientHeight);
+  const maxScrollTop = Math.max(0, scrollHeight - clientHeight);
+  if (clientHeight <= 0 || railHeight <= 0 || maxScrollTop <= 1) {
+    return { scrollable: false, thumbHeight: 0, thumbTop: 0, maxScrollTop: 0, maxThumbTop: 0 };
+  }
+  const thumbHeight = Math.min(railHeight, Math.max(32, Math.round((clientHeight / scrollHeight) * railHeight)));
+  const maxThumbTop = Math.max(0, railHeight - thumbHeight);
+  const scrollTop = Math.min(Math.max(0, Number(list.scrollTop) || 0), maxScrollTop);
+  return {
+    scrollable: true,
+    thumbHeight,
+    thumbTop: maxThumbTop ? Math.round((scrollTop / maxScrollTop) * maxThumbTop) : 0,
+    maxScrollTop,
+    maxThumbTop,
+  };
+}
+
+function viewportUsesFixedConversationRoster() {
+  return typeof window !== "undefined" && window.innerWidth <= CONVERSATION_ROSTER_FIXED_VIEWPORT;
+}
+
+function textGraphemes(value) {
+  const text = String(value || "");
+  if (!text) return [];
+  return EMOJI_GRAPHEME_SEGMENTER
+    ? Array.from(EMOJI_GRAPHEME_SEGMENTER.segment(text), ({ segment }) => segment)
+    : Array.from(text);
+}
+
+function appleEmojiSpriteStyle(skin) {
+  const x = Number(skin?.x);
+  const y = Number(skin?.y);
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+  return {
+    backgroundImage: `url(${appleEmojiSpritesheet})`,
+    backgroundPosition: `${(100 / (APPLE_EMOJI_SHEET_COLUMNS - 1)) * x}% ${(100 / (APPLE_EMOJI_SHEET_ROWS - 1)) * y}%`,
+    backgroundSize: `${APPLE_EMOJI_SHEET_COLUMNS * 100}% ${APPLE_EMOJI_SHEET_ROWS * 100}%`,
+  };
+}
+
+function ConversationInlineText({ text }) {
+  return (
+    <>
+      {textGraphemes(text).map((segment, index) => {
+        const emoji = APPLE_EMOJI_BY_NATIVE.get(segment);
+        const style = appleEmojiSpriteStyle(emoji);
+        if (!emoji || !style) return <Fragment key={`text-${index}`}>{segment}</Fragment>;
+        return <span aria-label={emoji.name || segment} className="conversation-inline-emoji" key={`emoji-${index}`} role="img" style={style} />;
+      })}
+    </>
+  );
+}
+
+function ConversationText({ text }) {
+  return (
+    <div className="conversation-text">
+      <ConversationInlineText text={text} />
+    </div>
+  );
+}
+
+function markdownExternalUrl(value) {
+  try {
+    const url = new URL(String(value || "").trim());
+    return MARKDOWN_EXTERNAL_PROTOCOLS.has(url.protocol) ? url.href : "";
+  } catch {
+    return "";
+  }
+}
+
+function ConversationMarkdown({ onOpenExternal, text }) {
+  const components = {
+    a: ({ children, href, node: _node, ...props }) => {
+      const url = markdownExternalUrl(href);
+      if (!url) return <span>{children}</span>;
+      return (
+        <a
+          {...props}
+          href={url}
+          onClick={(event) => {
+            event.preventDefault();
+            void onOpenExternal?.(url);
+          }}
+        >{children}</a>
+      );
+    },
+    table: ({ children, node: _node, ...props }) => (
+      <div className="conversation-markdown__table-scroll">
+        <table {...props}>{children}</table>
+      </div>
+    ),
+  };
+  return (
+    <div className="conversation-markdown">
+      <ReactMarkdown components={components} remarkPlugins={[remarkGfm]}>{String(text || "")}</ReactMarkdown>
+    </div>
+  );
+}
+
+function ConversationRenderedText({ onOpenExternal, text }) {
+  if (!hasMarkdownFormatting(text)) return <ConversationText text={text} />;
+  return <ConversationMarkdown onOpenExternal={onOpenExternal} text={text} />;
+}
+
+function clipboardFileIsImage(file, fallbackMimeType = "") {
+  const mimeType = String(file?.type || fallbackMimeType || "").trim().toLowerCase();
+  return mimeType.startsWith("image/") || /\.(?:gif|jpe?g|png|webp)$/iu.test(String(file?.name || "").trim());
+}
+
+function clipboardImageFiles(clipboardData) {
+  const fromItems = Array.from(clipboardData?.items || []).flatMap((item) => {
+    if (item?.kind !== "file" || typeof item.getAsFile !== "function") return [];
+    const file = item.getAsFile();
+    return file && clipboardFileIsImage(file, item?.type) ? [file] : [];
+  });
+  if (fromItems.length) return fromItems;
+  return Array.from(clipboardData?.files || []).filter((file) => clipboardFileIsImage(file));
+}
 
 function unreadBadgeLabel(value) {
   const count = Number.isSafeInteger(value) && value > 0 ? value : 1;
@@ -70,14 +231,8 @@ function ConversationIcon({ name }) {
   if (name === "plus") {
     return <svg {...common}><path d="M12 5v14M5 12h14" /></svg>;
   }
-  if (name === "box") {
-    return <svg {...common}><path d="m12 3 8 4.4v9.2L12 21l-8-4.4V7.4L12 3Z" /><path d="m4 7.4 8 4.4 8-4.4M12 11.8V21" /></svg>;
-  }
   if (name === "folder") {
     return <svg {...common}><path d="M3.5 7.2h6l1.9 2h9.1v8.7a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2V7.2Z" /></svg>;
-  }
-  if (name === "scissors") {
-    return <svg {...common}><circle cx="6.4" cy="17.2" r="2.2" /><circle cx="6.4" cy="6.8" r="2.2" /><path d="m8.2 8.2 10.3 7.1M8.2 15.8l4-2.8" /></svg>;
   }
   if (name === "mic") {
     return <svg {...common}><rect height="12" rx="3.5" width="7" x="8.5" y="3" /><path d="M5.8 11.5a6.2 6.2 0 0 0 12.4 0M12 17.7V21M8.5 21h7" /></svg>;
@@ -85,20 +240,26 @@ function ConversationIcon({ name }) {
   if (name === "phone") {
     return <svg {...common}><path d="M7.2 3.8 5.4 5.1c-.9.7-1.2 1.9-.7 3 1.8 4.3 5.2 7.7 9.5 9.5 1.1.5 2.3.2 3-.7l1.3-1.8c.6-.8.5-1.9-.3-2.6l-2.2-1.8c-.7-.6-1.8-.6-2.5.1l-1.1 1.1a13.1 13.1 0 0 1-3.8-3.8l1.1-1.1c.7-.7.7-1.8.1-2.5L9.8 4.1c-.7-.8-1.8-.9-2.6-.3Z" /></svg>;
   }
-  if (name === "sound") {
-    return <svg {...common}><path d="M4 14h3.2L12 18V6L7.2 10H4v4Z" /><path d="M15 9.2a4.2 4.2 0 0 1 0 5.6M17.8 6.4a8.1 8.1 0 0 1 0 11.2" /></svg>;
-  }
   return <svg {...common}><circle cx="10.8" cy="10.8" r="5.8" /><path d="m15.2 15.2 4.3 4.3" /></svg>;
 }
 
 function ConversationRoster({ actions, contacts, hasContactsRoot, rosterEmpty }) {
+  const [query, setQuery] = useState("");
+  const normalizedQuery = query.trim().toLocaleLowerCase("zh-CN");
+  const visibleContacts = normalizedQuery
+    ? contacts.filter((contact) => String(contact?.name || "").toLocaleLowerCase("zh-CN").includes(normalizedQuery))
+    : contacts;
+  const emptyCopy = normalizedQuery ? `没有找到“${query.trim()}”` : rosterEmpty;
   return (
     <aside className="conversation-roster" aria-label="联系人列表">
       <div className="conversation-roster__heading">
-        <strong>联系人</strong>
+        <label className="conversation-roster__search">
+          <ConversationIcon name="search" />
+          <input aria-label="搜索联系人" autoComplete="off" onChange={(event) => setQuery(event.currentTarget.value)} placeholder="搜索" type="search" value={query} />
+        </label>
         <button aria-label="新建联系人" disabled={!hasContactsRoot} onClick={actions.openContactCreate} title="新建联系人" type="button">＋</button>
       </div>
-      {contacts.length ? contacts.map((contact, index) => (
+      {visibleContacts.length ? visibleContacts.map((contact, index) => (
         <button
           aria-label={`${contact.name}${contact.unread ? `，有${unreadBadgeLabel(contact.unreadCount)}条未读消息` : ""}${contact.muted ? "，已开启消息免打扰" : ""}`}
           aria-current={contact.selected ? "page" : undefined}
@@ -126,7 +287,7 @@ function ConversationRoster({ actions, contacts, hasContactsRoot, rosterEmpty })
             {contact.muted ? <span aria-hidden="true" className="conversation-contact__muted-mark">免</span> : null}
           </span>
         </button>
-      )) : <div className="conversation-roster__empty">{rosterEmpty}</div>}
+      )) : <div className="conversation-roster__empty">{emptyCopy}</div>}
     </aside>
   );
 }
@@ -152,10 +313,6 @@ function ContactContextMenu({ actions, menu }) {
     <button onClick={() => { void actions.updateContactPresentation?.(menu.contactId, { hidden: !menu.hidden }); }} role="menuitem" type="button">{hiddenLabel}</button>
     <button className="conversation-contact-context-menu__danger" onClick={() => { void actions.removeContact?.(menu.contactId); }} role="menuitem" type="button">删除联系人</button>
   </div>;
-}
-
-function StaticTool({ icon, label }) {
-  return <span aria-hidden="true" className="conversation-composer__static-tool" title={label}><ConversationIcon name={icon} /></span>;
 }
 
 function EmojiMartContent({ mode, onSelect }) {
@@ -187,11 +344,11 @@ function EmojiMartContent({ mode, onSelect }) {
       },
       autoFocus: mode === "search",
       categories: mode === "search" ? [] : EMOJI_COLLECTION_CATEGORIES,
+      dynamicWidth: true,
       emojiButtonSize: 42,
       emojiSize: 26,
       maxFrequentRows: 0,
       navPosition: "none",
-      perLine: 8,
       previewPosition: "none",
       searchPosition: mode === "search" ? "static" : "none",
       set: "apple",
@@ -312,41 +469,78 @@ function ConversationEmojiPicker({ actions }) {
   );
 }
 
-function ConversationComposer({ actions, callActive = false, composer, focusRequest = 0, voiceInput }) {
+function ConversationComposer({ actions, callActive = false, composer, composerHeight, focusRequest = 0, onResizeKeyDown, onResizePointerCancel, onResizePointerDown, onResizePointerMove, onResizePointerUp, voiceInput }) {
   const inputRef = useRef(null);
+  const draftMirrorRef = useRef(null);
   const unavailable = Boolean(composer.unavailable);
+  const externalDraft = String(composer.draft || "");
+  const [draft, setDraft] = useState(() => externalDraft);
+  const draftHasAppleEmoji = textGraphemes(draft).some((segment) => APPLE_EMOJI_BY_NATIVE.has(segment));
   const attachments = Array.isArray(composer.attachments) ? composer.attachments : [];
   const submitLabel = composer.sending ? "发送中" : composer.busy ? "加入队列" : "发送";
   const resize = (target = inputRef.current) => {
     if (!target) return;
+    const availableHeight = Math.max(78, target.parentElement?.clientHeight || 78);
     target.style.height = "auto";
-    target.style.height = `${Math.min(target.scrollHeight, 164)}px`;
+    target.style.height = `${availableHeight}px`;
+  };
+  const syncDraftMirrorScroll = (target = inputRef.current) => {
+    const mirror = draftMirrorRef.current;
+    if (!target || !mirror) return;
+    mirror.scrollLeft = target.scrollLeft;
+    mirror.scrollTop = target.scrollTop;
   };
   useLayoutEffect(() => {
+    setDraft((current) => (current === externalDraft ? current : externalDraft));
+  }, [externalDraft]);
+  useLayoutEffect(() => {
     resize();
+    syncDraftMirrorScroll();
     if (focusRequest) inputRef.current?.focus();
-  }, [composer.draft, focusRequest]);
+  }, [attachments.length, composerHeight, draft, focusRequest]);
+  const submitMessage = () => {
+    // The text field intentionally owns a local draft so typing does not
+    // re-render the whole conversation. Clear that local copy synchronously
+    // when a send is accepted; the outer conversation state restores it if
+    // delivery subsequently fails.
+    if (unavailable || composer.attachmentPicking || (!draft.trim() && !attachments.length)) return;
+    setDraft("");
+    actions.submitMessage();
+  };
   return (
-    <form className="conversation-composer" onSubmit={(event) => { event.preventDefault(); actions.submitMessage(); }}>
+    <form className={`conversation-composer${attachments.length ? " has-attachments" : ""}`} onSubmit={(event) => { event.preventDefault(); submitMessage(); }}>
+      <div aria-label="调整聊天框高度" aria-orientation="horizontal" aria-valuemax={CONVERSATION_COMPOSER_MAX_HEIGHT} aria-valuemin={CONVERSATION_COMPOSER_MIN_HEIGHT} aria-valuenow={composerHeight} className="conversation-composer-resizer" onKeyDown={onResizeKeyDown} onPointerCancel={onResizePointerCancel} onPointerDown={onResizePointerDown} onPointerMove={onResizePointerMove} onPointerUp={onResizePointerUp} role="separator" tabIndex={0} title="拖动调整聊天框高度" />
       <div className={`conversation-composer__surface${attachments.length ? " has-attachments" : ""}`}>
-        <textarea
-          value={composer.draft || ""}
-          disabled={unavailable}
-          maxLength={20000}
-          onChange={(event) => {
-            actions.setDraft(event.currentTarget.value);
-            resize(event.currentTarget);
-          }}
-          onKeyDown={(event) => {
-            if (!shouldSubmitConversationOnEnter(event)) return;
-            event.preventDefault();
-            actions.submitMessage();
-          }}
-          placeholder="输入消息（Enter 发送；Ctrl+Enter 或 Shift+Enter 换行）"
-          ref={inputRef}
-          rows={3}
-        />
-        {!composer.draft && !attachments.length ? <div aria-hidden="true" className="conversation-composer__command-hints">
+        <div className={`conversation-composer__input-layer${draftHasAppleEmoji ? " has-emoji-mirror" : ""}${unavailable ? " is-unavailable" : ""}`}>
+          <textarea
+            value={draft}
+            disabled={unavailable}
+            maxLength={20000}
+            onChange={(event) => {
+              const nextDraft = event.currentTarget.value;
+              setDraft(nextDraft);
+              actions.setDraft(nextDraft);
+              resize(event.currentTarget);
+            }}
+            onKeyDown={(event) => {
+              if (!shouldSubmitConversationOnEnter(event)) return;
+              event.preventDefault();
+              submitMessage();
+            }}
+            onPaste={(event) => {
+              const images = clipboardImageFiles(event.clipboardData);
+              if (!images.length) return;
+              event.preventDefault();
+              void actions.pasteComposerImages(images);
+            }}
+            onScroll={(event) => syncDraftMirrorScroll(event.currentTarget)}
+            placeholder="输入消息（Enter 发送；Ctrl+Enter 或 Shift+Enter 换行）"
+            ref={inputRef}
+            rows={3}
+          />
+          {draftHasAppleEmoji ? <div aria-hidden="true" className="conversation-composer__draft-mirror" ref={draftMirrorRef}><ConversationText text={draft} /></div> : null}
+        </div>
+        {!draft && !attachments.length ? <div aria-hidden="true" className="conversation-composer__command-hints">
           <span>/suzu stop 停止</span>
           <span>/suzu queue &lt;内容&gt; 排队</span>
         </div> : null}
@@ -371,9 +565,7 @@ function ConversationComposer({ actions, callActive = false, composer, focusRequ
               title="表情"
               type="button"
             ><ConversationIcon name="emoji" /></button>
-            <button aria-label="添加图片" className="conversation-composer__tool" disabled={unavailable || composer.attachmentPicking} onClick={() => { void actions.selectComposerAttachments("image"); }} title="添加图片" type="button"><ConversationIcon name="box" /></button>
             <button aria-label="添加文件" className="conversation-composer__tool" disabled={unavailable || composer.attachmentPicking} onClick={() => { void actions.selectComposerAttachments("file"); }} title="添加文件" type="button"><ConversationIcon name="folder" /></button>
-            <StaticTool icon="scissors" label="截图" />
             <button
               aria-label={voiceInput?.label || "语音输入"}
               aria-pressed={voiceInput?.active === true}
@@ -385,8 +577,7 @@ function ConversationComposer({ actions, callActive = false, composer, focusRequ
             ><ConversationIcon name="mic" /></button>
           </div>
           <div className="conversation-composer__submit-area">
-            <StaticTool icon="sound" label="语音消息" />
-            <button className="conversation-send-button" disabled={unavailable}>{submitLabel}</button>
+            <button className="conversation-send-button" disabled={unavailable || composer.attachmentPicking}>{submitLabel}</button>
           </div>
         </div>
       </div>
@@ -529,9 +720,33 @@ function PlayableChatVoice({ fileName, fileUrl }) {
   );
 }
 
-function ConversationMessageBlock({ block, onOpenFile, onPreview }) {
+function FileContextMenu({ actions, menu }) {
+  if (!menu) return null;
+  return <div
+    aria-label={`${menu.fileName}的文件菜单`}
+    className="conversation-file-context-menu"
+    onContextMenu={(event) => event.preventDefault()}
+    role="menu"
+    style={{ left: menu.x, top: menu.y }}
+  >
+    <button onClick={() => { void actions.copyMediaFile?.(menu); }} role="menuitem" type="button">复制</button>
+    <button onClick={() => { void actions.openMediaFile?.(menu); }} role="menuitem" type="button">打开</button>
+  </div>;
+}
+
+function ConversationFileIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 64 76">
+      <path d="M12 2h26l14 14v54a4 4 0 0 1-4 4H12a4 4 0 0 1-4-4V6a4 4 0 0 1 4-4Z" fill="currentColor" opacity=".16" />
+      <path d="M38 2v14h14" fill="currentColor" opacity=".26" />
+      <text fill="currentColor" fontFamily="ui-sans-serif, system-ui, sans-serif" fontSize="29" fontWeight="700" textAnchor="middle" x="31" y="52">?</text>
+    </svg>
+  );
+}
+
+function ConversationMessageBlock({ block, onOpenExternal, onOpenFile, onOpenFileContextMenu, onPreview }) {
   if (block.type === "audio") return <PlayableChatVoice fileName={block.fileName} fileUrl={block.fileUrl} />;
-  if (block.type === "text") return <div className="conversation-text">{block.text}</div>;
+  if (block.type === "text") return <ConversationRenderedText onOpenExternal={onOpenExternal} text={block.text} />;
   if (block.type === "detail") return <details className="conversation-detail"><summary>{block.title}</summary><pre>{block.detail}</pre></details>;
   if (block.type !== "media") return null;
   const preview = block.preview;
@@ -547,23 +762,46 @@ function ConversationMessageBlock({ block, onOpenFile, onPreview }) {
     ) : null;
   }
   const clickableFile = block.mediaKind === "file" && onOpenFile;
+  if (block.mediaKind === "file") {
+    return (
+      <section className="conversation-media conversation-media--file">
+        <button
+          aria-label={clickableFile ? `在文件夹中显示 ${block.fileName}` : `文件 ${block.fileName}`}
+          className="conversation-media__file-card"
+          disabled={!clickableFile}
+          onClick={clickableFile ? () => onOpenFile(block) : undefined}
+          onContextMenu={(event) => {
+            if (!clickableFile || !onOpenFileContextMenu) return;
+            event.preventDefault();
+            onOpenFileContextMenu(block, { x: event.clientX, y: event.clientY });
+          }}
+          onKeyDown={(event) => {
+            if (!clickableFile || !onOpenFileContextMenu || (event.key !== "ContextMenu" && !(event.shiftKey && event.key === "F10"))) return;
+            event.preventDefault();
+            const bounds = event.currentTarget.getBoundingClientRect();
+            onOpenFileContextMenu(block, { x: bounds.left + 12, y: bounds.bottom + 6 });
+          }}
+          title={clickableFile ? `在文件夹中显示 ${block.fileName}` : undefined}
+          type="button"
+        >
+          <span className="conversation-media__file-copy">
+            <strong>{block.fileName}</strong>
+            {block.size ? <span>{block.size}</span> : null}
+          </span>
+          <span className="conversation-media__file-icon"><ConversationFileIcon /></span>
+        </button>
+      </section>
+    );
+  }
+  if (!preview) return null;
   return (
     <section className={`conversation-media conversation-media--${block.mediaKind}`}>
-      {preview ? (
-        <button
-          aria-label={`放大查看 ${preview.name}`}
-          className="conversation-media__preview"
-          onClick={() => onPreview(preview)}
-          type="button"
-        ><img alt={preview.name} className="conversation-media__image" loading="lazy" src={preview.url} /></button>
-      ) : null}
       <button
-        className="conversation-media__copy"
-        disabled={!clickableFile}
-        onClick={clickableFile ? () => onOpenFile(block) : undefined}
-        title={clickableFile ? `打开 ${block.fileName}` : undefined}
+        aria-label={`放大查看 ${preview.name}`}
+        className="conversation-media__preview"
+        onClick={() => onPreview(preview)}
         type="button"
-      ><small>{block.typeLabel}附件</small><strong>{block.fileName}</strong>{block.size ? <span>{block.size}</span> : null}</button>
+      ><img alt={preview.name} className="conversation-media__image" loading="lazy" src={preview.url} /></button>
     </section>
   );
 }
@@ -574,10 +812,11 @@ function ConversationUsage({ usage }) {
   return <div className="conversation-usage">{items.join(" · ")}</div>;
 }
 
-function ConversationMessage({ onOpenFile, onPreview, row }) {
+function ConversationMessage({ onOpenExternal, onOpenFile, onOpenFileContextMenu, onPreview, row }) {
   const className = [
     "conversation-message",
     row.kind,
+    row.entering && "is-entering",
     row.mediaOnly && "is-media-only",
     row.live && "is-live",
     row.focused && "is-focus-target",
@@ -591,7 +830,7 @@ function ConversationMessage({ onOpenFile, onPreview, row }) {
     >
       {row.avatar ? <div className="conversation-avatar"><PersonAvatar avatar={row.avatar} /></div> : null}
       <div className="conversation-bubble">
-        {row.blocks.map((block, index) => <ConversationMessageBlock block={block} key={`${block.type}-${block.fileUrl || block.text || block.title || index}-${index}`} onOpenFile={onOpenFile} onPreview={onPreview} />)}
+        {row.blocks.map((block, index) => <ConversationMessageBlock block={block} key={`${block.type}-${block.fileUrl || block.text || block.title || index}-${index}`} onOpenExternal={onOpenExternal} onOpenFile={onOpenFile} onOpenFileContextMenu={onOpenFileContextMenu} onPreview={onPreview} />)}
         <ConversationUsage usage={row.usage} />
         {row.timestamp ? <div className="conversation-meta">{row.timestamp}</div> : null}
       </div>
@@ -599,14 +838,16 @@ function ConversationMessage({ onOpenFile, onPreview, row }) {
   );
 }
 
-function ConversationMessageList({ onOpenFile, onPreview, rows }) {
+export function ConversationMessageList({ onOpenExternal, onOpenFile, onOpenFileContextMenu, onPreview, rows }) {
   if (!rows.length) return null;
   return rows.map((row, index) => {
-    const key = `${row.type}-${row.sourceMessageId || row.lineNumber || "row"}-${index}`;
+    const key = row.type === "message"
+      ? `${row.type}-${row.anchorId || row.sourceMessageId || row.lineNumber || index}`
+      : `${row.type}-${row.sourceMessageId || row.lineNumber || "row"}-${index}`;
     if (row.type === "day") return <div className="conversation-day" key={key}>{row.label}</div>;
     if (row.type === "time") return <div className="conversation-time-divider" key={key}>{row.label}</div>;
     if (row.type === "empty") return <div className="conversation-empty" key={key}>{row.text}</div>;
-    return <ConversationMessage key={key} onOpenFile={onOpenFile} onPreview={onPreview} row={row} />;
+    return <ConversationMessage key={key} onOpenExternal={onOpenExternal} onOpenFile={onOpenFile} onOpenFileContextMenu={onOpenFileContextMenu} onPreview={onPreview} row={row} />;
   });
 }
 
@@ -645,15 +886,15 @@ function ConversationSessionSettings({ actions, onDisplayPreferenceChange, onTim
   if (!settings) return null;
   const changeDisplayPreference = typeof onDisplayPreferenceChange === "function" ? onDisplayPreferenceChange : actions.setDisplayPreference;
   const changeTimeDisplay = typeof onTimeDisplayChange === "function" ? onTimeDisplayChange : actions.setTimeDisplay;
+  const permissionMode = settings.permissionMode || "danger-full-access";
   return (
     <aside aria-label="当前联系人设置" className={`conversation-session-settings${settings.visible ? "" : " hidden"}`} id="conversationSettings">
-      <header><div><span>当前联系人</span><div className="conversation-session-settings__contact-name"><strong>{settings.contactName}</strong><button className="conversation-session-settings__note-button" onClick={() => actions.openContactRename(settings.contactId)} type="button">修改联系人备注</button></div></div><button aria-label="关闭联系人设置" className="conversation-session-settings__close suzu-close-button" onClick={actions.closeSessionSettings} type="button">×</button></header>
-      {settings.contactAvatar ? (
-        <section className="conversation-session-settings__section"><header><div><span>CONTACT</span><h2>联系人头像</h2></div></header><div className="conversation-session-settings__avatar"><span className="conversation-contact__avatar"><PersonAvatar avatar={settings.contactAvatar} fallback={settings.contactName} /></span><div className="conversation-session-settings__avatar-copy"><strong>{settings.contactName}</strong><div className="conversation-session-settings__avatar-actions"><label className="secondary-button">选择头像<input accept="image/png,image/jpeg,image/webp" hidden onChange={(event) => { const file = event.currentTarget.files?.[0]; event.currentTarget.value = ""; void actions.uploadContactAvatar(file); }} type="file" /></label>{settings.removeContactAvatar ? <button className="text-button" onClick={() => { void actions.removeContactAvatar(); }} type="button">移除头像</button> : null}</div></div></div></section>
-      ) : null}
-      <section className="conversation-session-settings__section"><header><div><span>CHAT DISPLAY</span><h2>聊天显示</h2></div></header><div className="conversation-session-settings__checks">{settings.preferences.map((preference) => <label key={preference.key}><input checked={preference.checked} onChange={(event) => { void changeDisplayPreference(preference.key, event.currentTarget.checked); }} type="checkbox" />{preference.label}</label>)}<label className="conversation-settings__time-display"><span>时间显示</span><Select ariaLabel="时间显示方式" className="conversation-settings__select" onChange={(value) => { void changeTimeDisplay(value); }} options={[{ label: "每条气泡内", value: "bubble" }, { label: "画面中心", value: "center" }]} value={settings.timeDisplay} /></label></div></section>
-      <section className="conversation-session-settings__section"><header><div><span>SUZU AGENT · CORE</span><h2>运行时能力</h2><p>当前陪伴 Agent 可直接使用 Windows PowerShell、文件工具、已有 CLI，以及已启用的图像/视频理解、图像生成、手机拍照式图像和语音能力；浏览器、子 Agent 和游戏控制尚未接入。</p></div></header></section>
-      <section className="conversation-session-settings__section"><header><div><span>MEMORY · CORE</span><h2>长期记忆</h2><p>关闭后，这位联系人不会自动写入或召回长期记忆；已有记忆会保留。召回内容只作为当前 Agent 请求的动态上下文，不会显示成聊天气泡。</p></div></header><label className="conversation-session-settings__switch"><input checked={settings.longTermMemoryEnabled} onChange={(event) => { void actions.setLongTermMemoryEnabled(event.currentTarget.checked); }} type="checkbox" /><span>启用长期记忆</span></label></section>
+      <section className="conversation-session-settings__section conversation-session-settings__identity"><span className="conversation-contact__avatar"><PersonAvatar avatar={settings.contactAvatar} fallback={settings.contactName} /></span><div className="conversation-session-settings__identity-copy"><strong>{settings.contactName}</strong><div className="conversation-session-settings__identity-actions"><button className="conversation-session-settings__identity-action" onClick={() => actions.openContactRename(settings.contactId)} type="button">修改备注</button><label className="conversation-session-settings__identity-action">更换头像<input accept="image/png,image/jpeg,image/webp" hidden onChange={(event) => { const file = event.currentTarget.files?.[0]; event.currentTarget.value = ""; void actions.uploadContactAvatar(file); }} type="file" /></label>{settings.removeContactAvatar ? <button className="conversation-session-settings__identity-action" onClick={() => { void actions.removeContactAvatar(); }} type="button">移除头像</button> : null}</div></div><button aria-label="关闭联系人设置" className="conversation-session-settings__close suzu-close-button" onClick={actions.closeSessionSettings} type="button">×</button></section>
+      <details className="conversation-session-settings__section conversation-session-settings__display-options"><summary className="conversation-settings__time-display"><span>聊天显示</span></summary><div className="conversation-session-settings__checks">{settings.preferences.map((preference) => <label key={preference.key}><input checked={preference.checked} onChange={(event) => { void changeDisplayPreference(preference.key, event.currentTarget.checked); }} type="checkbox" />{preference.label}</label>)}</div></details>
+      <section className="conversation-session-settings__section conversation-session-settings__single-row"><label className="conversation-settings__time-display"><span>时间显示</span><Select ariaLabel="时间显示方式" className="conversation-settings__select" onChange={(value) => { void changeTimeDisplay(value); }} options={[{ label: "每条气泡内", value: "bubble" }, { label: "画面中心", value: "center" }]} value={settings.timeDisplay} /></label></section>
+      <section className="conversation-session-settings__section conversation-session-settings__single-row"><label className="conversation-settings__time-display"><span>审批模式</span><Select ariaLabel="联系人审批模式" className="conversation-settings__select" disabled={Boolean(settings.saving)} onChange={(value) => { void actions.setContactPermissionMode(value); }} options={CONTACT_APPROVAL_MODE_OPTIONS} value={permissionMode} /></label></section>
+      <section className="conversation-session-settings__section"><header><div><span>COMPANION</span><h2>主动关心</h2><p>开启后，Suzu 会在软件运行期间结合你们的对话安排后续主动联系；关闭后会停止为这位联系人创建新的主动关心任务。</p></div></header><label className="conversation-session-settings__switch"><input checked={settings.proactiveContactEnabled} disabled={Boolean(settings.saving)} onChange={(event) => { void actions.setProactiveContactEnabled(event.currentTarget.checked); }} type="checkbox" /><span>启用主动关心</span></label></section>
+      <section className="conversation-session-settings__section"><header><div><span>MEMORY · CORE</span><h2>长期记忆</h2><p>这个开关控制这位联系人的自动写入和召回；已有记忆会保留。召回内容会作为当前 Agent 请求的动态上下文参与对话，聊天页面显示实际消息。</p></div></header><label className="conversation-session-settings__switch"><input checked={settings.longTermMemoryEnabled} onChange={(event) => { void actions.setLongTermMemoryEnabled(event.currentTarget.checked); }} type="checkbox" /><span>启用长期记忆</span></label></section>
       {settings.hasSession ? (
         <>
           <section className="conversation-session-settings__section"><header><div><span>LOCAL MEDIA</span><h2>本地附件</h2><p>Agent 交付给这位联系人的图片和文件保存在 Suzu 本地缓存中。</p></div></header><div className="conversation-session-settings__actions"><button className="secondary-button" onClick={() => { void actions.openMediaDirectory(settings.contactId); }} type="button">打开文件目录</button></div></section>
@@ -797,9 +1038,31 @@ export function ConversationPage({ actions, api = null, incomingCall = null, sna
   const acceptedIncomingCall = useRef("");
   const incomingCallDialingSeen = useRef("");
   const listRef = useRef(null);
+  const workspaceRef = useRef(null);
+  const chatShellRef = useRef(null);
+  const conversationScrollbarRailRef = useRef(null);
+  const conversationScrollbarDragRef = useRef(null);
+  const composerResizeRef = useRef(null);
+  const rosterResizeRef = useRef(null);
   const latestScrollRequest = useRef(0);
   const scrollTargetRequest = useRef(0);
   const viewportAnchorRef = useRef(null);
+  const conversationScrollbarIdleTimer = useRef(null);
+  const [rosterWidth, setRosterWidth] = useState(() => clampConversationRosterWidth(snapshot.rosterWidth));
+  const [rosterResizing, setRosterResizing] = useState(false);
+  const [fixedRosterViewport, setFixedRosterViewport] = useState(viewportUsesFixedConversationRoster);
+  const [composerHeight, setComposerHeight] = useState(() => clampConversationComposerHeight(snapshot.composerHeight));
+  const [composerResizing, setComposerResizing] = useState(false);
+  const [conversationScrollbarVisible, setConversationScrollbarVisible] = useState(false);
+  const [conversationScrollbar, setConversationScrollbar] = useState(() => ({
+    scrollable: false,
+    thumbHeight: 0,
+    thumbTop: 0,
+    maxScrollTop: 0,
+    maxThumbTop: 0,
+  }));
+  const composerHeightRef = useRef(composerHeight);
+  const rosterWidthRef = useRef(rosterWidth);
   const contacts = Array.isArray(snapshot.contacts) ? snapshot.contacts : [];
   const activeContactId = String(contacts.find((contact) => contact?.selected)?.id || "").trim();
   const composer = snapshot.composer || {};
@@ -807,6 +1070,82 @@ export function ConversationPage({ actions, api = null, incomingCall = null, sna
   const permissions = Array.isArray(snapshot.permissions) ? snapshot.permissions : [];
   const ui = snapshot.ui || {};
   const contactContextMenu = snapshot.contactContextMenu || null;
+  const fileContextMenu = snapshot.fileContextMenu || null;
+  const openExternalLink = useCallback((url) => {
+    if (typeof api?.settings?.openExternal !== "function") return;
+    return api.settings.openExternal(url).catch(() => undefined);
+  }, [api]);
+  const updateConversationScrollbar = useCallback((list = listRef.current) => {
+    const next = conversationScrollbarGeometry(list, conversationScrollbarRailRef.current);
+    setConversationScrollbar((current) => (
+      current.scrollable === next.scrollable
+      && current.thumbHeight === next.thumbHeight
+      && current.thumbTop === next.thumbTop
+      && current.maxScrollTop === next.maxScrollTop
+      && current.maxThumbTop === next.maxThumbTop
+        ? current
+        : next
+    ));
+    return next;
+  }, []);
+  const revealConversationScrollbar = useCallback(() => {
+    if (conversationScrollbarIdleTimer.current !== null) {
+      window.clearTimeout(conversationScrollbarIdleTimer.current);
+    }
+    setConversationScrollbarVisible(true);
+    const hideWhenIdle = () => {
+      conversationScrollbarIdleTimer.current = null;
+      if (conversationScrollbarDragRef.current) {
+        conversationScrollbarIdleTimer.current = window.setTimeout(hideWhenIdle, CONVERSATION_SCROLLBAR_IDLE_MS);
+        return;
+      }
+      setConversationScrollbarVisible(false);
+    };
+    conversationScrollbarIdleTimer.current = window.setTimeout(hideWhenIdle, CONVERSATION_SCROLLBAR_IDLE_MS);
+  }, []);
+  useEffect(() => () => {
+    if (conversationScrollbarIdleTimer.current !== null) {
+      window.clearTimeout(conversationScrollbarIdleTimer.current);
+    }
+  }, []);
+  const moveConversationScrollbar = useCallback((clientY, rail = conversationScrollbarRailRef.current) => {
+    const list = listRef.current;
+    if (!list || !rail) return;
+    const geometry = conversationScrollbarGeometry(list, rail);
+    if (!geometry.scrollable) return;
+    const rect = rail.getBoundingClientRect();
+    const thumbTop = Math.min(
+      geometry.maxThumbTop,
+      Math.max(0, clientY - rect.top - (geometry.thumbHeight / 2)),
+    );
+    list.scrollTop = geometry.maxThumbTop
+      ? (thumbTop / geometry.maxThumbTop) * geometry.maxScrollTop
+      : 0;
+    updateConversationScrollbar(list);
+  }, [updateConversationScrollbar]);
+  const beginConversationScrollbarDrag = (event) => {
+    if (event.button !== 0) return;
+    const geometry = updateConversationScrollbar();
+    if (!geometry.scrollable) return;
+    event.preventDefault();
+    conversationScrollbarDragRef.current = { pointerId: event.pointerId, rail: event.currentTarget };
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+    moveConversationScrollbar(event.clientY, event.currentTarget);
+    revealConversationScrollbar();
+  };
+  const dragConversationScrollbar = (event) => {
+    const drag = conversationScrollbarDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    moveConversationScrollbar(event.clientY, drag.rail);
+    revealConversationScrollbar();
+  };
+  const finishConversationScrollbarDrag = (event) => {
+    const drag = conversationScrollbarDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    conversationScrollbarDragRef.current = null;
+    if (event.currentTarget?.hasPointerCapture?.(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+    revealConversationScrollbar();
+  };
   const captureViewportAnchor = useCallback(() => {
     const anchor = captureConversationViewportAnchor(listRef.current);
     viewportAnchorRef.current = anchor ? { ...anchor, contactId: activeContactId } : null;
@@ -827,6 +1166,137 @@ export function ConversationPage({ actions, api = null, incomingCall = null, sna
     onTranscript: actions.appendVoiceInputTranscript,
     scopeKey: activeContactId,
   });
+  useEffect(() => {
+    const updateFixedRosterViewport = () => setFixedRosterViewport(viewportUsesFixedConversationRoster());
+    updateFixedRosterViewport();
+    window.addEventListener("resize", updateFixedRosterViewport);
+    return () => window.removeEventListener("resize", updateFixedRosterViewport);
+  }, []);
+  useEffect(() => {
+    if (rosterResizeRef.current) return;
+    const nextWidth = clampConversationRosterWidth(snapshot.rosterWidth);
+    rosterWidthRef.current = nextWidth;
+    setRosterWidth(nextWidth);
+  }, [snapshot.rosterWidth]);
+  useEffect(() => {
+    if (composerResizeRef.current) return;
+    const nextHeight = clampConversationComposerHeight(snapshot.composerHeight);
+    composerHeightRef.current = nextHeight;
+    setComposerHeight(nextHeight);
+  }, [snapshot.composerHeight]);
+  useLayoutEffect(() => {
+    updateConversationScrollbar();
+  }, [messageRows, updateConversationScrollbar]);
+  useEffect(() => {
+    const list = listRef.current;
+    if (!list || typeof ResizeObserver !== "function") return undefined;
+    const observer = new ResizeObserver(() => updateConversationScrollbar(list));
+    observer.observe(list);
+    return () => observer.disconnect();
+  }, [updateConversationScrollbar]);
+  const applyRosterWidth = (value) => {
+    const nextWidth = clampConversationRosterWidth(value);
+    rosterWidthRef.current = nextWidth;
+    setRosterWidth(nextWidth);
+    return nextWidth;
+  };
+  const rosterWidthFromPointer = (clientX) => {
+    const workspaceLeft = workspaceRef.current?.getBoundingClientRect?.().left || 0;
+    return clampConversationRosterWidth(clientX - workspaceLeft);
+  };
+  const finishRosterResize = (event, { save = true, useCurrentWidth = false } = {}) => {
+    const activeResize = rosterResizeRef.current;
+    if (!activeResize || activeResize.pointerId !== event.pointerId) return;
+    const nextWidth = !useCurrentWidth && Number.isFinite(event.clientX)
+      ? rosterWidthFromPointer(event.clientX)
+      : rosterWidthRef.current;
+    rosterResizeRef.current = null;
+    rosterWidthRef.current = nextWidth;
+    setRosterWidth(nextWidth);
+    setRosterResizing(false);
+    if (event.currentTarget?.hasPointerCapture?.(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+    if (save) void actions.setConversationRosterWidth?.(nextWidth);
+  };
+  const beginRosterResize = (event) => {
+    if (event.button !== 0 || fixedRosterViewport) return;
+    event.preventDefault();
+    rosterResizeRef.current = { pointerId: event.pointerId };
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+    setRosterResizing(true);
+    applyRosterWidth(rosterWidthFromPointer(event.clientX));
+  };
+  const resizeRoster = (event) => {
+    if (rosterResizeRef.current?.pointerId !== event.pointerId) return;
+    applyRosterWidth(rosterWidthFromPointer(event.clientX));
+  };
+  const cancelRosterResize = (event) => {
+    if (rosterResizeRef.current?.pointerId !== event.pointerId) return;
+    finishRosterResize(event, { save: false, useCurrentWidth: true });
+  };
+  const resizeRosterFromKeyboard = (event) => {
+    if (fixedRosterViewport) return;
+    let nextWidth = null;
+    if (event.key === "ArrowLeft") nextWidth = clampConversationRosterWidth(rosterWidthRef.current - 16);
+    if (event.key === "ArrowRight") nextWidth = clampConversationRosterWidth(rosterWidthRef.current + 16);
+    if (event.key === "Home") nextWidth = CONVERSATION_ROSTER_MIN_WIDTH;
+    if (event.key === "End") nextWidth = CONVERSATION_ROSTER_MAX_WIDTH;
+    if (nextWidth === null) return;
+    event.preventDefault();
+    rosterWidthRef.current = nextWidth;
+    setRosterWidth(nextWidth);
+    void actions.setConversationRosterWidth?.(nextWidth);
+  };
+  const applyComposerHeight = (value) => {
+    const nextHeight = clampConversationComposerHeight(value);
+    composerHeightRef.current = nextHeight;
+    setComposerHeight(nextHeight);
+    return nextHeight;
+  };
+  const composerHeightFromPointer = (clientY) => {
+    const chatBottom = chatShellRef.current?.getBoundingClientRect?.().bottom || 0;
+    return clampConversationComposerHeight(chatBottom - clientY);
+  };
+  const finishComposerResize = (event, { save = true, useCurrentHeight = false } = {}) => {
+    const activeResize = composerResizeRef.current;
+    if (!activeResize || activeResize.pointerId !== event.pointerId) return;
+    const nextHeight = !useCurrentHeight && Number.isFinite(event.clientY)
+      ? composerHeightFromPointer(event.clientY)
+      : composerHeightRef.current;
+    composerResizeRef.current = null;
+    composerHeightRef.current = nextHeight;
+    setComposerHeight(nextHeight);
+    setComposerResizing(false);
+    if (event.currentTarget?.hasPointerCapture?.(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+    if (save) void actions.setConversationComposerHeight?.(nextHeight);
+  };
+  const beginComposerResize = (event) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    composerResizeRef.current = { pointerId: event.pointerId };
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+    setComposerResizing(true);
+    applyComposerHeight(composerHeightFromPointer(event.clientY));
+  };
+  const resizeComposer = (event) => {
+    if (composerResizeRef.current?.pointerId !== event.pointerId) return;
+    applyComposerHeight(composerHeightFromPointer(event.clientY));
+  };
+  const cancelComposerResize = (event) => {
+    if (composerResizeRef.current?.pointerId !== event.pointerId) return;
+    finishComposerResize(event, { save: false, useCurrentHeight: true });
+  };
+  const resizeComposerFromKeyboard = (event) => {
+    let nextHeight = null;
+    if (event.key === "ArrowUp") nextHeight = clampConversationComposerHeight(composerHeightRef.current + 16);
+    if (event.key === "ArrowDown") nextHeight = clampConversationComposerHeight(composerHeightRef.current - 16);
+    if (event.key === "Home") nextHeight = CONVERSATION_COMPOSER_MIN_HEIGHT;
+    if (event.key === "End") nextHeight = CONVERSATION_COMPOSER_MAX_HEIGHT;
+    if (nextHeight === null) return;
+    event.preventDefault();
+    composerHeightRef.current = nextHeight;
+    setComposerHeight(nextHeight);
+    void actions.setConversationComposerHeight?.(nextHeight);
+  };
   useEffect(() => {
     const requestId = String(incomingCall?.requestId || "").trim();
     const contactId = String(incomingCall?.contactId || "").trim();
@@ -850,19 +1320,23 @@ export function ConversationPage({ actions, api = null, incomingCall = null, sna
     void Promise.resolve().then(() => actions.consumeIncomingVoiceCall?.(requestId));
   }, [actions, callControl.call, incomingCall?.requestId]);
   useEffect(() => {
-    if (!contactContextMenu) return undefined;
+    if (!contactContextMenu && !fileContextMenu) return undefined;
     const close = (event) => {
-      if (event.target?.closest?.(".conversation-contact-context-menu")) return;
+      if (event.target?.closest?.(".conversation-contact-context-menu, .conversation-file-context-menu")) return;
       actions.closeContactContextMenu?.();
+      actions.closeFileContextMenu?.();
     };
-    const closeOnResize = () => actions.closeContactContextMenu?.();
+    const closeOnResize = () => {
+      actions.closeContactContextMenu?.();
+      actions.closeFileContextMenu?.();
+    };
     window.addEventListener("pointerdown", close);
     window.addEventListener("resize", closeOnResize);
     return () => {
       window.removeEventListener("pointerdown", close);
       window.removeEventListener("resize", closeOnResize);
     };
-  }, [actions, contactContextMenu]);
+  }, [actions, contactContextMenu, fileContextMenu]);
   useLayoutEffect(() => {
     const list = listRef.current;
     if (!list) return;
@@ -899,13 +1373,15 @@ export function ConversationPage({ actions, api = null, incomingCall = null, sna
     event.preventDefault();
   };
   const dismissOnWorkspaceClick = (event) => {
-    const interactive = event.target.closest?.(".conversation-pane__actions, .conversation-menu, .conversation-session-settings, .conversation-search-panel, .conversation-composer, .conversation-roster, .conversation-contact-context-menu, .conversation-permissions, .conversation-media__preview, .conversation-contact-create-dialog, .conversation-wechat-qr-dialog, .conversation-media-preview-dialog, .conversation-avatar-crop-dialog");
+    const interactive = event.target.closest?.(".conversation-pane__actions, .conversation-menu, .conversation-session-settings, .conversation-search-panel, .conversation-composer, .conversation-composer-resizer, .conversation-roster, .conversation-roster-resizer, .conversation-contact-context-menu, .conversation-file-context-menu, .conversation-permissions, .conversation-media__preview, .conversation-contact-create-dialog, .conversation-wechat-qr-dialog, .conversation-media-preview-dialog, .conversation-avatar-crop-dialog");
     if (!interactive) actions.dismissOverlays();
   };
   return (
-    <section aria-label="对话" className="conversation-workspace" onClick={dismissOnWorkspaceClick} onKeyDown={dismissOnEscape}>
+    <section aria-label="对话" className={`conversation-workspace${rosterResizing ? " is-resizing-roster" : ""}${composerResizing ? " is-resizing-composer" : ""}`} onClick={dismissOnWorkspaceClick} onKeyDown={dismissOnEscape} ref={workspaceRef} style={{ "--conversation-composer-height": `${composerHeight}px`, "--conversation-roster-width": `${fixedRosterViewport ? CONVERSATION_ROSTER_NARROW_WIDTH : rosterWidth}px` }}>
       <ConversationRoster actions={actions} contacts={contacts} hasContactsRoot={snapshot.hasContactsRoot} rosterEmpty={snapshot.rosterEmpty} />
+      <div aria-label="调整联系人栏宽度" aria-orientation="vertical" aria-valuemax={CONVERSATION_ROSTER_MAX_WIDTH} aria-valuemin={CONVERSATION_ROSTER_MIN_WIDTH} aria-valuenow={fixedRosterViewport ? CONVERSATION_ROSTER_NARROW_WIDTH : rosterWidth} className="conversation-roster-resizer" onKeyDown={resizeRosterFromKeyboard} onPointerCancel={cancelRosterResize} onPointerDown={beginRosterResize} onPointerMove={resizeRoster} onPointerUp={finishRosterResize} role="separator" tabIndex={fixedRosterViewport ? -1 : 0} title="拖动调整联系人栏宽度" />
       <ContactContextMenu actions={actions} menu={contactContextMenu} />
+      <FileContextMenu actions={actions} menu={fileContextMenu} />
       <section className={`conversation-pane${callControl.call ? " has-active-call" : ""}`}>
         <ConversationHeader actions={actions} callControl={callControl} snapshot={snapshot} />
         <ConversationCallBar call={callControl.call} onEnd={callControl.end} />
@@ -913,11 +1389,16 @@ export function ConversationPage({ actions, api = null, incomingCall = null, sna
         {snapshot.error || callControl.startError ? <div className="conversation-error">{snapshot.error || callControl.startError}</div> : null}
         {snapshot.notice ? <div className="conversation-notice">{snapshot.notice}</div> : null}
         {snapshot.focus ? <div className="conversation-focus-banner"><span>已定位到搜索结果附近的聊天记录</span><button onClick={actions.viewCurrentConversation} type="button">回到最新消息</button></div> : null}
-        <div className="conversation-chat-shell">
+        <div className="conversation-chat-shell" ref={chatShellRef}>
           <ConversationPermissions actions={actions} permissions={permissions} />
-          <div aria-label={snapshot.listLabel || "Suzu 的聊天记录"} aria-live="polite" className="conversation-list" data-conversation-list="" onScroll={(event) => actions.setListScroll(event.currentTarget)} ref={listRef} role="log"><ConversationMessageList onOpenFile={actions.openMediaFile} onPreview={actions.openMediaPreview} rows={messageRows} /></div>
+          <div className="conversation-transcript">
+            <div aria-label={snapshot.listLabel || "Suzu 的聊天记录"} aria-live="polite" className="conversation-list" data-conversation-list="" onPointerDown={revealConversationScrollbar} onScroll={(event) => { actions.setListScroll(event.currentTarget); updateConversationScrollbar(event.currentTarget); revealConversationScrollbar(); }} onWheel={revealConversationScrollbar} ref={listRef} role="log"><ConversationMessageList onOpenExternal={openExternalLink} onOpenFile={actions.openMediaFile} onOpenFileContextMenu={actions.openFileContextMenu} onPreview={actions.openMediaPreview} rows={messageRows} /></div>
+            <div aria-hidden="true" className={`conversation-scrollbar${conversationScrollbarVisible && conversationScrollbar.scrollable ? " is-visible" : ""}`} onPointerCancel={finishConversationScrollbarDrag} onPointerDown={beginConversationScrollbarDrag} onPointerMove={dragConversationScrollbar} onPointerUp={finishConversationScrollbarDrag} ref={conversationScrollbarRailRef}>
+              <div className="conversation-scrollbar__thumb" style={{ height: `${conversationScrollbar.thumbHeight}px`, transform: `translateY(${conversationScrollbar.thumbTop}px)` }} />
+            </div>
+          </div>
           {snapshot.unread ? <button className="conversation-latest" onClick={actions.jumpToLatest} type="button">回到最新消息</button> : null}
-          <ConversationComposer actions={actions} callActive={callControl.active} composer={composer} focusRequest={ui.composerFocusRequest} voiceInput={voiceInput} />
+          <ConversationComposer actions={actions} callActive={callControl.active} composer={composer} composerHeight={composerHeight} focusRequest={ui.composerFocusRequest} onResizeKeyDown={resizeComposerFromKeyboard} onResizePointerCancel={cancelComposerResize} onResizePointerDown={beginComposerResize} onResizePointerMove={resizeComposer} onResizePointerUp={finishComposerResize} voiceInput={voiceInput} />
         </div>
         <ConversationSearchPanel actions={actions} focusRequest={ui.searchFocusRequest} search={snapshot.search} />
         <ConversationCallDialing call={callControl.call} onEnd={callControl.end} />

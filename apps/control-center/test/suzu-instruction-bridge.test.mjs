@@ -28,6 +28,7 @@ test("the global SUZU.md is created once and mirrored into the private Agent Cor
   assert.equal(first.changed, true);
   assert.equal(first.globalPath, path.join(dataRoot, SUZU_GLOBAL_INSTRUCTIONS_FILE));
   assert.equal(first.bridgePath, path.join(runtimeHome, SUZU_AGENT_GLOBAL_INSTRUCTIONS_BRIDGE_FILE));
+  assert.equal(DEFAULT_SUZU_GLOBAL_INSTRUCTIONS, "");
   assert.equal(await fs.readFile(first.globalPath, "utf8"), DEFAULT_SUZU_GLOBAL_INSTRUCTIONS);
   assert.equal(await fs.readFile(first.bridgePath, "utf8"), DEFAULT_SUZU_GLOBAL_INSTRUCTIONS);
 

@@ -47,6 +47,8 @@ test("Agent Core capability bridge exposes only parent-provided catalog actions 
   const action = registered.get("suzu_capability");
   assert.ok(catalog);
   assert.ok(action);
+  assert.match(catalog.description, /列出当前为此对话已连接的 Suzu 产品能力动作/u);
+  assert.match(action.description, /执行一个由 suzu_capability_catalog 返回的 Suzu 产品能力动作/u);
   const exec = {
     agent: { session: { id: "session-1" } },
     callId: "call-1",

@@ -8,12 +8,19 @@ import {
   SUZU_AGENT_LIFECYCLE_IPC_PROTOCOL,
   normalizeSuzuAgentLifecycleIpcMessage,
 } from "./lifecycle-ipc.mjs";
+import {
+  isSuzuAgentTaskTrigger,
+  normalizeSuzuAgentTaskOutputPolicy,
+} from "./task-trigger.mjs";
 
 export const name = "suzu-lifecycle-bridge";
 export const inject = [];
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 5_000;
 const DYNAMIC_CONTEXT_INTRO = "以下是仅供本次模型请求使用的实时背景资料，不是用户新消息：";
+const LEGACY_SCHEDULE_TASK_OPEN = "<suzu-schedule-task>";
+const LEGACY_SCHEDULE_TASK_CLOSE = "</suzu-schedule-task>";
+const LEGACY_SILENT_SCHEDULE_MARKER = "<!-- suzu-lives:display-system -->";
 
 function clean(value) {
   return String(value ?? "").trim();
@@ -21,6 +28,43 @@ function clean(value) {
 
 function plainObject(value) {
   return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+}
+
+function messageText(message) {
+  const content = Array.isArray(plainObject(message).content) ? message.content : [];
+  return content
+    .filter((block) => plainObject(block).type === "text")
+    .map((block) => String(plainObject(block).text ?? ""))
+    .join("\n");
+}
+
+function isLegacySilentScheduleTask(message) {
+  const text = messageText(message);
+  return text.includes(LEGACY_SCHEDULE_TASK_OPEN)
+    && text.includes(LEGACY_SCHEDULE_TASK_CLOSE)
+    && text.includes(LEGACY_SILENT_SCHEDULE_MARKER);
+}
+
+function taskOutputPolicy(message) {
+  return normalizeSuzuAgentTaskOutputPolicy(plainObject(message?.source).outputPolicy);
+}
+
+function automationTaskOutputPolicy(blocks) {
+  let found = false;
+  for (const block of Array.isArray(blocks) ? blocks : []) {
+    const candidate = plainObject(block);
+    if (clean(candidate.kind) !== "automation-task") continue;
+    found = true;
+    if (normalizeSuzuAgentTaskOutputPolicy(plainObject(candidate.metadata).outputPolicy) === "silent") {
+      return "silent";
+    }
+  }
+  return found ? "external" : "";
+}
+
+function hasTerminalNoReply(value) {
+  const text = clean(value);
+  return Boolean(text) && /NO_REPLY(?:[\s,，。.!！?？;；、…]*NO_REPLY)*[\s,，。.!！?？;；、…]*$/iu.test(text);
 }
 
 function timeoutMilliseconds(value) {
@@ -128,6 +172,11 @@ function isDynamicContextMessage(message) {
     && source.plugin === name
     && source.form === "snapshot"
     && Array.isArray(source.sections);
+}
+
+function persistedAutomationTaskOutputPolicy(message) {
+  if (!isDynamicContextMessage(message)) return "";
+  return automationTaskOutputPolicy(plainObject(message?.source).sections);
 }
 
 function insertBeforeCurrentUserMessage(messages, message) {
@@ -460,6 +509,7 @@ export function createSuzuAgentLifecycleBridge({
   const preparedDynamicMessages = new Map();
   const dynamicRecordsBySession = new Map();
   const knownSessionsById = new Map();
+  const silentTaskRecordsBySession = new Map();
   const streamRecordsBySession = new Map();
   const sessionRepairTails = new Map();
 
@@ -521,7 +571,7 @@ export function createSuzuAgentLifecycleBridge({
 
   const scheduleSessionRepair = (session, repair) => {
     const id = clean(session?.id);
-    if (!id || typeof session?.append !== "function" || typeof repair !== "function") return;
+    if (!id || typeof session?.append !== "function" || typeof repair !== "function") return Promise.resolve(false);
     const previous = sessionRepairTails.get(id) || Promise.resolve();
     const operation = previous.then(repair, repair);
     // A compatibility repair must never turn an already-completed model turn
@@ -531,6 +581,140 @@ export function createSuzuAgentLifecycleBridge({
     void settled.finally(() => {
       if (sessionRepairTails.get(id) === settled) sessionRepairTails.delete(id);
     });
+    return settled;
+  };
+
+  const waitForSessionRepair = async (session) => {
+    const pending = sessionRepairTails.get(clean(session?.id));
+    if (pending) await pending;
+  };
+
+  const taskRecordsFor = (session, { create = false } = {}) => {
+    const id = clean(session?.id);
+    if (!id) return null;
+    const records = silentTaskRecordsBySession.get(id);
+    if (records || !create) return records || null;
+    const created = new Map();
+    silentTaskRecordsBySession.set(id, created);
+    return created;
+  };
+
+  const rememberTask = (session, turn, outputPolicy = "external") => {
+    if (!Number.isInteger(turn) || !Array.isArray(session?.surface?.nodes)) return null;
+    const records = taskRecordsFor(session, { create: true });
+    if (!records || records.has(turn)) return records?.get(turn) || null;
+    const record = Object.freeze({
+      session,
+      startSurfaceIndex: session.surface.nodes.length,
+      turn,
+      outputPolicy: normalizeSuzuAgentTaskOutputPolicy(outputPolicy),
+    });
+    records.set(turn, record);
+    return record;
+  };
+
+  const takeTask = (session, turn) => {
+    const records = taskRecordsFor(session);
+    if (!records || !Number.isInteger(turn)) return null;
+    const record = records.get(turn) || null;
+    if (record) records.delete(turn);
+    if (!records.size) silentTaskRecordsBySession.delete(clean(session?.id));
+    return record;
+  };
+
+  const cleanupMessage = () => createMessage({
+    content: [],
+    source: {
+      kind: "plugin",
+      plugin: name,
+      form: "task-cleanup",
+    },
+  });
+
+  const replaceSurfaceRangeWithCleanup = (session, start, end) => {
+    if (!surfaceIncludes(session, start) || !surfaceIncludes(session, end)) return false;
+    const nodes = Array.isArray(session?.surface?.nodes) ? session.surface.nodes : [];
+    const startIndex = nodes.indexOf(start);
+    const endIndex = nodes.indexOf(end);
+    if (startIndex < 0 || endIndex < startIndex) return false;
+    session.append("user/message", cleanupMessage(), {
+      surfaceOp: { op: "replace", start, end },
+    });
+    return true;
+  };
+
+  const cleanupSilentTask = (record) => {
+    const session = rememberSession(record?.session);
+    const startIndex = Number(record?.startSurfaceIndex);
+    const nodes = Array.isArray(session?.surface?.nodes) ? session.surface.nodes : [];
+    if (!session || !Number.isSafeInteger(startIndex) || startIndex < 0 || nodes.length <= startIndex) return false;
+    return replaceSurfaceRangeWithCleanup(session, nodes[startIndex], nodes.at(-1));
+  };
+
+  const taskEndedWithNoReply = (record) => {
+    const session = record?.session;
+    const startIndex = Number(record?.startSurfaceIndex);
+    const nodes = Array.isArray(session?.surface?.nodes) ? session.surface.nodes : [];
+    const events = Array.isArray(session?.events) ? session.events : [];
+    if (!Number.isSafeInteger(startIndex) || startIndex < 0 || nodes.length <= startIndex) return false;
+    const bySequence = new Map(events.map((event) => [event?.seq, event]));
+    for (let index = nodes.length - 1; index >= startIndex; index -= 1) {
+      const event = bySequence.get(nodes[index]);
+      if (clean(event?.type) !== "assistant/message") continue;
+      return hasTerminalNoReply(messageText(plainObject(event?.data).message));
+    }
+    return false;
+  };
+
+  const repairPersistedAutomationTask = (session) => {
+    const events = Array.isArray(session?.events) ? session.events : [];
+    const nodes = Array.isArray(session?.surface?.nodes) ? session.surface.nodes : [];
+    if (!events.length || !nodes.length) return false;
+    const bySequence = new Map(events.map((event) => [event?.seq, event]));
+    const turnBySequence = new Map();
+    const candidates = [];
+    let activeTurn = null;
+    for (const event of events) {
+      const type = clean(event?.type);
+      if (type === "turn/start") {
+        const turn = Number(plainObject(event.data).turn);
+        activeTurn = Number.isInteger(turn) ? turn : null;
+      }
+      if (Number.isInteger(event?.seq)) turnBySequence.set(event.seq, activeTurn);
+      if (type === "user/message" && Number.isInteger(activeTurn)) {
+        const legacySilent = isLegacySilentScheduleTask(event.data);
+        const dynamicPolicy = persistedAutomationTaskOutputPolicy(event.data);
+        if (legacySilent || dynamicPolicy) {
+          candidates.push(Object.freeze({
+            seq: event.seq,
+            turn: activeTurn,
+            outputPolicy: legacySilent ? "silent" : dynamicPolicy,
+          }));
+        }
+      }
+      if (type === "turn/end") activeTurn = null;
+    }
+    for (const candidate of candidates) {
+      if (!surfaceIncludes(session, candidate.seq)) continue;
+      const startIndex = nodes.indexOf(candidate.seq);
+      if (startIndex < 0) continue;
+      let endIndex = startIndex;
+      while (endIndex + 1 < nodes.length && turnBySequence.get(nodes[endIndex + 1]) === candidate.turn) {
+        endIndex += 1;
+      }
+      if (turnBySequence.get(nodes[endIndex]) !== candidate.turn) continue;
+      let terminalNoReply = false;
+      for (let index = endIndex; index >= startIndex; index -= 1) {
+        const event = bySequence.get(nodes[index]);
+        if (clean(event?.type) !== "assistant/message") continue;
+        terminalNoReply = hasTerminalNoReply(messageText(plainObject(event?.data).message));
+        break;
+      }
+      if (candidate.outputPolicy === "silent" || terminalNoReply) {
+        return replaceSurfaceRangeWithCleanup(session, nodes[startIndex], nodes[endIndex]);
+      }
+    }
+    return false;
   };
 
   const persistInterruptedAssistant = (record) => {
@@ -715,6 +899,13 @@ export function createSuzuAgentLifecycleBridge({
 
       if (event?.type === "turn/end") {
         const turn = Number(data.turn);
+        const task = takeTask(session, turn);
+        if (task && (task.outputPolicy === "silent" || taskEndedWithNoReply(task))) {
+          // B is operational work, and an A decision with NO_REPLY is also
+          // not a conversation message. Remove its entire completed surface
+          // before another turn can derive model history from it.
+          scheduleSessionRepair(session, () => cleanupSilentTask(task));
+        }
         const aborted = clean(plainObject(data.reason).kind) === "aborted";
         const record = aborted
           ? takeLatestStreamRecordForTurn(session, turn)
@@ -748,7 +939,16 @@ export function createSuzuAgentLifecycleBridge({
     });
 
     ctx.on("agent/pre-step", async ({ agent, turn, step, signal }, next) => {
-      await expireDynamicRecords(activeDynamicRecords(agent?.session));
+      const session = rememberSession(agent?.session);
+      // A queued human message can wake the next Core turn immediately after
+      // an internal task ends. Wait for its cleanup before Core derives the
+      // durable surface for that human request.
+      await waitForSessionRepair(session);
+      while (repairPersistedAutomationTask(session)) {
+        // A task can outlive an app restart. Repair every persisted internal
+        // turn before a later human request derives model context from it.
+      }
+      await expireDynamicRecords(activeDynamicRecords(session));
       const decision = await next();
       if (decision.kind === "reject" || signal?.aborted) return decision;
       const reply = await transport.request("ContextCollect", contextEventPayload({ agent, turn, step }), { timeoutMs });
@@ -762,7 +962,17 @@ export function createSuzuAgentLifecycleBridge({
         return decision;
       }
       const blocks = injectedBlocks(reply.result);
-      const messages = [...decision.messages];
+      const taskTriggers = decision.messages.filter(isSuzuAgentTaskTrigger);
+      if (taskTriggers.length) {
+        const outputPolicy = taskTriggers.some((message) => taskOutputPolicy(message) === "silent")
+          ? "silent"
+          : "external";
+        rememberTask(session, turn, outputPolicy);
+      }
+      // A task trigger only wakes Core. Leaving it in `messages` would append
+      // it to the session as a faux user entry; task text is injected below as
+      // dynamic context for this request alone.
+      const messages = decision.messages.filter((message) => !isSuzuAgentTaskTrigger(message));
       if (blocks.length) {
         try {
           messages.push(...blocks.map((block) => createMessage({
@@ -795,6 +1005,12 @@ export function createSuzuAgentLifecycleBridge({
         }));
       } else {
         const dynamicBlocks = injectedBlocks(dynamicReply.result);
+        // Real Agent Core removes its empty task trigger from the inbox before
+        // this hook returns. The dynamic automation block is therefore the
+        // durable source of truth for associating the whole turn with its
+        // output policy; relying on decision.messages alone loses that link.
+        const dynamicTaskPolicy = automationTaskOutputPolicy(dynamicBlocks);
+        if (dynamicTaskPolicy) rememberTask(session, turn, dynamicTaskPolicy);
         if (dynamicBlocks.length) {
           try {
             const dynamicMessage = createMessage({
@@ -823,9 +1039,13 @@ export function createSuzuAgentLifecycleBridge({
         }
       }
 
-      return messages.length === decision.messages.length
-        ? decision
-        : { kind: "enter", messages };
+      // A task trigger can be removed while one dynamic block is added, leaving
+      // the same array length. Compare the actual sequence instead of using
+      // length as a proxy, otherwise Core would retain the trigger and drop
+      // the dynamic task body.
+      const unchanged = messages.length === decision.messages.length
+        && messages.every((message, index) => message === decision.messages[index]);
+      return unchanged ? decision : { kind: "enter", messages };
     }, { prepend: true });
 
     ctx.on("llm/stream", (options, next) => {

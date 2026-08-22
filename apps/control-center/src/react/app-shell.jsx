@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import { Avatar, Button, Dialog, Input, SideNav, SideNavItem } from "suzu-design-system";
 import { ApplicationRouter } from "./app-router.jsx";
@@ -40,6 +40,29 @@ const UTILITY_NAVIGATION = [
   { view: "admin", label: "管理", icon: "sliders" },
   { view: "settings", label: "设置", icon: "gear" },
 ];
+
+const SIDEBAR_COMPACT_WIDTH = 70;
+const SIDEBAR_DEFAULT_WIDTH = 240;
+const SIDEBAR_MIN_EXPANDED_WIDTH = 240;
+const SIDEBAR_MAX_WIDTH = 360;
+const SIDEBAR_COLLAPSE_THRESHOLD = 144;
+const SIDEBAR_COMPACT_VIEWPORT = 1180;
+
+function clampSidebarWidth(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return SIDEBAR_DEFAULT_WIDTH;
+  return Math.min(Math.max(Math.round(numeric), SIDEBAR_COMPACT_WIDTH), SIDEBAR_MAX_WIDTH);
+}
+
+function snapSidebarWidth(value) {
+  const width = clampSidebarWidth(value);
+  if (width <= SIDEBAR_COLLAPSE_THRESHOLD) return SIDEBAR_COMPACT_WIDTH;
+  return Math.max(width, SIDEBAR_MIN_EXPANDED_WIDTH);
+}
+
+function viewportUsesCompactSidebar() {
+  return typeof window !== "undefined" && window.innerWidth <= SIDEBAR_COMPACT_VIEWPORT;
+}
 
 function ShellIcon({ name }) {
   const paths = useMemo(() => ({
@@ -193,6 +216,14 @@ export function AppShell() {
   const [softwareAssistantOpen, setSoftwareAssistantOpen] = useState(false);
   const [softwareAssistantPrompt, setSoftwareAssistantPrompt] = useState("");
   const [softwareAssistantDraft, setSoftwareAssistantDraft] = useState("");
+  const [sidebarWidth, setSidebarWidth] = useState(() => snapSidebarWidth(latestWorkspace?.shellSidebarWidth));
+  const [sidebarResizing, setSidebarResizing] = useState(false);
+  const [compactSidebarViewport, setCompactSidebarViewport] = useState(viewportUsesCompactSidebar);
+  const [sidebarViewportOverride, setSidebarViewportOverride] = useState(false);
+  const shellRef = useRef(null);
+  const sidebarResizeRef = useRef(null);
+  const compactSidebarViewportRef = useRef(compactSidebarViewport);
+  const sidebarWidthRef = useRef(sidebarWidth);
 
   useLayoutEffect(() => {
     updateWorkspace = setWorkspace;
@@ -231,9 +262,126 @@ export function AppShell() {
     return () => window.removeEventListener("keydown", openAssistant);
   }, []);
 
+  useEffect(() => {
+    const updateCompactViewport = () => {
+      const nextCompact = viewportUsesCompactSidebar();
+      if (compactSidebarViewportRef.current === nextCompact) return;
+      compactSidebarViewportRef.current = nextCompact;
+      setCompactSidebarViewport(nextCompact);
+      // Entering or leaving the responsive layout starts a new viewport
+      // state. A person can still drag it open again while it is narrow.
+      setSidebarViewportOverride(false);
+    };
+    updateCompactViewport();
+    window.addEventListener("resize", updateCompactViewport);
+    return () => window.removeEventListener("resize", updateCompactViewport);
+  }, []);
+
+  useEffect(() => {
+    if (sidebarResizeRef.current) return;
+    const nextWidth = snapSidebarWidth(workspace?.shellSidebarWidth);
+    sidebarWidthRef.current = nextWidth;
+    setSidebarWidth(nextWidth);
+  }, [workspace?.shellSidebarWidth]);
+
+  const applySidebarWidth = (value) => {
+    const nextWidth = clampSidebarWidth(value);
+    sidebarWidthRef.current = nextWidth;
+    setSidebarWidth(nextWidth);
+    return nextWidth;
+  };
+
+  const sidebarWidthFromPointer = (clientX, { snap = false } = {}) => {
+    const shellLeft = shellRef.current?.getBoundingClientRect?.().left || 0;
+    const width = clientX - shellLeft;
+    return snap ? snapSidebarWidth(width) : clampSidebarWidth(width);
+  };
+
+  const saveSidebarWidth = (width) => {
+    void workspace?.actions?.setShellSidebarWidth?.(width);
+  };
+
+  const finishSidebarResize = (event, { save = true, useCurrentWidth = false } = {}) => {
+    const activeResize = sidebarResizeRef.current;
+    if (!activeResize || activeResize.pointerId !== event.pointerId) return;
+    const nextWidth = activeResize.moved && !useCurrentWidth && Number.isFinite(event.clientX)
+      ? sidebarWidthFromPointer(event.clientX, { snap: true })
+      : snapSidebarWidth(sidebarWidthRef.current);
+    sidebarResizeRef.current = null;
+    sidebarWidthRef.current = nextWidth;
+    setSidebarWidth(nextWidth);
+    setSidebarResizing(false);
+    if (event.currentTarget?.hasPointerCapture?.(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+    if (save) saveSidebarWidth(nextWidth);
+  };
+
+  const beginSidebarResize = (event) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    sidebarResizeRef.current = {
+      autoCompact: compactSidebarViewport && !sidebarViewportOverride,
+      moved: false,
+      pointerId: event.pointerId,
+    };
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+    setSidebarResizing(true);
+  };
+
+  const resizeSidebar = (event) => {
+    const activeResize = sidebarResizeRef.current;
+    if (activeResize?.pointerId !== event.pointerId) return;
+    if (!activeResize.moved) {
+      activeResize.moved = true;
+      if (activeResize.autoCompact) setSidebarViewportOverride(true);
+    }
+    applySidebarWidth(sidebarWidthFromPointer(event.clientX));
+  };
+
+  const cancelSidebarResize = (event) => {
+    if (sidebarResizeRef.current?.pointerId !== event.pointerId) return;
+    finishSidebarResize(event, { save: false, useCurrentWidth: true });
+  };
+
+  const resizeSidebarFromKeyboard = (event) => {
+    const sidebarAutoCompact = compactSidebarViewport && !sidebarViewportOverride;
+    const currentWidth = sidebarAutoCompact ? SIDEBAR_COMPACT_WIDTH : sidebarWidthRef.current;
+    let nextWidth = null;
+    if (event.key === "ArrowLeft") {
+      const candidate = currentWidth - 24;
+      nextWidth = candidate < SIDEBAR_MIN_EXPANDED_WIDTH
+        ? SIDEBAR_COMPACT_WIDTH
+        : snapSidebarWidth(candidate);
+    }
+    if (event.key === "ArrowRight") nextWidth = currentWidth === SIDEBAR_COMPACT_WIDTH
+      ? SIDEBAR_MIN_EXPANDED_WIDTH
+      : snapSidebarWidth(currentWidth + 24);
+    if (event.key === "Home") nextWidth = SIDEBAR_COMPACT_WIDTH;
+    if (event.key === "End") nextWidth = SIDEBAR_MAX_WIDTH;
+    if (nextWidth === null) return;
+    event.preventDefault();
+    if (nextWidth >= SIDEBAR_MIN_EXPANDED_WIDTH) setSidebarViewportOverride(true);
+    sidebarWidthRef.current = nextWidth;
+    setSidebarWidth(nextWidth);
+    saveSidebarWidth(nextWidth);
+  };
+
+  const sidebarAutoCompact = compactSidebarViewport && !sidebarViewportOverride;
+  const effectiveSidebarWidth = sidebarAutoCompact ? SIDEBAR_COMPACT_WIDTH : sidebarWidth;
+  const sidebarIsCompact = effectiveSidebarWidth < SIDEBAR_MIN_EXPANDED_WIDTH;
+  const shellStyle = {
+    "--shell-command-center-offset": `${-(effectiveSidebarWidth / 2)}px`,
+    "--shell-main-center-offset": `${effectiveSidebarWidth / 2}px`,
+    "--shell-sidebar-width": `${effectiveSidebarWidth}px`,
+  };
+
   return (
     <div className="desktop-shell">
-      <div className="app-shell">
+      <div
+        className={`app-shell${sidebarResizing ? " is-resizing-sidebar" : ""}`}
+        data-sidebar-compact={sidebarIsCompact ? "true" : "false"}
+        ref={shellRef}
+        style={shellStyle}
+      >
         <aside className="shell-sidebar" aria-label="主导航">
           <div className="shell-brand">
             <Avatar className="shell-brand-avatar" name="Suzu Lives" size="lg" src="./app-icon.png" />
@@ -245,6 +393,22 @@ export function AppShell() {
           <div className="shell-sidebar-spacer" />
           <Navigation items={UTILITY_NAVIGATION} activeView={activeView} onNavigate={navigate} className="shell-utility-nav" />
         </aside>
+        <div
+          aria-label="调整侧边栏宽度"
+          aria-orientation="vertical"
+          aria-valuemax={SIDEBAR_MAX_WIDTH}
+          aria-valuemin={SIDEBAR_COMPACT_WIDTH}
+          aria-valuenow={effectiveSidebarWidth}
+          className="shell-sidebar-resizer"
+          onKeyDown={resizeSidebarFromKeyboard}
+          onPointerCancel={cancelSidebarResize}
+          onPointerDown={beginSidebarResize}
+          onPointerMove={resizeSidebar}
+          onPointerUp={finishSidebarResize}
+          role="separator"
+          tabIndex={0}
+          title="拖动调整侧边栏宽度"
+        />
 
         <main className="main shell-main">
           <header className="topbar shell-topbar">
@@ -271,7 +435,7 @@ export function AppShell() {
                   onChange={(event) => setSoftwareAssistantDraft(event.currentTarget.value)}
                   placeholder="问 Suzu：想做什么？"
                   prefix={<ShellIcon name="search" />}
-                  size="lg"
+                  size="sm"
                   style={{ width: "min(620px, 100%)" }}
                   suffix={<kbd className="shell-command-key">Ctrl K</kbd>}
                   value={softwareAssistantDraft}
@@ -290,12 +454,14 @@ export function AppShell() {
               <ApplicationRouter workspace={workspace} />
             </ConversationCallProvider>
           </section>
+          <div aria-hidden="true" className="shell-bottombar" />
           <SoftwareAssistantDialog
             api={globalThis.suzuConsole?.softwareAssistant}
             initialPrompt={softwareAssistantPrompt}
             onClose={() => setSoftwareAssistantOpen(false)}
             onPromptConsumed={() => setSoftwareAssistantPrompt("")}
             open={softwareAssistantOpen}
+            owner={workspace?.owner}
           />
           <OnboardingDialog onboarding={workspace?.onboarding} />
         </main>

@@ -1,4 +1,4 @@
-import { Banner, Button, Empty, GlassPanel, PageHeader, Status } from "suzu-design-system";
+import { Avatar, Banner, Button, Empty, GlassPanel, PageHeader, Roster, Status } from "suzu-design-system";
 
 import { PageScaffold } from "./page-scaffold.jsx";
 import "./agent-journal-page.css";
@@ -39,17 +39,16 @@ function ContactRail({ contacts, loading, onSelect, selectedContactId }) {
       <div aria-label="选择查看日记的联系人" className="agent-journal-contact-list">
         {contacts.map((contact) => {
           const selected = contact.id === selectedContactId;
-          return <button
-            aria-pressed={selected}
-            className={`agent-journal-contact${selected ? " selected" : ""}`}
-            disabled={loading}
+          const name = clean(contact.name) || "未命名联系人";
+          return <Roster
+            avatar={<Avatar name={name} size="md" />}
+            className="agent-journal-contact"
             key={contact.id}
-            onClick={() => onSelect?.({ contactId: contact.id })}
-            type="button"
-          >
-            <strong>{contact.name || "未命名联系人"}</strong>
-            <span>{selected ? "正在查看" : "查看日记"}</span>
-          </button>;
+            name={name}
+            onClick={loading ? undefined : () => onSelect?.({ contactId: contact.id })}
+            selected={selected}
+            subtitle={selected ? "当前联系人" : "切换到此联系人"}
+          />;
         })}
       </div>
     </GlassPanel>
@@ -76,7 +75,7 @@ export function AgentJournalPage({ actions = {}, error = "", loading = false, sn
 
   return (
     <PageScaffold
-      canvasClassName="page-canvas--stack"
+      canvasClassName="page-canvas--fill"
       className="agent-journal-react-page"
       header={(
         <PageHeader
@@ -87,24 +86,25 @@ export function AgentJournalPage({ actions = {}, error = "", loading = false, sn
         />
       )}
     >
-
-      {error ? <Banner className="agent-journal-page-error" tone="danger">{error}</Banner> : null}
-      {!ready ? (
-        <GlassPanel as="section" className="agent-journal-loading" intensity="soft"><Empty description={loading ? "正在读取本地日记。" : "暂时无法读取 Agent 日记。"} title={loading ? "正在加载日记" : "无法加载日记"} /></GlassPanel>
-      ) : !contacts.length ? (
-        <GlassPanel as="section" className="agent-journal-loading" intensity="soft"><Empty description="先创建联系人，再到能力 → 行动中为其开启“写日记”。" title="还没有联系人" /></GlassPanel>
-      ) : (
-        <section aria-label="Agent 日记" className="agent-journal-workspace">
-          <ContactRail contacts={contacts} loading={loading} onSelect={actions.selectContact} selectedContactId={snapshot?.selectedContactId} />
-          <GlassPanel as="section" className="agent-journal-main" intensity="soft">
-            <header className="agent-journal-main__header">
-              <div><span>JOURNAL OF</span><h2>{selected?.name || "未命名联系人"}</h2><p>这里只显示这位 Agent 已经写下的日记，不会改动聊天记录或长期记忆。</p></div>
-              <Status label={entries.length ? `${entries.length} 篇` : "尚未写下"} tone={entries.length ? "success" : "muted"} />
-            </header>
-            {entries.length ? <div className="agent-journal-entry-list">{entries.map((entry) => <JournalEntry entry={entry} key={entry.date} />)}</div> : <Empty description="在能力 → 行动中开启“写日记”后，Agent 会在设定时间完成当天第一篇回顾。软件未运行的日期不会补写。" title="这位联系人还没有日记" />}
-          </GlassPanel>
-        </section>
-      )}
+      <div className="agent-journal-page-body">
+        {error ? <Banner className="agent-journal-page-error" tone="danger">{error}</Banner> : null}
+        {!ready ? (
+          <GlassPanel as="section" className="agent-journal-loading" intensity="soft"><Empty description={loading ? "正在读取本地日记。" : "暂时无法读取 Agent 日记。"} title={loading ? "正在加载日记" : "无法加载日记"} /></GlassPanel>
+        ) : !contacts.length ? (
+          <GlassPanel as="section" className="agent-journal-loading" intensity="soft"><Empty description="先创建联系人，再到能力 → 行动中为其开启“写日记”。" title="还没有联系人" /></GlassPanel>
+        ) : (
+          <section aria-label="Agent 日记" className="agent-journal-workspace">
+            <ContactRail contacts={contacts} loading={loading} onSelect={actions.selectContact} selectedContactId={snapshot?.selectedContactId} />
+            <GlassPanel as="section" className="agent-journal-main" intensity="soft">
+              <header className="agent-journal-main__header">
+                <div><span>JOURNAL OF</span><h2>{selected?.name || "未命名联系人"}</h2><p>这里只显示这位 Agent 已经写下的日记，不会改动聊天记录或长期记忆。</p></div>
+                <Status label={entries.length ? `${entries.length} 篇` : "尚未写下"} tone={entries.length ? "success" : "muted"} />
+              </header>
+              {entries.length ? <div className="agent-journal-entry-list">{entries.map((entry) => <JournalEntry entry={entry} key={entry.date} />)}</div> : <Empty description="在能力 → 行动中开启“写日记”后，Agent 会在设定时间完成当天第一篇回顾。软件未运行的日期不会补写。" title="这位联系人还没有日记" />}
+            </GlassPanel>
+          </section>
+        )}
+      </div>
     </PageScaffold>
   );
 }

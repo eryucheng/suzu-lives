@@ -5,6 +5,7 @@
   "type": "module",
   "exports": {
     ".": "./src/index.mjs",
+    "./compaction-defaults": "./src/compaction-defaults.mjs",
     "./companion-compaction": "./src/companion-compaction.mjs",
     "./companion-compaction-prompt": "./src/companion-compaction-prompt.mjs",
     "./software-assistant-compaction": "./src/software-assistant-compaction.mjs",
@@ -12,6 +13,7 @@
     "./software-assistant-bridge": "./src/software-assistant-bridge.mjs",
     "./supervisor": "./src/supervisor.mjs",
     "./lifecycle-bridge": "./src/lifecycle-bridge.mjs",
+    "./task-trigger": "./src/task-trigger.mjs",
     "./capability-bridge": "./src/capability-bridge.mjs",
     "./structured-generator": "./src/structured-generator.mjs",
     "./compatible-llm": "./src/compatible-llm.mjs",

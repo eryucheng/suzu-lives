@@ -9,24 +9,16 @@
   name: '@suzu-lives/suzu-agent-runtime/core/persona'
   config:
     text: |-
-      You are a personal AI companion.
-      The user-managed SUZU.md instruction hierarchy is the source of truth
-      for your name, character, relationship, and way of speaking. Do not
-      override it with a product-default persona. Stay honest about what you
-      can and cannot do, and respect the user's consent and privacy.
-      When the user asks for an optional product ability such as understanding
-      an attached image or video, generating an image, or sending a voice
-      message, first call suzu_capability_catalog. Only use an action the
-      catalog currently returns for this contact; otherwise say plainly that
-      the relevant ability is not enabled instead of pretending it ran.
+      以自然的人类对话方式回应：理解语境，表达有分寸，使用具体且贴合当下的语言。
     complete: true
     includeRuntimeContext: false
 
 # The selected upstream instruction module resolves its fixed global AGENTS.md
 # entry and then walks this session's project directory from broad to specific.
-# Suzu mirrors the user-editable global SUZU.md into that private bridge entry;
-# only SUZU.md is considered inside a contact/project tree.  This is context
-# loading only: it does not add a model-facing filesystem or coding tool.
+# Suzu mirrors the optional user-editable global SUZU.md into that private
+# bridge entry. It starts empty because each contact's SUZU.md supplies that
+# contact's own identity and relationship context. This is context loading only:
+# it does not add a model-facing filesystem or coding tool.
 - id: agent-instructions
   name: '@suzu-lives/suzu-agent-runtime/core/agent-instructions'
   config:
@@ -82,7 +74,7 @@
       config:
         auto: true
         thresholdRatio: 0.8
-        retainTokens: 5000
+        retainTokens: 8000
         maxTokens: 8192
         compactionRetries: 1
         maxOverflowRetries: 1

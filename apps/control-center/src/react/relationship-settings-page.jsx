@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Avatar, Banner, Button, Dialog, Empty, GlassPanel, Input, PageHeader, Roster, Select, Tabs, Textarea } from "suzu-design-system";
+import { Avatar, Banner, Button, Dialog, Empty, GlassPanel, Input, PageHeader, Roster, Tabs, Textarea } from "suzu-design-system";
 
 import { getIdentity } from "../core/identity.mjs";
 import { PageScaffold } from "./page-scaffold.jsx";
@@ -29,23 +29,6 @@ function contactAvatarSource(contact, settings) {
   const identity = getIdentity(settings);
   const agentId = clean(contact?.agentId);
   return clean(identity?.agents?.[agentId]?.avatarDataUrl || identity?.defaultAgent?.avatarDataUrl);
-}
-
-const APPROVAL_MODE_OPTIONS = [
-  { label: "全权限（不审批）", value: "danger-full-access" },
-  { label: "工作目录可写", value: "workspace-write" },
-  { label: "只读", value: "read-only" },
-];
-
-function approvalModeDescription(value) {
-  switch (value) {
-    case "workspace-write":
-      return "可在当前联系人的工作目录和允许的临时目录写入；需要更大范围时询问。";
-    case "read-only":
-      return "默认不能修改文件；需要提升权限时再询问。";
-    default:
-      return "可访问并修改任意位置，不弹出审批。";
-  }
 }
 
 function WorkspaceEmpty({ description, title }) {
@@ -155,22 +138,8 @@ function RelationshipEditor({ actions, activeContact, current, files, onSelectFi
     }
   };
 
-  const savePermissionMode = async (permissionMode) => {
-    if (pending || !clean(activeContact?.id) || permissionMode === approvalMode) return;
-    setPending("permission-mode");
-    setError("");
-    try {
-      await actions.savePermissionMode?.({ id: activeContact.id, permissionMode });
-    } catch (saveError) {
-      setError(clean(saveError?.message) || "无法更新联系人审批模式。 ");
-    } finally {
-      setPending("");
-    }
-  };
-
   const name = contactName(activeContact);
   const readOnly = current?.readOnly === true;
-  const approvalMode = clean(activeContact?.permissionMode) || "danger-full-access";
   const tabItems = files.map((file) => ({ label: fileLabel(file), value: file.path }));
   return (
     <>
@@ -182,21 +151,6 @@ function RelationshipEditor({ actions, activeContact, current, files, onSelectFi
         <Tabs active={current?.path || ""} className="relationship-settings-file-tabs" items={tabItems} onChange={onSelectFile} size="lg" />
         <Button className="relationship-settings-new-file-button" disabled={Boolean(pending)} onClick={() => setCreateOpen(true)} variant="secondary">添加资料</Button>
       </header>
-
-      <section className="relationship-settings-approval-mode" aria-label="联系人审批模式">
-        <div>
-          <span>审批模式</span>
-          <p>{approvalModeDescription(approvalMode)}</p>
-        </div>
-        <Select
-          ariaLabel="审批模式"
-          disabled={Boolean(pending)}
-          fullWidth
-          onChange={savePermissionMode}
-          options={APPROVAL_MODE_OPTIONS}
-          value={approvalMode}
-        />
-      </section>
 
       {error ? <Banner className="relationship-settings-editor-error" tone="danger">{error}</Banner> : null}
       {readOnly ? <Banner className="relationship-settings-editor-error" tone="warning">{current.message || "这是从旧版本保留下来的资料，仅供查看；新的相处设定请写入 SUZU.md。"}</Banner> : null}

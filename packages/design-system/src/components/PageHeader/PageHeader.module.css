@@ -2,10 +2,11 @@
 
 .header {
   display: flex;
+  width:100%;
   align-items: flex-end;
   justify-content: space-between;
   gap: 24px;
-  max-width: 1200px;
+  max-width:none;
   margin-bottom: var(--page-header-content-gap, var(--space-xl));
 }
 
@@ -23,7 +24,8 @@
 
 .title {
   margin: 6px 0 0;
-  font-size: var(--font-size-3xl);
+  /* 页面标题统一采用 Today 已验证的主标题尺度；不要让单个页面另行覆写。 */
+  font-size: 36px;
   font-weight: 690;
   letter-spacing: -0.6px;
   color: var(--text);

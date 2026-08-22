@@ -16,9 +16,11 @@ export function PageScaffold({
   header,
 }) {
   return (
-    <div className={joinClassNames("page-layout", className)}>
-      <div className="page-titlebar">{header}</div>
-      <div className={joinClassNames("page-canvas", canvasClassName)}>{children}</div>
+    <div className="page-layout">
+      <div className={joinClassNames("page-layout__frame", className)}>
+        <div className="page-titlebar">{header}</div>
+        <div className={joinClassNames("page-canvas", canvasClassName)}>{children}</div>
+      </div>
     </div>
   );
 }

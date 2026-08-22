@@ -2,11 +2,13 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 import { DEFAULT_SUZU_COMPACTION_PROMPT } from "@suzu-lives/suzu-agent-runtime/companion-compaction-prompt";
+import {
+  DEFAULT_SUZU_COMPACTION_RETAIN_TOKENS,
+  DEFAULT_SUZU_COMPACTION_TOKEN_THRESHOLD,
+} from "@suzu-lives/suzu-agent-runtime/compaction-defaults";
 
 const MAX_PROMPT_LENGTH = 24_000;
 const MAX_SUMMARY_LENGTH = 48_000;
-const DEFAULT_TOKEN_THRESHOLD = 15_000;
-const DEFAULT_RETAIN_TOKENS = 5_000;
 const HISTORY_PAGE_SIZE = 600;
 
 export class ConversationCompactorError extends Error {
@@ -73,11 +75,11 @@ function normalizedSettings(value = {}) {
     prompt: storedPrompt(source.prompt),
     automatic: {
       enabled: automatic.enabled === true,
-      tokenThreshold: storedPositiveInteger(automatic.tokenThreshold, DEFAULT_TOKEN_THRESHOLD),
-      retainTokens: storedPositiveInteger(automatic.retainTokens, DEFAULT_RETAIN_TOKENS),
+      tokenThreshold: storedPositiveInteger(automatic.tokenThreshold, DEFAULT_SUZU_COMPACTION_TOKEN_THRESHOLD),
+      retainTokens: storedPositiveInteger(automatic.retainTokens, DEFAULT_SUZU_COMPACTION_RETAIN_TOKENS),
     },
     manual: {
-      retainTokens: storedPositiveInteger(manual.retainTokens, DEFAULT_RETAIN_TOKENS),
+      retainTokens: storedPositiveInteger(manual.retainTokens, DEFAULT_SUZU_COMPACTION_RETAIN_TOKENS),
     },
     updatedAt: clean(source.updatedAt).slice(0, 80),
   };

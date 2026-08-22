@@ -1,5 +1,9 @@
 import { useEffect, useState } from "react";
-import { Banner, Button, Empty, GlassPanel, Input, PageHeader, Status, Switch, Textarea } from "suzu-design-system";
+import {
+  DEFAULT_SUZU_COMPACTION_RETAIN_TOKENS,
+  DEFAULT_SUZU_COMPACTION_TOKEN_THRESHOLD,
+} from "@suzu-lives/suzu-agent-runtime/compaction-defaults";
+import { Avatar, Banner, Button, Empty, GlassPanel, Input, PageHeader, Roster, Status, Switch, Textarea } from "suzu-design-system";
 
 import { PageScaffold } from "./page-scaffold.jsx";
 import "./conversation-compactor-page.css";
@@ -17,9 +21,9 @@ function initialDraft(snapshot) {
   const settings = snapshot?.settings || {};
   return {
     automaticEnabled: settings.automatic?.enabled === true,
-    automaticRetainTokens: tokenValue(settings.automatic?.retainTokens, 5_000),
-    automaticThreshold: tokenValue(settings.automatic?.tokenThreshold, 15_000),
-    manualRetainTokens: tokenValue(settings.manual?.retainTokens, 5_000),
+    automaticRetainTokens: tokenValue(settings.automatic?.retainTokens, DEFAULT_SUZU_COMPACTION_RETAIN_TOKENS),
+    automaticThreshold: tokenValue(settings.automatic?.tokenThreshold, DEFAULT_SUZU_COMPACTION_TOKEN_THRESHOLD),
+    manualRetainTokens: tokenValue(settings.manual?.retainTokens, DEFAULT_SUZU_COMPACTION_RETAIN_TOKENS),
     prompt: String(settings.prompt ?? ""),
   };
 }
@@ -41,19 +45,18 @@ function ContactRail({ contacts, disabled, selectedContactId, onSelect }) {
       </div>
       <div className="conversation-compactor-contact-list" aria-label="选择联系人">
         {contacts.map((contact) => {
+          const name = clean(contact.name) || "未命名联系人";
           const selected = clean(contact.id) === clean(selectedContactId);
           return (
-            <div className={`conversation-compactor-contact${selected ? " selected" : ""}`} key={contact.id}>
-              <button
-                className="conversation-compactor-contact-button"
-                disabled={disabled || selected}
-                onClick={() => onSelect(contact.id)}
-                type="button"
-              >
-                <strong>{clean(contact.name) || "未命名联系人"}</strong>
-                <span>{contact.hasConversation ? "固定对话" : "还没有聊天记录"}</span>
-              </button>
-            </div>
+            <Roster
+              avatar={<Avatar name={name} size="md" />}
+              className="conversation-compactor-contact"
+              key={contact.id}
+              name={name}
+              onClick={disabled ? undefined : () => onSelect(contact.id)}
+              selected={selected}
+              subtitle={selected ? "当前联系人" : "切换到此联系人"}
+            />
           );
         })}
       </div>
@@ -186,7 +189,7 @@ export function ConversationCompactorPage({ actions = {}, error = "", loading = 
                       <Input disabled={busy} inputMode="numeric" min="1" onChange={(event) => setDraft((current) => ({ ...current, automaticRetainTokens: event.target.value }))} type="number" value={draft.automaticRetainTokens} />
                     </label>
                   </div>
-                  <p className="conversation-compactor-section__hint">默认是约 15,000 Token 触发，并保留最近约 5,000 Token 原话。保留值必须小于触发阈值。</p>
+                  <p className="conversation-compactor-section__hint">目标是约 32,000 Token 触发，并保留最近约 8,000 Token 原话；小上下文模型会自动收紧。保留值必须小于实际触发阈值。</p>
                   <div className="conversation-compactor-section-actions">
                     <Button disabled={busy} onClick={() => void save("automatic")}>{pending === "automatic" ? "正在保存…" : "保存自动设置"}</Button>
                   </div>

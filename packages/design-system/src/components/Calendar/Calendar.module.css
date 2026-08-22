@@ -1,6 +1,12 @@
 /* Calendar —— 月历（移植自 Suzu-Lives .today-calendar-*） */
 
 .board {
+  --calendar-marker-reserve: 10px;
+  min-width: 0;
+}
+
+.layout-compact {
+  --calendar-compact-row-height: clamp(34px, min(3.4cqw, 3.8dvh), 40px);
   min-width: 0;
 }
 
@@ -15,7 +21,8 @@
 
 .head {
   display: flex;
-  align-items: center;
+  /* 月份标题与同一卡片中其他面板的首行对齐；控件可在右侧保持自身高度。 */
+  align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
 }
@@ -110,9 +117,19 @@
   padding-bottom: clamp(5px, 0.65cqw, 8px);
 }
 
+.layout-compact .weekdays {
+  margin-top: 10px;
+  padding-bottom: 5px;
+}
+
 .grid {
   gap: 2px;
   margin-top: 6px;
+}
+
+.grid-compact {
+  grid-auto-rows: var(--calendar-compact-row-height);
+  margin-top: var(--space-xs);
 }
 
 .grid-fill {
@@ -137,6 +154,11 @@
   min-height: var(--calendar-fill-row-min-height);
 }
 
+.layout-compact .day,
+.layout-compact .blank {
+  min-height: var(--calendar-compact-row-height);
+}
+
 .day {
   display: grid;
   grid-template-rows: minmax(0, 1fr);
@@ -149,10 +171,11 @@
   transition: background-color 0.15s ease, color 0.15s ease, transform 0.15s ease;
 }
 
-/* Markers participate in layout rather than floating over the number. */
+/* Markers reserve equally sized top/bottom rails, keeping the day number on
+ * exactly the same vertical baseline as an unmarked day. */
 .dayWithDots {
-  grid-template-rows: minmax(0, 1fr) auto;
-  padding: 3px 0 4px;
+  grid-template-rows: var(--calendar-marker-reserve) minmax(0, 1fr) var(--calendar-marker-reserve);
+  padding: 0;
 }
 
 .dayNumber {
@@ -162,7 +185,16 @@
 }
 
 .dayWithDots .dayNumber {
-  align-self: end;
+  grid-row: 2;
+  align-self: center;
+}
+
+.day:hover,
+.day.selected,
+.day.daySelected {
+  /* 交互状态共用整格：只切换视觉，不切换日期格本身的尺寸。 */
+  align-self: stretch;
+  justify-self: stretch;
 }
 
 .day:hover {
@@ -178,7 +210,7 @@
 }
 
 .day.selected,
-.daySelected {
+.day.daySelected {
   border-color: color-mix(in srgb, var(--accent) 60%, transparent);
   background: linear-gradient(
     145deg,
@@ -190,9 +222,10 @@
 
 /* 事件小圆点 */
 .dots {
-  grid-row: 2;
+  grid-row: 3;
   display: flex;
   min-height: 5px;
+  align-self: start;
   gap: 3px;
   margin-top: 2px;
 }

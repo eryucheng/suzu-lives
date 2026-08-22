@@ -23,7 +23,7 @@ export function CreatePage({ actions = {} }) {
   return (
     <PageScaffold
       className="create-react-page"
-      header={<PageHeader eyebrow="CREATE" subtitle="把视觉灵感与声音方向整理成可以继续推进的创作现场。" title="创造" />}
+      header={<PageHeader eyebrow="CREATE" subtitle="把视觉灵感、参考资料与候选结果整理成可以继续推进的创作现场。" title="创造" />}
     >
       <section aria-label="创作空间" className="create-space-grid">
         {CREATE_SPACES.map((space) => (

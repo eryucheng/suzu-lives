@@ -81,6 +81,11 @@ test("settings owns the reusable API connection library without a global capabil
   assert.match(apiConnections, /<Drawer/u);
   assert.match(apiConnections, /connection\.name/u);
   assert.match(capabilityDetail, /<ApiConnectionPicker/u);
+  assert.match(admin, /<Drawer[\s\S]*?title="选择主模型"/u);
+  assert.match(admin, /从已获取模型中选择/u);
+  assert.match(admin, /setModelPickerOpen\(nextModels\.length > 0\)/u);
+  assert.doesNotMatch(admin, /<datalist/u);
+  assert.doesNotMatch(admin, /main-model-candidates/u);
   assert.doesNotMatch(admin, /function ApiBindings/u);
   assert.match(app, /\["general", "main-model", "api", "data", "privacy"\]/u);
   assert.match(app, /state\.settingsTab === "main-model"\) void loadAgentRuntimeConfig\(context\)/u);

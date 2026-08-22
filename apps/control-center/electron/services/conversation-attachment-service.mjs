@@ -226,7 +226,7 @@ async function inspectPath(sourcePath, fsOps) {
 
 function mediaKind(entry, mimeType) {
   const requested = clean(entry.kind).toLowerCase();
-  return requested === "image" && AGENT_CORE_IMAGE_MEDIA_TYPES.has(mimeType) ? "image" : "file";
+  return (requested === "image" || requested === "auto") && AGENT_CORE_IMAGE_MEDIA_TYPES.has(mimeType) ? "image" : "file";
 }
 
 function understandingKind({ kind, fileName, mimeType }) {

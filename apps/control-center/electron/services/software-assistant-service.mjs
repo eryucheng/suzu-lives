@@ -4,6 +4,10 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { DEFAULT_SUZU_SOFTWARE_ASSISTANT_COMPACTION_PROMPT } from "@suzu-lives/suzu-agent-runtime/software-assistant-compaction-prompt";
+import {
+  DEFAULT_SUZU_COMPACTION_RETAIN_TOKENS,
+  DEFAULT_SUZU_COMPACTION_TOKEN_THRESHOLD,
+} from "@suzu-lives/suzu-agent-runtime/compaction-defaults";
 
 import { SUZU_SOFTWARE_ASSISTANT_AGENT_PRESET } from "./suzu-agent-runtime.mjs";
 import { conversationDisplayMessages } from "./conversation-reader.mjs";
@@ -72,9 +76,10 @@ function mergeFullText(previous, next) {
 
 function visibleMessages(events) {
   return conversationDisplayMessages(events, MAX_HISTORY_MESSAGES)
-    // The assistant itself uses product tools. Their verbose internal cards do
-    // not belong in this small help-chat transcript; its final wording does.
-    .filter((message) => ["user", "assistant"].includes(clean(message?.kind)));
+    // Product work should remain inspectable in this chat, including native
+    // tool calls and results. They are rendered with the normal conversation
+    // detail cards instead of being folded into the final answer.
+    .filter((message) => ["user", "assistant", "system"].includes(clean(message?.kind)));
 }
 
 function modelStatusLine() {
@@ -304,8 +309,12 @@ export function createSoftwareAssistantService({
       await respond(requestId, {
         available: true,
         prompt: DEFAULT_SUZU_SOFTWARE_ASSISTANT_COMPACTION_PROMPT,
-        automatic: { enabled: true, tokenThreshold: 15_000, retainTokens: 5_000 },
-        manual: { retainTokens: 5_000 },
+        automatic: {
+          enabled: true,
+          tokenThreshold: DEFAULT_SUZU_COMPACTION_TOKEN_THRESHOLD,
+          retainTokens: DEFAULT_SUZU_COMPACTION_RETAIN_TOKENS,
+        },
+        manual: { retainTokens: DEFAULT_SUZU_COMPACTION_RETAIN_TOKENS },
       });
       return;
     }

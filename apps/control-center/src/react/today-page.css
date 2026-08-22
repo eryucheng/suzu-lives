@@ -1,11 +1,16 @@
 .today-react-page {
-  --today-layout-max-width:1480px;
-  --today-insight-min-height:188px;
+  /* 以 1460 × 920 的设计窗口为纵向上限，扣除应用顶部与底部的固定 chrome。 */
+  --today-layout-max-block-size:calc(920px - var(--shell-topbar-height,40px) - var(--shell-bottombar-height,8px));
+  --page-layout-max-block-size:var(--today-layout-max-block-size);
+  /* 最小窗口先保住紧凑首屏；多出来的纵向空间再按 2:1 分给上下两组卡片。 */
+  --today-workspace-min-block-size:328px;
+  /* 首屏在最小窗口中也无需滚动；两张概览卡共用这个固定紧凑高度。 */
+  --today-insight-height:168px;
+  /* 上方双卡共用一条内容起始线，避免日历内容区比日程内容区更窄。 */
+  --today-panel-inline:var(--space-lg);
   container-type:inline-size;
   width:100%;
   min-width:0;
-  max-width:var(--today-layout-max-width);
-  margin:0 auto;
 }
 
 .today-page-content {
@@ -13,7 +18,9 @@
   min-width:0;
   min-height:0;
   height:100%;
-  grid-template-rows:minmax(0,2fr) minmax(var(--today-insight-min-height),1fr);
+  /* 仅由可用高度驱动：窗口变高时两组卡片共同增长，抵达页面上限后停止。 */
+  grid-template-rows:minmax(var(--today-workspace-min-block-size),2fr) minmax(var(--today-insight-height),1fr);
+  align-content:stretch;
   gap:var(--page-card-gap);
 }
 
@@ -29,16 +36,13 @@
   flex:1;
 }
 
-.today-page-header h1 {
-  font-size:clamp(32px,2.4vw,38px);
-}
-
 .today-glass-workspace {
   display:grid;
   grid-template-columns:repeat(2,minmax(0,1fr));
   min-height:0;
-  height:100%;
-  grid-template-rows:minmax(0,1fr);
+  height:auto;
+  align-self:stretch;
+  grid-template-rows:auto;
   align-items:stretch;
   gap:var(--page-card-gap);
   width:100%;
@@ -48,7 +52,7 @@
   display:grid;
   min-width:0;
   min-height:0;
-  height:100%;
+  height:auto;
   grid-template-rows:minmax(0,2fr) minmax(92px,1fr);
   gap:var(--page-card-gap);
 }
@@ -63,17 +67,24 @@
 .today-calendar-panel {
   display:flex;
   min-height:0;
-  height:100%;
+  height:auto;
+  align-self:stretch;
   flex-direction:column;
-  padding:clamp(15px,1.55cqw,22px) clamp(16px,1.7cqw,24px) clamp(12px,1.25cqw,18px);
+  padding:var(--space-lg) var(--today-panel-inline) var(--space-sm);
+}
+
+/* 六周月份在最小窗口中也完整显示，不产生只有几像素的日期区内滚动。 */
+.today-calendar.today-calendar {
+  --calendar-fill-row-min-height:33px;
 }
 
 .today-calendar-legend {
   display:flex;
   flex-wrap:wrap;
-  gap:clamp(12px,1.35cqw,20px);
-  margin-top:clamp(7px,.85cqw,12px);
-  padding-top:clamp(10px,1.15cqw,16px);
+  column-gap:var(--space-lg);
+  row-gap:var(--space-sm);
+  margin-top:var(--space-xs);
+  padding-top:var(--space-sm);
   border-top:1px solid color-mix(in srgb, var(--glass-border) 82%, transparent);
   color:var(--text-muted);
   font-size:var(--font-size-xs);
@@ -103,9 +114,9 @@
   display:flex;
   min-height:0;
   flex-direction:column;
-  gap:clamp(10px,1.15cqw,16px);
+  gap:var(--space-md);
   overflow:hidden;
-  padding:clamp(12px,1.4cqw,21px);
+  padding:var(--space-lg) var(--today-panel-inline);
 }
 
 .today-day-panel__header,
@@ -122,7 +133,7 @@
   display:flex;
   flex:0 0 auto;
   align-items:center;
-  gap:clamp(8px,.9cqw,12px);
+  gap:var(--space-sm);
 }
 
 .today-day-panel__actions > button { white-space:nowrap; }
@@ -132,7 +143,7 @@
   min-height:0;
   flex:1;
   flex-direction:column;
-  gap:clamp(8px,.9cqw,12px);
+  gap:var(--space-sm);
   overflow-y:auto;
   overscroll-behavior:contain;
   padding-right:2px;
@@ -177,12 +188,12 @@
   height:100%;
   align-items:center;
   justify-content:space-between;
-  gap:clamp(14px,1.45cqw,22px);
+  gap:var(--space-lg);
   border:0;
   background:transparent;
   color:inherit;
   cursor:pointer;
-  padding:clamp(16px,1.55cqw,22px);
+  padding:var(--space-lg);
   text-align:left;
   font:inherit;
 }
@@ -295,8 +306,8 @@
 
 .today-insight-grid {
   display:grid;
-  min-height:0;
-  height:100%;
+  min-block-size:var(--today-insight-height);
+  height:auto;
   grid-template-columns:minmax(0,.72fr) minmax(0,1.4fr);
   align-items:stretch;
   gap:var(--page-card-gap);
@@ -308,7 +319,7 @@
   min-height:0;
   height:100%;
   flex-direction:column;
-  padding:clamp(12px,1.4cqw,21px);
+  padding:var(--space-lg);
 }
 
 .today-cost-card {
@@ -320,7 +331,8 @@
   transition:border-color .2s ease, box-shadow .2s ease, transform .2s ease;
 }
 
-.today-cost-card__action {
+.today-cost-card__action,
+.today-activity-card__action {
   display:flex;
   width:100%;
   min-height:0;
@@ -331,65 +343,63 @@
   background:transparent;
   color:inherit;
   cursor:pointer;
-  padding:clamp(12px,1.4cqw,21px);
+  padding:var(--space-lg);
   text-align:left;
   font:inherit;
 }
 
-.today-cost-card__action:focus-visible {
+.today-cost-card__action:focus-visible,
+.today-activity-card__action:focus-visible {
   outline:2px solid color-mix(in srgb, var(--accent-300) 75%, transparent);
   outline-offset:-4px;
   border-radius:inherit;
 }
 
 .today-cost-value {
-  margin-top:clamp(14px,1.35cqw,20px);
+  margin-top:var(--space-lg);
   color:var(--text);
-  font-size:clamp(30px,3.1cqw,46px);
+  font-size:38px;
   font-weight:var(--font-weight-bold);
   letter-spacing:-1.1px;
   line-height:1;
 }
 
 .today-cost-card p {
-  margin:clamp(7px,.75cqw,11px) 0 clamp(14px,1.35cqw,20px);
+  margin:var(--space-sm) 0 0;
   color:var(--text-secondary);
   font-size:var(--font-size-sm);
 }
 
-.today-text-action {
-  width:max-content;
-  margin-top:auto;
-  border:0;
-  background:transparent;
-  color:var(--accent-300);
-  cursor:pointer;
+.today-activity-card {
+  overflow:hidden;
   padding:0;
-  font:inherit;
-  font-size:var(--font-size-sm);
+  transition:border-color .2s ease, box-shadow .2s ease, transform .2s ease;
 }
 
-.today-text-action:hover { color:var(--text); }
+.today-activity-card__action {
+  text-align:left;
+}
 
 @media (hover:hover) {
-  .today-cost-card:hover {
+  .today-cost-card:hover,
+  .today-activity-card:hover {
     border-color:color-mix(in srgb, var(--accent-300) 48%, var(--glass-border));
     box-shadow:0 18px 38px color-mix(in srgb, var(--brand-700) 18%, transparent);
     transform:translateY(-2px);
   }
-
-  .today-cost-card:hover .today-text-action { color:var(--text); }
 }
 
 .today-activity-list {
   display:grid;
-  margin-top:clamp(10px,1.1cqw,16px);
+  min-height:0;
+  margin-top:var(--space-sm);
   border-top:1px solid color-mix(in srgb, var(--glass-border) 76%, transparent);
+  overflow:hidden;
 }
 
 .today-activity-row {
   display:flex;
-  min-height:clamp(36px,3.4cqw,50px);
+  min-height:36px;
   align-items:center;
   justify-content:space-between;
   gap:var(--space-md);
@@ -399,6 +409,12 @@
 .today-activity-row:last-child { border-bottom:0; }
 .today-activity-row > div { display:grid; min-width:0; gap:3px; }
 .today-activity-row b { flex:0 0 auto; color:var(--text-secondary); font-size:var(--font-size-xs); }
+
+.today-activity-card .today-activity-empty {
+  min-height:0;
+  flex:1;
+  padding:var(--space-sm);
+}
 
 .today-editor-form {
   display:grid;

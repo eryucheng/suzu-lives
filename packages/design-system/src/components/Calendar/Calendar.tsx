@@ -4,7 +4,7 @@ import styles from './Calendar.module.css';
 export type EventKind = 'holiday' | 'personal';
 /** dateKey 形如 'YYYY-MM-DD' */
 export type CalendarEvents = Record<string, EventKind[]>;
-export type CalendarLayout = 'content' | 'fill';
+export type CalendarLayout = 'content' | 'compact' | 'fill';
 
 export interface CalendarProps {
   /** 显示年份，如 2026 */
@@ -28,7 +28,7 @@ export interface CalendarProps {
   weekdayLabels?: string[];
   /**
    * 布局模式。fill 适用于父容器已有确定高度的场景：日历会撑满可用高度，
-   * 每周日期行平分剩余空间。
+   * 每周日期行平分剩余空间；compact 使用固定的紧凑行高，适合仪表盘卡片。
    */
   layout?: CalendarLayout;
   className?: string;
@@ -115,6 +115,7 @@ export function Calendar({
     <div
       className={[
         styles.board,
+        layout === 'compact' && styles['layout-compact'],
         layout === 'fill' && styles['layout-fill'],
         className,
       ]
@@ -155,7 +156,15 @@ export function Calendar({
           <span key={w}>{w}</span>
         ))}
       </div>
-      <div className={[styles.grid, layout === 'fill' && styles['grid-fill']].filter(Boolean).join(' ')}>
+      <div
+        className={[
+          styles.grid,
+          layout === 'compact' && styles['grid-compact'],
+          layout === 'fill' && styles['grid-fill'],
+        ]
+          .filter(Boolean)
+          .join(' ')}
+      >
         {cells}
       </div>
     </div>

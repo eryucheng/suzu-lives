@@ -31,6 +31,9 @@ test("software assistant bridge exposes only the product state, manual, and regi
   }, { timeoutMs: 2_000 });
 
   assert.deepEqual([...tools.keys()], ["suzu_software_status", "suzu_software_manual", "suzu_software_action"]);
+  assert.match(tools.get("suzu_software_status").description, /读取当前 Suzu Lives 软件状态/u);
+  assert.match(tools.get("suzu_software_manual").description, /读取当前 Suzu Lives 产品手册/u);
+  assert.match(tools.get("suzu_software_action").description, /执行一项已登记的 Suzu Lives 软件动作/u);
   assert.deepEqual(await tools.get("suzu_software_status").execute({}, EXECUTION), { content: "当前外观：浅色主题。" });
   assert.deepEqual(await tools.get("suzu_software_manual").execute({ query: "配置语音" }, EXECUTION), { content: "打开设置 → API 连接。" });
   assert.deepEqual(await tools.get("suzu_software_action").execute({ action: "set-theme", input: { theme: "dark" } }, EXECUTION), {

@@ -8,16 +8,49 @@ import test from "node:test";
 const require = createRequire(import.meta.url);
 const { default: afterPack, packageTypeForTargets } = require("../scripts/package-type-hook.cjs");
 
+async function writePackagedAgentCoreRuntimeFixture(appOutDir) {
+  const resources = path.join(appOutDir, "resources");
+  const files = [
+    "agent-core-native/node_modules/@suzu-lives/agent-core-native/package.json",
+    "agent-core-native/node_modules/sharp/dist/index.mjs",
+    "agent-core-native/node_modules/node-pty/prebuilds/win32-x64/conpty.node",
+    "agent-core-native/node_modules/@koromix/koffi-win32-x64/win32_x64/koffi.node",
+    "agent-core-native/node_modules/@img/sharp-win32-x64/lib/sharp-win32-x64-fixture.node",
+    "app.asar.unpacked/node_modules/@suzu-lives/suzu-agent-runtime/vendor/core/modules/attachment-local.mjs",
+    "app.asar.unpacked/node_modules/@suzu-lives/suzu-agent-runtime/src/embedded-module-loader.mjs",
+  ];
+  await Promise.all(files.map(async (relativePath) => {
+    const target = path.join(resources, ...relativePath.split("/"));
+    await fs.mkdir(path.dirname(target), { recursive: true });
+    await fs.writeFile(target, "fixture", "utf8");
+  }));
+}
+
 test("Windows packaging writes the actual installer type into resources", async () => {
   const temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "suzu-lives-package-type-"));
   try {
     const appOutDir = path.join(temporaryRoot, "win-unpacked");
+    await writePackagedAgentCoreRuntimeFixture(appOutDir);
     await afterPack({ appOutDir, electronPlatformName: "win32", targets: [{ name: "nsis" }] });
     assert.equal(await fs.readFile(path.join(appOutDir, "resources", "package-type"), "utf8"), "nsis\n");
 
     const zipOutDir = path.join(temporaryRoot, "zip-unpacked");
+    await writePackagedAgentCoreRuntimeFixture(zipOutDir);
     await afterPack({ appOutDir: zipOutDir, electronPlatformName: "win32", targets: [{ name: "zip" }] });
     assert.equal(await fs.readFile(path.join(zipOutDir, "resources", "package-type"), "utf8"), "zip\n");
+  } finally {
+    await fs.rm(temporaryRoot, { recursive: true, force: true });
+  }
+});
+
+test("Windows packaging refuses an Agent Core bundle that is missing a runtime dependency", async () => {
+  const temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "suzu-lives-package-runtime-"));
+  try {
+    const appOutDir = path.join(temporaryRoot, "win-unpacked");
+    await assert.rejects(
+      () => afterPack({ appOutDir, electronPlatformName: "win32", targets: [{ name: "nsis" }] }),
+      /Suzu Agent Core 打包依赖缺失.*sharp image runtime/u,
+    );
   } finally {
     await fs.rm(temporaryRoot, { recursive: true, force: true });
   }

@@ -21,12 +21,6 @@ function enabledCapabilityNames(capabilities) {
   return capabilities.filter((capability) => capability.enabled === true).map((capability) => capability.name);
 }
 
-function activeCapabilityCopy(names) {
-  if (!names.length) return "尚未开启";
-  const visible = names.slice(0, 2).join("、");
-  return names.length > 2 ? visible + " 等" : visible;
-}
-
 function CapabilityCategoryCard({ category, members, onOpen }) {
   const enabled = enabledCapabilityNames(members);
   const tone = enabled.length ? "success" : "muted";
@@ -49,11 +43,6 @@ function CapabilityCategoryCard({ category, members, onOpen }) {
           <span className="capability-overview-card__eyebrow">{category.id.toUpperCase()}</span>
           <h2>{category.label}</h2>
           <p>{category.detail}</p>
-        </div>
-
-        <div className="capability-overview-card__enabled">
-          <span>当前已启用</span>
-          <strong>{activeCapabilityCopy(enabled)}</strong>
         </div>
       </button>
     </GlassPanel>

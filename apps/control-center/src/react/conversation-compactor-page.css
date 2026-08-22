@@ -12,14 +12,11 @@
 }
 
 .conversation-compactor-react-page {
-  --conversation-compactor-layout-min-width:920px;
-  --conversation-compactor-layout-max-width:1200px;
+  container-type:inline-size;
   width:100%;
   min-width:0;
   min-height:0;
   flex:1;
-  max-width:var(--conversation-compactor-layout-max-width);
-  margin:0 auto;
 }
 
 .conversation-compactor-return-button {
@@ -39,7 +36,7 @@
   display:grid;
   min-height:290px;
   place-items:center;
-  padding:clamp(22px,3cqw,34px);
+  padding:var(--space-2xl);
 }
 
 .conversation-compactor-page-error,
@@ -48,7 +45,7 @@
 .conversation-compactor-page-body {
   display:flex;
   width:100%;
-  min-width:var(--conversation-compactor-layout-min-width);
+  min-width:0;
   min-height:0;
   flex:1;
   flex-direction:column;
@@ -57,7 +54,9 @@
 
 .conversation-compactor-workspace {
   display:grid;
-  grid-template-columns:minmax(220px,.3fr) minmax(0,1fr);
+  grid-template-columns:minmax(210px,.3fr) minmax(0,1fr);
+  align-items:stretch;
+  min-width:0;
   min-height:0;
   flex:1;
   gap:var(--page-card-gap);
@@ -97,56 +96,13 @@
 .conversation-compactor-contact-list {
   display:grid;
   align-content:start;
+  min-width:0;
   min-height:0;
   gap:var(--space-xs);
   overflow:auto;
 }
 
-.conversation-compactor-contact {
-  display:grid;
-  min-width:0;
-  gap:4px;
-}
-
-.conversation-compactor-contact-button,
-.conversation-compactor-session {
-  display:grid;
-  min-width:0;
-  gap:4px;
-  border:1px solid transparent;
-  border-radius:var(--radius-md);
-  background:transparent;
-  color:var(--text);
-  cursor:pointer;
-  padding:12px;
-  text-align:left;
-}
-
-.conversation-compactor-contact-button:hover:not(:disabled),
-.conversation-compactor-contact.selected > .conversation-compactor-contact-button {
-  border-color:color-mix(in srgb,var(--accent) 36%,var(--border));
-  background:color-mix(in srgb,var(--accent) 11%,var(--panel-soft));
-}
-
-.conversation-compactor-contact-button:disabled,
-.conversation-compactor-session:disabled { cursor:wait; opacity:.65; }
-.conversation-compactor-contact-button strong,
-.conversation-compactor-contact-button span,
-.conversation-compactor-session strong,
-.conversation-compactor-session span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.conversation-compactor-contact-button strong { color:var(--text); font-size:var(--font-size-sm); font-weight:var(--font-weight-semibold); }
-.conversation-compactor-contact-button span { color:var(--text-muted); font-size:var(--font-size-xs); }
-.conversation-compactor-contact-sessions { display:grid; gap:var(--space-xs); padding-left:10px; }
-.conversation-compactor-contact-sessions .conversation-compactor-session { padding:9px 10px; }
-.conversation-compactor-session:hover:not(:disabled),
-.conversation-compactor-session.selected {
-  border-color:color-mix(in srgb,var(--accent2) 40%,var(--border));
-  background:color-mix(in srgb,var(--accent2) 10%,var(--panel-soft));
-}
-.conversation-compactor-session strong { color:var(--text); font-size:var(--font-size-sm); font-weight:var(--font-weight-semibold); }
-.conversation-compactor-session span { color:var(--text-muted); font-size:var(--font-size-xs); }
-.conversation-compactor-contact-button:focus-visible,
-.conversation-compactor-session:focus-visible { outline:3px solid color-mix(in srgb,var(--accent2) 38%,transparent); outline-offset:-3px; }
+.conversation-compactor-contact { width:100%; }
 
 .conversation-compactor-workspace__main {
   display:grid;
@@ -154,7 +110,7 @@
   min-width:0;
   min-height:0;
   gap:var(--space-md);
-  padding:clamp(17px,2cqw,24px);
+  padding:var(--space-xl);
 }
 
 .conversation-compactor-main-header,
@@ -269,12 +225,14 @@
 .conversation-compactor-prompt-field textarea::placeholder { color:var(--text-muted); opacity:1; }
 .conversation-compactor-run-button { min-width:102px; }
 
-@media (max-width:980px) {
-  .conversation-compactor-workspace { grid-template-columns:1fr; }
-  .conversation-compactor-session-rail { max-height:240px; }
+/* 与相处设定共用工作台收缩策略：优先保住主编辑区，联系人栏在不足宽时隐藏。 */
+@container (max-width:1140px) {
+  .conversation-compactor-workspace { grid-template-columns:minmax(0,1fr); min-height:0; }
+  .conversation-compactor-session-rail { display:none; }
 }
 
-@media (prefers-reduced-motion:reduce) {
-  .conversation-compactor-contact-button,
-  .conversation-compactor-session { transition:none; }
+@container (max-width:680px) {
+  .conversation-compactor-main-header { display:grid; }
+  .conversation-compactor-mode-grid,
+  .conversation-compactor-number-grid { grid-template-columns:minmax(0,1fr); }
 }

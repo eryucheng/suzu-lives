@@ -81,8 +81,8 @@ test("Agent compactor keeps editable per-contact rewind settings and uses only n
   const initial = await service.snapshot({ contactId: fake.contact.id });
   assert.equal(initial.runtime, "agent-core");
   assert.equal(initial.settings.prompt, DEFAULT_SUZU_COMPACTION_PROMPT);
-  assert.deepEqual(initial.settings.automatic, { enabled: false, tokenThreshold: 15_000, retainTokens: 5_000 });
-  assert.deepEqual(initial.settings.manual, { retainTokens: 5_000 });
+  assert.deepEqual(initial.settings.automatic, { enabled: false, tokenThreshold: 32_000, retainTokens: 8_000 });
+  assert.deepEqual(initial.settings.manual, { retainTokens: 8_000 });
   assert.equal(initial.selectedConversation.hasTranscript, true);
 
   const saved = await service.save({

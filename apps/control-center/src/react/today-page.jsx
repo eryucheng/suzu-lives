@@ -238,18 +238,20 @@ export function TodayPage({ actions = {}, snapshot = {} }) {
     () => calendarEvents(events, month.getFullYear(), month.getMonth()),
     [events, month],
   );
-  const recentEvents = Array.isArray(snapshot.data?.events) ? snapshot.data.events.slice(-3).reverse() : [];
+  // 首页只保留两条预览；完整调用记录由整张卡片进入用量页查看。
+  const recentEvents = Array.isArray(snapshot.data?.events) ? snapshot.data.events.slice(-2).reverse() : [];
   return (
     <>
       <PageScaffold
         canvasClassName="page-canvas--fill"
-        className="today-react-page"
-        header={<PageHeader className="today-page-header" eyebrow="TODAY" subtitle="把握当下" title="今天" />}
+        className="today-react-page page-layout__frame--bounded"
+        header={<PageHeader eyebrow="TODAY" subtitle="把握当下" title="今天" />}
       >
       <div className="today-page-content">
         <section className="today-glass-workspace" aria-label="今日日历">
           <GlassPanel as="section" className="today-calendar-panel" intensity="soft">
             <Calendar
+              className="today-calendar"
               events={calendarMarks}
               layout="fill"
               month={month.getMonth()}
@@ -308,7 +310,7 @@ export function TodayPage({ actions = {}, snapshot = {} }) {
             <button
               type="button"
               className="today-cost-card__action"
-              aria-label="查看今日用量"
+              aria-label="打开用量记录"
               onClick={() => actions.openUsage?.()}
             >
               <div className="today-insight-head">
@@ -318,33 +320,38 @@ export function TodayPage({ actions = {}, snapshot = {} }) {
               <h2>今日成本</h2>
               <strong className="today-cost-value">{costLabel(snapshot.data?.summary?.today, ready)}</strong>
               <p>{costDetail(snapshot.data?.summary?.today, ready)}</p>
-              <span className="today-text-action">查看用量</span>
             </button>
           </GlassPanel>
 
           <GlassPanel as="article" className="today-insight-card today-activity-card" intensity="soft">
-            <div className="today-insight-head">
-              <div>
-                <span className="today-section-kicker">RECENT</span>
-                <h2>最近活动</h2>
+            <button
+              type="button"
+              className="today-activity-card__action"
+              aria-label="打开调用记录"
+              onClick={() => actions.openUsage?.()}
+            >
+              <div className="today-insight-head">
+                <div>
+                  <span className="today-section-kicker">RECENT</span>
+                  <h2>最近活动</h2>
+                </div>
               </div>
-              <button className="today-text-action" type="button" onClick={() => actions.openUsage?.()}>全部记录</button>
-            </div>
-            {recentEvents.length ? (
-              <div className="today-activity-list">
-                {recentEvents.map((event, index) => (
-                  <div className="today-activity-row" key={`${event.timestamp || "activity"}-${index}`}>
-                    <div>
-                      <strong>{event.feature || "已识别调用"}</strong>
-                      <span>{event.source || "调用记录"} · {dateTime(event.timestamp)}</span>
+              {recentEvents.length ? (
+                <div className="today-activity-list">
+                  {recentEvents.map((event, index) => (
+                    <div className="today-activity-row" key={`${event.timestamp || "activity"}-${index}`}>
+                      <div>
+                        <strong>{event.feature || "已识别调用"}</strong>
+                        <span>{event.source || "调用记录"} · {dateTime(event.timestamp)}</span>
+                      </div>
+                      <b>{activityCost(event.amountCny)}</b>
                     </div>
-                    <b>{activityCost(event.amountCny)}</b>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <div className="today-activity-empty">{ready ? "还没有可显示的活动。" : "进入联系人后显示最近活动。"}</div>
-            )}
+                  ))}
+                </div>
+              ) : (
+                <div className="today-activity-empty">{ready ? "还没有可显示的活动。" : "进入联系人后显示最近活动。"}</div>
+              )}
+            </button>
           </GlassPanel>
         </section>
       </div>

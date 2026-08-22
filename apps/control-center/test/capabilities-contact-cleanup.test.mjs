@@ -70,7 +70,12 @@ test("Agent Core capability initialization keeps capability state in the product
   const existingProject = path.join(root, "existing-contact");
   const newProject = path.join(root, "new-contact");
   await Promise.all([fs.mkdir(dataRoot, { recursive: true }), fs.mkdir(existingProject), fs.mkdir(newProject)]);
+  const synchronized = [];
   const service = createCapabilitiesService({
+    capabilityRuntime: {
+      removeContact: async () => undefined,
+      sync: async ({ capabilityId, reason, scope }) => { synchronized.push({ capabilityId, reason, scope }); },
+    },
     contactProjectsService: {
       snapshot: async () => ({ contacts: [{ id: "contact-existing", projectRoot: existingProject }] }),
     },
@@ -81,17 +86,61 @@ test("Agent Core capability initialization keeps capability state in the product
   });
 
   const refreshed = await service.refreshManagedRegistrations();
-  assert.equal(refreshed.refreshed, false);
+  assert.equal(refreshed.refreshed, true);
   assert.equal(refreshed.status, "ready");
   assert.equal(refreshed.errors.length, 0);
+  assert.deepEqual(synchronized, [{
+    capabilityId: "proactive-contact",
+    reason: "default-contact-migration",
+    scope: undefined,
+  }]);
+  const migratedSettings = JSON.parse(await fs.readFile(path.join(dataRoot, "automation", "proactive-contact", "config.json"), "utf8"));
+  assert.deepEqual(migratedSettings.enabledContactIds, ["contact-existing"]);
 
   const initialized = await service.initializeDefaultContactCapabilities({ id: "contact-new", projectRoot: newProject });
-  assert.equal(initialized.initialized, false);
+  assert.equal(initialized.initialized, true);
   assert.equal(initialized.status, "ready");
   assert.equal(initialized.errors.length, 0);
+  assert.deepEqual(synchronized, [
+    { capabilityId: "proactive-contact", reason: "default-contact-migration", scope: undefined },
+    { capabilityId: "proactive-contact", reason: "contact-created", scope: { contactId: "contact-new" } },
+  ]);
+  const proactiveSettings = JSON.parse(await fs.readFile(path.join(dataRoot, "automation", "proactive-contact", "config.json"), "utf8"));
+  assert.equal(proactiveSettings.autoMaintain, true);
+  assert.deepEqual(proactiveSettings.enabledContactIds, ["contact-existing", "contact-new"]);
   const snapshot = service.snapshot();
   assert.equal(snapshot.runtime, "agent-core");
   assert.equal(snapshot.capabilities.find((capability) => capability.id === "voice-message")?.runtimeStatus, "agent-capability-bridge");
+  assert.equal(snapshot.capabilities.find((capability) => capability.id === "proactive-contact")?.savedSettings.enabledContactIds.includes("contact-new"), true);
+});
+
+test("proactive-contact default migration preserves an explicitly saved contact selection", async () => {
+  const root = await temporaryDirectory("suzu-capability-proactive-default-");
+  const dataRoot = path.join(root, "software-data");
+  const contactId = "contact-existing";
+  await writeConfig(dataRoot, ["automation", "proactive-contact", "config.json"], {
+    enabledContactIds: [],
+  });
+  const synchronized = [];
+  const service = createCapabilitiesService({
+    capabilityRuntime: {
+      removeContact: async () => undefined,
+      sync: async ({ capabilityId }) => { synchronized.push(capabilityId); },
+    },
+    contactProjectsService: {
+      snapshot: async () => ({ contacts: [{ id: contactId, projectRoot: path.join(root, "contact") }] }),
+    },
+    settingsService: {
+      load: () => ({ dataRoot }),
+      response: () => ({ dataRoot }),
+    },
+  });
+
+  const refreshed = await service.refreshManagedRegistrations();
+  assert.equal(refreshed.refreshed, false);
+  assert.deepEqual(synchronized, []);
+  const settings = JSON.parse(await fs.readFile(path.join(dataRoot, "automation", "proactive-contact", "config.json"), "utf8"));
+  assert.deepEqual(settings.enabledContactIds, []);
 });
 
 test("an Agent Core bridge capability keeps its installed contacts in the existing product config", async () => {
@@ -140,6 +189,9 @@ test("Agent Core time awareness enables a contact through its lifecycle Hook", a
   const contactId = "contact-time";
   await Promise.all([fs.mkdir(dataRoot, { recursive: true }), fs.mkdir(contactProject)]);
   await writeConfig(dataRoot, ["capabilities", "time-awareness", "config.json"], {
+    enabledContactIds: [],
+  });
+  await writeConfig(dataRoot, ["automation", "proactive-contact", "config.json"], {
     enabledContactIds: [],
   });
   const installedProjects = [];

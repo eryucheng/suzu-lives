@@ -44,6 +44,7 @@ function createFakeRuntime({ history = { events: [], hasMore: false } } = {}) {
     history: [],
     respondLifecycleRequest: [],
     resolveApproval: [],
+    sendTask: [],
     sendTurn: [],
     close: 0,
   };
@@ -58,6 +59,10 @@ function createFakeRuntime({ history = { events: [], hasMore: false } } = {}) {
     },
     async sendTurn(value) {
       calls.sendTurn.push(value);
+      return { accepted: true, turnId: value.turnId, queued: true };
+    },
+    async sendTask(value) {
+      calls.sendTask.push(value);
       return { accepted: true, turnId: value.turnId, queued: true };
     },
     async cancelTurn(value) {
@@ -131,17 +136,19 @@ test("Agent Core chat keeps Suzu's queue, stream, memory, and terminal event con
   runtime.emit({ type: "turn-started", sessionId: "contact-session", turnId: accepted.requestId });
   runtime.emit({ type: "assistant-reasoning-delta", sessionId: "contact-session", turnId: accepted.requestId, text: "先想一想" });
   runtime.emit({ type: "assistant-delta", sessionId: "contact-session", turnId: accepted.requestId, text: "你" });
-  runtime.emit({ type: "assistant-completed", sessionId: "contact-session", turnId: accepted.requestId, text: "你好，我在。" });
+  runtime.emit({ type: "assistant-delta", sessionId: "contact-session", turnId: accepted.requestId, text: "好，我在。" });
+  runtime.emit({ type: "assistant-delta", sessionId: "contact-session", turnId: accepted.requestId, text: "还有半句" });
+  runtime.emit({ type: "assistant-completed", sessionId: "contact-session", turnId: accepted.requestId, text: "你好，我在。还有半句" });
   await flush();
 
-  assert.equal(events.find((event) => event.type === "reply-stream")?.content, "你");
+  assert.deepEqual(events.filter((event) => event.type === "reply-stream").map((event) => event.content), ["你好，我在。"]);
   assert.equal(events.find((event) => event.type === "thinking")?.requestId, accepted.requestId);
   assert.equal(events.find((event) => event.type === "thinking")?.sessionId, "contact-session");
-  assert.equal(events.find((event) => event.type === "reply" && event.done)?.content, "你好，我在。");
-  assert.equal(events.find((event) => event.type === "agent-reply")?.content, "你好，我在。");
+  assert.equal(events.find((event) => event.type === "reply" && event.done)?.content, "你好，我在。还有半句");
+  assert.equal(events.find((event) => event.type === "agent-reply")?.content, "你好，我在。还有半句");
   assert.equal(events.find((event) => event.type === "turn-complete")?.requestId, accepted.requestId);
   assert.deepEqual(memoryCalls.map((item) => item.type), ["prepare", "complete"]);
-  assert.equal(memoryCalls[1].value.assistantText, "你好，我在。");
+  assert.equal(memoryCalls[1].value.assistantText, "你好，我在。还有半句");
   chat.dispose();
 });
 
@@ -371,6 +378,148 @@ test("contact chat leaves the built-in software assistant lifecycle to its isola
   chat.dispose();
 });
 
+test("Agent Core chat keeps a scheduled NO_REPLY terminal even after an internal streamed step", async () => {
+  const root = await temporaryRoot();
+  const projectRoot = path.join(root, "contact");
+  await fs.mkdir(projectRoot, { recursive: true });
+  const runtime = createFakeRuntime();
+  const events = [];
+  const chat = createConversationChatService({
+    settingsService: { load: () => ({}) },
+    reader: fakeReader(projectRoot),
+    runtime,
+    onEvent: (event) => events.push(event),
+  });
+
+  const accepted = await chat.sendToSession({
+    content: "<suzu-schedule-task>主动关心判断</suzu-schedule-task>",
+    contactId: "contact-suzu",
+    sessionId: "contact-session",
+    projectRoot,
+    kind: "schedule",
+    requestId: "proactive-silent-turn",
+    scheduleSource: "proactive-chain",
+    deliverToWechat: true,
+  });
+  runtime.emit({ type: "turn-started", sessionId: "contact-session", turnId: accepted.requestId });
+  runtime.emit({ type: "assistant-delta", sessionId: "contact-session", turnId: accepted.requestId, text: "这是给工具的内部安排。" });
+  runtime.emit({ type: "assistant-completed", sessionId: "contact-session", turnId: accepted.requestId, text: "NO_REPLYNO_REPLY" });
+  await flush();
+
+  assert.equal(events.some((event) => event.type === "agent-reply"), false);
+  assert.equal(events.find((event) => event.type === "turn-complete")?.requestId, accepted.requestId);
+  chat.dispose();
+});
+
+test("internal scheduled work supplies its body through dynamic context and keeps a silent B phase off every reply transport", async () => {
+  const root = await temporaryRoot();
+  const projectRoot = path.join(root, "contact");
+  await fs.mkdir(projectRoot, { recursive: true });
+  const runtime = createFakeRuntime();
+  const events = [];
+  const lifecycleEvents = [];
+  const lifecycle = createSuzuAgentLifecycle();
+  lifecycle.on("UserPromptSubmit", (payload) => lifecycleEvents.push(["UserPromptSubmit", payload]), { id: "user-submit" });
+  lifecycle.on("TurnQueued", (payload) => lifecycleEvents.push(["TurnQueued", payload]), { id: "task-queued" });
+  lifecycle.on("TurnStarting", (payload) => lifecycleEvents.push(["TurnStarting", payload]), { id: "task-start" });
+  lifecycle.on("DynamicContextCollect", (payload) => {
+    lifecycleEvents.push(["DynamicContextCollect", payload]);
+    if (!payload.taskContext?.text) return null;
+    return {
+      id: `task:${payload.turnId}`,
+      kind: "automation-task",
+      text: payload.taskContext.text,
+    };
+  }, { id: "task-context" });
+  const chat = createConversationChatService({
+    settingsService: { load: () => ({}) },
+    reader: fakeReader(projectRoot),
+    runtime,
+    lifecycle,
+    onEvent: (event) => events.push(event),
+  });
+
+  const accepted = await chat.sendTaskToSession({
+    contactId: "contact-suzu",
+    sessionId: "contact-session",
+    projectRoot,
+    requestId: "proactive-b",
+    scheduleSource: "proactive-chain-planning",
+    outputPolicy: "silent",
+    taskContext: { id: "schedule-b", text: "安排下一次主动关心。" },
+  });
+  assert.equal(runtime.calls.sendTurn.length, 0);
+  assert.deepEqual(runtime.calls.sendTask, [{
+    sessionId: "contact-session",
+    turnId: "proactive-b",
+    task: { id: "schedule-b", outputPolicy: "silent" },
+    placement: "queue",
+  }]);
+  assert.equal(lifecycleEvents.some(([name]) => name === "UserPromptSubmit"), false);
+  assert.equal(lifecycleEvents.find(([name]) => name === "TurnQueued")?.[1].taskContext?.text, "安排下一次主动关心。");
+
+  runtime.emit({ type: "turn-started", sessionId: "contact-session", turnId: accepted.requestId });
+  runtime.emit({
+    type: "lifecycle-request",
+    requestId: "task-context-1",
+    lifecycleEvent: "DynamicContextCollect",
+    data: { sessionId: "contact-session", coreTurn: 3, step: 1 },
+  });
+  await flush();
+  assert.equal(runtime.calls.respondLifecycleRequest.at(-1).result.blocks[0].text, "安排下一次主动关心。");
+  runtime.emit({ type: "tool-started", sessionId: "contact-session", turnId: accepted.requestId, toolName: "schedule" });
+  runtime.emit({ type: "assistant-delta", sessionId: "contact-session", turnId: accepted.requestId, text: "内部安排完成。" });
+  runtime.emit({ type: "assistant-completed", sessionId: "contact-session", turnId: accepted.requestId, text: "完成" });
+  await flush();
+
+  assert.equal(events.some((event) => ["reply", "reply-stream", "agent-reply", "tool"].includes(event.type)), false);
+  assert.equal(events.find((event) => event.type === "turn-complete")?.requestId, accepted.requestId);
+  chat.dispose();
+  lifecycle.close();
+});
+
+test("a failed internal task releases its conversation queue for the next message", async () => {
+  const root = await temporaryRoot();
+  const projectRoot = path.join(root, "contact");
+  await fs.mkdir(projectRoot, { recursive: true });
+  const runtime = createFakeRuntime();
+  const events = [];
+  const chat = createConversationChatService({
+    settingsService: { load: () => ({}) },
+    reader: fakeReader(projectRoot),
+    runtime,
+    onEvent: (event) => events.push(event),
+  });
+
+  const task = await chat.sendTaskToSession({
+    contactId: "contact-suzu",
+    sessionId: "contact-session",
+    projectRoot,
+    requestId: "stuck-internal-task",
+    scheduleSource: "proactive-chain",
+    outputPolicy: "silent",
+    taskContext: { id: "stuck-task", text: "内部任务" },
+  });
+  runtime.emit({ type: "turn-started", sessionId: "contact-session", turnId: task.requestId });
+  await flush();
+
+  const queued = await chat.send({ content: "请继续正常聊天", queued: true });
+  assert.equal(queued.queued, true);
+  assert.equal(runtime.calls.sendTurn.length, 0);
+
+  runtime.emit({
+    type: "runtime-unavailable",
+    sessionId: "contact-session",
+    turnId: task.requestId,
+    error: "Agent Core host 事件流不可用：session persistence failed",
+  });
+  await waitFor(() => runtime.calls.sendTurn.length === 1);
+
+  assert.equal(events.find((event) => event.type === "error" && event.requestId === task.requestId)?.message, "Agent Core host 事件流不可用：session persistence failed");
+  assert.equal(runtime.calls.sendTurn[0].input, "请继续正常聊天");
+  chat.dispose();
+});
+
 test("Agent Core chat answers capability catalog and action bridge requests through the product runtime", async () => {
   const root = await temporaryRoot();
   const projectRoot = path.join(root, "contact");
@@ -513,7 +662,7 @@ test("Agent Core capability bridge gives Agent-created files the durable chat-at
         resourceKind: "runtime",
         driver: "conversation-attachment",
         action: "deliver",
-        actionDescription: "将已生成或已确认的本机绝对路径交付到当前聊天。input 必须是 { items: [{ path: \"绝对路径\", kind: \"image\" | \"audio\" | \"file\" }] }；图片支持 AVIF/BMP/GIF/HEIC/ICO/JPG/PNG/SVG/TIFF/WebP，音频仅支持 MP3。",
+        actionDescription: "将已生成或已确认的本机绝对路径交付到当前聊天。input 必须是 { items: [{ path: \"绝对路径\", kind: \"image\" | \"audio\" | \"file\" }] }；图片支持 AVIF/BMP/GIF/HEIC/ICO/JPG/PNG/SVG/TIFF/WebP，音频仅支持 MP3。动作成功后，附件会出现在当前聊天；已绑定微信的会话会自动转发同一附件。",
         actionName: "发送聊天附件",
       }],
     },
@@ -739,12 +888,37 @@ test("Agent Core chat cancels only a running public turn and removes product-que
   await flush();
   assert.equal(events.find((event) => event.requestId === first.requestId && event.type === "turn-stopped")?.message, "已停止当前 Agent 任务。");
   assert.deepEqual(lifecycleEvents, [
-    ["StopRequested", second.requestId, "removed-from-queue"],
     ["StopRequested", first.requestId, "user"],
+    ["StopRequested", second.requestId, "removed-from-queue"],
     ["Stop", first.requestId, "cancelled"],
   ]);
   chat.dispose();
   lifecycle.close();
+});
+
+test("steer follows the same interruption path as a direct message", async () => {
+  const root = await temporaryRoot();
+  const projectRoot = path.join(root, "contact");
+  await fs.mkdir(projectRoot, { recursive: true });
+  const runtime = createFakeRuntime();
+  const chat = createConversationChatService({ settingsService: { load: () => ({}) }, reader: fakeReader(projectRoot), runtime });
+
+  const first = await chat.send({ content: "先处理这件事" });
+  runtime.emit({ type: "turn-started", sessionId: "contact-session", turnId: first.requestId });
+  await flush();
+
+  const steered = await chat.steer({ content: "改为处理这件事" });
+  assert.equal(steered.accepted, true);
+  assert.equal(steered.delivered, true);
+  assert.equal(steered.message, "已收到新消息，正在按新要求继续。");
+  await flush();
+  assert.deepEqual(runtime.calls.cancelTurn, [{ sessionId: "contact-session", turnId: first.requestId }]);
+
+  runtime.emit({ type: "turn-cancelled", sessionId: "contact-session", turnId: first.requestId });
+  await waitFor(() => runtime.calls.sendTurn.length === 2);
+  assert.equal(runtime.calls.sendTurn.length, 2);
+  assert.equal(runtime.calls.sendTurn[1].input, "改为处理这件事");
+  chat.dispose();
 });
 
 test("Agent Core chat bridges tool approvals and sends image attachments through the native input contract", async () => {
@@ -1059,6 +1233,41 @@ test("Agent Core reader hides internal scheduled task turns without hiding proac
   assert.equal((await reader.search("链式主动关心")).matches.length, 0);
   assert.equal((await reader.search("NO_REPLY")).matches.length, 0);
   assert.equal((await reader.search("晚上好")).matches.length, 1);
+});
+
+test("Agent Core reader hides an entire silent proactive turn with intermediate tools", () => {
+  const checkTask = [
+    "<suzu-schedule-task>",
+    "任务说明：链式主动关心",
+    "这是 Suzu 自动任务触发，不是用户发来的新消息。",
+    "</suzu-schedule-task>",
+  ].join("\n");
+  const events = [
+    { type: "user/message", seq: 1, time: 1_000, surfaceOp: "append", data: {
+      id: "schedule-input", source: { kind: "user" }, content: [{ type: "text", text: checkTask }],
+    } },
+    { type: "assistant/message", seq: 2, time: 2_000, surfaceOp: "append", data: {
+      turn: 4, step: 1, message: { id: "internal-step", content: [{ type: "text", text: "先检查一下任务链。" }] },
+    } },
+    { type: "tool/result", seq: 3, time: 3_000, surfaceOp: "append", data: {
+      turn: 4, step: 1, message: { content: [{ type: "text", text: "任务已检查。" }] },
+    } },
+    { type: "assistant/message", seq: 4, time: 4_000, surfaceOp: "append", data: {
+      turn: 4, step: 2, message: {
+        id: "silent-final",
+        content: [
+          { type: "reasoning", text: "当前不应重复打扰对方。" },
+          { type: "text", text: "NO_REPLYNO_REPLY" },
+        ],
+      },
+    } },
+    { type: "turn/end", seq: 5, time: 5_000, data: { turn: 4, reason: { kind: "completed" } } },
+    { type: "user/message", seq: 6, time: 6_000, surfaceOp: "append", data: {
+      id: "user-after", source: { kind: "user" }, content: [{ type: "text", text: "我回来啦。" }],
+    } },
+  ];
+
+  assert.deepEqual(conversationDisplayMessages(events).map((message) => message.id), ["user-after"]);
 });
 
 test("Agent Core reader keeps direct Core history when switching contacts and projects call transcripts", async () => {

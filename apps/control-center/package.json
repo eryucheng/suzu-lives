@@ -1,6 +1,6 @@
 {
   "name": "suzu-lives-console",
-  "version": "0.2.5",
+  "version": "0.2.6",
   "private": true,
   "author": "儿玉诚也",
   "description": "Local desktop control center for Suzu Lives.",
@@ -52,6 +52,8 @@
     "qrcode": "1.5.4",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1",
     "suzu-design-system": "0.1.0",
     "ws": "8.18.3"
   },
