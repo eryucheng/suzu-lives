@@ -106,8 +106,35 @@ test("chat attachment delivery stays an on-demand capability action", () => {
   );
   const [delivery] = registry.agentActions({ capabilityId: "conversation-attachment" });
   assert.equal(delivery.action, "deliver");
+  assert.match(delivery.actionDescription, /自动投放/u);
+  assert.match(delivery.actionDescription, /其他已有文件/u);
   assert.match(delivery.actionDescription, /当前聊天/u);
   assert.match(delivery.actionDescription, /自动转发/u);
+});
+
+test("user-facing creation actions declare automatic attachment delivery, while browser artifacts stay manual", async () => {
+  const registry = createCapabilityRegistry();
+  const outputDelivery = (capabilityId) => registry.get(capabilityId)
+    .resources.find((resource) => resource.id === "agent-action")
+    ?.agentAction?.outputDelivery;
+  assert.deepEqual(outputDelivery("image-generation"), { kind: "image", pathField: "path" });
+  assert.deepEqual(outputDelivery("phone-camera"), { kind: "image", pathField: "path" });
+  assert.deepEqual(outputDelivery("voice-message"), { kind: "audio", pathField: "savedPath" });
+  assert.equal(
+    registry.get("web-browser").resources.find((resource) => resource.id === "browser-screenshot")
+      ?.agentAction?.outputDelivery,
+    undefined,
+  );
+
+  const runtime = createCapabilityRuntime({
+    registry,
+    adapters: {
+      "image-generation": () => ({ path: "D:\\Temp\\suzu-lives-generated.png" }),
+    },
+  });
+  const result = await runtime.invoke({ capabilityId: "image-generation", action: "generate" });
+  assert.equal(result.status, "completed");
+  assert.deepEqual(result.outputDelivery, { kind: "image", pathField: "path" });
 });
 
 test("automation task context is mounted as a one-turn dynamic Hook, not a contact instruction", async () => {

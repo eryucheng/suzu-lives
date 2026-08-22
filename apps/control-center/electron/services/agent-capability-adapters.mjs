@@ -12,7 +12,7 @@ import {
   loadPhoneConfig,
   takePhonePhoto,
 } from "@suzu-lives/phone-camera";
-import { runDirectVoiceMessage } from "@suzu-lives/voice-message/direct-voice-message";
+import { resolveConfiguredVoiceService, runDirectVoiceMessage } from "@suzu-lives/voice-message/direct-voice-message";
 
 const CONTACT_ID = /^contact-[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
 
@@ -184,6 +184,17 @@ export function createAgentCapabilityAdapters({
     }
     throw new Error(`请先在 设置 → API 中为“${label}”选择并配置 API。`);
   };
+  const requiredApiConnectionById = async (connectionId, label) => {
+    if (typeof connectionsService.resolveApiConnectionById !== "function") {
+      throw new Error("当前语音服务无法读取已保存的 API 连接。请更新 Suzu Lives 后重试。 ");
+    }
+    const connection = await connectionsService.resolveApiConnectionById(connectionId);
+    if (connection?.key) return connection;
+    if (["unreadable", "invalid", "encryption-unavailable"].includes(clean(connection?.credentialStatus))) {
+      throw new Error(`${label}使用的 API 已保存，但 Key 无法读取；请前往 设置 → API 重新填写并保存。`);
+    }
+    throw new Error(`${label}使用的 API 不可用；请前往 设置 → API 检查该连接。`);
+  };
 
   const resolveScope = async (context = {}) => {
     const request = plainObject(context);
@@ -269,7 +280,10 @@ export function createAgentCapabilityAdapters({
     if (Boolean(text) === Boolean(audioFile)) {
       throw new Error("语音消息必须且只能提供 text 或 audioPath 其中之一。 ");
     }
-    const connection = await requiredApiConnection("voice-message", "语音消息");
+    const selectedVoiceService = resolveConfiguredVoiceService({ dataRoot: scope.dataRoot, agentId: scope.agentId });
+    const connection = selectedVoiceService
+      ? await requiredApiConnectionById(selectedVoiceService.service.connectionId, `语音服务“${selectedVoiceService.service.name}”`)
+      : await requiredApiConnection("voice-message", "语音消息");
     return executor.runDirectVoiceMessage({
       dataRoot: scope.dataRoot,
       ledgerPath: scope.ledgerPath,

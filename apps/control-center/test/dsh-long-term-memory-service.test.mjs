@@ -169,3 +169,80 @@ test("DSH memory service retrieves one cached current-turn context from the exis
   assert.match(structuredRequests[0].schemaName, /long-term-memory-extraction/u);
   runtime.dispose();
 });
+
+test("message deletion retracts only the exact persisted user or companion source for its Suzu turn", async () => {
+  const dataRoot = await temporaryDirectory("suzu-lives-dsh-memory-delete-");
+  const projectRoot = path.join(dataRoot, "contact-suzu");
+  await fs.mkdir(projectRoot, { recursive: true });
+  const contact = {
+    id: "contact-suzu",
+    name: "Suzu",
+    agentId: "agent-suzu",
+    projectRoot,
+    sessionId: "session-suzu",
+  };
+  const runtime = createLongTermMemoryService({
+    conversationReader: {
+      resolveContactSession: async (contactId) => ({
+        contactId,
+        id: contact.sessionId,
+        projectRoot: contact.projectRoot,
+      }),
+    },
+    connectionsService: { resolveNamedApiConnection: async () => null },
+    contactProjectsService: {
+      snapshot: async () => ({
+        activeContact: contact,
+        contacts: [contact],
+        preferredContact: contact,
+      }),
+    },
+    settingsService: {
+      load: () => ({
+        identity: { owner: { displayName: "小林" } },
+        projectRoot,
+      }),
+      response: () => ({ dataRoot, projectRoot }),
+    },
+  });
+
+  try {
+    const turn = await runtime.prepareTurn({
+      projectRoot,
+      sessionId: contact.sessionId,
+      turnId: "turn-delete-1",
+      userText: "这段对话不应再被长期记忆召回。",
+      occurredAt: "2026-08-23T12:00:00.000Z",
+    });
+    assert.ok(turn);
+    await runtime.completeTurn(turn, {
+      assistantText: "好的，这条回复也会成为同一轮的来源。",
+      occurredAt: "2026-08-23T12:00:01.000Z",
+    });
+
+    const user = await runtime.retractConversationMessage({
+      projectRoot,
+      sessionId: contact.sessionId,
+      turnId: "turn-delete-1",
+      role: "user",
+    });
+    const companion = await runtime.retractConversationMessage({
+      projectRoot,
+      sessionId: contact.sessionId,
+      turnId: "turn-delete-1",
+      role: "companion",
+    });
+    assert.equal(user.status, "retracted");
+    assert.equal(companion.status, "retracted");
+    assert.equal(user.retracted, 1);
+    assert.equal(companion.retracted, 1);
+    assert.equal((await runtime.retractConversationMessage({
+      projectRoot,
+      sessionId: contact.sessionId,
+      turnId: "turn-delete-1",
+      role: "user",
+    })).status, "not-recorded");
+  } finally {
+    runtime.dispose();
+  }
+});

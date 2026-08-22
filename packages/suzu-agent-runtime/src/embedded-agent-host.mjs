@@ -127,12 +127,16 @@ async function modelCatalog(ctx) {
       const entries = [];
       for (const model of models) {
         const info = await ctx.llm.resolveModelInfo(provider.id, model.id);
+        const inputModalities = [...new Set((Array.isArray(info?.inputModalities) ? info.inputModalities : [])
+          .map((modality) => clean(modality).toLowerCase())
+          .filter((modality) => modality === "text" || modality === "image"))];
         entries.push({
           id: model.id,
           name: model.name,
           ...(model.description === undefined ? {} : { description: model.description }),
           ...(info?.context?.contextWindow === undefined ? {} : { contextWindow: info.context.contextWindow }),
           ...(info?.context?.maxTokens === undefined ? {} : { maxTokens: info.context.maxTokens }),
+          ...(inputModalities.length ? { inputModalities } : {}),
         });
       }
       if (entries.length) groups.push({ id: provider.id, name: provider.name, models: entries });
@@ -450,9 +454,13 @@ export class SuzuAgentHost {
         return this.history(payload);
       case "sessions.prompt": {
         const agent = await this.ensureSession(payload);
+        const turnId = clean(payload.turnId);
         agent.followup(createUserMessage({
           content: promptBlocks(payload.content),
-          source: { kind: "user" },
+          source: {
+            kind: "user",
+            ...(turnId ? { suzuTurnId: identifier(turnId, "Suzu 轮次标识") } : {}),
+          },
         }));
         return { accepted: true };
       }

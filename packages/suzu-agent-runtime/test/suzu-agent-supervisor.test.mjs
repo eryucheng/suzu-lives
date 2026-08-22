@@ -533,6 +533,40 @@ test("embedded host reads the product main model from the host context, not an A
   assert.deepEqual(host.selectionFor(agent).current, liveSelection);
 });
 
+test("embedded host exposes each model's resolved native input modalities", async () => {
+  const host = new SuzuAgentHost({
+    llm: {
+      listProviders: () => [{ id: "deepseek-official", name: "DeepSeek" }],
+      async listModels() {
+        return [{ id: "deepseek-v4-flash-vision-exp", name: "DeepSeek-V4-Flash-Vision-Exp" }];
+      },
+      async resolveModelInfo() {
+        return {
+          inputModalities: ["text", "image"],
+          context: { contextWindow: 1_000_000, maxTokens: 384_000 },
+        };
+      },
+    },
+  }, { send: () => true });
+
+  const catalog = await host.handle("llm.models", {});
+
+  assert.deepEqual(catalog, {
+    groups: [{
+      id: "deepseek-official",
+      name: "DeepSeek",
+      models: [{
+        id: "deepseek-v4-flash-vision-exp",
+        name: "DeepSeek-V4-Flash-Vision-Exp",
+        contextWindow: 1_000_000,
+        maxTokens: 384_000,
+        inputModalities: ["text", "image"],
+      }],
+    }],
+    failures: [],
+  });
+});
+
 test("embedded Suzu host and private resolver are concrete", async () => {
   assert.equal(existsSync(resolveEmbeddedSuzuAgentHost()), true);
   assert.equal(existsSync(resolveEmbeddedSuzuAgentModuleLoader()), true);

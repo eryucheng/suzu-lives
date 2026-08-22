@@ -73,3 +73,82 @@ test("file context menu delegates copy and reveal through the scoped conversatio
     else globalThis.window = priorWindow;
   }
 });
+
+test("message context menu hides the selected message after confirmation", async () => {
+  const priorWindow = globalThis.window;
+  const calls = [];
+  let currentSnapshot = {
+    activeContact: { agentId: "agent-suzu", id: "contact-suzu", name: "Suzu" },
+    activeSessionId: "session-suzu",
+    contacts: [{ agentId: "agent-suzu", id: "contact-suzu", name: "Suzu" }],
+    contactsRoot: "D:/suzu-data/contacts",
+    messages: [{
+      id: "assistant-42",
+      kind: "assistant",
+      lineNumber: 42,
+      blocks: [{ kind: "text", text: "这条回复可以删除。" }],
+      timestamp: "2026-08-23T12:00:00.000Z",
+    }],
+    projectRoot: "D:/suzu-data/contacts/suzu",
+    sessions: [{ id: "session-suzu", title: "Suzu" }],
+    status: "ready",
+    version: "message-delete-before",
+  };
+  globalThis.window = {
+    clearInterval: () => {},
+    confirm: () => true,
+    innerHeight: 768,
+    innerWidth: 1366,
+    setInterval: () => 1,
+  };
+  const context = {
+    api: {
+      conversation: {
+        deleteMessage: async (value) => {
+          calls.push(value);
+          currentSnapshot = {
+            ...currentSnapshot,
+            messages: [],
+            version: "message-delete-after",
+          };
+          return currentSnapshot;
+        },
+        onEvent: () => () => {},
+        snapshot: async () => currentSnapshot,
+      },
+    },
+    render: () => {},
+    state: { settings: {} },
+  };
+
+  try {
+    startConversationPolling(context);
+    await flush();
+    const actions = createConversationReactActions(context);
+    const row = conversationReactSnapshot(context).messageRows.find((item) => item.type === "message");
+    assert.equal(row?.deletable, true);
+
+    actions.openMessageContextMenu(row, { x: 120, y: 160 });
+    assert.deepEqual(conversationReactSnapshot(context).messageContextMenu, {
+      kind: "assistant",
+      lineNumber: 42,
+      messageId: "assistant-42",
+      x: 120,
+      y: 160,
+    });
+
+    await actions.deleteMessage(conversationReactSnapshot(context).messageContextMenu);
+    assert.deepEqual(calls, [{
+      confirmed: true,
+      lineNumber: 42,
+      messageId: "assistant-42",
+    }]);
+    assert.equal(conversationReactSnapshot(context).messageContextMenu, null);
+    assert.equal(conversationReactSnapshot(context).messageRows.filter((item) => item.type === "message").length, 0);
+    assert.equal(conversationReactSnapshot(context).notice, "已从聊天记录中隐藏这条消息。");
+  } finally {
+    stopConversationPolling();
+    if (priorWindow === undefined) delete globalThis.window;
+    else globalThis.window = priorWindow;
+  }
+});

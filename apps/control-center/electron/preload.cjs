@@ -71,6 +71,7 @@ contextBridge.exposeInMainWorld("suzuConsole", {
     updateContactLongTermMemoryEnabled: (value) => ipcRenderer.invoke("conversation:update-contact-long-term-memory", value),
     updateContactPermissionMode: (value) => ipcRenderer.invoke("conversation:update-contact-permission-mode", value),
     removeContact: (value) => ipcRenderer.invoke("conversation:remove-contact", value),
+    deleteMessage: (value) => ipcRenderer.invoke("conversation:delete-message", value),
     attachments: {
       select: (value) => ipcRenderer.invoke("conversation:select-attachments", value),
       paste: (value) => ipcRenderer.invoke("conversation:paste-attachments", value),
@@ -116,6 +117,7 @@ contextBridge.exposeInMainWorld("suzuConsole", {
     snapshot: () => ipcRenderer.invoke("software-assistant:snapshot"),
     send: (value) => ipcRenderer.invoke("software-assistant:send", value),
     stop: (value = {}) => ipcRenderer.invoke("software-assistant:stop", value),
+    clearHistory: () => ipcRenderer.invoke("software-assistant:clear-history"),
     onEvent: (callback) => {
       if (typeof callback !== "function") return () => {};
       const listener = (_event, payload) => callback(payload);
@@ -176,8 +178,14 @@ contextBridge.exposeInMainWorld("suzuConsole", {
   },
   voiceDesign: {
     snapshot: () => ipcRenderer.invoke("voice-design:snapshot"),
+    deleteProfile: (value) => ipcRenderer.invoke("voice-design:delete-profile", value),
+    deleteService: (value) => ipcRenderer.invoke("voice-design:delete-service", value),
     deleteCustomVoice: (value) => ipcRenderer.invoke("voice-design:delete-custom-voice", value),
+    deleteCustomTtsAdapter: (value) => ipcRenderer.invoke("voice-design:delete-custom-tts-adapter", value),
+    saveProfile: (value) => ipcRenderer.invoke("voice-design:save-profile", value),
+    saveService: (value) => ipcRenderer.invoke("voice-design:save-service", value),
     saveCustomAudio: (value) => ipcRenderer.invoke("voice-design:save-custom-audio", value),
+    saveCustomTtsAdapter: (value) => ipcRenderer.invoke("voice-design:save-custom-tts-adapter", value),
     saveContactVoice: (value) => ipcRenderer.invoke("voice-design:save-contact-voice", value),
   },
   memory: {

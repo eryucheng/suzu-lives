@@ -5,10 +5,17 @@ import { fileURLToPath } from "node:url";
 const MODULE_DIRECTORY = dirname(fileURLToPath(import.meta.url));
 const BUNDLE_DIRECTORY = resolve(MODULE_DIRECTORY, "..", "vendor", "core", "modules");
 const PRODUCT_CORE_MODULE_OVERRIDES = Object.freeze({
+  // Core persists zstd, while Suzu may retain the corresponding raw JSONL
+  // event chain for projection. The wrapper never rewrites either artifact.
+  "session-persistence-jsonl": resolve(MODULE_DIRECTORY, "session-persistence-jsonl-compat.mjs"),
   // Imported pre-0.2 transcripts have no DSH step lifecycle around historical
   // assistant messages.  Keep their compatibility logic in owned source
   // instead of modifying the generated upstream bundle.
   "token-meter": resolve(MODULE_DIRECTORY, "token-meter-compat.mjs"),
+  // Keep the selected upstream DeepSeek plugin, while teaching its new Vision
+  // model how to serialize native image prompt blocks. The generated vendor
+  // bundle stays immutable and can still be refreshed independently.
+  "deepseek-model": resolve(MODULE_DIRECTORY, "deepseek-model-vision.mjs"),
 });
 
 /**

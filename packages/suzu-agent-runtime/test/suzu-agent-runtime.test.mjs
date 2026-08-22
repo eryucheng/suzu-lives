@@ -139,6 +139,7 @@ test("Agent Core driver maps one public FIFO text turn into neutral stream event
   assert.deepEqual(fake.calls.prompt[0], {
     sessionId: "suzu-session-1",
     mode: "queue",
+    turnId: "turn-1",
     content: [{ type: "text", text: "你好" }],
   });
 
@@ -263,6 +264,7 @@ test("Agent Core driver forwards validated native image prompt parts unchanged",
   assert.deepEqual(fake.calls.prompt[0], {
     sessionId: runtimeSessionId,
     mode: "queue",
+    turnId: "turn-image",
     content: [
       { type: "text", text: "看一下这张图" },
       { type: "image", mediaType: "image/png", data: "aW1hZ2U=", name: "reference.png" },

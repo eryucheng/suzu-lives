@@ -15,6 +15,7 @@ import {
   SUZU_AGENT_GLOBAL_INSTRUCTIONS_BRIDGE_FILE,
   SUZU_GLOBAL_INSTRUCTIONS_FILE,
 } from "../electron/services/suzu-instruction-bridge.mjs";
+import { resolveAgentSessionStoragePaths } from "../electron/services/agent-session-storage.mjs";
 
 async function temporaryRoot() {
   const root = process.env.SUZU_LIVES_TEST_TEMP || "D:\\Temp";
@@ -43,6 +44,7 @@ function createFakeRuntimeParts() {
   };
   const lifecycleListeners = new Set();
   const facadeListeners = new Set();
+  let activeSessionIds = [];
   let sendTurnHandler = null;
   let compactHandler = null;
   let state = "stopped";
@@ -94,6 +96,7 @@ function createFakeRuntimeParts() {
     },
   };
   const facade = {
+    activeSessionIds() { return [...activeSessionIds]; },
     async cancelTurn(value) { calls.cancelTurn.push(value); return { accepted: true }; },
     async closeRuntime() { calls.closeRuntime += 1; },
     async createSession(value) { calls.createSession.push(value); return { created: true, runtimeSessionId: value.sessionId, sessionId: value.sessionId }; },
@@ -137,6 +140,9 @@ function createFakeRuntimeParts() {
     },
     onCompact(handler) {
       compactHandler = handler;
+    },
+    setActiveSessionIds(ids) {
+      activeSessionIds = Array.isArray(ids) ? [...ids] : [];
     },
   };
 }
@@ -421,6 +427,99 @@ test("Suzu Agent Runtime stops its owned child before erasing one persisted cont
 
   await runtime.ensureSession({ sessionId: "remaining-session", cwd: workspaceDirectory });
   assert.equal(fake.calls.createDriver, 2, "the next contact turn gets a fresh facade after deletion");
+  await runtime.close();
+});
+
+test("Suzu Agent Runtime reports native image input from the selected Core model", async () => {
+  const root = await temporaryRoot();
+  const dataRoot = path.join(root, "data");
+  const workspaceDirectory = path.join(root, "workspace");
+  const temporaryDirectory = path.join(root, "scratch");
+  await fs.mkdir(workspaceDirectory, { recursive: true });
+  const fake = createFakeRuntimeParts();
+  fake.api.settings = {
+    async describe() {
+      return {
+        result: {
+          ok: true,
+          value: {
+            namespaces: [{
+              ns: "agent-default-model",
+              value: { provider: "deepseek-official", model: "deepseek-v4-flash-vision-exp" },
+            }],
+          },
+        },
+      };
+    },
+  };
+  fake.api.llm = {
+    async models() {
+      return {
+        result: {
+          ok: true,
+          value: {
+            groups: [{
+              id: "deepseek-official",
+              name: "DeepSeek",
+              models: [{
+                id: "deepseek-v4-flash-vision-exp",
+                inputModalities: ["text", "image"],
+              }],
+            }],
+          },
+        },
+      };
+    },
+  };
+  const runtime = createSuzuAgentRuntime({
+    dataRoot,
+    temporaryDirectory,
+    workspaceDirectory,
+    createDriver: fake.createDriver,
+    createRuntimeFacade: fake.createRuntimeFacade,
+    createSupervisor: fake.createSupervisor,
+  });
+
+  const capabilities = await runtime.currentModelCapabilities();
+
+  assert.deepEqual(capabilities, {
+    provider: "deepseek-official",
+    model: "deepseek-v4-flash-vision-exp",
+    known: true,
+    inputModalities: ["text", "image"],
+    supportsImageInput: true,
+  });
+  await runtime.close();
+});
+
+test("Suzu Agent Runtime leaves the shared child running when another session has an active turn", async () => {
+  const root = await temporaryRoot();
+  const dataRoot = path.join(root, "data");
+  const workspaceDirectory = path.join(root, "workspace");
+  await fs.mkdir(workspaceDirectory, { recursive: true });
+  const fake = createFakeRuntimeParts();
+  const storageCalls = [];
+  const runtime = createSuzuAgentRuntime({
+    dataRoot,
+    workspaceDirectory,
+    createDriver: fake.createDriver,
+    createRuntimeFacade: fake.createRuntimeFacade,
+    createSupervisor: fake.createSupervisor,
+    async deleteSessionStorage(value) {
+      storageCalls.push(value);
+      return { sessionDirectoryRemoved: true };
+    },
+  });
+
+  await runtime.ensureSession({ sessionId: "delete-session", cwd: workspaceDirectory });
+  fake.setActiveSessionIds(["other-active-session"]);
+  await assert.rejects(
+    runtime.purgeSession({ sessionId: "delete-session", cwd: workspaceDirectory }),
+    (error) => error?.code === "AGENT_OTHER_SESSION_ACTIVE",
+  );
+  assert.equal(fake.calls.closeRuntime, 0);
+  assert.equal(fake.calls.stop, 0);
+  assert.deepEqual(storageCalls, []);
   await runtime.close();
 });
 

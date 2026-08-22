@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Button, Empty, GlassPanel, PageHeader, Select, Status, Switch } from "suzu-design-system";
-import { TTS_ADAPTER_OPTIONS, ttsAdapterLabel } from "@suzu-lives/voice-message/tts-adapters";
+import { TTS_ADAPTER_OPTIONS, ttsAdapterDefinition, ttsAdapterLabel } from "@suzu-lives/voice-message/tts-adapters";
 
 import { API_BINDINGS } from "../features/agent/runtime.mjs";
 import {
@@ -202,6 +202,10 @@ function ContactDeliverySettings({ actions, capability, contactsSnapshot, defaul
 }
 
 function voiceChoiceLabel(contact, choices) {
+  if (contact?.voiceProfileId) {
+    const profile = choices.find((item) => item.selection === "profile" && item.id === contact.voiceProfileId);
+    return profile?.name || "已选音色不可用";
+  }
   if (!contact?.voiceId) return "尚未配置";
   const choice = choices.find((item) => (
     item.adapter === contact.adapter
@@ -258,13 +262,17 @@ function VoiceContactConfigDialog({ onClose, open, voiceDesign }) {
     if (!contact || saving || typeof voiceDesign?.saveContactVoice !== "function") return;
     const key = new FormData(event.currentTarget).get("voiceSelection");
     const choice = choices.find((item) => item.key === key);
-    if (!choice?.voiceId || !choice.adapter) return;
+    if (!choice) return;
     setSaving(true);
     setFeedback(`正在为“${contact.name}”保存音色…`);
     try {
-      const next = await voiceDesign.saveContactVoice({
+      const next = await voiceDesign.saveContactVoice(choice.selection === "profile" ? {
+        contactId: contact.id,
+        voiceProfileId: choice.id,
+      } : {
         contactId: contact.id,
         customVoiceId: choice.id || "",
+        customAdapterId: choice.customAdapterId || "",
         adapter: choice.adapter,
         sourceContactId: choice.sourceContactId || "",
         voiceId: choice.voiceId,
@@ -290,7 +298,7 @@ function VoiceContactConfigDialog({ onClose, open, voiceDesign }) {
         <SettingsDialogHeader onClose={close} title={`为“${contact.name}”配置音色`}>联系人</SettingsDialogHeader>
         <div className="voice-settings-copy"><p>{`这里列出已保存的音色；保存后只影响“${contact.name}”。`}</p></div>
         {feedback ? <div className="voice-settings-copy"><p>{feedback}</p></div> : null}
-        {choices.length ? <form className="voice-form voice-contact-config-form" onSubmit={save}><div className="voice-contact-choice-list">{choices.map((item) => { const selected = item.id ? contact.adapter === item.adapter && item.id === contact.customVoiceId && item.voiceId === contact.voiceId : contact.adapter === item.adapter && item.voiceId === contact.voiceId; return <label className="voice-contact-choice" key={item.key}><input defaultChecked={selected} name="voiceSelection" required type="radio" value={item.key} /><span><strong>{item.name}</strong><small>{selected ? `${contact.name}正在使用` : item.kindLabel}</small></span></label>; })}</div><div className="voice-form-actions"><button className="secondary-button" disabled={saving} onClick={() => setSelectedContactId("")} type="button">返回联系人列表</button><button className="primary-button" disabled={saving}>{saving ? "正在保存…" : "使用这个音色"}</button></div></form> : <><div className="voice-history-empty voice-contact-empty">还没有可用音色。请先在“语音消息”设置中新增一个音色。</div><div className="voice-form-actions voice-contact-dialog-actions"><button className="secondary-button" onClick={() => setSelectedContactId("")} type="button">返回联系人列表</button></div></>}
+        {choices.length ? <form className="voice-form voice-contact-config-form" onSubmit={save}><div className="voice-contact-choice-list">{choices.map((item) => { const selected = item.selection === "profile" ? contact.voiceProfileId === item.id : item.id ? contact.adapter === item.adapter && item.id === contact.customVoiceId && item.customAdapterId === contact.customAdapterId && item.voiceId === contact.voiceId : contact.adapter === item.adapter && item.voiceId === contact.voiceId; return <label className="voice-contact-choice" key={item.key}><input defaultChecked={selected} name="voiceSelection" required type="radio" value={item.key} /><span><strong>{item.name}</strong><small>{selected ? `${contact.name}正在使用` : item.kindLabel}</small></span></label>; })}</div><div className="voice-form-actions"><button className="secondary-button" disabled={saving} onClick={() => setSelectedContactId("")} type="button">返回联系人列表</button><button className="primary-button" disabled={saving}>{saving ? "正在保存…" : "使用这个音色"}</button></div></form> : <><div className="voice-history-empty voice-contact-empty">还没有可用音色。请先在“语音消息”设置中添加语音服务和音色。</div><div className="voice-form-actions voice-contact-dialog-actions"><button className="secondary-button" onClick={() => setSelectedContactId("")} type="button">返回联系人列表</button></div></>}
       </> : null}
     </CreateStudioDialog>
   );
@@ -417,145 +425,413 @@ function PhoneCameraSettings({ actions, apiServices, capability, contactsSnapsho
   );
 }
 
+const CUSTOM_TTS_RESPONSE_OPTIONS = Object.freeze([
+  { label: "JSON 中的 Base64 音频", value: "json-base64" },
+  { label: "JSON 中的音频下载地址", value: "json-url" },
+  { label: "直接返回音频文件", value: "binary" },
+]);
+
+function CustomTtsAdapterDialog({ onClose, onSaved, open, voiceDesign }) {
+  const [saving, setSaving] = useState(false);
+  const [feedback, setFeedback] = useState("");
+  const [responseMode, setResponseMode] = useState("json-base64");
+  const close = () => { if (!saving) onClose?.(); };
+  const save = async (event) => {
+    event.preventDefault();
+    if (saving || typeof voiceDesign?.saveCustomTtsAdapter !== "function") return;
+    const form = new FormData(event.currentTarget);
+    setSaving(true);
+    setFeedback("");
+    try {
+      const next = await voiceDesign.saveCustomTtsAdapter({
+        audioPath: form.get("audioPath"),
+        baseUrl: form.get("baseUrl"),
+        endpointPath: form.get("endpointPath"),
+        name: form.get("name"),
+        outputFormat: form.get("outputFormat"),
+        requestBody: form.get("requestBody"),
+        requestHeaders: form.get("requestHeaders"),
+        responseMode,
+      });
+      onSaved?.(next);
+      onClose?.();
+    } catch (error) {
+      setFeedback(error?.message || "自定义协议没有保存，请检查填写内容。 ");
+    } finally {
+      setSaving(false);
+    }
+  };
+  return (
+    <CreateStudioDialog ariaLabel="新增自定义语音协议" onClose={close} open={open}>
+      <SettingsDialogHeader onClose={close} title="新增自定义语音协议">语音服务</SettingsDialogHeader>
+      <div className="voice-settings-copy"><p>这里描述未内置服务的地址、请求和返回格式。创建语音服务时再选择它要使用的 API Key。Headers 和请求 JSON 可使用 {"{{apiKey}}"}、{"{{model}}"}、{"{{voice}}"}、{"{{text}}"}；请求路径还可使用 {"{{voice}}"}。</p></div>
+      {feedback ? <div className="voice-settings-copy"><p>{feedback}</p></div> : null}
+      <form className="voice-form voice-contact-config-form" onSubmit={save}>
+        <label>协议备注名<input autoFocus disabled={saving} maxLength="80" name="name" required /></label>
+        <label>服务地址<input disabled={saving} maxLength="500" name="baseUrl" required /></label>
+        <label>请求路径<input defaultValue="/chat/completions" disabled={saving} maxLength="300" name="endpointPath" required /></label>
+        <label>请求 Headers（JSON）<textarea defaultValue={'{"Authorization":"Bearer {{apiKey}}","Content-Type":"application/json"}'} disabled={saving} maxLength="8000" name="requestHeaders" required /></label>
+        <label>请求 JSON<textarea defaultValue={'{\n  "model": "{{model}}",\n  "input": "{{text}}",\n  "voice": "{{voice}}"\n}'} disabled={saving} maxLength="24000" name="requestBody" required /></label>
+        <label>音频返回方式<input name="responseMode" type="hidden" value={responseMode} /><Select className="create-select-react" disabled={saving} fullWidth onChange={setResponseMode} options={CUSTOM_TTS_RESPONSE_OPTIONS} value={responseMode} /></label>
+        {responseMode !== "binary" ? <label>音频返回位置<input defaultValue="data" disabled={saving} maxLength="300" name="audioPath" required /></label> : <input name="audioPath" type="hidden" value="" />}
+        <label>音频格式<input defaultValue="mp3" disabled={saving} maxLength="12" name="outputFormat" placeholder="mp3" required /></label>
+        <div className="voice-form-actions"><button className="secondary-button" disabled={saving} onClick={close} type="button">取消</button><button className="primary-button" disabled={saving}>{saving ? "正在保存…" : "保存协议"}</button></div>
+      </form>
+    </CreateStudioDialog>
+  );
+}
+
+const VOICE_SERVICE_TYPE_OPTIONS = Object.freeze(TTS_ADAPTER_OPTIONS.map((option) => ({
+  label: option.value === "custom-http-tts" ? "自定义协议" : option.label,
+  value: option.value,
+})));
+
+function voiceServiceTypeLabel(adapter) {
+  return adapter === "custom-http-tts" ? "自定义协议" : ttsAdapterLabel(adapter);
+}
+
+function compatibleVoiceApiConnections(apiConnections, adapter) {
+  const types = ttsAdapterDefinition(adapter)?.connectionTypes || [];
+  return (Array.isArray(apiConnections) ? apiConnections : []).filter((connection) => (
+    connection?.type === "tts-api" || types.includes(connection?.type)
+  ));
+}
+
+function VoiceServiceDialog({ apiConnections, customProtocols, onClose, onOpenApiServices, onSaved, open, service, voiceDesign }) {
+  const [serviceType, setServiceType] = useState("dashscope-qwen");
+  const [connectionId, setConnectionId] = useState("");
+  const [customProtocolId, setCustomProtocolId] = useState("");
+  const [name, setName] = useState("");
+  const [model, setModel] = useState("");
+  const [feedback, setFeedback] = useState("");
+  const [saving, setSaving] = useState(false);
+  const editing = Boolean(service?.id);
+  const availableConnections = compatibleVoiceApiConnections(apiConnections, serviceType);
+  const protocolOptions = (Array.isArray(customProtocols) ? customProtocols : []).map((protocol) => ({ label: protocol.name, value: protocol.id }));
+
+  useEffect(() => {
+    if (!open) return;
+    const nextType = service?.adapter || "dashscope-qwen";
+    setServiceType(nextType);
+    setConnectionId(service?.connectionId || "");
+    setCustomProtocolId(service?.customAdapterId || "");
+    setName(service?.name || "");
+    setModel(service?.model || ttsAdapterDefinition(nextType)?.defaultModel || "");
+    setFeedback("");
+  }, [open, service]);
+
+  useEffect(() => {
+    if (!open) return;
+    if (!availableConnections.some((connection) => connection.id === connectionId)) {
+      setConnectionId(availableConnections[0]?.id || "");
+    }
+  }, [availableConnections, connectionId, open]);
+
+  useEffect(() => {
+    if (!open || serviceType !== "custom-http-tts") return;
+    if (!protocolOptions.some((option) => option.value === customProtocolId)) {
+      setCustomProtocolId(protocolOptions[0]?.value || "");
+    }
+  }, [customProtocolId, open, protocolOptions, serviceType]);
+
+  const changeType = (nextType) => {
+    setServiceType(nextType);
+    setModel(ttsAdapterDefinition(nextType)?.defaultModel || "");
+  };
+  const close = () => { if (!saving) onClose?.(); };
+  const save = async (event) => {
+    event.preventDefault();
+    if (saving || typeof voiceDesign?.saveService !== "function") return;
+    setSaving(true);
+    setFeedback("");
+    try {
+      const next = await voiceDesign.saveService({
+        ...(service?.id ? { id: service.id } : {}),
+        adapter: serviceType,
+        connectionId,
+        customAdapterId: serviceType === "custom-http-tts" ? customProtocolId : "",
+        model,
+        name,
+      });
+      onSaved?.(next);
+      onClose?.();
+    } catch (error) {
+      setFeedback(error?.message || "语音服务没有保存，请检查填写内容。");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <CreateStudioDialog ariaLabel={editing ? "编辑语音服务" : "新增语音服务"} onClose={close} open={open}>
+      <SettingsDialogHeader onClose={close} title={editing ? "编辑语音服务" : "新增语音服务"}>语音服务</SettingsDialogHeader>
+      <div className="voice-settings-copy"><p>一个语音服务对应一种服务类型和一条已保存的 API 连接。音色会引用这项服务，联系人只需要选择音色。</p></div>
+      {feedback ? <div className="voice-settings-copy"><p>{feedback}</p></div> : null}
+      <form className="voice-form voice-contact-config-form" onSubmit={save}>
+        <label>服务备注名<input autoFocus disabled={saving} maxLength="80" onChange={(event) => setName(event.target.value)} required value={name} /></label>
+        <label>服务类型<Select className="create-select-react" disabled={saving} fullWidth onChange={changeType} options={VOICE_SERVICE_TYPE_OPTIONS} value={serviceType} /></label>
+        {serviceType === "custom-http-tts" ? <label>自定义协议<Select className="create-select-react" disabled={saving || !protocolOptions.length} fullWidth onChange={setCustomProtocolId} options={protocolOptions.length ? protocolOptions : [{ label: "请先新增自定义协议", value: "" }]} value={customProtocolId} /></label> : null}
+        <label>API 连接<Select className="create-select-react" disabled={saving || !availableConnections.length} fullWidth onChange={setConnectionId} options={availableConnections.length ? availableConnections.map((connection) => ({ label: `${connection.name}${connection.configured ? "" : "（未填写 Key）"}`, value: connection.id })) : [{ label: "没有兼容的已保存 API", value: "" }]} value={connectionId} /></label>
+        {!availableConnections.length ? <div className="voice-form-actions"><button className="secondary-button" disabled={saving} onClick={() => onOpenApiServices?.()} type="button">前往 API 设置</button></div> : null}
+        <label>默认模型<input disabled={saving} maxLength="160" onChange={(event) => setModel(event.target.value)} placeholder="可留空" value={model} /></label>
+        <div className="voice-form-actions"><button className="secondary-button" disabled={saving} onClick={close} type="button">取消</button><button className="primary-button" disabled={saving || !connectionId || (serviceType === "custom-http-tts" && !customProtocolId)}>{saving ? "正在保存…" : editing ? "保存修改" : "保存语音服务"}</button></div>
+      </form>
+    </CreateStudioDialog>
+  );
+}
+
+function VoiceProfileDialog({ onClose, onSaved, open, profile, services, voiceDesign }) {
+  const [serviceId, setServiceId] = useState("");
+  const [name, setName] = useState("");
+  const [voiceId, setVoiceId] = useState("");
+  const [model, setModel] = useState("");
+  const [feedback, setFeedback] = useState("");
+  const [saving, setSaving] = useState(false);
+  const editing = Boolean(profile?.id);
+  const serviceOptions = (Array.isArray(services) ? services : []).map((service) => ({
+    label: `${service.name} · ${voiceServiceTypeLabel(service.adapter)}`,
+    value: service.id,
+  }));
+  const selectedService = (Array.isArray(services) ? services : []).find((service) => service.id === serviceId) || null;
+
+  useEffect(() => {
+    if (!open) return;
+    setServiceId(profile?.serviceId || services?.[0]?.id || "");
+    setName(profile?.name || "");
+    setVoiceId(profile?.voiceId || "");
+    setModel(profile?.model || "");
+    setFeedback("");
+  }, [open, profile, services]);
+
+  const close = () => { if (!saving) onClose?.(); };
+  const save = async (event) => {
+    event.preventDefault();
+    if (saving || typeof voiceDesign?.saveProfile !== "function") return;
+    setSaving(true);
+    setFeedback("");
+    try {
+      const next = await voiceDesign.saveProfile({
+        ...(profile?.id ? { id: profile.id } : {}),
+        model,
+        name,
+        serviceId,
+        voiceId,
+      });
+      onSaved?.(next);
+      onClose?.();
+    } catch (error) {
+      setFeedback(error?.message || "音色没有保存，请检查填写内容。");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <CreateStudioDialog ariaLabel={editing ? "编辑音色" : "新增音色"} onClose={close} open={open}>
+      <SettingsDialogHeader onClose={close} title={editing ? "编辑音色" : "新增音色"}>音色</SettingsDialogHeader>
+      <div className="voice-settings-copy"><p>音色属于一个语音服务。联系人选中它后，会自动使用该服务的 API 连接、协议和模型。</p></div>
+      {feedback ? <div className="voice-settings-copy"><p>{feedback}</p></div> : null}
+      <form className="voice-form voice-contact-config-form" onSubmit={save}>
+        <label>声音备注名<input autoFocus disabled={saving} maxLength="80" onChange={(event) => setName(event.target.value)} required value={name} /></label>
+        <label>语音服务<Select className="create-select-react" disabled={saving || !serviceOptions.length} fullWidth onChange={setServiceId} options={serviceOptions.length ? serviceOptions : [{ label: "请先新增语音服务", value: "" }]} value={serviceId} /></label>
+        <label>音色 ID<input disabled={saving} maxLength="200" onChange={(event) => setVoiceId(event.target.value)} placeholder="填写服务商提供的 voice ID" required value={voiceId} /></label>
+        <label>模型（可选）<input disabled={saving} maxLength="160" onChange={(event) => setModel(event.target.value)} placeholder={selectedService?.model || "留空时使用语音服务的默认模型"} value={model} /></label>
+        <div className="voice-form-actions"><button className="secondary-button" disabled={saving} onClick={close} type="button">取消</button><button className="primary-button" disabled={saving || !serviceId}>{saving ? "正在保存…" : editing ? "保存修改" : "保存音色"}</button></div>
+      </form>
+    </CreateStudioDialog>
+  );
+}
+
 function VoiceMessageSettings({ actions, apiServices, capability, contactsSnapshot }) {
   const [voiceDialogOpen, setVoiceDialogOpen] = useState(false);
-  const [voiceCreateOpen, setVoiceCreateOpen] = useState(false);
+  const [serviceDraft, setServiceDraft] = useState(null);
+  const [profileDraft, setProfileDraft] = useState(null);
+  const [customProtocolOpen, setCustomProtocolOpen] = useState(false);
   const [voiceSnapshot, setVoiceSnapshot] = useState(null);
   const [voiceError, setVoiceError] = useState("");
-  const [customAdapter, setCustomAdapter] = useState("openai-speech");
-  const [savingCustomAudio, setSavingCustomAudio] = useState(false);
-  const [deletingVoiceId, setDeletingVoiceId] = useState("");
+  const [deletingServiceId, setDeletingServiceId] = useState("");
+  const [deletingProfileId, setDeletingProfileId] = useState("");
+  const [deletingLegacyVoiceId, setDeletingLegacyVoiceId] = useState("");
+  const [deletingProtocolId, setDeletingProtocolId] = useState("");
 
-  useEffect(() => { void refreshVoice(); }, []);
   const refreshVoice = async () => {
     try {
-      setVoiceSnapshot(await actions.voiceDesign?.snapshot());
+      const next = await actions.voiceDesign?.snapshot();
+      setVoiceSnapshot(next || null);
       setVoiceError("");
     } catch (error) {
-      setVoiceError(error?.message || "无法读取音色设置。");
+      setVoiceError(error?.message || "无法读取语音设置。");
     }
   };
-  const customVoices = Array.isArray(voiceSnapshot?.customVoices) ? voiceSnapshot.customVoices : [];
-  const saveCustomAudio = async (event) => {
-    event.preventDefault();
-    if (savingCustomAudio) return;
-    const form = new FormData(event.currentTarget);
-    setSavingCustomAudio(true);
+  useEffect(() => { void refreshVoice(); }, []);
+
+  const voiceServices = Array.isArray(voiceSnapshot?.voiceServices) ? voiceSnapshot.voiceServices : [];
+  const voiceProfiles = Array.isArray(voiceSnapshot?.voiceProfiles) ? voiceSnapshot.voiceProfiles : [];
+  const legacyVoices = Array.isArray(voiceSnapshot?.customVoices) ? voiceSnapshot.customVoices : [];
+  const customProtocols = Array.isArray(voiceSnapshot?.customTtsAdapters) ? voiceSnapshot.customTtsAdapters : [];
+  const apiConnections = Array.isArray(apiServices?.connections) ? apiServices.connections : [];
+  const apiBindings = apiServices?.bindings && typeof apiServices.bindings === "object" ? apiServices.bindings : {};
+  const asrConnections = apiConnections.filter((connection) => (API_BINDINGS.find((item) => item.id === "realtime-asr")?.types || []).includes(connection.type));
+  const connectionNames = new Map(apiConnections.map((connection) => [connection.id, connection.name]));
+
+  const updateSnapshot = (next) => {
+    if (next?.status) setVoiceSnapshot(next);
+  };
+  const deleteService = async (service) => {
+    if (!service?.id || deletingServiceId) return;
+    setDeletingServiceId(service.id);
     setVoiceError("");
     try {
-      const next = await actions.voiceDesign?.saveCustomAudio({
-        adapter: customAdapter,
-        model: form.get("model"),
-        name: form.get("name"),
-        voiceId: form.get("voiceId"),
-      });
-      if (next?.status) setVoiceSnapshot(next);
-      setVoiceCreateOpen(false);
+      updateSnapshot(await actions.voiceDesign?.deleteService({ id: service.id }));
     } catch (error) {
-      setVoiceError(error?.message || "保存音色失败，请稍后重试。");
+      setVoiceError(error?.message || "删除语音服务失败，请稍后重试。");
     } finally {
-      setSavingCustomAudio(false);
+      setDeletingServiceId("");
     }
   };
-  const deleteCustomVoice = async (voice) => {
-    if (!voice?.id || deletingVoiceId) return;
-    setDeletingVoiceId(voice.id);
+  const deleteProfile = async (profile) => {
+    if (!profile?.id || deletingProfileId) return;
+    setDeletingProfileId(profile.id);
     setVoiceError("");
     try {
-      const next = await actions.voiceDesign?.deleteCustomVoice({
-        id: voice.id,
-        source: voice.source || "",
-        sourceContactId: voice.sourceContactId || "",
-      });
-      if (next?.status) setVoiceSnapshot(next);
+      updateSnapshot(await actions.voiceDesign?.deleteProfile({ id: profile.id }));
     } catch (error) {
       setVoiceError(error?.message || "删除音色失败，请稍后重试。");
     } finally {
-      setDeletingVoiceId("");
+      setDeletingProfileId("");
     }
   };
-  const apiConnections = Array.isArray(apiServices?.connections) ? apiServices.connections : [];
-  const apiBindings = apiServices?.bindings && typeof apiServices.bindings === "object" ? apiServices.bindings : {};
-  const connectionsFor = (bindingId) => {
-    const types = API_BINDINGS.find((item) => item.id === bindingId)?.types || [];
-    return apiConnections.filter((item) => types.includes(item.type));
+  const deleteLegacyVoice = async (voice) => {
+    if (!voice?.id || deletingLegacyVoiceId) return;
+    setDeletingLegacyVoiceId(voice.id);
+    setVoiceError("");
+    try {
+      updateSnapshot(await actions.voiceDesign?.deleteCustomVoice({
+        id: voice.id,
+        source: voice.source || "",
+        sourceContactId: voice.sourceContactId || "",
+      }));
+    } catch (error) {
+      setVoiceError(error?.message || "删除音色失败，请稍后重试。");
+    } finally {
+      setDeletingLegacyVoiceId("");
+    }
   };
+  const deleteProtocol = async (protocol) => {
+    if (!protocol?.id || deletingProtocolId) return;
+    setDeletingProtocolId(protocol.id);
+    setVoiceError("");
+    try {
+      updateSnapshot(await actions.voiceDesign?.deleteCustomTtsAdapter({ id: protocol.id }));
+    } catch (error) {
+      setVoiceError(error?.message || "删除自定义协议失败，请稍后重试。");
+    } finally {
+      setDeletingProtocolId("");
+    }
+  };
+
   return (
     <>
-    <SettingSurface
-      action={<Button onClick={() => setVoiceDialogOpen(true)} type="button" variant="secondary">配置联系人音色</Button>}
-      description="文字转语音与通话识别使用的 API。"
-      eyebrow="声音"
-      title="发送语音"
-    >
-        <div className="voice-binding-pair">
-          <div className="voice-binding-pair__item">
-            <span className="voice-binding-pair__label">TTS API</span>
-            <ApiConnectionPicker
-              connections={connectionsFor("voice-message")}
-              onManage={actions.openApiServices}
-              onSelect={(connectionId) => actions.selectApiBinding?.("voice-message", connectionId)}
-              selectedId={apiBindings["voice-message"] || ""}
-              title="为文字转语音选择 API"
-            />
-          </div>
-          <div className="voice-binding-pair__item">
-            <span className="voice-binding-pair__label">ASR API</span>
-            <ApiConnectionPicker
-              connections={connectionsFor("realtime-asr")}
-              onManage={actions.openApiServices}
-              onSelect={(connectionId) => actions.selectApiBinding?.("realtime-asr", connectionId)}
-              selectedId={apiBindings["realtime-asr"] || ""}
-              title="为语音识别选择 API"
-            />
-          </div>
-        </div>
-    </SettingSurface>
-    <CapabilitySettingsForm abilityId="voice-message" actions={actions} submitLabel="保存灵敏度">
-      <SettingSurface description="说话能量阈值越小越灵敏；静音判定帧数越多，一句话要停顿更久才算说完。" eyebrow="声音" title="通话灵敏度">
-        <FormGrid>
-          <FormField hint="建议 0.010～0.060；环境安静可以调低，有背景音可以调高。" label="说话能量阈值">
-            <input defaultValue={savedSettings(capability).voiceEnergyThreshold ?? 0.025} max="1" min="0.001" name="voiceEnergyThreshold" step="0.001" type="number" />
-          </FormField>
-          <FormField hint="默认 9 帧（约 0.4 秒停顿）。" label="静音判定帧数">
-            <input defaultValue={savedSettings(capability).voiceSilenceFrames ?? 9} max="120" min="1" name="voiceSilenceFrames" step="1" type="number" />
-          </FormField>
-        </FormGrid>
-      </SettingSurface>
-    </CapabilitySettingsForm>
-    <SettingSurface
-      action={<Button onClick={() => setVoiceCreateOpen(true)} type="button" variant="secondary">新增音色</Button>}
-      description="Agent 发语音消息和电话都会使用这里的声音。"
-      eyebrow="声音"
-      title="音色"
-    >
+      <SettingSurface
+        action={<Button onClick={() => setServiceDraft({})} type="button" variant="secondary">新建语音服务</Button>}
+        description="每项语音服务单独选择 API 连接和请求类型，可以同时保留多个服务。"
+        eyebrow="VOICE SERVICES"
+        title="语音服务"
+      >
         {voiceError ? <p className="voice-settings-copy">{voiceError}</p> : null}
-        {customVoices.length ? <div className="voice-candidate-list">{customVoices.map((voice) => (
-          <article className="voice-candidate" key={voice.key}>
+        {voiceServices.length ? <div className="voice-candidate-list">{voiceServices.map((service) => (
+          <article className="voice-candidate" key={service.id}>
             <div className="voice-candidate-copy">
-              <span className="reference-kicker">{voice.kindLabel}</span>
-              <h3>{voice.name}</h3>
-              <p>{voice.model ? `模型 ${voice.model}` : "使用默认模型"} · 音色 {voice.voiceId}</p>
+              <span className="reference-kicker">{voiceServiceTypeLabel(service.adapter)}</span>
+              <h3>{service.name}</h3>
+              <p>{connectionNames.get(service.connectionId) || "已移除的 API 连接"}{service.model ? ` · 模型 ${service.model}` : ""}</p>
             </div>
             <div className="voice-candidate-actions">
-              <button className="danger-button" disabled={deletingVoiceId === voice.id} onClick={() => void deleteCustomVoice(voice)} type="button">{deletingVoiceId === voice.id ? "正在删除…" : "删除"}</button>
+              <button className="secondary-button" onClick={() => setServiceDraft(service)} type="button">编辑</button>
+              <button className="danger-button" disabled={deletingServiceId === service.id} onClick={() => void deleteService(service)} type="button">{deletingServiceId === service.id ? "正在删除…" : "删除"}</button>
             </div>
           </article>
-        ))}</div> : <Empty className="capability-inline-empty" description="还没有音色。新增后可为联系人配置。" title="暂无音色" />}
-    </SettingSurface>
-      <ContactDeliverySettings actions={actions} capability={capability} contactsSnapshot={contactsSnapshot} description="所选联系人会通过 Suzu Agent Core 使用各自保存的音色设置。" emptyDescription="先创建联系人，再选择允许哪些联系人使用语音消息。" />
+        ))}</div> : <Empty className="capability-inline-empty" description="先新建一项服务，并选择它使用的 API 连接。" title="暂无语音服务" />}
+      </SettingSurface>
+      <SettingSurface
+        action={<Button onClick={() => setCustomProtocolOpen(true)} type="button" variant="secondary">新建协议</Button>}
+        description="用于接入尚未内置的语音服务。协议保存服务地址、请求与返回格式；API 连接只保存 Key。"
+        eyebrow="CUSTOM PROTOCOLS"
+        title="自定义协议"
+      >
+        {customProtocols.length ? <div className="voice-candidate-list">{customProtocols.map((protocol) => (
+          <article className="voice-candidate" key={protocol.id}>
+            <div className="voice-candidate-copy">
+              <span className="reference-kicker">自定义语音协议</span>
+              <h3>{protocol.name}</h3>
+              <p>{protocol.baseUrl || "旧配置未填写地址"} · {protocol.endpointPath} · {protocol.responseMode === "binary" ? "直接返回音频" : protocol.audioPath} · {protocol.outputFormat.toUpperCase()}</p>
+            </div>
+            <div className="voice-candidate-actions">
+              <button className="danger-button" disabled={deletingProtocolId === protocol.id} onClick={() => void deleteProtocol(protocol)} type="button">{deletingProtocolId === protocol.id ? "正在删除…" : "删除"}</button>
+            </div>
+          </article>
+        ))}</div> : <Empty className="capability-inline-empty" description="新建后，可在创建语音服务时选择它。" title="暂无自定义协议" />}
+      </SettingSurface>
+      <SettingSurface
+        action={<div className="voice-candidate-actions"><Button onClick={() => setVoiceDialogOpen(true)} type="button" variant="secondary">配置联系人音色</Button><Button onClick={() => setProfileDraft({})} type="button" variant="secondary">新建音色</Button></div>}
+        description="音色绑定到一项语音服务；联系人只需选择音色，不需要再分别配置 API。"
+        eyebrow="VOICES"
+        title="音色"
+      >
+        {voiceProfiles.length || legacyVoices.length ? <div className="voice-candidate-list">
+          {voiceProfiles.map((profile) => (
+            <article className="voice-candidate" key={profile.id}>
+              <div className="voice-candidate-copy">
+                <span className="reference-kicker">{profile.serviceName ? `${profile.serviceName} · ${voiceServiceTypeLabel(profile.adapter)}` : "语音服务不可用"}</span>
+                <h3>{profile.name}</h3>
+                <p>{profile.model ? `模型 ${profile.model}` : "使用服务默认模型"} · 音色 {profile.voiceId}</p>
+              </div>
+              <div className="voice-candidate-actions">
+                <button className="secondary-button" onClick={() => setProfileDraft(profile)} type="button">编辑</button>
+                <button className="danger-button" disabled={deletingProfileId === profile.id} onClick={() => void deleteProfile(profile)} type="button">{deletingProfileId === profile.id ? "正在删除…" : "删除"}</button>
+              </div>
+            </article>
+          ))}
+          {legacyVoices.map((voice) => (
+            <article className="voice-candidate" key={voice.key}>
+              <div className="voice-candidate-copy">
+                <span className="reference-kicker">之前保存的音色 · {voice.kindLabel}</span>
+                <h3>{voice.name}</h3>
+                <p>{voice.model ? `模型 ${voice.model}` : "使用旧版默认模型"} · 音色 {voice.voiceId}</p>
+              </div>
+              <div className="voice-candidate-actions">
+                <button className="danger-button" disabled={deletingLegacyVoiceId === voice.id} onClick={() => void deleteLegacyVoice(voice)} type="button">{deletingLegacyVoiceId === voice.id ? "正在删除…" : "删除"}</button>
+              </div>
+            </article>
+          ))}
+        </div> : <Empty className="capability-inline-empty" description="先创建语音服务，再新增它可用的音色。" title="暂无音色" />}
+      </SettingSurface>
+      <SettingSurface description="语音通话时用这条 API 把声音转写为文字。" eyebrow="VOICE INPUT" title="语音输入">
+        <ApiConnectionPicker
+          connections={asrConnections}
+          onManage={actions.openApiServices}
+          onSelect={(connectionId) => actions.selectApiBinding?.("realtime-asr", connectionId)}
+          selectedId={apiBindings["realtime-asr"] || ""}
+          title="为语音识别选择 API"
+        />
+      </SettingSurface>
+      <CapabilitySettingsForm abilityId="voice-message" actions={actions} submitLabel="保存灵敏度">
+        <SettingSurface description="说话能量阈值越小越灵敏；静音判定帧数越多，一句话要停顿更久才算说完。" eyebrow="CALL" title="通话灵敏度">
+          <FormGrid>
+            <FormField hint="建议 0.010～0.060；环境安静可以调低，有背景音可以调高。" label="说话能量阈值">
+              <input defaultValue={savedSettings(capability).voiceEnergyThreshold ?? 0.025} max="1" min="0.001" name="voiceEnergyThreshold" step="0.001" type="number" />
+            </FormField>
+            <FormField hint="默认 9 帧（约 0.4 秒停顿）。" label="静音判定帧数">
+              <input defaultValue={savedSettings(capability).voiceSilenceFrames ?? 9} max="120" min="1" name="voiceSilenceFrames" step="1" type="number" />
+            </FormField>
+          </FormGrid>
+        </SettingSurface>
+      </CapabilitySettingsForm>
+      <ContactDeliverySettings actions={actions} capability={capability} contactsSnapshot={contactsSnapshot} description="所选联系人可以调用语音消息，并使用各自选择的音色。" emptyDescription="先创建联系人，再选择允许哪些联系人使用语音消息。" />
       <VoiceContactConfigDialog onClose={() => setVoiceDialogOpen(false)} open={voiceDialogOpen} voiceDesign={actions.voiceDesign} />
-      <CreateStudioDialog ariaLabel="新增音色" onClose={() => { if (!savingCustomAudio) setVoiceCreateOpen(false); }} open={voiceCreateOpen}>
-        <SettingsDialogHeader onClose={() => { if (!savingCustomAudio) setVoiceCreateOpen(false); }} title="新增音色">音色</SettingsDialogHeader>
-        <div className="voice-settings-copy"><p>填写声音的模型与音色 ID。若已选择百炼地址且模型或音色 ID 为 CosyVoice / Qwen TTS，Suzu 会自动使用百炼协议；其他服务再按其文档选择适配器。</p></div>
-        <form className="voice-form voice-contact-config-form" onSubmit={saveCustomAudio}>
-          <label>声音备注名<input autoFocus disabled={savingCustomAudio} maxLength="80" name="name" placeholder="例如：Suzu 的电话声" required /></label>
-          <label>接口适配器（其他服务用）<Select className="create-select-react" disabled={savingCustomAudio} fullWidth onChange={setCustomAdapter} options={TTS_ADAPTER_OPTIONS} value={customAdapter} /></label>
-          <label>模型<input disabled={savingCustomAudio} maxLength="160" name="model" placeholder="留空时使用适配器默认模型" /></label>
-          <label>音色 ID<input disabled={savingCustomAudio} maxLength="200" name="voiceId" placeholder="填写服务商提供的 voice ID" required /></label>
-          <div className="voice-form-actions"><button className="secondary-button" disabled={savingCustomAudio} onClick={() => setVoiceCreateOpen(false)} type="button">取消</button><button className="primary-button" disabled={savingCustomAudio}>{savingCustomAudio ? "正在保存…" : "保存音色"}</button></div>
-        </form>
-      </CreateStudioDialog>
+      <VoiceServiceDialog apiConnections={apiConnections} customProtocols={customProtocols} onClose={() => setServiceDraft(null)} onOpenApiServices={actions.openApiServices} onSaved={updateSnapshot} open={Boolean(serviceDraft)} service={serviceDraft?.id ? serviceDraft : null} voiceDesign={actions.voiceDesign} />
+      <VoiceProfileDialog onClose={() => setProfileDraft(null)} onSaved={updateSnapshot} open={Boolean(profileDraft)} profile={profileDraft?.id ? profileDraft : null} services={voiceServices} voiceDesign={actions.voiceDesign} />
+      <CustomTtsAdapterDialog onClose={() => setCustomProtocolOpen(false)} onSaved={updateSnapshot} open={customProtocolOpen} voiceDesign={actions.voiceDesign} />
     </>
   );
 }
@@ -668,7 +944,7 @@ function ProactiveContactSettings({ actions, capability, contactsSnapshot }) {
     <>
       <CapabilitySettingsForm abilityId="proactive-contact" actions={actions}>
         {({ submitButton }) => (
-          <SettingSurface action={submitButton} description="A 只判断要不要联系；它结束后，软件会交给 B 让 Agent 自己安排下一次 A。可以按你的相处方式修改判断提示词。" eyebrow="主动关心" title="触发提示词">
+          <SettingSurface action={submitButton} description="A 负责判断此刻是否联系；A 完成后，B 会安排下一次 A。这里用于补充这段关系的联系语气、节奏与边界。" eyebrow="主动关心" title="触发提示词">
             <AsyncSwitchRow
               checked={capability.enabled === true && autoMaintain}
               description="软件启动或开启联系人时会补上第一条 A；之后由 A → B → 下一条 A 自己闭环。"
@@ -677,7 +953,7 @@ function ProactiveContactSettings({ actions, capability, contactsSnapshot }) {
               onChange={(enabled) => actions.saveSettings?.("proactive-contact", { autoMaintain: enabled })}
             />
             <FormGrid>
-              <FormField className="capability-form-field--wide" label="A · 是否主动联系提示词"><textarea defaultValue={settings.chainPrompt || ""} maxLength="12000" name="chainPrompt" /></FormField>
+              <FormField className="capability-form-field--wide" label="A · 主动联系补充原则"><textarea defaultValue={settings.chainPrompt || ""} maxLength="12000" name="chainPrompt" /></FormField>
               <FormField className="capability-form-field--wide" label="临时回访提示词"><textarea defaultValue={settings.followUpPrompt || ""} maxLength="12000" name="followUpPrompt" /></FormField>
             </FormGrid>
           </SettingSurface>

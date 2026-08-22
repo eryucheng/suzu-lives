@@ -3,7 +3,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 import { resolveAgentDataRoot } from "@suzu-lives/agent-registry";
+import { readCustomTtsAdapters } from "@suzu-lives/voice-message/custom-tts-adapters";
 import { normalizeTtsAdapter, ttsAdapterLabel } from "@suzu-lives/voice-message/tts-adapters";
+import { readVoiceProfiles, readVoiceServices, resolveVoiceProfile } from "@suzu-lives/voice-message/voice-services";
 import { DEFAULT_AGENT_JOURNAL_TIME } from "../services/agent-journal-schedule.mjs";
 import { createCapabilityRegistry } from "../services/capability-registry.mjs";
 
@@ -22,7 +24,7 @@ const DEFAULT_MAIL_BRIDGE_IMAP_HOST = "imap.163.com";
 const DEFAULT_MAIL_BRIDGE_PASSWORD_ENV = "SUZU_MAIL_PASSWORD";
 const DEFAULT_MAIL_BRIDGE_ROUTE_SUBJECT = "Suzu";
 const DEFAULT_MAIL_BRIDGE_ROUTE_PROMPT = "这是收到的一封邮件（{{subject}}，来自 {{from}}，{{receivedAt}}）：\n{{content}}\n{{attachments}}";
-const DEFAULT_PROACTIVE_CHAIN_PROMPT = "根据时间和前面聊的内容判断要不要主动联系对方。把判断过程写在思考中；要联系就正常发，不联系就只输出 NO_REPLY。";
+const DEFAULT_PROACTIVE_CHAIN_PROMPT = "在自然合适的时候关心对方，保持真诚、克制和贴合关系的语气。";
 const DEFAULT_PROACTIVE_FOLLOW_UP_PROMPT = "临时回访：用户在 TIME 提到 EVENT。先检查当前会话里是否已经有结果；已经有结果就只输出 NO_REPLY；还没有结果就自然地关心或询问。不要提及自动任务、回访任务或系统机制。这是一次性回访，不要设置下一次自动任务。";
 function clean(value) {
   return String(value ?? "").trim();
@@ -319,6 +321,7 @@ function publicCustomVoices(agentRoot) {
     const name = publicText(voice.name, 80);
     const adapter = normalizeTtsAdapter(voice.adapter || voice.provider);
     const voiceId = publicText(voice.voiceId, 200);
+    const customAdapterId = publicText(voice.customAdapterId, 100);
     if (!id || !name || !adapter || !voiceId || seen.has(id)) continue;
     seen.add(id);
     voices.push({
@@ -326,6 +329,7 @@ function publicCustomVoices(agentRoot) {
       name,
       adapter,
       voiceId,
+      ...(customAdapterId ? { customAdapterId } : {}),
       model: publicText(voice.model, 160),
       createdAt: publicText(voice.createdAt, 100),
     });
@@ -369,6 +373,18 @@ function configuredCustomVoiceId(value) {
   return clean(config.customVoiceId || tts.customVoiceId);
 }
 
+function configuredCustomAdapterId(value) {
+  const config = plainObject(value);
+  const tts = plainObject(config.tts);
+  return clean(config.customAdapterId || tts.customAdapterId);
+}
+
+function configuredVoiceProfileId(value) {
+  const config = plainObject(value);
+  const tts = plainObject(config.tts);
+  return clean(config.voiceProfileId || tts.voiceProfileId).toLowerCase();
+}
+
 function voiceMessageSettings({ dataRoot, agentRoot, voiceDesign, candidates, customVoices }) {
   const shared = publicJson(dataRoot, ["capabilities", "voice-message", "config.json"]);
   const scope = contactScopedAgentCapabilitySettings(shared);
@@ -376,26 +392,43 @@ function voiceMessageSettings({ dataRoot, agentRoot, voiceDesign, candidates, cu
   const contactVoiceId = configuredVoiceId(contact);
   const contactAdapter = configuredVoiceAdapter(contact);
   const contactCustomVoiceId = configuredCustomVoiceId(contact);
+  const contactCustomAdapterId = configuredCustomAdapterId(contact);
+  const contactVoiceProfileId = configuredVoiceProfileId(contact);
+  const selectedProfile = contactVoiceProfileId ? resolveVoiceProfile(dataRoot, contactVoiceProfileId) : null;
+  const voiceServices = readVoiceServices(dataRoot);
+  const voiceProfiles = readVoiceProfiles(dataRoot);
   const availableVoiceIds = new Set(candidates.map((candidate) => candidate.voiceId));
   let voiceId = "";
   let voiceAdapter = "dashscope-qwen";
   let customVoiceId = "";
+  let customAdapterId = "";
   let selectionSource = "missing";
   let diagnostic = "";
   if (!agentRoot) {
     selectionSource = "missing-contact";
     diagnostic = "请先选择可用项目，才能查看或保存音色。";
+  } else if (contactVoiceProfileId) {
+    if (selectedProfile) {
+      voiceId = selectedProfile.profile.voiceId;
+      voiceAdapter = selectedProfile.service.adapter;
+      selectionSource = "profile";
+    } else {
+      selectionSource = "invalid-profile";
+      diagnostic = "当前项目保存的音色已经不可用；发送会被拒绝，请重新选择。";
+    }
   } else if (contactVoiceId) {
     if (contactCustomVoiceId) {
       const selected = customVoices.find((item) => (
         item.id === contactCustomVoiceId
         && item.adapter === contactAdapter
         && item.voiceId === contactVoiceId
+        && clean(item.customAdapterId) === contactCustomAdapterId
       ));
       if (selected) {
         voiceId = contactVoiceId;
         voiceAdapter = contactAdapter;
         customVoiceId = selected.id;
+        customAdapterId = clean(selected.customAdapterId);
         selectionSource = "contact";
       } else {
         selectionSource = "invalid-contact";
@@ -409,16 +442,18 @@ function voiceMessageSettings({ dataRoot, agentRoot, voiceDesign, candidates, cu
       selectionSource = "invalid-contact";
         diagnostic = "当前项目保存的音色不在候选库中；发送会被安全拒绝，请重新选择。";
     }
-  } else if (!candidates.length && !customVoices.length) {
-    diagnostic = "当前项目还没有可用音色；请先在音色设计中创建并保存候选，或添加自定义音频。";
+  } else if (!candidates.length && !customVoices.length && !voiceProfiles.length) {
+    diagnostic = "当前项目还没有可用音色；请先在“语音消息”中创建语音服务和音色。";
   } else {
     diagnostic = "当前联系人尚未选择音色；请点击“配置联系人音色”后再发送。";
   }
   return {
-    saved: Object.keys(shared).length > 0 || Object.keys(contact).length > 0 || Object.keys(voiceDesign).length > 0 || candidates.length > 0 || customVoices.length > 0,
+    saved: Object.keys(shared).length > 0 || Object.keys(contact).length > 0 || Object.keys(voiceDesign).length > 0 || candidates.length > 0 || customVoices.length > 0 || voiceServices.length > 0 || voiceProfiles.length > 0,
     voiceId,
     voiceAdapter,
+    voiceProfileId: contactVoiceProfileId,
     customVoiceId,
+    customAdapterId,
     timeoutMs: numberOrFallback(shared.timeoutMs, { minimum: 1000, maximum: 600000, fallback: 30000, integer: true }),
     voiceEnergyThreshold: numberOrFallback(shared.voiceEnergyThreshold, { minimum: 0.001, maximum: 1, fallback: 0.025 }),
     voiceSilenceFrames: numberOrFallback(shared.voiceSilenceFrames, { minimum: 1, maximum: 120, fallback: 9, integer: true }),
@@ -427,7 +462,7 @@ function voiceMessageSettings({ dataRoot, agentRoot, voiceDesign, candidates, cu
     enabledContactIds: scope.enabledContactIds,
     selectionSource,
     voiceDiagnostic: diagnostic,
-    canSelectVoice: Boolean(agentRoot) && (candidates.length > 0 || customVoices.length > 0),
+    canSelectVoice: Boolean(agentRoot) && (candidates.length > 0 || customVoices.length > 0 || voiceProfiles.length > 0),
   };
 }
 
@@ -496,7 +531,10 @@ function savedCapabilitySettings(settings, dataRoot) {
   const proactiveContact = publicJson(dataRoot, ["automation", "proactive-contact", "config.json"]);
   const phonePrompt = plainObject(phoneCamera.prompt);
   const candidates = voiceAgentRoot ? publicVoiceCandidates(voiceAgentRoot) : [];
-  const customVoices = voiceAgentRoot ? publicCustomVoices(voiceAgentRoot) : [];
+  const customTtsAdapterIds = new Set(readCustomTtsAdapters(dataRoot).map((adapter) => adapter.id));
+  const customVoices = voiceAgentRoot
+    ? publicCustomVoices(voiceAgentRoot).filter((voice) => voice.adapter !== "custom-http-tts" || customTtsAdapterIds.has(voice.customAdapterId))
+    : [];
   const voiceMessage = voiceMessageSettings({ dataRoot, agentRoot: voiceAgentRoot, voiceDesign, candidates, customVoices });
   return {
     "image-generation": {
@@ -1015,26 +1053,41 @@ export function createCapabilitiesService({
         if (!adapter) throw new Error("请选择受支持的语音接口适配器。 ");
         if (clean(input.customVoiceId)) {
           const customVoiceId = boundedText(input.customVoiceId, "自定义音频", 100);
+          const customAdapterId = boundedText(input.customAdapterId, "自定义 TTS 适配器", 100);
+          const availableCustomAdapterIds = new Set(readCustomTtsAdapters(dataRoot).map((item) => item.id));
           const customVoice = publicCustomVoices(agentRoot).find((item) => (
-            item.id === customVoiceId && item.adapter === adapter && item.voiceId === voiceId
+            item.id === customVoiceId
+            && item.adapter === adapter
+            && item.voiceId === voiceId
+            && clean(item.customAdapterId) === customAdapterId
           ));
+          if (adapter === "custom-http-tts" && !availableCustomAdapterIds.has(customAdapterId)) {
+            throw new Error("所选自定义 TTS 适配器已经不可用；请重新选择音色。 ");
+          }
           if (!customVoice) throw new Error(`所选${ttsAdapterLabel(adapter)}自定义音色不属于当前项目，请重新选择。 `);
           nextContact = {
             ...contact,
-            schemaVersion: 4,
+            schemaVersion: 5,
             adapter,
             voiceId,
             customVoiceId: customVoice.id,
+            ...(customVoice.customAdapterId ? { customAdapterId: customVoice.customAdapterId } : {}),
           };
         } else if (adapter === "dashscope-qwen") {
           const candidates = publicVoiceCandidates(agentRoot);
           if (!candidates.some((candidate) => candidate.voiceId === voiceId)) {
             throw new Error("所选音色不属于当前项目的候选库，请重新选择。 ");
           }
-          const { customVoiceId: _customVoiceId, provider: _provider, adapter: _adapter, ...contactWithoutCustomVoice } = contact;
+          const {
+            customVoiceId: _customVoiceId,
+            customAdapterId: _customAdapterId,
+            provider: _provider,
+            adapter: _adapter,
+            ...contactWithoutCustomVoice
+          } = contact;
           nextContact = {
             ...contactWithoutCustomVoice,
-            schemaVersion: 4,
+            schemaVersion: 5,
             adapter,
             voiceId,
           };

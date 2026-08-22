@@ -35,6 +35,22 @@ test("maps a Suzu session to one runtime session and emits ordered product event
   await runtime.closeRuntime();
 });
 
+test("reports only sessions with an unfinished turn to shared runtime maintenance", async () => {
+  const driver = createFakeAgentRuntimeDriver();
+  const runtime = createAgentRuntime({ driver, createId: fixedIds() });
+  const first = await runtime.createSession({ sessionId: "first-session", cwd: "D:\\Suzu\\first" });
+  const second = await runtime.createSession({ sessionId: "second-session", cwd: "D:\\Suzu\\second" });
+  const firstTurn = await runtime.sendTurn({ sessionId: first.sessionId, input: "第一条" });
+  const secondTurn = await runtime.sendTurn({ sessionId: second.sessionId, input: "第二条" });
+
+  assert.deepEqual(runtime.activeSessionIds(), [first.sessionId, second.sessionId]);
+  driver.emit({ type: "assistant-completed", runtimeSessionId: first.runtimeSessionId, turnId: firstTurn.turnId, text: "完成" });
+  assert.deepEqual(runtime.activeSessionIds(), [second.sessionId]);
+  driver.emit({ type: "turn-cancelled", runtimeSessionId: second.runtimeSessionId, turnId: secondTurn.turnId });
+  assert.deepEqual(runtime.activeSessionIds(), []);
+  await runtime.closeRuntime();
+});
+
 test("passes an internal task through the neutral runtime without creating a text prompt", async () => {
   const driver = createFakeAgentRuntimeDriver();
   const runtime = createAgentRuntime({ driver, createId: fixedIds() });

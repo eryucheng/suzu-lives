@@ -2,13 +2,13 @@ export const PROACTIVE_CONTACT_ID = "proactive-contact";
 export const PROACTIVE_CONTACT_NAME = "主动联系";
 
 /**
- * Returns only the Agent-facing registration text. Suzu owns task creation and
- * storage; the active direct conversation provides the scoped CLI invocation.
+ * Returns only the Agent-facing registration text. Suzu owns chain orchestration
+ * and storage; the active direct conversation provides the scoped CLI invocation.
  */
 export function renderProactiveContactSkill() {
   return `---
 name: suzu-lives-proactive-contact
-description: 管理 Agent 的主动关心和临时回访；仅在链式自动任务触发、用户明确要求启动或恢复，或出现确实值得稍后回访的未完成事项时使用。
+description: 说明 Suzu 的链式主动关心分工，并管理一次性临时回访；仅在链式自动任务触发、用户明确要求启动或恢复，或出现确实值得稍后回访的未完成事项时使用。
 ---
 
 <!-- suzu-lives:ability:proactive-contact -->
@@ -22,17 +22,13 @@ description: 管理 Agent 的主动关心和临时回访；仅在链式自动任
 
 ## 链式主动关心
 
-收到包含“根据时间和前面聊的内容”的提示时，把它视为链式主动关心触发。
+链式主动关心由软件维护为 A → B → 下一条 A：
 
-1. 根据本轮时间 Hook 提供的准确时间、当前会话和最近对话，自主判断是否适合联系用户。
-2. 自由决定下一次触发间隔。结合当前时间、聊天节奏以及用户是否可能正在睡觉或忙碌，不使用固定间隔表。
-3. 设置且只设置一个下一次自动任务。执行时保留系统提示给出的当前会话参数：
+1. A 是一次联系判断。收到 A 自动任务时，根据本轮时间、当前会话和最近对话判断是否适合联系用户；适合时只写自然、完整、可直接送达给对方的消息，暂不适合时只输出精确的 NO_REPLY。
+2. A 完成后，软件会启动内部 B。B 负责为当前联系人创建下一次 A；B 的任务正文会提供准确的 schedule add 参数。
+3. 普通聊天不续约链式任务。用户手动开启或恢复主动关心时，由软件补上链路。
 
-    <当前会话系统提示中的 schedule add 命令> --delay Xm --prompt "<系统提示中的链式主动关心提示词>" --desc "链式主动关心"
-
-需要按小时延迟时把 Xm 换成 Xh。设置下一次自动任务后，再输出自然的聊天内容；不适合联系时只输出精确的 NO_REPLY。
-
-不要在正文中提及自动任务、触发任务、判断流程或系统机制。普通聊天结束时不要重复创建链式主动关心；只有当前链式自动任务触发，或者用户明确要求启动、恢复时才创建。
+以当前自动任务正文为准；A 的内容只负责联系判断和对方可见回复。
 
 ## 创建临时回访
 

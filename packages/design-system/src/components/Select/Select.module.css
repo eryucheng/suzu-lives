@@ -70,11 +70,8 @@
 
 /* ---- 浮层面板 ---- */
 .panel {
-  position: absolute;
-  z-index: 60;
-  top: calc(100% + 2px);
-  left: 0;
-  right: 0;
+  position: fixed;
+  z-index: 110;
   max-height: min(360px, calc(100dvh - 24px));
   overflow-x: hidden;
   overflow-y: auto;

@@ -411,7 +411,7 @@ test("Agent Core chat keeps a scheduled NO_REPLY terminal even after an internal
   chat.dispose();
 });
 
-test("internal scheduled work supplies its body through dynamic context and keeps a silent B phase off every reply transport", async () => {
+test("internal scheduled work provides its instruction at the opening model step and keeps a silent B phase off every reply transport", async () => {
   const root = await temporaryRoot();
   const projectRoot = path.join(root, "contact");
   await fs.mkdir(projectRoot, { recursive: true });
@@ -430,7 +430,12 @@ test("internal scheduled work supplies its body through dynamic context and keep
       kind: "automation-task",
       text: payload.taskContext.text,
     };
-  }, { id: "task-context" });
+  }, { id: "task-context", order: -110 });
+  lifecycle.on("DynamicContextCollect", (payload) => ({
+    id: `time:${payload.step}`,
+    kind: "time-awareness",
+    text: `当前内部步骤 ${payload.step}`,
+  }), { id: "time-awareness", order: -100 });
   const chat = createConversationChatService({
     settingsService: { load: () => ({}) },
     reader: fakeReader(projectRoot),
@@ -466,7 +471,21 @@ test("internal scheduled work supplies its body through dynamic context and keep
     data: { sessionId: "contact-session", coreTurn: 3, step: 1 },
   });
   await flush();
-  assert.equal(runtime.calls.respondLifecycleRequest.at(-1).result.blocks[0].text, "安排下一次主动关心。");
+  assert.deepEqual(runtime.calls.respondLifecycleRequest.at(-1).result.blocks.map((block) => [block.kind, block.text]), [
+    ["automation-task", "安排下一次主动关心。"],
+    ["time-awareness", "当前内部步骤 1"],
+  ]);
+  runtime.emit({
+    type: "lifecycle-request",
+    requestId: "task-context-2",
+    lifecycleEvent: "DynamicContextCollect",
+    data: { sessionId: "contact-session", coreTurn: 3, step: 2 },
+  });
+  await flush();
+  assert.deepEqual(runtime.calls.respondLifecycleRequest.at(-1).result.blocks.map((block) => [block.kind, block.text]), [
+    ["time-awareness", "当前内部步骤 2"],
+  ]);
+  assert.equal(lifecycleEvents.filter(([name]) => name === "DynamicContextCollect").at(-1)?.[1].taskContext, undefined);
   runtime.emit({ type: "tool-started", sessionId: "contact-session", turnId: accepted.requestId, toolName: "schedule" });
   runtime.emit({ type: "assistant-delta", sessionId: "contact-session", turnId: accepted.requestId, text: "内部安排完成。" });
   runtime.emit({ type: "assistant-completed", sessionId: "contact-session", turnId: accepted.requestId, text: "完成" });
@@ -662,7 +681,7 @@ test("Agent Core capability bridge gives Agent-created files the durable chat-at
         resourceKind: "runtime",
         driver: "conversation-attachment",
         action: "deliver",
-        actionDescription: "将已生成或已确认的本机绝对路径交付到当前聊天。input 必须是 { items: [{ path: \"绝对路径\", kind: \"image\" | \"audio\" | \"file\" }] }；图片支持 AVIF/BMP/GIF/HEIC/ICO/JPG/PNG/SVG/TIFF/WebP，音频仅支持 MP3。动作成功后，附件会出现在当前聊天；已绑定微信的会话会自动转发同一附件。",
+        actionDescription: "将已有且已确认的本机绝对路径作为附件交付到当前聊天。图片生成、手机拍照式图片和语音消息成功时由软件自动投放；本动作用于其他已有文件。input 必须是 { items: [{ path: \"绝对路径\", kind: \"image\" | \"audio\" | \"file\" }] }；图片支持 AVIF/BMP/GIF/HEIC/ICO/JPG/PNG/SVG/TIFF/WebP，音频仅支持 MP3。动作成功后，附件会出现在当前聊天；已绑定微信的会话会自动转发同一附件。",
         actionName: "发送聊天附件",
       }],
     },
@@ -687,6 +706,96 @@ test("Agent Core capability bridge gives Agent-created files the durable chat-at
   assert.equal(delivered.result.value.items[0].kind, "file");
   assert.match(delivered.result.value.items[0].path, /[\\/]attachments[\\/]/u);
   assert.equal(await fs.readFile(delivered.result.value.items[0].path, "utf8"), "这是 Suzu 写好的报告。");
+  chat.dispose();
+});
+
+test("Agent creation capabilities automatically deliver their declared output to the active chat", async () => {
+  const root = await temporaryRoot();
+  const dataRoot = path.join(root, "data");
+  const projectRoot = path.join(root, "contact");
+  const generatedImage = path.join(projectRoot, "generated.png");
+  await fs.mkdir(projectRoot, { recursive: true });
+  await fs.writeFile(generatedImage, Buffer.from("generated-image"));
+  const runtime = createFakeRuntime();
+  const events = [];
+  const attachmentService = createConversationAttachmentService({ dataRoot });
+  const capabilityRuntime = {
+    async invoke(request) {
+      assert.equal(request.capabilityId, "image-generation");
+      assert.equal(request.action, "generate");
+      return {
+        capabilityId: "image-generation",
+        action: "generate",
+        resourceId: "agent-action",
+        kind: "runtime",
+        status: "completed",
+        outputDelivery: { kind: "image", pathField: "path" },
+        value: {
+          status: "ok",
+          path: generatedImage,
+          model: "fixture-image-model",
+          sent: false,
+          note: "已生成图片。请使用 conversation-attachment 交付给用户。",
+        },
+      };
+    },
+  };
+  const chat = createConversationChatService({
+    attachmentService,
+    capabilityRuntime,
+    settingsService: { load: () => ({}) },
+    reader: fakeReader(projectRoot),
+    runtime,
+    onEvent: (event) => events.push(event),
+  });
+
+  const accepted = await chat.sendToSession({
+    content: "给我画一张图",
+    contactId: "contact-suzu",
+    sessionId: "contact-session",
+    projectRoot,
+    deliverToWechat: true,
+  });
+  runtime.emit({ type: "turn-started", sessionId: "contact-session", turnId: accepted.requestId });
+  runtime.emit({
+    type: "lifecycle-request",
+    requestId: "auto-image-delivery",
+    lifecycleEvent: "CapabilityExecute",
+    data: {
+      sessionId: "contact-session",
+      coreTurn: 2,
+      step: 1,
+      capabilityId: "image-generation",
+      action: "generate",
+      input: { prompt: "一只猫" },
+    },
+  });
+  const response = await waitFor(() => runtime.calls.respondLifecycleRequest
+    .find((item) => item.requestId === "auto-image-delivery"));
+  assert.equal(response.result.status, "completed");
+  assert.equal(response.result.value.type, "suzu-conversation-attachment");
+  assert.equal(response.result.value.items[0].kind, "image");
+  assert.match(response.result.value.items[0].path, /[\\/]attachments[\\/]/u);
+  assert.equal(Object.hasOwn(response.result.value, "generated"), false);
+  const receiptText = JSON.stringify(response.result.value);
+  assert.equal(receiptText.includes("请使用 conversation-attachment"), false);
+  assert.equal(receiptText.includes('"sent":false'), false);
+
+  // The Core bridge returns `value` as the tool result payload.  Its ordinary
+  // completion event therefore drives both the local renderer and linked
+  // transport without a second model-selected delivery action.
+  runtime.emit({
+    type: "tool-completed",
+    sessionId: "contact-session",
+    turnId: accepted.requestId,
+    toolName: "suzu_capability",
+    data: { callId: "generated-image", result: JSON.stringify(response.result.value) },
+  });
+  await flush();
+  const media = events.find((event) => event.type === "agent-media");
+  assert.equal(media.deliverToWechat, true);
+  assert.equal(media.media[0].kind, "image");
+  assert.equal(media.media[0].path, response.result.value.items[0].path);
   chat.dispose();
 });
 
@@ -1043,6 +1152,57 @@ test("Agent Core chat sends enabled image and video understanding results to the
   }], 500, { dataRoot });
   assert.deepEqual(messages[0].blocks.map((block) => block.kind), ["text", "media", "media"]);
   assert.equal(messages[0].blocks.some((block) => String(block.text || "").includes("suzu-media-understanding")), false);
+  chat.dispose();
+});
+
+test("Agent Core chat sends images natively to a visual main model and retains the video fallback", async () => {
+  const root = await temporaryRoot();
+  const dataRoot = path.join(root, "data");
+  const projectRoot = path.join(root, "contact");
+  const image = path.join(root, "reference.png");
+  const video = path.join(root, "moment.mp4");
+  await fs.mkdir(projectRoot, { recursive: true });
+  await fs.writeFile(image, Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl+jh0AAAAASUVORK5CYII=", "base64"));
+  await fs.writeFile(video, Buffer.from([0x00, 0x00, 0x00, 0x18, 0x66, 0x74, 0x79, 0x70]));
+  const runtime = createFakeRuntime();
+  runtime.currentModelCapabilities = async () => ({
+    provider: "deepseek-official",
+    model: "deepseek-v4-flash-vision-exp",
+    inputModalities: ["text", "image"],
+    supportsImageInput: true,
+  });
+  const invocations = [];
+  const capabilityRuntime = {
+    availableActions: ({ capabilityId }) => [{ capabilityId, action: "analyze" }],
+    async invoke(value) {
+      invocations.push(value);
+      return { status: "completed", value: { summary: "视频里有人向镜头挥手。" } };
+    },
+  };
+  const chat = createConversationChatService({
+    attachmentService: createConversationAttachmentService({ dataRoot }),
+    capabilityRuntime,
+    settingsService: { load: () => ({}) },
+    reader: fakeReader(projectRoot),
+    runtime,
+  });
+
+  await chat.send({
+    content: "这两个媒体是什么？",
+    media: [
+      { kind: "image", path: image },
+      { kind: "file", path: video },
+    ],
+  });
+
+  const input = runtime.calls.sendTurn[0].input;
+  assert.deepEqual(input.map((part) => part.type), ["text", "text", "image", "text"]);
+  assert.equal(input[2].mediaType, "image/png");
+  assert.equal(input[2].data.length > 0, true);
+  assert.match(input[3].text, /<suzu-media-understanding>/u);
+  assert.deepEqual(invocations.map((item) => [item.capabilityId, item.action]), [
+    ["video-understanding", "analyze"],
+  ]);
   chat.dispose();
 });
 

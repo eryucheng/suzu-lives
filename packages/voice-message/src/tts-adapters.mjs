@@ -5,10 +5,10 @@ function clean(value) {
 export const TTS_ADAPTERS = Object.freeze({
   "openai-speech": Object.freeze({
     id: "openai-speech",
-    label: "OpenAI Compatible TTS",
-    detail: "适用于实现 OpenAI /audio/speech 协议的语音服务。",
+    label: "OpenAI TTS",
+    detail: "使用 OpenAI 官方文字转语音接口。",
     connectionTypes: Object.freeze(["openai-compatible"]),
-    defaultBaseUrl: "",
+    defaultBaseUrl: "https://api.openai.com/v1",
     defaultModel: "",
     ledgerProvider: "OpenAI Compatible",
   }),
@@ -56,6 +56,33 @@ export const TTS_ADAPTERS = Object.freeze({
     defaultBaseUrl: "https://api.minimax.io/v1",
     defaultModel: "speech-2.8-hd",
     ledgerProvider: "MiniMax",
+  }),
+  "xiaomi-mimo-tts": Object.freeze({
+    id: "xiaomi-mimo-tts",
+    label: "小米 MiMo TTS",
+    detail: "使用小米 MiMo V2.5 语音合成接口。",
+    connectionTypes: Object.freeze(["tts-api", "openai-compatible", "generic-api"]),
+    defaultBaseUrl: "https://api.xiaomimimo.com/v1",
+    defaultModel: "mimo-v2.5-tts",
+    ledgerProvider: "小米 MiMo",
+  }),
+  "elevenlabs-speech": Object.freeze({
+    id: "elevenlabs-speech",
+    label: "ElevenLabs TTS",
+    detail: "使用 ElevenLabs 标准文字转语音接口。",
+    connectionTypes: Object.freeze(["tts-api", "openai-compatible", "generic-api"]),
+    defaultBaseUrl: "https://api.elevenlabs.io",
+    defaultModel: "eleven_multilingual_v2",
+    ledgerProvider: "ElevenLabs",
+  }),
+  "custom-http-tts": Object.freeze({
+    id: "custom-http-tts",
+    label: "自定义 JSON TTS",
+    detail: "使用本机保存的请求模板、音频返回位置与格式。",
+    connectionTypes: Object.freeze(["tts-api", "openai-compatible", "generic-api"]),
+    defaultBaseUrl: "",
+    defaultModel: "",
+    ledgerProvider: "自定义 TTS",
   }),
 });
 
@@ -142,6 +169,7 @@ function dashscopeAdapterForModel(model) {
 export function resolveTtsAdapterForService({ adapter, baseUrl = "", model = "", voiceId = "" } = {}) {
   const configured = normalizeTtsAdapter(adapter);
   if (!isOfficialDashScopeEndpoint(baseUrl)) return configured;
+  if (!new Set(["openai-speech", "dashscope-qwen", "dashscope-cosyvoice"]).has(configured)) return configured;
   const inferred = dashscopeAdapterForModel(model) || dashscopeAdapterForModel(voiceId);
   if (inferred) return inferred;
   return configured;
@@ -168,6 +196,15 @@ export function ttsProtocolForRuntime({ adapter, model = "" } = {}) {
     return "dashscope-sse";
   }
   return "json";
+}
+
+export function ttsAdapterModelCompatibilityError({ adapter, model = "" } = {}) {
+  const normalized = normalizeTtsAdapter(adapter);
+  const selectedModel = clean(model).toLowerCase();
+  if (normalized === "xiaomi-mimo-tts" && selectedModel !== "mimo-v2.5-tts") {
+    return "小米 MiMo TTS 当前使用 mimo-v2.5-tts 与内置音色。请填写该模型名称，或改用与音色设计、声音复刻对应的专用配置。";
+  }
+  return "";
 }
 
 export function ttsAdapterVoiceCompatibilityError({ adapter, model = "", voiceId = "" } = {}) {

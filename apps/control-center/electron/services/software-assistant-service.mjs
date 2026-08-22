@@ -127,7 +127,7 @@ export function createSoftwareAssistantService({
   fsOps = fs,
   onEvent = () => {},
 } = {}) {
-  if (typeof runtime?.ensureSession !== "function" || typeof runtime?.history !== "function" || typeof runtime?.sendTurn !== "function" || typeof runtime?.cancelTurn !== "function" || typeof runtime?.respondLifecycleRequest !== "function" || typeof runtime?.subscribe !== "function") {
+  if (typeof runtime?.ensureSession !== "function" || typeof runtime?.history !== "function" || typeof runtime?.sendTurn !== "function" || typeof runtime?.cancelTurn !== "function" || typeof runtime?.purgeSession !== "function" || typeof runtime?.respondLifecycleRequest !== "function" || typeof runtime?.subscribe !== "function") {
     throw new SoftwareAssistantServiceError("软件助手需要完整的 Agent Core 会话运行时。", { code: "RUNTIME_REQUIRED" });
   }
   if (!settingsService?.load || !settingsService?.update) {
@@ -453,7 +453,37 @@ export function createSoftwareAssistantService({
     return { accepted: true, stopped: true, requestId: turn.requestId };
   };
 
+  // The product helper is one fixed, non-contact session. Keep its workspace
+  // and versioned manual, but delete its native Agent Core transcript so the
+  // next question begins with no prior assistant context.
+  const clearHistory = async () => {
+    if (disposed) throw new SoftwareAssistantServiceError("软件助手已经停止。", { code: "SERVICE_STOPPED" });
+    if (activeTurns.size) {
+      throw new SoftwareAssistantServiceError("Suzu 正在处理当前问题，请结束后再清空记录。", { code: "TURN_ACTIVE" });
+    }
+    try {
+      await runtime.purgeSession({
+        sessionId: SUZU_SOFTWARE_ASSISTANT_SESSION_ID,
+        cwd: workspaceDirectory,
+        imageAttachmentIds: [],
+        protectedImageAttachmentIds: [],
+      });
+    } catch (error) {
+      throw new SoftwareAssistantServiceError(
+        `无法清空问 Suzu 的记录：${clean(error?.message) || "未知错误。"}`,
+        { cause: error, code: clean(error?.code) || "CLEAR_HISTORY_FAILED" },
+      );
+    }
+    emit({ type: "history-cleared" });
+    return Object.freeze({
+      accepted: true,
+      cleared: true,
+      sessionId: SUZU_SOFTWARE_ASSISTANT_SESSION_ID,
+    });
+  };
+
   return Object.freeze({
+    clearHistory,
     snapshot,
     send,
     stop,

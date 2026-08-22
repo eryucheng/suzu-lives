@@ -5,7 +5,7 @@ import path from "node:path";
 import WebSocket from "ws";
 
 import { appendUsageEvent } from "@suzu-lives/cost-ledger";
-import { resolveDirectVoiceRuntime, synthesizeDirectVoiceAudio } from "@suzu-lives/voice-message/direct-voice-message";
+import { resolveConfiguredVoiceService, resolveDirectVoiceRuntime, synthesizeDirectVoiceAudio } from "@suzu-lives/voice-message/direct-voice-message";
 import { DEFAULT_REALTIME_ASR_MODEL, realtimeAsrWebSocketUrl } from "./realtime-asr.mjs";
 
 const DEFAULT_ASR_MODEL = DEFAULT_REALTIME_ASR_MODEL;
@@ -738,9 +738,13 @@ export function createRealtimeVoiceCallService({
       const frames = Number(shared.voiceSilenceFrames);
       if (Number.isFinite(frames) && frames >= 1 && frames <= 120) voiceSilenceFrames = Math.round(frames);
     } catch { /* 没有共享语音设置时使用默认阈值。 */ }
-    const selectedVoiceConnection = voiceConnection;
+    const selectedVoiceService = resolveConfiguredVoiceService({ dataRoot, agentId });
+    const selectedVoiceConnection = selectedVoiceService
+      ? await connectionsService.resolveApiConnectionById?.(selectedVoiceService.service.connectionId)
+      : voiceConnection;
     if (!selectedVoiceConnection?.key) {
-      throw new RealtimeVoiceCallError("语音通话需要“语音消息”API；请先在 设置 → API 中选择并配置它。 ");
+      const label = selectedVoiceService ? `语音服务“${selectedVoiceService.service.name}”` : "语音消息";
+      throw new RealtimeVoiceCallError(`语音通话需要${label}使用的 API；请先在 设置 → API 中检查并配置它。 `);
     }
     const voiceRuntime = resolveVoiceRuntime({
       dataRoot,

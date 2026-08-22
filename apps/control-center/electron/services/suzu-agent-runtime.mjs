@@ -42,6 +42,7 @@ const SUZU_SOFTWARE_ASSISTANT_PRESET_ASSET_DIRECTORY = path.join(
   SUZU_SOFTWARE_ASSISTANT_AGENT_PRESET,
 );
 const SUZU_SOFTWARE_ASSISTANT_PRESET_FILES = ["agent.cordis.yml", "preset.yml"];
+const AGENT_DEFAULT_MODEL_SETTINGS_NAMESPACE = "agent-default-model";
 export class SuzuAgentRuntimeServiceError extends Error {
   constructor(message, { cause, code = "SUZU_AGENT_RUNTIME_ERROR" } = {}) {
     super(message, cause ? { cause } : undefined);
@@ -146,6 +147,28 @@ function unwrapAgentCoreResponse(response, operation) {
     clean(error.message) || `Suzu Agent Core 拒绝了${operation}。`,
     { code: clean(error.code) || "AGENT_CORE_RPC_REJECTED" },
   );
+}
+
+function selectedModelCapabilities(settings, catalog) {
+  const namespaces = Array.isArray(settings?.namespaces) ? settings.namespaces : [];
+  const selectionNamespace = namespaces.find((entry) => clean(entry?.ns) === AGENT_DEFAULT_MODEL_SETTINGS_NAMESPACE);
+  const selection = plainObject(selectionNamespace?.value);
+  const provider = clean(selection.provider);
+  const model = clean(selection.model);
+  const groups = Array.isArray(catalog?.groups) ? catalog.groups : [];
+  const group = groups.find((entry) => clean(entry?.id) === provider);
+  const entry = (Array.isArray(group?.models) ? group.models : [])
+    .find((candidate) => clean(candidate?.id) === model);
+  const inputModalities = [...new Set((Array.isArray(entry?.inputModalities) ? entry.inputModalities : [])
+    .map((modality) => clean(modality).toLowerCase())
+    .filter((modality) => modality === "text" || modality === "image"))];
+  return Object.freeze({
+    provider,
+    model,
+    known: Boolean(provider && model && entry),
+    inputModalities: Object.freeze(inputModalities),
+    supportsImageInput: inputModalities.includes("image"),
+  });
 }
 
 // Keep the product-side history contract stable even when Agent Core changes
@@ -658,6 +681,16 @@ export function createSuzuAgentRuntime({
     // that attempt to settle, then always stop the owned process before any
     // durable file is removed. A startup failure leaves no running writer.
     if (startTask) await startTask.catch(() => undefined);
+    const activeSessionIds = typeof runtime?.activeSessionIds === "function"
+      ? runtime.activeSessionIds().map((value) => clean(value)).filter(Boolean)
+      : [];
+    const otherActiveSessions = activeSessionIds.filter((candidate) => candidate !== id);
+    if (otherActiveSessions.length) {
+      throw new SuzuAgentRuntimeServiceError(
+        "其他 Suzu 会话仍在处理任务，请等待其完成后再清空这段记录。",
+        { code: "AGENT_OTHER_SESSION_ACTIVE" },
+      );
+    }
     await disposeFacade().catch(() => undefined);
     if (supervisor) {
       try {
@@ -701,17 +734,47 @@ export function createSuzuAgentRuntime({
     return Object.freeze({ reloaded: true, state: supervisor?.status?.().state || "stopped" });
   };
 
+  const controlPlane = async () => {
+    await start();
+    if (!supervisor) {
+      throw new SuzuAgentRuntimeServiceError("Suzu Agent Core 控制面未就绪。", { code: "AGENT_NOT_READY" });
+    }
+    const started = await supervisor.start();
+    return started.api;
+  };
+
+  /**
+   * The model setting is live and user-editable, so do not cache this answer.
+   * A failed capability lookup deliberately reports no image support: the chat
+   * layer will retain its configured image-understanding fallback instead of
+   * risking a native image request to an unknown model.
+   */
+  const currentModelCapabilities = async () => {
+    try {
+      const api = await controlPlane();
+      if (!api?.settings?.describe || !api?.llm?.models) {
+        return Object.freeze({ provider: "", model: "", known: false, inputModalities: Object.freeze([]), supportsImageInput: false });
+      }
+      const [settings, catalog] = await Promise.all([
+        api.settings.describe({}).then((reply) => unwrapAgentCoreResponse(reply, "读取模型设置")),
+        api.llm.models({}).then((reply) => unwrapAgentCoreResponse(reply, "读取模型目录")),
+      ]);
+      return selectedModelCapabilities(settings, catalog);
+    } catch {
+      return Object.freeze({ provider: "", model: "", known: false, inputModalities: Object.freeze([]), supportsImageInput: false });
+    }
+  };
+
   return Object.freeze({
     /** Product-internal access to Agent Core's private IPC control plane.
      * It is never forwarded to the renderer; the configuration service uses it
      * for credential and model settings without touching external Agent files. */
     async controlPlane() {
-      await start();
-      if (!supervisor) {
-        throw new SuzuAgentRuntimeServiceError("Suzu Agent Core 控制面未就绪。", { code: "AGENT_NOT_READY" });
-      }
-      const started = await supervisor.start();
-      return started.api;
+      return controlPlane();
+    },
+
+    async currentModelCapabilities() {
+      return currentModelCapabilities();
     },
 
     async prepareInstructions() {

@@ -12,6 +12,10 @@ import {
   relocateAgentWorkspaceStorageSync,
   resolveAgentSessionStoragePaths,
 } from "../electron/services/agent-session-storage.mjs";
+import {
+  legacyClaudeTranscriptEvents,
+  parseNativeAgentSessionArtifact,
+} from "../electron/services/legacy-migration-service.mjs";
 
 async function temporaryRoot() {
   const root = process.env.SUZU_LIVES_TEST_TEMP || "D:\\Temp";

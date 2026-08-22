@@ -51,6 +51,8 @@ test("named connection bindings reject incompatible types", async () => {
   assert.equal(dash.connections[0].baseUrl, "https://dashscope.aliyuncs.com/api/v1");
   const generic = await service.save({ name: "通用", type: "generic-api", apiKey: opaque() + "-generic" });
   assert.equal(generic.connections.find((item) => item.name === "通用").baseUrl, "");
+  const tts = await service.save({ name: "ElevenLabs 账户", type: "tts-api", apiKey: opaque() + "-tts" });
+  assert.equal(tts.connections.find((item) => item.name === "ElevenLabs 账户").baseUrl, "");
   const openai = await service.save({
     name: "开放语音",
     type: "openai-compatible",
@@ -97,4 +99,22 @@ test("named connections surface an unreadable saved key without exposing it", as
   assert.equal(resolved.key, "");
   assert.equal(resolved.credentialStatus, "unreadable");
   assert.equal(JSON.stringify({ snapshot, resolved }).includes(opaque()), false);
+});
+
+test("a saved API connection can be resolved by its id for a service-owned binding", async () => {
+  const root = await temporary();
+  const service = createNamedApiConnectionService({ dataRoot: root, safeStorage: protector });
+  const saved = await service.save({
+    name: "ElevenLabs 账户",
+    type: "generic-api",
+    apiKey: opaque() + "-elevenlabs",
+    baseUrl: "https://api.elevenlabs.io",
+  });
+  const connection = saved.connections[0];
+  const resolved = await service.resolveById(connection.id);
+  assert.equal(resolved.id, connection.id);
+  assert.equal(resolved.key, opaque() + "-elevenlabs");
+  assert.equal(resolved.baseUrl, "https://api.elevenlabs.io");
+  assert.equal(await service.resolveById("missing-connection"), null);
+  assert.equal(JSON.stringify(saved).includes(opaque()), false);
 });

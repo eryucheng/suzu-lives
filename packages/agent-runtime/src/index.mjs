@@ -379,6 +379,14 @@ export function createAgentRuntime({ driver, createId = (prefix) => `${prefix}-$
     return { sessionId: record.sessionId, runtimeSessionId: record.runtimeSessionId, snapshot };
   };
 
+  // A process-wide maintenance operation, such as deleting one persisted
+  // session, must not tear down the shared driver while another session is
+  // actively submitting or generating. Keep this read-only signal in the
+  // facade that owns the authoritative per-session turn state.
+  const activeSessionIds = () => Object.freeze([...sessions.values()]
+    .filter((record) => [...record.turns.values()].some((turn) => turn.state !== "finished"))
+    .map((record) => record.sessionId));
+
   const closeRuntime = async () => {
     if (closeTask) return closeTask;
     closed = true;
@@ -397,6 +405,7 @@ export function createAgentRuntime({ driver, createId = (prefix) => `${prefix}-$
     cancelTurn,
     resolveApproval,
     resumeSession,
+    activeSessionIds,
     closeRuntime,
     subscribe(listener) {
       if (typeof listener !== "function") throw new AgentRuntimeError("INVALID_LISTENER", "运行时订阅者无效。 ");

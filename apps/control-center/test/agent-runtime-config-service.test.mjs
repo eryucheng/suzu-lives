@@ -95,7 +95,7 @@ function fakeControlPlane({ credential = { configured: false, writable: true } }
     },
     llm: {
       async models() {
-        return ok({ groups: [{ id: "deepseek-official", models: [{ id: "deepseek-v4-flash" }, { id: "deepseek-v4-pro" }] }], failures: [] });
+        return ok({ groups: [{ id: "deepseek-official", models: cloned(state.namespaces["llm-deepseek"].value.models) }], failures: [] });
       },
       async discoverModels(value) {
         calls.push({ type: "llm.discoverModels", value: cloned(value) });
@@ -152,7 +152,31 @@ test("Agent Core config service uses the native DeepSeek setting, credential, an
       },
     },
   ]);
-  assert.deepEqual((await service.fetchModels()).models, ["deepseek-v4-flash", "deepseek-v4-pro"]);
+  const models = await service.fetchModels();
+  assert.deepEqual(models.models, ["deepseek-v4-flash", "deepseek-v4-pro", "deepseek-v4-flash-vision-exp"]);
+  assert.match(models.message, /当前选中的模型未改动/u);
+  assert.equal(fixture.state.namespaces["agent-default-model"].value.model, "deepseek-v4-pro");
+  assert.deepEqual(fixture.calls.at(-1), {
+    type: "settings.mutate",
+    value: {
+      ns: "llm-deepseek",
+      expectedRevision: 1,
+      ops: [{
+        op: "set",
+        path: ["models"],
+        value: [
+          { id: "deepseek-v4-flash", name: "deepseek-v4-flash" },
+          { id: "deepseek-v4-pro", name: "deepseek-v4-pro" },
+          {
+            id: "deepseek-v4-flash-vision-exp",
+            name: "DeepSeek-V4-Flash-Vision-Exp",
+            contextWindow: 1_000_000,
+            maxTokens: 384_000,
+          },
+        ],
+      }],
+    },
+  });
 });
 
 test("Agent Core config service writes a custom compatible provider through Suzu's compatible endpoint layer", async () => {

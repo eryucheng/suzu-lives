@@ -1,3 +1,4 @@
+import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 
@@ -303,6 +304,24 @@ function recallKey(sessionId, turnId) {
   return isSessionId(session) && turn ? `${session}\u0000${turn}` : "";
 }
 
+function conversationMemoryEventId({ sessionId, turnId, role }) {
+  const normalizedRole = clean(role);
+  const messageId = normalizedRole === "user" ? clean(turnId) : "";
+  const digest = createHash("sha256").update([
+    HOST_ID,
+    clean(sessionId),
+    clean(turnId),
+    normalizedRole,
+    messageId,
+  ].join("\u001f")).digest("hex");
+  return `host-turn-${digest}`;
+}
+
+function parentMemoryEventId(event) {
+  const fragment = plainObject(plainObject(event?.metadata).suzuMemoryFragment);
+  return clean(fragment.parentEventId) || clean(event?.external_id);
+}
+
 function memoryRecallEnabled(settings) {
   return plainObject(settings).memoryRecallEnabled !== false;
 }
@@ -444,6 +463,7 @@ export function createLongTermMemoryService({
     });
     const agentRoot = resolveAgentDataRoot({ dataRoot, agentId: contact.agentId });
     const sessionMemoryRoot = path.join(agentRoot, "memory", "sessions", normalizedSessionId);
+    const databasePath = path.join(sessionMemoryRoot, "suzu-memory.db");
     const configuredUsageLedgerPath = typeof settingsService.usageLedgerPath === "function"
       ? settingsService.usageLedgerPath({
         ...settings,
@@ -468,7 +488,7 @@ export function createLongTermMemoryService({
     const memory = createSuzuMemoryService({
       dataRoot,
       agentId: contact.agentId,
-      databasePath: path.join(sessionMemoryRoot, "suzu-memory.db"),
+      databasePath,
       usageLedgerPath,
       defaults: {
         companionId: identity.companionId,
@@ -490,6 +510,7 @@ export function createLongTermMemoryService({
         sourceKind: "suzu-lives-conversation",
       }),
       contact,
+      databasePath,
       info,
       memory,
       providerStatus: providerRuntime.status,
@@ -567,6 +588,117 @@ export function createLongTermMemoryService({
       if (maintenanceByAgent.get(scopeKey) === next) maintenanceByAgent.delete(scopeKey);
     });
     return next;
+  };
+
+  const activeInputEventsForSession = async (entry, sessionId) => {
+    const events = [];
+    let offset = 0;
+    for (let pageNumber = 0; pageNumber < 10_000; pageNumber += 1) {
+      const page = await entry.memory.listInputEvents({
+        statuses: ["pending", "archived"],
+        lifecycles: ["active"],
+        hostId: HOST_ID,
+        sessionId,
+        limit: 500,
+        offset,
+      });
+      const items = Array.isArray(page?.items) ? page.items : [];
+      events.push(...items.filter((event) => {
+        const host = plainObject(plainObject(event?.metadata).host);
+        return clean(host.id) === HOST_ID && clean(host.sessionId) === sessionId;
+      }));
+      offset += items.length;
+      const total = Number(page?.total);
+      if (!items.length || (Number.isFinite(total) && offset >= total)) break;
+    }
+    return events;
+  };
+
+  const retractConversationMessage = async ({
+    projectRoot,
+    sessionId,
+    turnId = "",
+    role = "",
+    text = "",
+    occurredAt = "",
+  } = {}) => {
+    const normalizedSessionId = clean(sessionId);
+    const normalizedTurnId = clean(turnId);
+    const normalizedRole = clean(role);
+    if (!isSessionId(normalizedSessionId) || !new Set(["user", "companion"]).has(normalizedRole)) {
+      return Object.freeze({ retracted: 0, status: "not-applicable" });
+    }
+    const entry = await entryForProject(projectRoot, {
+      optional: true,
+      sessionId: normalizedSessionId,
+      initialize: false,
+    });
+    if (!entry || !await fileExists(entry.databasePath)) {
+      return Object.freeze({ retracted: 0, status: "not-recorded" });
+    }
+    entry.memory.initialize();
+    let candidates = (await activeInputEventsForSession(entry, normalizedSessionId))
+      .filter((event) => clean(plainObject(plainObject(event?.metadata).host).role) === normalizedRole);
+    if (normalizedTurnId) {
+      const expectedEventId = conversationMemoryEventId({
+        sessionId: normalizedSessionId,
+        turnId: normalizedTurnId,
+        role: normalizedRole,
+      });
+      candidates = candidates.filter((event) => parentMemoryEventId(event) === expectedEventId);
+    } else {
+      const expectedText = clean(text);
+      if (!expectedText) return Object.freeze({ retracted: 0, status: "not-recorded" });
+      candidates = candidates.filter((event) => clean(plainObject(event?.content).text) === expectedText);
+      if (candidates.length > 1) {
+        const expectedTime = Date.parse(occurredAt);
+        if (Number.isFinite(expectedTime)) {
+          const closest = candidates
+            .map((event) => ({
+              event,
+              distance: Math.abs(Date.parse(clean(event?.occurred_at)) - expectedTime),
+            }))
+            .filter((candidate) => Number.isFinite(candidate.distance))
+            .sort((left, right) => left.distance - right.distance);
+          if (closest.length === 1 || (closest[0] && closest[1] && closest[0].distance < closest[1].distance)) {
+            candidates = closest.length ? [closest[0].event] : candidates;
+          }
+        }
+      }
+    }
+    const targets = new Map();
+    for (const event of candidates) {
+      const eventId = parentMemoryEventId(event);
+      if (eventId) targets.set(eventId, event);
+    }
+    if (!targets.size) return Object.freeze({ retracted: 0, status: "not-recorded" });
+    if (targets.size !== 1) {
+      const error = new Error("这条历史消息无法可靠关联到唯一的长期记忆来源；为避免影响其他记忆，尚未删除。 ");
+      error.code = "MEMORY_SOURCE_AMBIGUOUS";
+      throw error;
+    }
+    const targetEventId = [...targets.keys()][0];
+    const revision = entry.memory.reviseEvent(targetEventId, {
+      action: "retract",
+      revisionId: `suzu-message-delete-${randomUUID()}`,
+      reason: "Source conversation message was deleted in Suzu Lives.",
+      metadata: {
+        role: normalizedRole,
+        sessionId: normalizedSessionId,
+        source: "suzu-lives-message-delete",
+        ...(normalizedTurnId ? { turnId: normalizedTurnId } : {}),
+      },
+    });
+    if (normalizedTurnId) clearTurnRecall({ sessionId: normalizedSessionId, turnId: normalizedTurnId });
+    void queueMaintenance(entry, normalizedSessionId, { rebuildWhenIdle: true });
+    return Object.freeze({
+      affectedMemories: Number(revision?.affectedMemories) || 0,
+      invalidatedSources: Number(revision?.invalidatedSources) || 0,
+      retracted: 1,
+      status: "retracted",
+      targetEventId,
+      targetEvents: Number(revision?.targetEvents) || 0,
+    });
   };
 
   const resumeExistingMaintenance = async () => {
@@ -767,6 +899,10 @@ export function createLongTermMemoryService({
     },
 
     recallForTurn,
+
+    async retractConversationMessage(value) {
+      return retractConversationMessage(value);
+    },
 
     async completeTurn(turn, { assistantText, occurredAt = new Date() } = {}) {
       const text = clean(assistantText);

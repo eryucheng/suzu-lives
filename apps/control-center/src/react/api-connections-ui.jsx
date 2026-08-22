@@ -127,6 +127,7 @@ function ApiConnectionEditor({ connection, connections, onClose, onSave }) {
   const [pending, setPending] = useState(false);
   const editing = Boolean(connection?.id);
   const openAiCompatible = draft.type === "openai-compatible";
+  const usesServiceAddress = draft.type !== "tts-api";
 
   useEffect(() => {
     setDraft(connectionDraft(connection));
@@ -199,10 +200,10 @@ function ApiConnectionEditor({ connection, connections, onClose, onSave }) {
   return (
     <Dialog footer={footer} onClose={pending ? () => {} : onClose} open surface="solid" title={editing ? `编辑 ${connection.name}` : "新建 API"}>
       <form className="api-connection-editor" id="apiConnectionForm" onSubmit={save}>
-        <p className="api-connection-dialog-copy">这里只保存 API 的备注、地址和密钥；具体哪项能力使用它，会在那项能力自己的选择抽屉中决定。</p>
+        <p className="api-connection-dialog-copy">这里只保存可复用的 API 连接；具体哪项能力使用它，会在那项能力自己的选择抽屉中决定。</p>
         <div className="api-connection-form-grid">
           <Field className="api-connection-field--wide" hint="备注会显示在能力选择抽屉里，不能和已有 API 重名。" label="备注名称">
-            <Input disabled={pending} maxLength="80" onChange={(event) => change("name", event.target.value)} placeholder="例如：TTS api、生图 api" required value={draft.name} />
+            <Input disabled={pending} maxLength="80" onChange={(event) => change("name", event.target.value)} required value={draft.name} />
           </Field>
           <Field label="服务类型">
             <Select disabled={pending} fullWidth onChange={changeType} options={[
@@ -218,12 +219,12 @@ function ApiConnectionEditor({ connection, connections, onClose, onSave }) {
               <Select disabled={pending} fullWidth onChange={changePreset} options={presetOptions()} value={currentPreset()} />
             </Field>
           ) : null}
-          <Field className="api-connection-field--wide" hint={draft.type === "dashscope" ? "默认是官方地址；也可以填写兼容网关。" : draft.type === "generic-api" ? "服务商没有固定地址时可以留空。" : draft.type === "tts-api" ? "填写 TTS 服务的完整地址，可以是官方接口或自建中转。" : draft.type === "asr-api" ? "填写语音识别服务的完整地址，可以是官方接口或自建中转。" : "填写服务商提供的完整 Base URL。"} label={draft.type === "generic-api" ? "服务地址（可选）" : "服务地址"}>
-            <Input disabled={pending} maxLength="500" onChange={(event) => change("baseUrl", event.target.value)} placeholder={draft.type === "dashscope" ? DEFAULT_DASHSCOPE_BASE_URL : "https://api.example.com/v1"} required={openAiCompatible || draft.type === "tts-api" || draft.type === "asr-api"} value={draft.baseUrl} />
-          </Field>
-          <Field className="api-connection-field--wide" hint={openAiCompatible || draft.type === "asr-api" ? "这个连接的默认模型；能力可以在自己的设置里覆盖。" : "可选；能力有自己的模型设置时会优先使用能力设置。"} label={openAiCompatible || draft.type === "asr-api" ? "默认模型" : "默认模型（可选）"}>
-            <Input disabled={pending} maxLength="160" onChange={(event) => change("model", event.target.value)} placeholder={draft.type === "tts-api" ? "填写服务商提供的 TTS 模型名" : draft.type === "asr-api" ? "填写服务商提供的识别模型名" : "例如：deepseek-chat、gpt-4.1-mini"} required={openAiCompatible || draft.type === "asr-api"} value={draft.model} />
-          </Field>
+          {usesServiceAddress ? <Field className="api-connection-field--wide" hint={draft.type === "dashscope" ? "默认是官方地址；也可以填写兼容网关。" : draft.type === "generic-api" ? "服务商没有固定地址时可以留空。" : draft.type === "asr-api" ? "填写语音识别服务的完整地址，可以是官方接口或自建中转。" : "填写服务商提供的完整 Base URL。"} label={draft.type === "generic-api" ? "服务地址（可选）" : "服务地址"}>
+            <Input disabled={pending} maxLength="500" onChange={(event) => change("baseUrl", event.target.value)} required={openAiCompatible || draft.type === "asr-api"} value={draft.baseUrl} />
+          </Field> : null}
+          {draft.type !== "tts-api" ? <Field className="api-connection-field--wide" hint={openAiCompatible || draft.type === "asr-api" ? "这个连接的默认模型；能力可以在自己的设置里覆盖。" : "可选；能力有自己的模型设置时会优先使用能力设置。"} label={openAiCompatible || draft.type === "asr-api" ? "默认模型" : "默认模型（可选）"}>
+            <Input disabled={pending} maxLength="160" onChange={(event) => change("model", event.target.value)} placeholder={draft.type === "asr-api" ? "填写服务商提供的识别模型名" : ""} required={openAiCompatible || draft.type === "asr-api"} value={draft.model} />
+          </Field> : null}
         </div>
         {openAiCompatible ? (
           <details className="api-connection-advanced">
@@ -275,7 +276,7 @@ function ApiConnectionRow({ connection, onEdit, onRemove }) {
     <article className="api-connection-row">
       <div className="api-connection-row__copy">
         <div className="api-connection-row__title"><strong>{connection.name || "未命名 API"}</strong><Status label={status.label} tone={status.tone} /></div>
-        <span>{serviceLabel(connection)}{baseUrl ? ` · ${baseUrl}` : " · 未填写服务地址"}{model ? ` · ${model}` : ""}</span>
+        <span>{serviceLabel(connection)}{baseUrl ? ` · ${baseUrl}` : connection?.type === "tts-api" ? "" : " · 未填写服务地址"}{model ? ` · ${model}` : ""}</span>
       </div>
       <div className="api-connection-row__actions">
         <Button onClick={() => onEdit(connection)} size="md" type="button" variant="secondary">编辑</Button>

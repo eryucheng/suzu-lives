@@ -1,10 +1,13 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
+  type CSSProperties,
   type KeyboardEvent as ReactKeyboardEvent,
 } from 'react';
+import { createPortal } from 'react-dom';
 import styles from './Select.module.css';
 
 export interface SelectOption {
@@ -33,6 +36,14 @@ export interface SelectProps {
   className?: string;
 }
 
+interface PanelPosition {
+  left: number;
+  maxHeight: number;
+  placement: 'above' | 'below';
+  width: number;
+  y: number;
+}
+
 /**
  * Select —— 自绘毛玻璃下拉，不用浏览器原生弹层。
  * 受控/非受控皆可。面板为玻璃底 + 淡入动画，点击外部 / ESC / 上下键关闭。
@@ -53,7 +64,9 @@ export function Select({
   // 非受控时的内部值；受控时忽略
   const [uncontrolled, setUncontrolled] = useState(defaultValue ?? '');
   const [activeIndex, setActiveIndex] = useState(-1);
+  const [panelPosition, setPanelPosition] = useState<PanelPosition | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
 
   const selected = value !== undefined ? value : uncontrolled;
   const current = options.find((o) => o.value === selected);
@@ -62,9 +75,9 @@ export function Select({
   useEffect(() => {
     if (!open) return;
     const onDown = (e: MouseEvent) => {
-      if (rootRef.current && !rootRef.current.contains(e.target as Node)) {
-        setOpen(false);
-      }
+      const target = e.target as Node;
+      if (rootRef.current?.contains(target) || panelRef.current?.contains(target)) return;
+      setOpen(false);
     };
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') setOpen(false);
@@ -76,6 +89,47 @@ export function Select({
       document.removeEventListener('keydown', onKey);
     };
   }, [open]);
+
+  const updatePanelPosition = useCallback(() => {
+    if (typeof window === 'undefined' || !rootRef.current) return;
+    const anchor = rootRef.current.getBoundingClientRect();
+    const edge = 8;
+    const gap = 4;
+    const viewportWidth = window.innerWidth;
+    const viewportHeight = window.innerHeight;
+    const width = Math.min(anchor.width, Math.max(1, viewportWidth - edge * 2));
+    const left = Math.min(Math.max(edge, anchor.left), Math.max(edge, viewportWidth - edge - width));
+    const below = viewportHeight - anchor.bottom - edge - gap;
+    const above = anchor.top - edge - gap;
+    const placement = below >= 120 || below >= above ? 'below' : 'above';
+    const availableHeight = Math.max(1, placement === 'below' ? below : above);
+    setPanelPosition({
+      left,
+      maxHeight: Math.min(360, availableHeight),
+      placement,
+      width,
+      y: placement === 'below' ? anchor.bottom + gap : viewportHeight - anchor.top + gap,
+    });
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!open || disabled || typeof window === 'undefined') {
+      setPanelPosition(null);
+      return undefined;
+    }
+    updatePanelPosition();
+    window.addEventListener('resize', updatePanelPosition);
+    window.addEventListener('scroll', updatePanelPosition, true);
+    const observer = typeof ResizeObserver === 'undefined' || !rootRef.current
+      ? null
+      : new ResizeObserver(updatePanelPosition);
+    observer?.observe(rootRef.current);
+    return () => {
+      window.removeEventListener('resize', updatePanelPosition);
+      window.removeEventListener('scroll', updatePanelPosition, true);
+      observer?.disconnect();
+    };
+  }, [disabled, open, updatePanelPosition]);
 
   // 打开时重置高亮到当前选中项
   useEffect(() => {
@@ -127,6 +181,59 @@ export function Select({
     .filter(Boolean)
     .join(' ');
 
+  const panelStyle: CSSProperties = panelPosition
+    ? {
+      bottom: panelPosition.placement === 'above' ? panelPosition.y : 'auto',
+      left: panelPosition.left,
+      maxHeight: panelPosition.maxHeight,
+      right: 'auto',
+      top: panelPosition.placement === 'below' ? panelPosition.y : 'auto',
+      visibility: 'visible',
+      width: panelPosition.width,
+    }
+    : { visibility: 'hidden' };
+
+  const panel = open && !disabled ? (
+    <div ref={panelRef} className={styles.panel} role="listbox" style={panelStyle}>
+      {options.map((opt, i) => {
+        const isSelected = opt.value === selected;
+        return (
+          <button
+            key={opt.value}
+            type="button"
+            role="option"
+            aria-selected={isSelected}
+            className={[
+              styles.option,
+              isSelected && styles.selected,
+              i === activeIndex && styles.active,
+            ]
+              .filter(Boolean)
+              .join(' ')}
+            onClick={() => selectOne(opt.value)}
+            onMouseEnter={() => setActiveIndex(i)}
+          >
+            {opt.label}
+            <svg
+              className={styles.check}
+              viewBox="0 0 16 16"
+              fill="none"
+              aria-hidden="true"
+            >
+              <path
+                d="M3 8.5L6.5 12 13 4.5"
+                stroke="currentColor"
+                strokeWidth="1.8"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
+          </button>
+        );
+      })}
+    </div>
+  ) : null;
+
   return (
     <div ref={rootRef} className={wrapperCls}>
       <button
@@ -164,46 +271,7 @@ export function Select({
         </svg>
       </button>
 
-      {open && !disabled && (
-        <div className={styles.panel} role="listbox">
-          {options.map((opt, i) => {
-            const isSelected = opt.value === selected;
-            return (
-              <button
-                key={opt.value}
-                type="button"
-                role="option"
-                aria-selected={isSelected}
-                className={[
-                  styles.option,
-                  isSelected && styles.selected,
-                  i === activeIndex && styles.active,
-                ]
-                  .filter(Boolean)
-                  .join(' ')}
-                onClick={() => selectOne(opt.value)}
-                onMouseEnter={() => setActiveIndex(i)}
-              >
-                {opt.label}
-                <svg
-                  className={styles.check}
-                  viewBox="0 0 16 16"
-                  fill="none"
-                  aria-hidden="true"
-                >
-                  <path
-                    d="M3 8.5L6.5 12 13 4.5"
-                    stroke="currentColor"
-                    strokeWidth="1.8"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  />
-                </svg>
-              </button>
-            );
-          })}
-        </div>
-      )}
+      {panel && (typeof document === 'undefined' ? panel : createPortal(panel, document.body))}
     </div>
   );
 }

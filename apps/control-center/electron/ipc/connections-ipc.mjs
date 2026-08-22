@@ -3,6 +3,7 @@ import path from "node:path";
 
 import { createNamedApiConnectionService } from "@suzu-lives/service-connections";
 import { validateComfyRegistry } from "@suzu-lives/image-workbench";
+import { readVoiceServices } from "@suzu-lives/voice-message/voice-services";
 
 export function createConnectionsService({ safeStorage, settingsService }) {
   const dataRoot = settingsService.response(settingsService.load()).dataRoot;
@@ -12,6 +13,16 @@ export function createConnectionsService({ safeStorage, settingsService }) {
   const saveComfy = async (value = {}) => { let existing = {}; try { existing = JSON.parse(await fsp.readFile(comfyPath, "utf8")); } catch {} let registry = { version: 1, workflows: {} }; const text = String(value.registry || "").trim(); try { registry = validateComfyRegistry(text ? JSON.parse(text) : (existing.registry || registry)); } catch (error) { throw new Error(error?.message || "ComfyUI registry 无效。"); } const baseUrl = String(value.baseUrl || "http://127.0.0.1:8188").trim().replace(/\/+$/u, ""); try { const parsed = new URL(baseUrl); if (!['http:', 'https:'].includes(parsed.protocol)) throw new Error(); } catch { throw new Error("ComfyUI 地址必须是 HTTP(S) URL。"); } await fsp.mkdir(path.dirname(comfyPath), { recursive: true }); await fsp.writeFile(comfyPath + ".tmp", JSON.stringify({ baseUrl, timeoutMs: Number(value.timeoutMs) || 600000, pollIntervalMs: Number(value.pollIntervalMs) || 1000, registry }, null, 2) + "\n", "utf8"); await fsp.rename(comfyPath + ".tmp", comfyPath); return comfySnapshot(); };
   const apiServicesSnapshot = async () => ({ ...(await namedApi.snapshot()), comfy: await comfySnapshot() });
   const resolveNamed = (feature) => namedApi.resolve(feature);
+  const removeNamedApiConnection = async (id) => {
+    const connectionId = String(id ?? "").trim();
+    const voiceServices = readVoiceServices(dataRoot).filter((service) => service.connectionId === connectionId);
+    if (voiceServices.length) {
+      const names = voiceServices.slice(0, 3).map((service) => `“${service.name}”`).join("、");
+      throw new Error(`这条 API 正被语音服务${names}${voiceServices.length > 3 ? "等" : ""}使用。请先修改或删除对应语音服务。`);
+    }
+    await namedApi.remove(connectionId);
+    return apiServicesSnapshot();
+  };
   const imageApiSnapshot = async () => {
     const selected = await resolveNamed("image-workbench");
     return {
@@ -34,8 +45,9 @@ export function createConnectionsService({ safeStorage, settingsService }) {
     resolveVideoUnderstandingApi: async () => resolveNamed("video-understanding"),
     apiServicesSnapshot,
     resolveNamedApiConnection: resolveNamed,
+    resolveApiConnectionById: (connectionId) => namedApi.resolveById(connectionId),
     saveNamedApiConnection: async (value) => { await namedApi.save(value); return apiServicesSnapshot(); },
-    removeNamedApiConnection: async (id) => { await namedApi.remove(id); return apiServicesSnapshot(); },
+    removeNamedApiConnection,
     bindNamedApiConnection: async (feature, connectionId) => { await namedApi.bind(feature, connectionId); return apiServicesSnapshot(); },
     comfySnapshot,
     saveComfy,

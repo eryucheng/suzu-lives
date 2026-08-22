@@ -42,8 +42,10 @@ export const CAPABILITY_RESOURCE_LIFECYCLES = Object.freeze([
 const CAPABILITY_ID = /^[a-z][a-z0-9-]{0,127}$/u;
 const RESOURCE_ID = /^[a-z][a-z0-9-]{0,127}$/u;
 const AGENT_ACTION_ID = /^[a-z][a-z0-9-]{0,127}$/u;
+const RESULT_FIELD_ID = /^[A-Za-z][A-Za-z0-9_]{0,127}$/u;
 const RESOURCE_KIND_SET = new Set(CAPABILITY_RESOURCE_KINDS);
 const RESOURCE_LIFECYCLE_SET = new Set(CAPABILITY_RESOURCE_LIFECYCLES);
+const ATTACHMENT_MEDIA_KIND_SET = new Set(["image", "audio", "file"]);
 
 export class CapabilityRegistryError extends Error {
   constructor(message, { code = "CAPABILITY_REGISTRY_ERROR", cause } = {}) {
@@ -109,11 +111,33 @@ function agentActionDefinition(value, capabilityId, resourceId) {
       code: "AGENT_ACTION_INVALID",
     });
   }
+  const outputDelivery = source.outputDelivery === undefined
+    ? null
+    : outputDeliveryDefinition(source.outputDelivery, capabilityId, resourceId);
   return Object.freeze({
     id,
     description,
     ...(clean(source.name) ? { name: clean(source.name) } : {}),
+    ...(outputDelivery ? { outputDelivery } : {}),
   });
+}
+
+/**
+ * User-facing creation actions can declare the one result field that becomes
+ * an attachment automatically.  The declaration stays on the capability
+ * resource, so the conversation bridge never has to maintain a second,
+ * hard-coded list of generators and their result shapes.
+ */
+function outputDeliveryDefinition(value, capabilityId, resourceId) {
+  const source = plainObject(value);
+  const kind = clean(source.kind).toLowerCase();
+  const pathField = clean(source.pathField);
+  if (!ATTACHMENT_MEDIA_KIND_SET.has(kind) || !RESULT_FIELD_ID.test(pathField)) {
+    throw new CapabilityRegistryError(`能力 ${capabilityId} 的资源 ${resourceId} 具有无效的自动附件交付声明。`, {
+      code: "AGENT_ACTION_OUTPUT_DELIVERY_INVALID",
+    });
+  }
+  return Object.freeze({ kind, pathField });
 }
 
 function resourceDefinition(value, capabilityId) {
@@ -243,7 +267,8 @@ export const CAPABILITY_DEFINITIONS = freezeArray([
         agentAction: {
           id: "generate",
           name: "生成图片",
-          description: "生成或编辑一张图片。input 必须包含 { prompt: " + '"图片提示词"' + " }；可选 backend: \"api\" | \"comfyui\"、workflow、size、seed、outputDirectory，以及最多 16 个 references: [{ role: \"identity\" | \"location\" | \"object\" | \"style\", path: \"本机绝对图片路径\" }]。成功后会返回本机图片路径；如要发给用户，再调用 conversation-attachment.deliver。",
+          description: "生成或编辑一张图片。input 必须包含 { prompt: " + '"图片提示词"' + " }；可选 backend: \"api\" | \"comfyui\"、workflow、size、seed、outputDirectory，以及最多 16 个 references: [{ role: \"identity\" | \"location\" | \"object\" | \"style\", path: \"本机绝对图片路径\" }]。成功后图片会自动投放到当前聊天；已绑定微信的会话会自动转发。",
+          outputDelivery: { kind: "image", pathField: "path" },
         },
       },
       { id: "usage-ledger", kind: "usage", driver: "cost-ledger" },
@@ -266,7 +291,8 @@ export const CAPABILITY_DEFINITIONS = freezeArray([
         agentAction: {
           id: "generate",
           name: "生成手机拍照式图片",
-          description: "按手机后置、自拍或镜前拍照的既有构图规则生成一张图片。input 必须包含 { shot: \"rear\" | \"selfie\" | \"mirror\", scene: \"画面中可见的场景\" }；可选 backend、workflow、size、seed、outputDirectory，以及 references: [{ scope: \"contact\" | \"shared\", id: \"视觉资料或资料组 ID\" }]。成功后会返回本机图片路径；如要发给用户，再调用 conversation-attachment.deliver。",
+          description: "按手机后置、自拍或镜前拍照的既有构图规则生成一张图片。input 必须包含 { shot: \"rear\" | \"selfie\" | \"mirror\", scene: \"画面中可见的场景\" }；可选 backend、workflow、size、seed、outputDirectory，以及 references: [{ scope: \"contact\" | \"shared\", id: \"视觉资料或资料组 ID\" }]。成功后图片会自动投放到当前聊天；已绑定微信的会话会自动转发。",
+          outputDelivery: { kind: "image", pathField: "path" },
         },
       },
       { id: "usage-ledger", kind: "usage", driver: "cost-ledger" },
@@ -351,7 +377,8 @@ export const CAPABILITY_DEFINITIONS = freezeArray([
         agentAction: {
           id: "generate",
           name: "生成语音消息",
-          description: "按当前联系人的已选音色生成一个本机 MP3。input 必须且只能提供 { text: \"要说的话\" } 或 { audioPath: \"已有本机音频绝对路径\" } 其中之一。成功后会返回 savedPath；如要发给用户，再调用 conversation-attachment.deliver，kind 使用 audio。",
+          description: "按当前联系人的已选音色生成一个本机 MP3。input 必须且只能提供 { text: \"要说的话\" } 或 { audioPath: \"已有本机音频绝对路径\" } 其中之一。成功后语音会自动投放到当前聊天；已绑定微信的会话会自动转发。",
+          outputDelivery: { kind: "audio", pathField: "savedPath" },
         },
       },
       { id: "usage-ledger", kind: "usage", driver: "cost-ledger" },
@@ -578,7 +605,7 @@ export const CAPABILITY_DEFINITIONS = freezeArray([
         agentAction: {
           id: "deliver",
           name: "发送聊天附件",
-          description: "将已生成或已确认的本机绝对路径交付到当前聊天。input 必须是 { items: [{ path: \"绝对路径\", kind: \"image\" | \"audio\" | \"file\" }] }；图片支持 AVIF/BMP/GIF/HEIC/ICO/JPG/PNG/SVG/TIFF/WebP，音频仅支持 MP3。动作成功后，附件会出现在当前聊天；已绑定微信的会话会自动转发同一附件。",
+          description: "将已有且已确认的本机绝对路径作为附件交付到当前聊天。图片生成、手机拍照式图片和语音消息成功时由软件自动投放；本动作用于其他已有文件。input 必须是 { items: [{ path: \"绝对路径\", kind: \"image\" | \"audio\" | \"file\" }] }；图片支持 AVIF/BMP/GIF/HEIC/ICO/JPG/PNG/SVG/TIFF/WebP，音频仅支持 MP3。动作成功后，附件会出现在当前聊天；已绑定微信的会话会自动转发同一附件。",
         },
       },
     ],
@@ -912,6 +939,7 @@ export function createCapabilityRuntime({ registry = createCapabilityRegistry(),
         resourceId: selected.resourceId,
         kind: selected.resourceKind,
         status: "completed",
+        ...(resource.agentAction?.outputDelivery ? { outputDelivery: resource.agentAction.outputDelivery } : {}),
         ...(value === undefined ? {} : { value }),
       });
     } catch (error) {

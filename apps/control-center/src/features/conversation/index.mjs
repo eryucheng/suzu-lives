@@ -32,6 +32,7 @@ const viewState = {
   contactContextMenu: null,
   contactRenameOpen: false,
   fileContextMenu: null,
+  messageContextMenu: null,
   draft: "",
   emojiOpen: false,
   error: "",
@@ -208,6 +209,10 @@ function fileContextMenuPosition(point = {}) {
   return contextMenuPosition(point, { height: 112, width: 176 });
 }
 
+function messageContextMenuPosition(point = {}) {
+  return contextMenuPosition(point, { height: 64, width: 176 });
+}
+
 function sameProjectRoot(left, right) {
   const normalize = (value) => clean(value).replaceAll("\\", "/").replace(/\/+$/u, "").toLowerCase();
   const first = normalize(left);
@@ -259,19 +264,26 @@ function sameMedia(items, expected) {
   });
 }
 
-function messageMatches(items, kind, content, localTimestamp, media = []) {
+function messageMatchIndex(items, kind, content, localTimestamp, media = [], ignored = new Set()) {
   const target = clean(content);
   const expectedMedia = Array.isArray(media) ? media : [];
-  if (!target && !expectedMedia.length) return false;
+  if (!target && !expectedMedia.length) return -1;
   const localTime = Date.parse(localTimestamp);
-  return (items || []).some((item) => {
-    if (item.kind !== kind) return false;
-    if (target && messageText(item) !== target) return false;
-    if (!sameMedia(item.blocks, expectedMedia)) return false;
-    if (!Number.isFinite(localTime)) return true;
+  for (let index = 0; index < (items || []).length; index += 1) {
+    const item = items[index];
+    if (ignored.has(item)) continue;
+    if (item.kind !== kind) continue;
+    if (target && messageText(item) !== target) continue;
+    if (!sameMedia(item.blocks, expectedMedia)) continue;
+    if (!Number.isFinite(localTime)) return index;
     const transcriptTime = Date.parse(item.timestamp);
-    return Number.isFinite(transcriptTime) && transcriptTime >= localTime - TRANSCRIPT_MATCH_GRACE_MS;
-  });
+    if (Number.isFinite(transcriptTime) && transcriptTime >= localTime - TRANSCRIPT_MATCH_GRACE_MS) return index;
+  }
+  return -1;
+}
+
+function messageMatches(items, kind, content, localTimestamp, media = []) {
+  return messageMatchIndex(items, kind, content, localTimestamp, media) >= 0;
 }
 
 function conversationPreview(items) {
@@ -374,6 +386,71 @@ function insertPendingMessageAtTimestamp(items, message) {
     : [...items.slice(0, index), message, ...items.slice(index)];
 }
 
+function pendingUserMessage(item) {
+  return {
+    animateIn: Boolean(item.animateIn),
+    id: item.id,
+    kind: "user",
+    pending: !item.accepted,
+    accepted: item.accepted,
+    queued: item.queued,
+    queuePosition: item.queuePosition,
+    steering: item.steering,
+    timestamp: item.timestamp,
+    blocks: [
+      ...(clean(item.content) ? [{ kind: "text", text: item.content }] : []),
+      ...(Array.isArray(item.media) ? item.media.map((media) => ({
+        kind: "media",
+        mediaKind: clean(media?.mediaSource) === "sticker" && clean(media?.kind) === "image" ? "sticker" : clean(media?.kind) || "file",
+        fileName: clean(media?.fileName),
+        fileUrl: clean(media?.fileUrl),
+        size: Number(media?.size) || 0,
+        ...(clean(media?.mediaSource) ? { mediaSource: clean(media.mediaSource) } : {}),
+      })).filter((media) => media.fileName && media.fileUrl && media.size > 0) : []),
+    ],
+  };
+}
+
+function anchorPendingUsersInTranscript(source, pendingItems) {
+  const pending = (Array.isArray(pendingItems) ? pendingItems : []);
+  const matchedSourceItems = new Set();
+  const pendingWithoutDurableMessage = [];
+  let timeline = [...source];
+
+  for (const pendingItem of pending) {
+    const sourceIndex = messageMatchIndex(
+      source,
+      "user",
+      pendingItem.content,
+      pendingItem.timestamp,
+      pendingItem.media,
+      matchedSourceItems,
+    );
+    if (sourceIndex < 0) {
+      pendingWithoutDurableMessage.push(pendingUserMessage(pendingItem));
+      continue;
+    }
+    const durableItem = source[sourceIndex];
+    matchedSourceItems.add(durableItem);
+    const timelineIndex = timeline.indexOf(durableItem);
+    if (timelineIndex < 0) continue;
+    timeline = [...timeline.slice(0, timelineIndex), ...timeline.slice(timelineIndex + 1)];
+    // Agent Core may append the durable input after an assistant step. The
+    // locally recorded send time is the human-visible chronology, so retain
+    // the durable message and move it back ahead of that step rather than
+    // letting the matching pending bubble disappear at the bottom.
+    timeline = insertPendingMessageAtTimestamp(timeline, {
+      ...durableItem,
+      timestamp: clean(pendingItem.timestamp) || durableItem.timestamp,
+    });
+  }
+
+  return pendingWithoutDurableMessage.reduce(
+    (items, message) => insertPendingMessageAtTimestamp(items, message),
+    timeline,
+  );
+}
+
 function liveReplySentences(item) {
   // Projected live replies always carry `sentences`: an empty array means the
   // current token buffer is intentionally still hidden. The content fallback
@@ -422,29 +499,7 @@ export function mergeConversationMessages(items, pendingItems = [], liveReplyIte
   const source = Array.isArray(items) ? items : [];
   const sessionId = clean(activeSessionId);
   const pending = (Array.isArray(pendingItems) ? pendingItems : [])
-    .filter((item) => item.sessionId === sessionId && !messageMatches(source, "user", item.content, item.timestamp, item.media))
-    .map((item) => ({
-      animateIn: Boolean(item.animateIn),
-      id: item.id,
-      kind: "user",
-      pending: !item.accepted,
-      accepted: item.accepted,
-      queued: item.queued,
-      queuePosition: item.queuePosition,
-      steering: item.steering,
-      timestamp: item.timestamp,
-      blocks: [
-        ...(clean(item.content) ? [{ kind: "text", text: item.content }] : []),
-        ...(Array.isArray(item.media) ? item.media.map((media) => ({
-          kind: "media",
-          mediaKind: clean(media?.mediaSource) === "sticker" && clean(media?.kind) === "image" ? "sticker" : clean(media?.kind) || "file",
-          fileName: clean(media?.fileName),
-          fileUrl: clean(media?.fileUrl),
-          size: Number(media?.size) || 0,
-          ...(clean(media?.mediaSource) ? { mediaSource: clean(media.mediaSource) } : {}),
-        })).filter((media) => media.fileName && media.fileUrl && media.size > 0) : []),
-      ],
-    }));
+    .filter((item) => item.sessionId === sessionId);
   const replyValues = liveReplyValues(liveReplyItems);
   const liveReplies = replyValues
     .filter((item) => (
@@ -464,15 +519,10 @@ export function mergeConversationMessages(items, pendingItems = [], liveReplyIte
       // exact local duplicate once the stored conversation has caught up.
       && (item.kind !== "system" || !messageMatches(source, "system", messageText(item), item.timestamp))
   ));
-  // Agent Core can durably expose an assistant step before its input event is
-  // visible in a refreshed snapshot.  The input is still represented by its
-  // local pending bubble at that point.  Place that bubble into the snapshot
-  // timeline instead of appending it after every stored row, so an early
-  // assistant step cannot appear above the message that prompted it.
-  const sourceWithPending = pending.reduce(
-    (result, message) => insertPendingMessageAtTimestamp(result, message),
-    source,
-  );
+  // Keep the pending send timestamp as an anchor both before and after the
+  // same user message becomes durable. This protects the human-facing order
+  // when Agent Core writes its input event later than its first assistant step.
+  const sourceWithPending = anchorPendingUsersInTranscript(source, pending);
   const appended = [...sourceWithPending, ...localMessages];
   // Source rows are already in the transcript's append order.  Preserve that
   // order for special turns such as calls; only place a local unfinished reply
@@ -483,14 +533,32 @@ export function mergeConversationMessages(items, pendingItems = [], liveReplyIte
 }
 
 function displayedMessages(items) {
-  return mergeConversationMessages(
+  return filterDeletedConversationMessages(mergeConversationMessages(
     items,
     viewState.pending,
     viewState.liveReplies,
     clean(viewState.snapshot?.activeSessionId),
     viewState.transientSystemMessages,
     viewState.liveTools,
-  );
+  ), viewState.snapshot?.deletedEventSequences);
+}
+
+/**
+ * The main-process reader is the source of truth for hiding historical rows.
+ * Retain the same filter at the renderer boundary so an already-returned
+ * snapshot cannot briefly reintroduce a row while React is reconciling it.
+ * Local/live rows do not carry a durable event sequence and are left alone.
+ */
+export function filterDeletedConversationMessages(items, deletedEventSequences = []) {
+  const source = Array.isArray(items) ? items : [];
+  const hidden = new Set((Array.isArray(deletedEventSequences) ? deletedEventSequences : [])
+    .map((value) => Number(value))
+    .filter((value) => Number.isSafeInteger(value) && value > 0));
+  if (!hidden.size) return source;
+  return source.filter((item) => {
+    const lineNumber = messageLineNumber(item);
+    return !lineNumber || !hidden.has(lineNumber);
+  });
 }
 
 export function filterConversationItems(items, configuredPreferences = {}) {
@@ -726,6 +794,12 @@ function messageRow(message, context, showTimestamp = true) {
     anchorId,
     avatar: profile ? avatarPayload(profile, profile.displayName) : null,
     blocks,
+    deletable: Boolean(
+      lineNumber > 0
+      && !message.pending
+      && !message.streaming
+      && ["user", "assistant", "dynamic-context"].includes(clean(message.kind)),
+    ),
     entering: Boolean(message.animateIn),
     focused,
     kind: clean(message.kind),
@@ -1078,9 +1152,12 @@ function permissionPromptSnapshot(sessionId) {
 export function conversationReactSnapshot(context) {
   const payload = currentPayload();
   const sourceEntries = payload?.messages || [];
-  const entries = viewState.mode === "focus" ? sourceEntries : displayedMessages(sourceEntries);
-  const prefs = preferences(context.state.settings);
   const snapshot = viewState.snapshot || {};
+  const entries = filterDeletedConversationMessages(
+    viewState.mode === "focus" ? sourceEntries : displayedMessages(sourceEntries),
+    snapshot.deletedEventSequences,
+  );
+  const prefs = preferences(context.state.settings);
   const historyAvailable = snapshot.history?.status !== "unavailable";
   const ready = (snapshot.status || payload?.status) === "ready" && historyAvailable;
   const agent = getAgentProfile(context.state.settings);
@@ -1136,6 +1213,24 @@ export function conversationReactSnapshot(context) {
       y: Number(fileContextMenuState?.y) || 12,
     }
     : null;
+  const messageRows = conversationMessageRows(entries, context, viewState.mode === "focus");
+  const messageContextMenuState = viewState.messageContextMenu;
+  const messageContextMenuRow = messageRows.find((row) => (
+    row?.type === "message"
+    && row.deletable
+    && Number(row.lineNumber) === Number(messageContextMenuState?.lineNumber)
+    && (!clean(messageContextMenuState?.messageId)
+      || clean(row.sourceMessageId) === clean(messageContextMenuState?.messageId))
+  )) || null;
+  const messageContextMenu = messageContextMenuRow
+    ? {
+      kind: messageContextMenuRow.kind,
+      lineNumber: Number(messageContextMenuRow.lineNumber),
+      messageId: clean(messageContextMenuRow.sourceMessageId),
+      x: Number(messageContextMenuState?.x) || 12,
+      y: Number(messageContextMenuState?.y) || 12,
+    }
+    : null;
   return {
     call: {
       available: callAvailable,
@@ -1161,7 +1256,8 @@ export function conversationReactSnapshot(context) {
     hasContactsRoot,
     listLabel: `${agent.displayName || "Suzu"} 的聊天记录`,
     menuOpen: viewState.menuOpen,
-    messageRows: conversationMessageRows(entries, context, viewState.mode === "focus"),
+    messageContextMenu,
+    messageRows,
     notice: viewState.notice,
     overlays: {
       avatarCrop: avatarCropSnapshot(),
@@ -1502,11 +1598,12 @@ export function stopConversationPolling() {
 
 export function dismissConversationOverlays(target = viewState) {
   const state = target && typeof target === "object" ? target : viewState;
-  const open = Boolean(state.contactCreateOpen || state.contactContextMenu || state.contactRenameOpen || state.fileContextMenu || state.menuOpen || state.searchOpen || state.settingsOpen || state.emojiOpen || state.wechatQrOpen || state.mediaPreview || state.avatarCrop);
+  const open = Boolean(state.contactCreateOpen || state.contactContextMenu || state.contactRenameOpen || state.fileContextMenu || state.messageContextMenu || state.menuOpen || state.searchOpen || state.settingsOpen || state.emojiOpen || state.wechatQrOpen || state.mediaPreview || state.avatarCrop);
   state.contactCreateOpen = false;
   state.contactContextMenu = null;
   state.contactRenameOpen = false;
   state.fileContextMenu = null;
+  state.messageContextMenu = null;
   state.menuOpen = false;
   state.searchOpen = false;
   state.settingsOpen = false;
@@ -1797,6 +1894,7 @@ function resetConversationForContactChange() {
   viewState.attachmentPicking = false;
   viewState.contactContextMenu = null;
   viewState.fileContextMenu = null;
+  viewState.messageContextMenu = null;
   viewState.transientSystemMessages.length = 0;
   viewState.liveTools = [];
   viewState.pending = [];
@@ -1847,6 +1945,11 @@ export function createConversationReactActions(context) {
     closeFileContextMenu: () => {
       if (!viewState.fileContextMenu) return;
       viewState.fileContextMenu = null;
+      context.render();
+    },
+    closeMessageContextMenu: () => {
+      if (!viewState.messageContextMenu) return;
+      viewState.messageContextMenu = null;
       context.render();
     },
     closeMediaPreview: () => {
@@ -1930,6 +2033,7 @@ export function createConversationReactActions(context) {
       viewState.contactCreateOpen = true;
       viewState.contactContextMenu = null;
       viewState.fileContextMenu = null;
+      viewState.messageContextMenu = null;
       viewState.error = "";
       viewState.menuOpen = false;
       viewState.searchOpen = false;
@@ -1942,6 +2046,7 @@ export function createConversationReactActions(context) {
       if (!id || !contacts.some((contact) => clean(contact?.id) === id)) return;
       viewState.contactContextMenu = { contactId: id, ...contactContextMenuPosition(point) };
       viewState.fileContextMenu = null;
+      viewState.messageContextMenu = null;
       viewState.menuOpen = false;
       viewState.searchOpen = false;
       viewState.emojiOpen = false;
@@ -1953,6 +2058,7 @@ export function createConversationReactActions(context) {
       viewState.contactRenameOpen = true;
       viewState.contactContextMenu = null;
       viewState.fileContextMenu = null;
+      viewState.messageContextMenu = null;
       viewState.error = "";
       context.render();
     },
@@ -1975,6 +2081,28 @@ export function createConversationReactActions(context) {
         ...fileContextMenuPosition(point),
       };
       viewState.contactContextMenu = null;
+      viewState.messageContextMenu = null;
+      viewState.menuOpen = false;
+      viewState.searchOpen = false;
+      viewState.emojiOpen = false;
+      context.render();
+    },
+    openMessageContextMenu: (row, point) => {
+      const lineNumber = Number(row?.lineNumber);
+      const kind = clean(row?.kind);
+      if (viewState.sending
+        || row?.deletable !== true
+        || !Number.isSafeInteger(lineNumber)
+        || lineNumber <= 0
+        || !["user", "assistant", "dynamic-context"].includes(kind)) return;
+      viewState.messageContextMenu = {
+        kind,
+        lineNumber,
+        messageId: clean(row?.sourceMessageId),
+        ...messageContextMenuPosition(point),
+      };
+      viewState.contactContextMenu = null;
+      viewState.fileContextMenu = null;
       viewState.menuOpen = false;
       viewState.searchOpen = false;
       viewState.emojiOpen = false;
@@ -2007,9 +2135,13 @@ export function createConversationReactActions(context) {
       }
       context.render();
     },
-    openMediaPreview: (item) => void openConversationMediaPreviewForItem(context, item),
+    openMediaPreview: (item) => {
+      viewState.messageContextMenu = null;
+      void openConversationMediaPreviewForItem(context, item);
+    },
     openSessionSettings: async () => {
       viewState.menuOpen = false;
+      viewState.messageContextMenu = null;
       viewState.searchOpen = false;
       viewState.settingsOpen = true;
       viewState.emojiOpen = false;
@@ -2027,6 +2159,39 @@ export function createConversationReactActions(context) {
       if (!items.length || index === preview?.index) return;
       viewState.mediaPreview = { ...preview, index };
       context.render();
+    },
+    deleteMessage: async (message) => {
+      const lineNumber = Number(message?.lineNumber);
+      const kind = clean(message?.kind);
+      if (viewState.sending
+        || !Number.isSafeInteger(lineNumber)
+        || lineNumber <= 0
+        || !["user", "assistant", "dynamic-context"].includes(kind)
+        || typeof context.api.conversation.deleteMessage !== "function") return;
+      viewState.messageContextMenu = null;
+      const confirmed = window.confirm("从聊天记录中隐藏这条消息？\n\n已生成的会话摘要不会修改；若它曾写入长期记忆，对应记忆也会被撤回。");
+      if (!confirmed) {
+        context.render();
+        return;
+      }
+      viewState.sending = true;
+      context.render();
+      try {
+        viewState.snapshot = await context.api.conversation.deleteMessage({
+          confirmed: true,
+          lineNumber,
+          messageId: kind === "dynamic-context" ? "" : clean(message?.messageId),
+        });
+        viewState.lastVersion = viewState.snapshot?.version ?? null;
+        resetConversationFocus();
+        viewState.error = "";
+        viewState.notice = "已从聊天记录中隐藏这条消息。";
+      } catch (error) {
+        viewState.error = `无法删除消息：${error?.message || error}`;
+      } finally {
+        viewState.sending = false;
+        context.render();
+      }
     },
     refresh: () => void load(context, true),
     removeComposerAttachment: (selectionToken) => {
@@ -2437,11 +2602,13 @@ export function createConversationReactActions(context) {
     toggleEmoji: () => {
       viewState.emojiOpen = !viewState.emojiOpen;
       viewState.menuOpen = false;
+      viewState.messageContextMenu = null;
       if (viewState.emojiOpen) focusComposer();
       context.render();
     },
     toggleMenu: () => {
       viewState.menuOpen = !viewState.menuOpen;
+      viewState.messageContextMenu = null;
       viewState.searchOpen = false;
       viewState.settingsOpen = false;
       viewState.emojiOpen = false;
@@ -2450,6 +2617,7 @@ export function createConversationReactActions(context) {
     toggleSearch: () => {
       viewState.searchOpen = !viewState.searchOpen;
       viewState.menuOpen = false;
+      viewState.messageContextMenu = null;
       viewState.settingsOpen = false;
       viewState.emojiOpen = false;
       if (viewState.searchOpen) {

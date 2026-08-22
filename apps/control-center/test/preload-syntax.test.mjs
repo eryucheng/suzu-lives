@@ -79,6 +79,7 @@ test("Electron preload exposes the memory bridge", async () => {
   assert.equal(typeof bridge?.conversation?.updateContactApprovalMode, "undefined");
   assert.equal(typeof bridge?.conversation?.updateContactLongTermMemoryEnabled, "function");
   assert.equal(typeof bridge?.conversation?.removeContact, "function");
+  assert.equal(typeof bridge?.conversation?.deleteMessage, "function");
   assert.equal(typeof bridge?.conversation?.emojiStickers?.snapshot, "function");
   assert.equal(typeof bridge?.conversation?.emojiStickers?.select, "function");
   assert.equal(typeof bridge?.conversation?.emojiStickers?.add, "function");
@@ -137,6 +138,13 @@ test("Electron preload exposes the memory bridge", async () => {
   await bridge.conversation.removeContact({ id: "contact-suzu", confirmed: true });
   assert.equal(calls.at(-1).channel, "conversation:remove-contact");
   assert.deepEqual(JSON.parse(JSON.stringify(calls.at(-1).args[0])), { id: "contact-suzu", confirmed: true });
+  await bridge.conversation.deleteMessage({ lineNumber: 42, messageId: "assistant-42", confirmed: true });
+  assert.equal(calls.at(-1).channel, "conversation:delete-message");
+  assert.deepEqual(JSON.parse(JSON.stringify(calls.at(-1).args[0])), {
+    lineNumber: 42,
+    messageId: "assistant-42",
+    confirmed: true,
+  });
   await bridge.conversation.emojiStickers.snapshot();
   await bridge.conversation.emojiStickers.select();
   await bridge.conversation.emojiStickers.add({ selectionToken: "selected-sticker" });

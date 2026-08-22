@@ -67,8 +67,11 @@ test("the top command field opens the fixed Suzu software assistant instead of a
   assert.match(shell, /placeholder="问 Suzu：想做什么？"/u);
   assert.match(shell, /aria-label="问 Suzu"/u);
   assert.doesNotMatch(shell, /SuzuSearchDialog/u);
-  assert.match(dialog, /const assistantName = busy \? "正在输入中\.\.\." : "Suzu";/u);
+  assert.match(dialog, /const assistantName = phase === "clearing" \? "正在清空记录\.\.\." : busy \? "正在输入中\.\.\." : "Suzu";/u);
   assert.match(dialog, /<h2 aria-live="polite">\{assistantName\}<\/h2>/u);
+  assert.match(dialog, /api\?\.clearHistory/u);
+  assert.match(dialog, /清空问 Suzu 的记录/u);
+  assert.match(dialog, /联系人聊天、联系人资料和软件设置不会受影响/u);
   assert.doesNotMatch(dialog, /软件使用助手/u);
   assert.doesNotMatch(dialog, /默认不读取联系人或长期记忆/u);
   assert.match(dialog, /import \{ createPortal \} from "react-dom";/u);

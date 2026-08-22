@@ -9,7 +9,7 @@ function request(value) {
 
 /** Renderer bridge for the fixed, non-contact software-help conversation. */
 export function registerSoftwareAssistantIpc({ app = null, ipcMain, softwareAssistantService } = {}) {
-  if (!ipcMain?.handle || !softwareAssistantService?.snapshot || !softwareAssistantService?.send || !softwareAssistantService?.stop || !softwareAssistantService?.subscribe) {
+  if (!ipcMain?.handle || !softwareAssistantService?.snapshot || !softwareAssistantService?.send || !softwareAssistantService?.stop || !softwareAssistantService?.clearHistory || !softwareAssistantService?.subscribe) {
     throw new Error("软件助手 IPC 需要完整的软件助手服务。 ");
   }
   const senders = new Set();
@@ -36,6 +36,10 @@ export function registerSoftwareAssistantIpc({ app = null, ipcMain, softwareAssi
   ipcMain.handle("software-assistant:stop", async (event, value) => {
     remember(event.sender);
     return softwareAssistantService.stop({ requestId: clean(value?.requestId) });
+  });
+  ipcMain.handle("software-assistant:clear-history", async (event) => {
+    remember(event.sender);
+    return softwareAssistantService.clearHistory();
   });
   app?.once?.("before-quit", () => {
     try { unsubscribe?.(); } catch { /* Process shutdown. */ }

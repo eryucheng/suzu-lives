@@ -4,6 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
+import { resolveAgentDataRoot } from "@suzu-lives/agent-registry";
+
 import { createCapabilityAccessPolicy } from "../electron/services/capability-access-policy.mjs";
 import { createCapabilityRegistry, createCapabilityRuntime } from "../electron/services/capability-registry.mjs";
 import { createAgentCapabilityAdapters } from "../electron/services/agent-capability-adapters.mjs";
@@ -143,6 +145,81 @@ test("Agent capability adapters reuse product-owned executors with the active co
   assert.deepEqual(byType.get("phone-camera").options.refs, [{ scope: "contact", id: "person.main" }]);
   assert.equal(calls.filter((entry) => entry.type === "usage").length, 1);
   assert.equal(calls.find((entry) => entry.type === "usage").value.capabilityId, "phone-camera");
+});
+
+test("a profile-selected voice resolves the API assigned to its own voice service", async () => {
+  const root = await temporaryDirectory("suzu-agent-capability-voice-service-");
+  const dataRoot = path.join(root, "data");
+  const contact = {
+    agentId: "agent-1234567890abcdef",
+    id: "contact-voice-service",
+    name: "Suzu",
+    projectRoot: path.join(root, "contact"),
+  };
+  const agentRoot = resolveAgentDataRoot({ dataRoot, agentId: contact.agentId });
+  await fs.mkdir(path.join(dataRoot, "voice-message"), { recursive: true });
+  await fs.mkdir(path.join(agentRoot, "voice-message"), { recursive: true });
+  await fs.writeFile(path.join(dataRoot, "voice-message", "voice-services.json"), JSON.stringify({
+    schemaVersion: 1,
+    services: [{
+      id: "service-elevenlabs",
+      name: "ElevenLabs 语音",
+      adapter: "elevenlabs-speech",
+      connectionId: "connection-elevenlabs",
+      model: "eleven_multilingual_v2",
+      createdAt: "2026-08-23T00:00:00.000Z",
+    }],
+  }));
+  await fs.writeFile(path.join(dataRoot, "voice-message", "voice-profiles.json"), JSON.stringify({
+    schemaVersion: 1,
+    profiles: [{
+      id: "profile-elevenlabs",
+      serviceId: "service-elevenlabs",
+      name: "Narrator",
+      voiceId: "voice-id-123",
+      model: "",
+      createdAt: "2026-08-23T00:00:00.000Z",
+    }],
+  }));
+  await fs.writeFile(path.join(agentRoot, "voice-message", "config.json"), JSON.stringify({
+    schemaVersion: 6,
+    voiceProfileId: "profile-elevenlabs",
+  }));
+  const calls = [];
+  const adapters = createAgentCapabilityAdapters({
+    connectionsService: {
+      resolveApiConnectionById: async (id) => id === "connection-elevenlabs" ? {
+        apiKey: "elevenlabs-key",
+        baseUrl: "https://api.elevenlabs.io",
+        key: "elevenlabs-key",
+        model: "",
+        name: "ElevenLabs 账户",
+        type: "generic-api",
+      } : null,
+      resolveNamedApiConnection: async () => {
+        throw new Error("profile voice must not use the old global binding");
+      },
+    },
+    contactProjectsService: { snapshot: async () => ({ contacts: [contact] }) },
+    runners: {
+      runDirectVoiceMessage: async (value) => {
+        calls.push(value);
+        return { status: "ok" };
+      },
+    },
+    settingsService: settingsService(dataRoot),
+  });
+
+  await adapters["voice-message"]({
+    capability: { id: "voice-message" },
+    context: { contactId: contact.id, input: { text: "你好。" }, projectRoot: contact.projectRoot },
+    lifecycle: "invoke",
+  });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].apiKeyOverride, "elevenlabs-key");
+  assert.equal(calls[0].baseUrlOverride, "https://api.elevenlabs.io");
+  assert.equal(calls[0].connectionName, "ElevenLabs 账户");
+  assert.equal(calls[0].connectionType, "generic-api");
 });
 
 test("a contact capability is absent from the Agent catalog until that contact enables it", async () => {

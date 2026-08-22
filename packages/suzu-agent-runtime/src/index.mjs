@@ -678,6 +678,7 @@ export function createSuzuAgentRuntimeDriver({
           sessionId: record.runtimeSessionId,
           mode: "queue",
           content: promptContent(input),
+          turnId: turn.turnId,
         }), "发送消息");
         if (plainObject(value).accepted !== true) {
           throw new SuzuAgentRuntimeError("AGENT_CORE_PROMPT_REJECTED", "Agent Core 没有接受这条消息。 ");

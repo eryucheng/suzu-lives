@@ -18,6 +18,8 @@ const MAX_MESSAGE_LENGTH = 20_000;
 const MAX_EVENT_TEXT_LENGTH = 200_000;
 const MAX_QUEUED_TURNS = 50;
 const SUZU_CAPABILITY_TOOL = "suzu_capability";
+const AGENT_AUTOMATIC_ATTACHMENT_KINDS = new Set(["image", "audio", "file"]);
+const AUTOMATION_TASK_CONTEXT_KIND = "automation-task";
 const MAX_MEDIA_UNDERSTANDING_CONTEXT_CHARACTERS = 32_000;
 const MAX_MEDIA_UNDERSTANDING_RESULT_CHARACTERS = 4_000;
 const MEDIA_UNDERSTANDING_ACTIONS = Object.freeze({
@@ -117,6 +119,64 @@ function errorMessage(error, fallback) {
   return clean(error?.message || error) || fallback;
 }
 
+/**
+ * Creation capabilities declare their user-facing output on the capability
+ * resource itself.  Once the product adapter has produced that output, cache
+ * and deliver it in the same lifecycle response instead of asking the model
+ * to remember a second attachment action. The returned receipt is the only
+ * model-visible result: it is the durable record that the local renderer and
+ * linked transports already know, and it prevents low-level generation hints
+ * from reintroducing a second delivery step into the Agent's context.
+ */
+async function automaticallyDeliverCapabilityOutput({
+  attachmentService,
+  projectRoot,
+  result,
+  sessionId,
+} = {}) {
+  const invocation = plainObject(result);
+  if (clean(invocation.status) !== "completed") return result;
+  const delivery = plainObject(invocation.outputDelivery);
+  const kind = clean(delivery.kind).toLowerCase();
+  const pathField = clean(delivery.pathField);
+  if (!AGENT_AUTOMATIC_ATTACHMENT_KINDS.has(kind) || !/^[A-Za-z][A-Za-z0-9_]{0,127}$/u.test(pathField)) {
+    return result;
+  }
+  const generated = plainObject(invocation.value);
+  const sourcePath = clean(generated[pathField]);
+  // A dry run or a read-only result declares no actual file, so there is
+  // nothing to inject into the conversation.
+  if (!sourcePath) return result;
+  if (typeof attachmentService?.deliver !== "function") {
+    throw new ConversationChatError("聊天附件服务尚未就绪，无法自动投放生成结果。", {
+      code: "AUTOMATIC_ATTACHMENT_DELIVERY_UNAVAILABLE",
+    });
+  }
+  let receipt;
+  try {
+    receipt = await attachmentService.deliver({
+      input: {
+        items: [{
+          kind,
+          path: sourcePath,
+          ...(clean(generated.fileName) ? { fileName: clean(generated.fileName) } : {}),
+        }],
+      },
+      projectRoot: clean(projectRoot),
+      sessionId: clean(sessionId),
+    });
+  } catch (error) {
+    throw new ConversationChatError(`生成结果无法自动投放：${errorMessage(error, "附件交付失败。")}`, {
+      cause: error,
+      code: clean(error?.code) || "AUTOMATIC_ATTACHMENT_DELIVERY_FAILED",
+    });
+  }
+  return Object.freeze({
+    ...invocation,
+    value: Object.freeze({ ...plainObject(receipt) }),
+  });
+}
+
 function sameProjectRoot(left, right) {
   const first = clean(left);
   const second = clean(right);
@@ -192,6 +252,21 @@ function mediaUnderstandingActions(capabilityRuntime, context = {}) {
     }
   }
   return available;
+}
+
+async function runtimeAcceptsNativeImages(runtime) {
+  if (typeof runtime?.currentModelCapabilities !== "function") return false;
+  try {
+    const capabilities = plainObject(await runtime.currentModelCapabilities());
+    if (capabilities.supportsImageInput === true) return true;
+    return (Array.isArray(capabilities.inputModalities) ? capabilities.inputModalities : [])
+      .map((modality) => clean(modality).toLowerCase())
+      .includes("image");
+  } catch {
+    // When capability lookup is unavailable, preserve the known-safe fallback
+    // route rather than guessing that the selected model accepts images.
+    return false;
+  }
 }
 
 function mediaUnderstandingQuestion(kind, userText) {
@@ -331,7 +406,7 @@ function lifecycleTurnPayload(turn, extra = {}) {
   return {
     ...lifecycleScope(turn),
     ...(clean(turn?.userText) ? { userText: bounded(turn.userText, MAX_MESSAGE_LENGTH) } : {}),
-    ...(taskText ? {
+    ...(taskText && !turn?.taskContextInjected ? {
       taskContext: {
         ...(clean(task.id) ? { id: clean(task.id) } : {}),
         text: bounded(taskText, MAX_MESSAGE_LENGTH),
@@ -341,6 +416,22 @@ function lifecycleTurnPayload(turn, extra = {}) {
     ...(clean(turn?.text) ? { assistantText: bounded(turn.text) } : {}),
     ...extra,
   };
+}
+
+function dynamicContextForTurn(turn, blocks) {
+  const collected = Array.isArray(blocks) ? blocks : [];
+  if (!clean(turn?.taskContext?.text)) return collected;
+  const hasTaskInstruction = collected.some((block) => (
+    clean(block?.kind) === AUTOMATION_TASK_CONTEXT_KIND
+  ));
+  if (!turn.taskContextInjected) {
+    if (hasTaskInstruction) turn.taskContextInjected = true;
+    return collected;
+  }
+  // Agent Core requests dynamic context for every model step. The automatic
+  // task body starts the scheduled turn, while time and memory remain fresh
+  // for each subsequent step in that same turn.
+  return collected.filter((block) => clean(block?.kind) !== AUTOMATION_TASK_CONTEXT_KIND);
 }
 
 /**
@@ -727,6 +818,12 @@ export function createConversationChatService({
               step,
               turnId: turn.requestId,
             });
+            result = await automaticallyDeliverCapabilityOutput({
+              attachmentService,
+              projectRoot: turn.projectRoot,
+              result,
+              sessionId: turn.sessionId,
+            });
           } catch (error) {
             result = {
               status: "failed",
@@ -763,8 +860,9 @@ export function createConversationChatService({
         if (turn) {
           try {
             const context = await agentLifecycle.collectDynamicContext(lifecycleTurnPayload(turn, { coreTurn, step }));
-            turn.dynamicContextBlocks = context.blocks;
-            result = { blocks: context.blocks };
+            const blocks = dynamicContextForTurn(turn, context.blocks);
+            turn.dynamicContextBlocks = blocks;
+            result = { blocks };
           } catch (error) {
             dispatchLifecycle("DynamicContextInjectionFailed", lifecycleTurnPayload(turn, {
               coreTurn,
@@ -1091,6 +1189,7 @@ export function createConversationChatService({
       deliverToWechat: request.deliverToWechat === true,
       outputPolicy: request.outputPolicy,
       taskContext: request.taskContext,
+      taskContextInjected: false,
       finalText: "",
       state: "starting",
       streamedReplyContent: "",
@@ -1240,11 +1339,17 @@ export function createConversationChatService({
         projectRoot: session.projectRoot,
         sessionId: session.id,
       });
+      const nativeImageInput = understandingActions.has("image")
+        && await runtimeAcceptsNativeImages(runtime);
+      // Video continues through its dedicated understanding capability. A
+      // visual main model only owns native image blocks, never the video route.
+      const effectiveUnderstandingActions = new Map(understandingActions);
+      if (nativeImageInput) effectiveUnderstandingActions.delete("image");
       let understandingMedia = [];
       try {
         const prepared = await attachmentService.prepare({
           content: preparedInput,
-          includeNativeImages: !understandingActions.has("image"),
+          includeNativeImages: !effectiveUnderstandingActions.has("image"),
           media: suppliedMedia,
           mediaSource,
           projectRoot: session.projectRoot,
@@ -1261,7 +1366,7 @@ export function createConversationChatService({
         });
       }
       const understandingResults = await understandPreparedMedia({
-        actions: understandingActions,
+        actions: effectiveUnderstandingActions,
         capabilityRuntime,
         contactId: resolvedContactId,
         media: understandingMedia,

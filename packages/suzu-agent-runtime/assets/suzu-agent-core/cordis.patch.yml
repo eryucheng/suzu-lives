@@ -130,6 +130,18 @@
 
     - id: llm-deepseek
       name: '@suzu-lives/suzu-agent-runtime/core/deepseek-model'
+      config:
+        models:
+          - id: deepseek-v4-flash
+            name: DeepSeek-V4-Flash
+            contextWindow: 1000000
+          - id: deepseek-v4-pro
+            name: DeepSeek-V4-Pro
+            contextWindow: 1000000
+          - id: deepseek-v4-flash-vision-exp
+            name: DeepSeek-V4-Flash-Vision-Exp
+            contextWindow: 1000000
+            maxTokens: 384000
 
     - id: agent-presets
       name: '@suzu-lives/suzu-agent-runtime/core/agent-presets'

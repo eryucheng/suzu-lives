@@ -5,6 +5,7 @@ import path from "node:path";
 import test from "node:test";
 
 import { executeVoiceMessage, planVoiceMessage, VoiceMessageError } from "../src/index.mjs";
+import { normalizeCustomTtsAdapter } from "../src/custom-tts-adapters.mjs";
 import { resolveDirectVoiceRuntime, runDirectVoiceMessage, synthesizeDirectVoiceAudio } from "../src/direct-voice-message.mjs";
 import { resolveAgentDataRoot } from "@suzu-lives/agent-registry";
 import { CapabilityExecutionError, consumeCapabilityAuthorization, issueCapabilityAuthorization } from "@suzu-lives/capability-runtime";
@@ -393,4 +394,382 @@ test("CosyVoice v1 consumes DashScope SSE and downloads the final audio URL", as
   });
   assert.equal(result.requestId, "cosyvoice-v1-sse-request");
   assert.equal(result.audio.toString("utf8"), "mock-cosyvoice-v1-mp3");
+});
+
+test("Xiaomi MiMo TTS uses its chat-completions contract and decodes returned Base64 audio", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "suzu-voice-xiaomi-mimo-"));
+  const configPath = path.join(root, "voice-message", "config.json");
+  fs.mkdirSync(path.dirname(configPath), { recursive: true });
+  fs.writeFileSync(configPath, JSON.stringify({
+    adapter: "xiaomi-mimo-tts",
+    voiceId: "mimo_default",
+  }));
+  const runtime = resolveDirectVoiceRuntime({
+    dataRoot: root,
+    configPath,
+    apiKeyOverride: "mimo-api-key",
+    baseUrlOverride: "https://api.xiaomimimo.com/v1",
+    connectionName: "我的 MiMo",
+    connectionType: "tts-api",
+  });
+  assert.equal(runtime.tts.adapter, "xiaomi-mimo-tts");
+  assert.equal(runtime.tts.model, "mimo-v2.5-tts");
+
+  const requests = [];
+  const result = await synthesizeDirectVoiceAudio({
+    runtime,
+    text: "你好，今天过得怎么样？",
+    agentId: "agent-1234567890abcdef",
+    ledgerPath: path.join(root, "cost-ledger", "events.jsonl"),
+    fetchImpl: async (url, options = {}) => {
+      requests.push({ url, options });
+      return {
+        ok: true,
+        arrayBuffer: async () => Buffer.from(JSON.stringify({
+          id: "mimo-request-1",
+          choices: [{ message: { audio: { data: Buffer.from("mock-mimo-wav-audio").toString("base64") } } }],
+        })),
+      };
+    },
+  });
+
+  assert.equal(requests[0].url, "https://api.xiaomimimo.com/v1/chat/completions");
+  assert.equal(requests[0].options.headers["api-key"], "mimo-api-key");
+  assert.equal(requests[0].options.headers.Authorization, undefined);
+  assert.deepEqual(JSON.parse(requests[0].options.body), {
+    model: "mimo-v2.5-tts",
+    messages: [{ role: "assistant", content: "你好，今天过得怎么样？" }],
+    audio: { format: "wav", voice: "mimo_default" },
+  });
+  assert.equal(result.requestId, "mimo-request-1");
+  assert.equal(result.format, "wav");
+  assert.equal(result.audio.toString("utf8"), "mock-mimo-wav-audio");
+});
+
+test("Xiaomi MiMo adapter rejects a general MiMo model before it creates a malformed TTS request", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "suzu-voice-xiaomi-mimo-model-"));
+  const configPath = path.join(root, "voice-message", "config.json");
+  fs.mkdirSync(path.dirname(configPath), { recursive: true });
+  fs.writeFileSync(configPath, JSON.stringify({
+    adapter: "xiaomi-mimo-tts",
+    model: "mimo-v2.5",
+    voiceId: "mimo_default",
+  }));
+
+  assert.throws(
+    () => resolveDirectVoiceRuntime({
+      dataRoot: root,
+      configPath,
+      apiKeyOverride: "mimo-api-key",
+      baseUrlOverride: "https://api.xiaomimimo.com/v1",
+      connectionType: "tts-api",
+    }),
+    (error) => error?.code === "tts_model_incompatible" && /mimo-v2\.5-tts/u.test(error.message),
+  );
+});
+
+test("a locally saved custom JSON TTS adapter sends its template and decodes Base64 audio", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "suzu-voice-custom-json-adapter-"));
+  const agentId = "agent-1234567890abcdef";
+  const agentRoot = resolveAgentDataRoot({ dataRoot: root, agentId });
+  const customAdapter = {
+    id: "custom-mimo-adapter",
+    name: "本机 MiMo 协议",
+    endpointPath: "/chat/completions",
+    requestHeaders: { "api-key": "{{apiKey}}" },
+    requestBody: {
+      model: "{{model}}",
+      messages: [{ role: "assistant", content: "{{text}}" }],
+      audio: { format: "wav", voice: "{{voice}}" },
+    },
+    responseMode: "json-base64",
+    audioPath: "choices[0].message.audio.data",
+    outputFormat: "wav",
+  };
+  fs.mkdirSync(path.join(root, "voice-message"), { recursive: true });
+  fs.mkdirSync(path.join(agentRoot, "voice-message"), { recursive: true });
+  fs.writeFileSync(path.join(root, "voice-message", "custom-tts-adapters.json"), JSON.stringify({
+    schemaVersion: 1,
+    adapters: [customAdapter],
+  }));
+  fs.writeFileSync(path.join(root, "voice-message", "custom-voices.json"), JSON.stringify({
+    schemaVersion: 2,
+    voices: [{
+      id: "custom-mimo-voice",
+      name: "自定义 MiMo 音色",
+      adapter: "custom-http-tts",
+      customAdapterId: customAdapter.id,
+      model: "mimo-v2.5-tts",
+      voiceId: "mimo_default",
+    }],
+  }));
+  fs.writeFileSync(path.join(agentRoot, "voice-message", "config.json"), JSON.stringify({
+    schemaVersion: 5,
+    adapter: "custom-http-tts",
+    customAdapterId: customAdapter.id,
+    voiceId: "mimo_default",
+    customVoiceId: "custom-mimo-voice",
+    customVoiceSource: "global",
+  }));
+
+  const runtime = resolveDirectVoiceRuntime({
+    dataRoot: root,
+    agentId,
+    apiKeyOverride: "custom-mimo-key",
+    baseUrlOverride: "https://tts.example.test/v1",
+    connectionName: "我的自定义 TTS",
+    connectionType: "tts-api",
+  });
+  assert.equal(runtime.tts.adapter, "custom-http-tts");
+  assert.equal(runtime.tts.customAdapter.id, customAdapter.id);
+  const requests = [];
+  const result = await synthesizeDirectVoiceAudio({
+    runtime,
+    text: "你好，来自自定义协议。",
+    agentId,
+    ledgerPath: path.join(root, "cost-ledger", "events.jsonl"),
+    fetchImpl: async (url, options = {}) => {
+      requests.push({ url, options });
+      return {
+        ok: true,
+        arrayBuffer: async () => Buffer.from(JSON.stringify({
+          choices: [{ message: { audio: { data: Buffer.from("custom-wav-audio").toString("base64") } } }],
+        })),
+      };
+    },
+  });
+  assert.equal(requests[0].url, "https://tts.example.test/v1/chat/completions");
+  assert.equal(requests[0].options.headers["api-key"], "custom-mimo-key");
+  assert.deepEqual(JSON.parse(requests[0].options.body), {
+    model: "mimo-v2.5-tts",
+    messages: [{ role: "assistant", content: "你好，来自自定义协议。" }],
+    audio: { format: "wav", voice: "mimo_default" },
+  });
+  assert.equal(result.format, "wav");
+  assert.equal(result.audio.toString("utf8"), "custom-wav-audio");
+});
+
+test("a custom TTS adapter can place the selected voice in an ElevenLabs-style endpoint", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "suzu-voice-elevenlabs-template-"));
+  const agentId = "agent-1234567890abcdef";
+  const agentRoot = resolveAgentDataRoot({ dataRoot: root, agentId });
+  const customAdapter = {
+    id: "custom-elevenlabs-adapter",
+    name: "ElevenLabs 请求格式",
+    endpointPath: "/v1/text-to-speech/{{voice}}?output_format=mp3_44100_128",
+    requestHeaders: { "xi-api-key": "{{apiKey}}" },
+    requestBody: { text: "{{text}}", model_id: "{{model}}" },
+    responseMode: "binary",
+    audioPath: "",
+    outputFormat: "mp3",
+  };
+  fs.mkdirSync(path.join(root, "voice-message"), { recursive: true });
+  fs.mkdirSync(path.join(agentRoot, "voice-message"), { recursive: true });
+  fs.writeFileSync(path.join(root, "voice-message", "custom-tts-adapters.json"), JSON.stringify({
+    schemaVersion: 1,
+    adapters: [customAdapter],
+  }));
+  fs.writeFileSync(path.join(root, "voice-message", "custom-voices.json"), JSON.stringify({
+    schemaVersion: 2,
+    voices: [{
+      id: "elevenlabs-voice",
+      name: "ElevenLabs 音色",
+      adapter: "custom-http-tts",
+      customAdapterId: customAdapter.id,
+      model: "eleven_multilingual_v2",
+      voiceId: "voice id/1",
+    }],
+  }));
+  fs.writeFileSync(path.join(agentRoot, "voice-message", "config.json"), JSON.stringify({
+    schemaVersion: 5,
+    adapter: "custom-http-tts",
+    customAdapterId: customAdapter.id,
+    voiceId: "voice id/1",
+    customVoiceId: "elevenlabs-voice",
+    customVoiceSource: "global",
+  }));
+
+  const runtime = resolveDirectVoiceRuntime({
+    dataRoot: root,
+    agentId,
+    apiKeyOverride: "elevenlabs-key",
+    baseUrlOverride: "https://api.elevenlabs.io",
+    connectionName: "我的 ElevenLabs",
+    connectionType: "tts-api",
+  });
+  const requests = [];
+  const result = await synthesizeDirectVoiceAudio({
+    runtime,
+    text: "Hello from Suzu.",
+    agentId,
+    ledgerPath: path.join(root, "cost-ledger", "events.jsonl"),
+    fetchImpl: async (url, options = {}) => {
+      requests.push({ url, options });
+      return { ok: true, arrayBuffer: async () => Buffer.from("elevenlabs-mp3-audio") };
+    },
+  });
+  assert.equal(requests[0].url, "https://api.elevenlabs.io/v1/text-to-speech/voice%20id%2F1?output_format=mp3_44100_128");
+  assert.equal(requests[0].options.headers["xi-api-key"], "elevenlabs-key");
+  assert.deepEqual(JSON.parse(requests[0].options.body), {
+    text: "Hello from Suzu.",
+    model_id: "eleven_multilingual_v2",
+  });
+  assert.equal(result.format, "mp3");
+  assert.equal(result.audio.toString("utf8"), "elevenlabs-mp3-audio");
+});
+
+test("a profile-based ElevenLabs voice resolves its own service and API connection identity", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "suzu-voice-elevenlabs-service-"));
+  const agentId = "agent-abcdef1234567890";
+  const agentRoot = resolveAgentDataRoot({ dataRoot: root, agentId });
+  fs.mkdirSync(path.join(root, "voice-message"), { recursive: true });
+  fs.mkdirSync(path.join(agentRoot, "voice-message"), { recursive: true });
+  fs.writeFileSync(path.join(root, "voice-message", "voice-services.json"), JSON.stringify({
+    schemaVersion: 1,
+    services: [{
+      id: "service-elevenlabs",
+      name: "ElevenLabs 英文语音",
+      adapter: "elevenlabs-speech",
+      connectionId: "connection-elevenlabs",
+      model: "eleven_multilingual_v2",
+      createdAt: "2026-08-23T00:00:00.000Z",
+    }],
+  }));
+  fs.writeFileSync(path.join(root, "voice-message", "voice-profiles.json"), JSON.stringify({
+    schemaVersion: 1,
+    profiles: [{
+      id: "profile-elevenlabs",
+      serviceId: "service-elevenlabs",
+      name: "Narrator",
+      voiceId: "voice id/1",
+      model: "",
+      createdAt: "2026-08-23T00:00:00.000Z",
+    }],
+  }));
+  fs.writeFileSync(path.join(agentRoot, "voice-message", "config.json"), JSON.stringify({
+    schemaVersion: 6,
+    voiceProfileId: "profile-elevenlabs",
+  }));
+
+  const runtime = resolveDirectVoiceRuntime({
+    dataRoot: root,
+    agentId,
+    apiKeyOverride: "elevenlabs-service-key",
+    baseUrlOverride: "",
+    connectionName: "ElevenLabs 账户",
+    connectionType: "tts-api",
+  });
+  assert.equal(runtime.selectionSource, "profile");
+  assert.equal(runtime.voiceProfileId, "profile-elevenlabs");
+  assert.equal(runtime.voiceServiceId, "service-elevenlabs");
+  assert.equal(runtime.voiceConnectionId, "connection-elevenlabs");
+  assert.equal(runtime.tts.adapter, "elevenlabs-speech");
+  assert.equal(runtime.tts.baseUrl, "https://api.elevenlabs.io");
+  assert.equal(runtime.tts.voice, "voice id/1");
+
+  const requests = [];
+  const result = await synthesizeDirectVoiceAudio({
+    runtime,
+    text: "Hello from a voice profile.",
+    agentId,
+    ledgerPath: path.join(root, "cost-ledger", "events.jsonl"),
+    fetchImpl: async (url, options = {}) => {
+      requests.push({ url, options });
+      return { ok: true, arrayBuffer: async () => Buffer.from("profile-elevenlabs-audio") };
+    },
+  });
+  assert.equal(requests[0].url, "https://api.elevenlabs.io/v1/text-to-speech/voice%20id%2F1?output_format=mp3_44100_128");
+  assert.equal(requests[0].options.headers["xi-api-key"], "elevenlabs-service-key");
+  assert.deepEqual(JSON.parse(requests[0].options.body), {
+    text: "Hello from a voice profile.",
+    model_id: "eleven_multilingual_v2",
+  });
+  assert.equal(result.audio.toString("utf8"), "profile-elevenlabs-audio");
+});
+
+test("a profile-based custom protocol owns its endpoint while the selected API only provides its key", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "suzu-voice-custom-service-"));
+  const agentId = "agent-custom-service-1234";
+  const agentRoot = resolveAgentDataRoot({ dataRoot: root, agentId });
+  fs.mkdirSync(path.join(root, "voice-message"), { recursive: true });
+  fs.mkdirSync(path.join(agentRoot, "voice-message"), { recursive: true });
+  fs.writeFileSync(path.join(root, "voice-message", "custom-tts-adapters.json"), JSON.stringify({
+    schemaVersion: 1,
+    adapters: [{
+      id: "custom-service-protocol",
+      name: "供应商语音协议",
+      baseUrl: "https://voice.example.test/v1",
+      endpointPath: "/speech/{{voice}}",
+      requestHeaders: { Authorization: "Bearer {{apiKey}}" },
+      requestBody: { model: "{{model}}", text: "{{text}}" },
+      responseMode: "binary",
+      audioPath: "",
+      outputFormat: "mp3",
+    }],
+  }));
+  fs.writeFileSync(path.join(root, "voice-message", "voice-services.json"), JSON.stringify({
+    schemaVersion: 1,
+    services: [{
+      id: "service-custom-tts",
+      name: "供应商语音",
+      adapter: "custom-http-tts",
+      connectionId: "connection-custom-tts",
+      customAdapterId: "custom-service-protocol",
+      model: "speech-v1",
+      createdAt: "2026-08-23T00:00:00.000Z",
+    }],
+  }));
+  fs.writeFileSync(path.join(root, "voice-message", "voice-profiles.json"), JSON.stringify({
+    schemaVersion: 1,
+    profiles: [{
+      id: "profile-custom-tts",
+      serviceId: "service-custom-tts",
+      name: "供应商音色",
+      voiceId: "voice id/1",
+      model: "",
+      createdAt: "2026-08-23T00:00:00.000Z",
+    }],
+  }));
+  fs.writeFileSync(path.join(agentRoot, "voice-message", "config.json"), JSON.stringify({
+    schemaVersion: 6,
+    voiceProfileId: "profile-custom-tts",
+  }));
+
+  const runtime = resolveDirectVoiceRuntime({
+    dataRoot: root,
+    agentId,
+    apiKeyOverride: "custom-service-key",
+    baseUrlOverride: "",
+    connectionName: "供应商账户",
+    connectionType: "tts-api",
+  });
+  assert.equal(runtime.tts.baseUrl, "https://voice.example.test/v1");
+  const requests = [];
+  await synthesizeDirectVoiceAudio({
+    runtime,
+    text: "Hello from a custom service.",
+    agentId,
+    ledgerPath: path.join(root, "cost-ledger", "events.jsonl"),
+    fetchImpl: async (url, options = {}) => {
+      requests.push({ url, options });
+      return { ok: true, arrayBuffer: async () => Buffer.from("custom-service-audio") };
+    },
+  });
+  assert.equal(requests[0].url, "https://voice.example.test/v1/speech/voice%20id%2F1");
+  assert.equal(requests[0].options.headers.Authorization, "Bearer custom-service-key");
+});
+
+test("custom TTS endpoint templates only accept the selected voice variable", () => {
+  assert.throws(
+    () => normalizeCustomTtsAdapter({
+      id: "custom-invalid-template",
+      name: "无效路径变量",
+      endpointPath: "/v1/text-to-speech/{{apiKey}}",
+      requestHeaders: {},
+      requestBody: { text: "{{text}}" },
+      responseMode: "binary",
+      outputFormat: "mp3",
+    }),
+    /只支持 \{\{voice\}\}/u,
+  );
 });

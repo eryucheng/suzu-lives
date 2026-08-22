@@ -53,3 +53,33 @@ test("legacy environment keys never become an implicit API connection", async ()
   assert.equal(await service.resolveImageApi(), null);
   assert.equal(await service.resolveNamedApiConnection("voice-message"), null);
 });
+
+test("a saved API cannot be removed while a voice service is using it", async () => {
+  const dataRoot = await fs.mkdtemp(path.join(os.tmpdir(), "suzu-voice-service-connection-data-"));
+  const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "suzu-voice-service-connection-project-"));
+  const settings = { projectRoot, dataRoot, agentId: stableAgentId(projectRoot) };
+  const service = createConnectionsService({ safeStorage: protector, settingsService: { load: () => settings, response: () => ({ dataRoot }) } });
+  const saved = await service.saveNamedApiConnection({
+    name: "ElevenLabs 账户",
+    type: "generic-api",
+    baseUrl: "https://api.elevenlabs.io",
+    apiKey: opaque() + "-elevenlabs",
+  });
+  const connectionId = saved.connections[0].id;
+  await fs.mkdir(path.join(dataRoot, "voice-message"), { recursive: true });
+  await fs.writeFile(path.join(dataRoot, "voice-message", "voice-services.json"), JSON.stringify({
+    schemaVersion: 1,
+    services: [{
+      id: "service-elevenlabs",
+      name: "ElevenLabs 语音",
+      adapter: "elevenlabs-speech",
+      connectionId,
+      model: "eleven_multilingual_v2",
+      createdAt: "2026-08-23T00:00:00.000Z",
+    }],
+  }), "utf8");
+  await assert.rejects(
+    () => service.removeNamedApiConnection(connectionId),
+    /语音服务.*使用/u,
+  );
+});

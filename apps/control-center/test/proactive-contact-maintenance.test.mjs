@@ -7,6 +7,7 @@ import test from "node:test";
 import { createScheduleTask, listScheduleTasks, setScheduleTaskEnabled } from "@suzu-lives/task-scheduler";
 import {
   createProactiveChainPlanningTask,
+  isActiveProactiveChainTask,
   isActiveProactiveChainPlanningTask,
   maintainProactiveContactChains,
   PROACTIVE_CHAIN_DESCRIPTION,
@@ -15,6 +16,7 @@ import {
   PROACTIVE_CHAIN_RECOVERY_DELAY,
   PROACTIVE_CHAIN_TASK_PROMPT,
   proactiveCheckTaskPrompt,
+  proactivePlanningTaskPrompt,
 } from "../electron/services/proactive-contact-maintenance.mjs";
 
 async function temporaryDirectory(prefix) {
@@ -26,7 +28,7 @@ test("automatic proactive maintenance seeds one missing A task per enabled conta
   const now = new Date("2026-08-10T10:00:00+08:00");
   const settings = {
     autoMaintain: true,
-    chainPrompt: "根据时间自然联系，并设置下一次任务。",
+    chainPrompt: "根据时间自然联系。",
     enabledContactIds: ["contact-first", "contact-second"],
   };
 
@@ -134,12 +136,77 @@ test("an internal B planning task covers the chain until it creates the next A",
   assert.deepEqual(created, []);
 });
 
-test("A prompt keeps the decision in thinking and leaves next scheduling to B", () => {
+test("maintenance replaces stale or duplicate automatic chain work with one current A", async () => {
+  const dataRoot = await temporaryDirectory("suzu-proactive-normalize-");
+  const contactId = "contact-normalize";
+  const now = new Date("2026-08-10T10:00:00+08:00");
+  await createScheduleTask({
+    dataRoot,
+    delay: "30m",
+    prompt: "旧的 A 任务正文",
+    contactId,
+    description: PROACTIVE_CHAIN_DESCRIPTION,
+    source: "agent",
+    now,
+  });
+  await createScheduleTask({
+    dataRoot,
+    delay: "15m",
+    prompt: "旧的 B 任务正文",
+    contactId,
+    description: PROACTIVE_CHAIN_PLANNING_DESCRIPTION,
+    source: "system",
+    now,
+  });
+  await createScheduleTask({
+    dataRoot,
+    delay: "5m",
+    prompt: "保留的手工事项",
+    contactId,
+    description: "手工计划",
+    source: "manual",
+    now,
+  });
+
+  const created = await maintainProactiveContactChains({
+    dataRoot,
+    now,
+    settings: {
+      autoMaintain: true,
+      enabledContactIds: [contactId],
+    },
+  });
+
+  assert.equal(created.length, 1);
+  assert.equal(created[0].description, PROACTIVE_CHAIN_DESCRIPTION);
+  assert.equal(created[0].target.prompt, PROACTIVE_CHAIN_TASK_PROMPT);
+  assert.equal(created[0].dueAt, "2026-08-10T02:15:00.000Z");
+
+  const tasks = await listScheduleTasks({ dataRoot });
+  const chainTasks = tasks.filter((task) => isActiveProactiveChainTask(task, { contactId })
+    || isActiveProactiveChainPlanningTask(task, { contactId }));
+  assert.equal(chainTasks.length, 1);
+  assert.equal(tasks.some((task) => task.description === "手工计划"), true);
+});
+
+test("A prompt owns only the contact decision and hands the next schedule to B", () => {
   const prompt = proactiveCheckTaskPrompt("根据上次聊天判断是否联系。");
-  assert.match(prompt, /判断阶段（A）/u);
-  assert.match(prompt, /判断过程留在思考/u);
-  assert.match(prompt, /不要创建、修改或删除自动任务/u);
+  assert.match(prompt, /主动关心 A｜联系判断/u);
+  assert.match(prompt, /本次相处原则/u);
+  assert.match(prompt, /A 只负责判断和回复/u);
+  assert.match(prompt, /不调用 schedule add/u);
+  assert.match(prompt, /下一次判断由 B/u);
   assert.match(prompt, /NO_REPLY/u);
+});
+
+test("B prompt creates one correctly marked next A task and ends the internal turn", () => {
+  const prompt = proactivePlanningTaskPrompt();
+  assert.match(prompt, /主动关心 B｜下次判断安排/u);
+  assert.match(prompt, /schedule add/u);
+  assert.equal(prompt.includes(`--prompt "${PROACTIVE_CHAIN_TASK_PROMPT}"`), true);
+  assert.equal(prompt.includes(`--desc "${PROACTIVE_CHAIN_DESCRIPTION}"`), true);
+  assert.match(prompt, /结束本轮/u);
+  assert.doesNotMatch(prompt, /NO_REPLY/u);
 });
 
 test("a missing post-turn chain is restored two hours later", async () => {

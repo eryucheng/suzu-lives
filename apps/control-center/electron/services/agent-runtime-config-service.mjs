@@ -6,6 +6,24 @@ const AGENT_DEFAULT_MODEL_SETTINGS_NAMESPACE = "agent-default-model";
 const DEEPSEEK_API_KEY_REFERENCE = "DEEPSEEK_API_KEY";
 const DEFAULT_DEEPSEEK_BASE_URL = "https://api.deepseek.com";
 const DEFAULT_DEEPSEEK_MODEL = "deepseek-v4-flash";
+const DEEPSEEK_MODEL_CATALOG = Object.freeze([
+  Object.freeze({
+    id: "deepseek-v4-flash",
+    name: "DeepSeek-V4-Flash",
+    contextWindow: 1_000_000,
+  }),
+  Object.freeze({
+    id: "deepseek-v4-pro",
+    name: "DeepSeek-V4-Pro",
+    contextWindow: 1_000_000,
+  }),
+  Object.freeze({
+    id: "deepseek-v4-flash-vision-exp",
+    name: "DeepSeek-V4-Flash-Vision-Exp",
+    contextWindow: 1_000_000,
+    maxTokens: 384_000,
+  }),
+]);
 const CREDENTIAL_REFERENCE = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/u;
 const PROVIDER_ROUTE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/u;
 const SUPPORTED_PI_PROTOCOLS = new Set(["openai-completions", "openai-responses", "anthropic-messages"]);
@@ -207,6 +225,28 @@ function profileModels(profile) {
       maxTokens: Number(entry?.maxTokens) || 0,
     }))
     .filter((entry) => entry.id && !seen.has(entry.id) && (seen.add(entry.id) || true));
+}
+
+function mergeModelCatalogEntries(...collections) {
+  const seen = new Set();
+  return collections.flatMap((collection) => Array.isArray(collection) ? collection : [])
+    .map((value) => {
+      const id = clean(value?.id);
+      if (!id || seen.has(id)) return null;
+      seen.add(id);
+      const entry = {
+        id,
+        name: clean(value?.name) || id,
+      };
+      const description = clean(value?.description);
+      const contextWindow = Number(value?.contextWindow);
+      const maxTokens = Number(value?.maxTokens);
+      if (description) entry.description = description;
+      if (Number.isSafeInteger(contextWindow) && contextWindow > 0) entry.contextWindow = contextWindow;
+      if (Number.isSafeInteger(maxTokens) && maxTokens > 0) entry.maxTokens = maxTokens;
+      return entry;
+    })
+    .filter(Boolean);
 }
 
 function providerModels(id) {
@@ -448,11 +488,42 @@ export function createAgentRuntimeConfigService({
 
   const fetchModels = async (value = {}) => {
     const api = await controlPlane();
-    const current = await readConfiguration(api);
+    let current = await readConfiguration(api);
     const id = providerId(value.provider || value.providerId || configuredProviderId(current.selection, current.compatible.profiles));
     if (id === "deepseek") {
-      const models = modelEntries(current.catalog, TEXT_MODEL_PROVIDERS.deepseek.route).map((entry) => entry.id);
-      return Object.freeze({ status: "ready", models, message: models.length ? "已从当前模型目录读取可选模型。" : "当前没有公布可选模型。" });
+      const namespace = namedNamespace(current.settings, DEEPSEEK_SETTINGS_NAMESPACE);
+      const catalogEntries = modelEntries(current.catalog, TEXT_MODEL_PROVIDERS.deepseek.route);
+      const knownModels = mergeModelCatalogEntries(catalogEntries, DEEPSEEK_MODEL_CATALOG);
+      const knownIds = new Set(catalogEntries.map((entry) => entry.id));
+      const requiresCatalogUpdate = DEEPSEEK_MODEL_CATALOG.some((entry) => !knownIds.has(entry.id));
+
+      if (requiresCatalogUpdate) {
+        if (!namespace || !api.settings?.mutate) {
+          return Object.freeze({
+            status: "manual",
+            models: knownModels.map((entry) => entry.id),
+            message: "当前 Suzu Agent Core 无法更新 DeepSeek 模型目录；你仍可手动填写模型标识。",
+          });
+        }
+        unwrapRpc(await api.settings.mutate({
+          ns: DEEPSEEK_SETTINGS_NAMESPACE,
+          expectedRevision: Number(namespace.revision),
+          ops: [{ op: "set", path: ["models"], value: knownModels }],
+        }), "更新 DeepSeek 模型目录");
+        current = await readConfiguration(api);
+      }
+
+      const models = mergeModelCatalogEntries(
+        modelEntries(current.catalog, TEXT_MODEL_PROVIDERS.deepseek.route),
+        DEEPSEEK_MODEL_CATALOG,
+      ).map((entry) => entry.id);
+      return Object.freeze({
+        status: "ready",
+        models,
+        message: requiresCatalogUpdate
+          ? "已更新 DeepSeek 可选模型目录；当前选中的模型未改动。"
+          : "已读取 DeepSeek 可选模型目录。",
+      });
     }
     const selected = selectedProfileValue({ id, value: { ...value, model: value.model || providerDefinition(id).model || "manual-model" }, current });
     if (api?.llm?.discoverModels && selected.profile.api.startsWith("openai-")) {

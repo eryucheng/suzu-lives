@@ -7,6 +7,7 @@ import {
   conversationMediaManifest,
   conversationMediaUnderstandingContext,
 } from "./conversation-attachment-service.mjs";
+import { createConversationMessageDeletionStore } from "./conversation-message-deletion-store.mjs";
 
 const MAX_MESSAGES = 500;
 const HISTORY_PAGE_SIZE = 600;
@@ -22,6 +23,8 @@ const SUZU_SCHEDULE_TASK_CLOSE = "</suzu-schedule-task>";
 const SUZU_LOCAL_ONLY_SCHEDULE_MARKER = "<!-- suzu-lives:display-system -->";
 const SUZU_LIFECYCLE_BRIDGE_PLUGIN = "suzu-lifecycle-bridge";
 const SUZU_LIFECYCLE_SNAPSHOT_FORM = "snapshot";
+const LEGACY_CONVERSATION_DELETION_PLUGIN = "suzu-lives";
+const LEGACY_CONVERSATION_DELETION_FORM = "message-deletion";
 const AUTOMATION_TASK_CONTEXT_KIND = "automation-task";
 
 function markerSource(content) {
@@ -66,6 +69,26 @@ function dynamicAutomationTaskOutputPolicy(source) {
     if (clean(plainObject(candidate.metadata).outputPolicy) === "silent") return "silent";
   }
   return found ? "external" : "";
+}
+
+function automationTaskContextKey(block) {
+  const source = plainObject(block);
+  if (clean(source.kind) !== AUTOMATION_TASK_CONTEXT_KIND) return "";
+  return clean(source.id) || clean(plainObject(source.metadata).taskId);
+}
+
+function dynamicAutomationTaskContextKey(message, source) {
+  if (!isDynamicContextSnapshot(source)) return "";
+  return contextBlocksFromMessage(message, source)
+    .map(automationTaskContextKey)
+    .find(Boolean) || "";
+}
+
+function scopedAutomationTaskContextKey(taskKey, position) {
+  const turn = Number(position?.turn);
+  const scope = Number.isInteger(turn) ? `turn:${turn}` : "";
+  if (!taskKey) return "";
+  return scope ? `${scope}:${taskKey}` : taskKey;
 }
 
 function isSilentAgentReply(content, { terminal = false } = {}) {
@@ -436,6 +459,44 @@ function userMessageFromEvent(event) {
   return Object.keys(nestedMessage).length ? nestedMessage : data;
 }
 
+function messageForEvent(event) {
+  const type = clean(plainObject(event).type);
+  if (type === "user/message") return userMessageFromEvent(event);
+  if (type === "assistant/message") return plainObject(plainObject(event).data).message;
+  return {};
+}
+
+function legacyDeletionTargetSequence(event) {
+  if (clean(plainObject(event).type) !== "user/message") return -1;
+  const source = plainObject(userMessageFromEvent(event).source);
+  const target = Number(source.targetEventSeq);
+  return clean(source.kind) === "plugin"
+    && clean(source.plugin) === LEGACY_CONVERSATION_DELETION_PLUGIN
+    && clean(source.form) === LEGACY_CONVERSATION_DELETION_FORM
+    && Number.isSafeInteger(target)
+    && target >= 0
+    ? target
+    : -1;
+}
+
+function deletedMessageSequences(entries, storedSequences = []) {
+  const deleted = new Set();
+  for (const entry of Array.isArray(entries) ? entries : []) {
+    const target = legacyDeletionTargetSequence(historyEvent(entry));
+    if (target >= 0) deleted.add(target);
+  }
+  const values = storedSequences instanceof Set
+    ? storedSequences
+    : Array.isArray(storedSequences)
+      ? storedSequences
+      : [];
+  for (const value of values) {
+    const sequence = Number(value);
+    if (Number.isSafeInteger(sequence) && sequence >= 0) deleted.add(sequence);
+  }
+  return deleted;
+}
+
 function contextDisplay(value, kind) {
   const source = value === false
     ? { context: false, transcript: false }
@@ -507,6 +568,11 @@ function eventSequence(event) {
   return Number.isSafeInteger(sequence) && sequence >= 0 ? sequence : 0;
 }
 
+function optionalEventSequence(event) {
+  const sequence = Number(plainObject(event).seq);
+  return Number.isSafeInteger(sequence) && sequence >= 0 ? sequence : -1;
+}
+
 function expiredContextSequences(entries) {
   const expired = new Set();
   for (const entry of Array.isArray(entries) ? entries : []) {
@@ -525,15 +591,19 @@ function expiredContextSequences(entries) {
  * normal chat projection. Plugin context stays out of ordinary bubbles unless
  * the originating block explicitly opts into `display.transcript`.
  */
-export function conversationContextRecords(entries, maxRecords = HISTORY_PAGE_SIZE) {
+export function conversationContextRecords(entries, maxRecords = HISTORY_PAGE_SIZE, options = {}) {
   const sourceEntries = Array.isArray(entries) ? entries : [];
   const expiredSequences = expiredContextSequences(sourceEntries);
+  const deletedSequences = deletedMessageSequences(sourceEntries, options?.deletedEventSequences);
   const directMessagesByStep = new Map();
+  const recordedAutomationTaskContexts = new Set();
   const records = [];
   let currentPosition = null;
 
   for (const entry of sourceEntries) {
     const event = historyEvent(entry);
+    const sequence = optionalEventSequence(event);
+    if (sequence >= 0 && (deletedSequences.has(sequence) || legacyDeletionTargetSequence(event) >= 0)) continue;
     const type = clean(event.type);
     if (type === "step/start") {
       currentPosition = stepPosition(event.data) || currentPosition;
@@ -554,7 +624,14 @@ export function conversationContextRecords(entries, maxRecords = HISTORY_PAGE_SI
     if (clean(messageSource.kind) !== "plugin") continue;
 
     const blocks = contextBlocksFromMessage(message, messageSource)
-      .filter((block) => block.display.context);
+      .filter((block) => {
+        if (!block.display.context) return false;
+        const taskKey = scopedAutomationTaskContextKey(automationTaskContextKey(block), currentPosition);
+        if (!taskKey) return true;
+        if (recordedAutomationTaskContexts.has(taskKey)) return false;
+        recordedAutomationTaskContexts.add(taskKey);
+        return true;
+      });
     if (!blocks.length) continue;
     const form = clean(messageSource.form);
     const dynamic = form === "snapshot";
@@ -583,13 +660,14 @@ export function conversationContextRecords(entries, maxRecords = HISTORY_PAGE_SI
   return Object.freeze(anchored.slice(-maximum));
 }
 
-function dynamicContextDiagnosticMessage(event) {
+function dynamicContextDiagnosticMessage(event, { omittedAutomationTaskContexts = new Set() } = {}) {
   const source = plainObject(event);
   if (clean(source.type) !== "user/message") return null;
   const message = userMessageFromEvent(source);
   const messageSource = plainObject(message.source);
   if (!isDynamicContextSnapshot(messageSource)) return null;
-  const contextBlocks = contextBlocksFromMessage(message, messageSource);
+  const contextBlocks = contextBlocksFromMessage(message, messageSource)
+    .filter((block) => !omittedAutomationTaskContexts.has(automationTaskContextKey(block)));
   if (!contextBlocks.length) return null;
   return {
     id: `${clean(message.id) || `agent-core:${source.seq}`}:dynamic-context`,
@@ -713,8 +791,12 @@ function surfaceMessage(event, options = {}) {
 }
 
 export function conversationDisplayMessages(entries, maxMessages = MAX_MESSAGES, options = {}) {
+  const sourceEntries = Array.isArray(entries) ? entries : [];
+  const deletedSequences = deletedMessageSequences(sourceEntries, options?.deletedEventSequences);
   const transcript = [];
   const includeDynamicContext = options?.includeDynamicContext === true;
+  const displayedAutomationTaskContexts = new Set();
+  let currentPosition = null;
   // A voice-call turn is transport-level: its transcript and the assistant
   // reply both render as centered system messages, like the v1 reader.
   let inVoiceCall = false;
@@ -732,13 +814,20 @@ export function conversationDisplayMessages(entries, maxMessages = MAX_MESSAGES,
     const message = surfaceMessage(finalAssistantEvent, { ...options, inVoiceCall, scheduled: true });
     if (message) transcript.push(message);
   };
-  for (const entry of Array.isArray(entries) ? entries : []) {
+  for (const entry of sourceEntries) {
     const event = historyEvent(entry);
+    const sequence = optionalEventSequence(event);
+    if (sequence >= 0 && (deletedSequences.has(sequence) || legacyDeletionTargetSequence(event) >= 0)) continue;
     const type = clean(event.type);
+    if (type === "step/start") {
+      currentPosition = stepPosition(event.data) || currentPosition;
+      continue;
+    }
     // turn/end is not a surface event, but it is the reliable boundary that
     // lets us decide whether a scheduled turn had an external reply.
     if (type === "turn/end") {
       flushScheduledTurn();
+      currentPosition = null;
       continue;
     }
     if (!new Set(["user/message", "assistant/message", "tool/result"]).has(type)) continue;
@@ -752,24 +841,48 @@ export function conversationDisplayMessages(entries, maxMessages = MAX_MESSAGES,
       const content = userMessage.content;
       const messageSource = plainObject(userMessage.source);
       const dynamicTaskPolicy = dynamicAutomationTaskOutputPolicy(messageSource);
+      const automationTaskContext = dynamicAutomationTaskContextKey(userMessage, messageSource);
+      const scheduledAutomationTaskContext = scopedAutomationTaskContextKey(
+        automationTaskContext,
+        currentPosition,
+      );
+      const repeatedAutomationTaskContext = Boolean(
+        scheduledAutomationTaskContext && displayedAutomationTaskContexts.has(scheduledAutomationTaskContext)
+      );
+      if (scheduledAutomationTaskContext) displayedAutomationTaskContexts.add(scheduledAutomationTaskContext);
+      const omittedAutomationTaskContexts = repeatedAutomationTaskContext
+        ? new Set([automationTaskContext])
+        : new Set();
       if (isInternalSuzuScheduleTask(content) || dynamicTaskPolicy) {
+        const continuesScheduledTurn = Boolean(
+          dynamicTaskPolicy
+            && scheduledAutomationTaskContext
+            && scheduledTurn?.automationTaskContext === scheduledAutomationTaskContext
+        );
         // A legacy fixture may not contain turn/end; a following schedule
         // request still establishes a safe boundary for the prior one.
-        flushScheduledTurn();
-        const diagnostic = includeDynamicContext ? dynamicContextDiagnosticMessage(event) : null;
+        if (!continuesScheduledTurn) flushScheduledTurn();
+        const diagnostic = includeDynamicContext
+          ? dynamicContextDiagnosticMessage(event, { omittedAutomationTaskContexts })
+          : null;
         // Diagnostics are intentionally projected as a separate, opt-in row.
         // They remain out of normal chat bubbles and never make NO_REPLY or
         // task-control text look like an assistant reply.
         if (diagnostic) transcript.push(diagnostic);
-        scheduledTurn = {
-          localOnly: isInternalSuzuScheduleTask(content)
-            ? isLocalOnlySuzuScheduleTask(content)
-            : dynamicTaskPolicy === "silent",
-          events: [],
-        };
+        if (!continuesScheduledTurn) {
+          scheduledTurn = {
+            automationTaskContext: scheduledAutomationTaskContext,
+            localOnly: isInternalSuzuScheduleTask(content)
+              ? isLocalOnlySuzuScheduleTask(content)
+              : dynamicTaskPolicy === "silent",
+            events: [],
+          };
+        }
         continue;
       }
-      const diagnostic = includeDynamicContext ? dynamicContextDiagnosticMessage(event) : null;
+      const diagnostic = includeDynamicContext
+        ? dynamicContextDiagnosticMessage(event, { omittedAutomationTaskContexts })
+        : null;
       if (diagnostic) transcript.push(diagnostic);
       // Plugin context is model-only input inside the active schedule. It is
       // neither a new human turn nor something to render.
@@ -814,6 +927,51 @@ function textForMessage(message) {
     .join("\n");
 }
 
+function textForCoreEvent(event, options = {}) {
+  const message = messageForEvent(event);
+  return textForMessage({
+    blocks: blocksFromAgentCoreContent(message.content, options),
+  });
+}
+
+function turnIdsByEventSequence(entries) {
+  const result = new Map();
+  const turns = new Map();
+  const pendingTurnIds = [];
+  let currentTurn = null;
+  for (const entry of Array.isArray(entries) ? entries : []) {
+    const event = historyEvent(entry);
+    const type = clean(event.type);
+    if (type === "turn/start") {
+      const turn = Number(plainObject(event.data).turn);
+      currentTurn = Number.isInteger(turn) ? turn : null;
+      if (currentTurn !== null && pendingTurnIds.length) turns.set(currentTurn, pendingTurnIds.shift());
+      continue;
+    }
+    if (type === "turn/end") {
+      currentTurn = null;
+      continue;
+    }
+    const sequence = optionalEventSequence(event);
+    if (type === "user/message") {
+      const message = userMessageFromEvent(event);
+      const source = plainObject(message.source);
+      const turnId = clean(source.suzuTurnId);
+      if (clean(source.kind) !== "user" || !turnId) continue;
+      if (sequence >= 0) result.set(sequence, turnId);
+      if (currentTurn === null) pendingTurnIds.push(turnId);
+      else turns.set(currentTurn, turnId);
+      continue;
+    }
+    if (type === "assistant/message") {
+      const turn = Number(plainObject(event.data).turn);
+      const turnId = turns.get(turn);
+      if (sequence >= 0 && turnId) result.set(sequence, turnId);
+    }
+  }
+  return result;
+}
+
 function localDate(value) {
   const date = new Date(value);
   if (!Number.isFinite(date.getTime())) return "";
@@ -828,6 +986,8 @@ function localDate(value) {
 export function createConversationReader({
   contactProjectsService = null,
   dataRoot = "",
+  memoryRuntime = null,
+  messageDeletionStore = createConversationMessageDeletionStore(),
   onContactCreated = null,
   onAgentUsageEvents = null,
   runtime,
@@ -836,6 +996,9 @@ export function createConversationReader({
   if (!settingsService?.load) throw new ConversationReaderError("会话读取需要软件设置服务。", { code: "SETTINGS_REQUIRED" });
   if (!contactProjectsService?.snapshot) throw new ConversationReaderError("Agent 会话读取需要联系人项目服务。", { code: "CONTACTS_REQUIRED" });
   if (typeof runtime?.history !== "function") throw new ConversationReaderError("Agent 会话读取需要运行时历史接口。", { code: "RUNTIME_REQUIRED" });
+  if (typeof messageDeletionStore?.list !== "function" || typeof messageDeletionStore?.markDeleted !== "function") {
+    throw new ConversationReaderError("会话读取需要消息删除记录服务。", { code: "MESSAGE_DELETION_STORE_REQUIRED" });
+  }
 
   let selectionVersion = 0;
   const reconciledUsageHistoryBySession = new Map();
@@ -882,6 +1045,31 @@ export function createConversationReader({
     }
   };
 
+  const activeMessageDeletions = async (catalog) => {
+    if (!catalog.projectRoot || !isSessionId(catalog.sessionId)) {
+      return Object.freeze({ eventSequences: Object.freeze([]), revision: "" });
+    }
+    try {
+      const state = await messageDeletionStore.list({
+        projectRoot: catalog.projectRoot,
+        sessionId: catalog.sessionId,
+      });
+      const eventSequences = [...new Set((Array.isArray(state?.entries) ? state.entries : [])
+        .map((entry) => Number(plainObject(entry).eventSeq))
+        .filter((sequence) => Number.isSafeInteger(sequence) && sequence >= 0))]
+        .sort((left, right) => left - right);
+      return Object.freeze({
+        eventSequences: Object.freeze(eventSequences),
+        revision: clean(state?.revision),
+      });
+    } catch (error) {
+      throw new ConversationReaderError(
+        `无法读取消息删除记录：${clean(error?.message) || "未知错误。"}`,
+        { cause: error, code: error?.code || "MESSAGE_DELETION_STATE_FAILED" },
+      );
+    }
+  };
+
   const reconcileUsageHistory = async (catalog, events, highestSequence) => {
     if (typeof onAgentUsageEvents !== "function"
       || !catalog.activeContact?.agentId
@@ -920,6 +1108,30 @@ export function createConversationReader({
     };
   };
 
+  const unavailableContext = (catalog, contactsVersion, error) => {
+    const unavailable = unavailableHistory(error);
+    const session = {
+      id: catalog.sessionId,
+      title: clean(catalog.activeContact?.name) || "对话",
+      preview: "聊天记录暂不可用",
+      updatedAt: "",
+      createdAt: "",
+      draft: false,
+    };
+    return {
+      status: "ready",
+      ...catalog,
+      history: unavailable,
+      session,
+      events: [],
+      messages: [],
+      contextRecords: [],
+      deletedEventSequences: Object.freeze([]),
+      version: `${selectionVersion}:${catalog.sessionId}:history-unavailable:${unavailable.code}:${contactsVersion}`,
+      updatedAt: "",
+    };
+  };
+
   const context = async () => {
     const catalog = await activeCatalog();
     const contactsVersion = JSON.stringify(catalog.contacts.map((contact) => [
@@ -946,6 +1158,7 @@ export function createConversationReader({
         events: [],
         messages: [],
         contextRecords: [],
+        deletedEventSequences: Object.freeze([]),
         version: `${selectionVersion}:missing:${contactsVersion}`,
         updatedAt: "",
       };
@@ -954,33 +1167,23 @@ export function createConversationReader({
     try {
       history = await activeHistory(catalog);
     } catch (error) {
-      const unavailable = unavailableHistory(error);
-      const session = {
-        id: catalog.sessionId,
-        title: clean(catalog.activeContact?.name) || "对话",
-        preview: "聊天记录暂不可用",
-        updatedAt: "",
-        createdAt: "",
-        draft: false,
-      };
-      return {
-        status: "ready",
-        ...catalog,
-        history: unavailable,
-        session,
-        events: [],
-        messages: [],
-        contextRecords: [],
-        version: `${selectionVersion}:${catalog.sessionId}:history-unavailable:${unavailable.code}:${contactsVersion}`,
-        updatedAt: "",
-      };
+      return unavailableContext(catalog, contactsVersion, error);
     }
     const events = Array.isArray(history.events) ? history.events : [];
+    let deletions;
+    try {
+      deletions = await activeMessageDeletions(catalog);
+    } catch (error) {
+      return unavailableContext(catalog, contactsVersion, error);
+    }
     const messages = conversationDisplayMessages(events, MAX_MESSAGES, {
       dataRoot,
+      deletedEventSequences: deletions.eventSequences,
       includeDynamicContext: catalog.settings?.conversationPreferences?.dynamicContext === true,
     });
-    const contextRecords = conversationContextRecords(events);
+    const contextRecords = conversationContextRecords(events, HISTORY_PAGE_SIZE, {
+      deletedEventSequences: deletions.eventSequences,
+    });
     const last = [...messages].reverse().find((message) => ["user", "assistant"].includes(clean(message?.kind))) || null;
     const session = {
       id: catalog.sessionId,
@@ -1004,7 +1207,8 @@ export function createConversationReader({
       events,
       messages,
       contextRecords,
-      version: `${selectionVersion}:${catalog.sessionId}:${highestSequence}:${events.length}:${contactsVersion}`,
+      deletedEventSequences: deletions.eventSequences,
+      version: `${selectionVersion}:${catalog.sessionId}:${highestSequence}:${events.length}:${deletions.revision}:${contactsVersion}`,
       updatedAt: session.updatedAt,
     };
   };
@@ -1030,6 +1234,10 @@ export function createConversationReader({
       history: current.history,
       error: current.history?.status === "unavailable" ? current.history.message : "",
       messages: current.messages,
+      // Keep the product-owned deletion state in the snapshot as well as
+      // applying it in this reader.  The renderer uses it as a final guard
+      // when a history update and a React render cross each other.
+      deletedEventSequences: current.deletedEventSequences,
       context: Object.freeze({
         available: current.history?.status === "ready",
         count: current.contextRecords.length,
@@ -1098,6 +1306,74 @@ export function createConversationReader({
   const removeContact = async (value = {}) => {
     if (!contactProjectsService?.remove) throw new ConversationReaderError("当前版本未接入联系人项目服务。", { code: "CONTACTS_REQUIRED" });
     await contactProjectsService.remove(value);
+    selectionVersion += 1;
+    return snapshot();
+  };
+
+  const deleteMessage = async (value = {}) => {
+    const source = plainObject(value);
+    if (source.confirmed !== true) {
+      throw new ConversationReaderError("请确认后再删除这条消息。", { code: "MESSAGE_DELETE_CONFIRMATION_REQUIRED" });
+    }
+    const targetSequence = Number(source.lineNumber);
+    if (!Number.isSafeInteger(targetSequence) || targetSequence < 0) {
+      throw new ConversationReaderError("要删除的消息标识无效。", { code: "MESSAGE_DELETE_INPUT_INVALID" });
+    }
+    const current = await context();
+    if (current.status !== "ready" || current.history?.status !== "ready" || !current.session || !current.projectRoot || !current.activeContact) {
+      throw new ConversationReaderError("当前联系人没有可删除的消息。", { code: "MESSAGE_DELETE_UNAVAILABLE" });
+    }
+    const event = current.events
+      .map(historyEvent)
+      .find((candidate) => optionalEventSequence(candidate) === targetSequence);
+    if (!event) throw new ConversationReaderError("没有找到要删除的消息。", { code: "MESSAGE_NOT_FOUND" });
+    const type = clean(event.type);
+    const message = messageForEvent(event);
+    const messageSource = plainObject(message.source);
+    const isUserMessage = type === "user/message" && clean(messageSource.kind) === "user";
+    const isAssistantMessage = type === "assistant/message";
+    const isDynamicContext = isDynamicContextSnapshot(messageSource);
+    if (!isUserMessage && !isAssistantMessage && !isDynamicContext) {
+      throw new ConversationReaderError("这条内部记录不能删除。", { code: "MESSAGE_DELETE_UNSUPPORTED" });
+    }
+    const requestedMessageId = clean(source.messageId);
+    if (requestedMessageId && !isDynamicContext && requestedMessageId !== clean(message.id)) {
+      throw new ConversationReaderError("要删除的消息已经变化，请刷新后重试。", { code: "MESSAGE_CHANGED" });
+    }
+    if (current.deletedEventSequences.includes(targetSequence)) return snapshot();
+
+    if ((isUserMessage || isAssistantMessage) && typeof memoryRuntime?.retractConversationMessage === "function") {
+      const turnId = turnIdsByEventSequence(current.events).get(targetSequence) || "";
+      try {
+        await memoryRuntime.retractConversationMessage({
+          projectRoot: current.projectRoot,
+          sessionId: current.session.id,
+          turnId,
+          role: isUserMessage ? "user" : "companion",
+          text: textForCoreEvent(event, { dataRoot }),
+          occurredAt: isoTime(event.time),
+        });
+      } catch (error) {
+        throw new ConversationReaderError(
+          `无法撤回关联的长期记忆：${clean(error?.message) || "未知错误。"}`,
+          { cause: error, code: error?.code || "MEMORY_RETRACTION_FAILED" },
+        );
+      }
+    }
+
+    try {
+      await messageDeletionStore.markDeleted({
+        sessionId: current.session.id,
+        projectRoot: current.projectRoot,
+        eventSeq: targetSequence,
+        messageId: isDynamicContext ? "" : clean(message.id),
+      });
+    } catch (error) {
+      throw new ConversationReaderError(
+        `无法保存消息删除记录：${clean(error?.message) || "未知错误。"}`,
+        { cause: error, code: error?.code || "MESSAGE_DELETE_FAILED" },
+      );
+    }
     selectionVersion += 1;
     return snapshot();
   };
@@ -1307,6 +1583,7 @@ export function createConversationReader({
     contextTrace,
     create,
     createContact,
+    deleteMessage,
     ensureActiveSession,
     focus,
     removeContact,

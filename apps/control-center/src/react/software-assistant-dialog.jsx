@@ -168,13 +168,40 @@ export function SoftwareAssistantDialog({ api, initialPrompt = "", onClose, onPr
   }, [sessionId]);
 
   const stop = useCallback(async () => {
-    if (phase === "idle" || typeof api?.stop !== "function") return;
+    if (!["thinking", "replying"].includes(phase) || typeof api?.stop !== "function") return;
     try {
       await api.stop({ requestId: activeRequestRef.current });
     } catch (cause) {
       setError(`无法停止：${clean(cause?.message || cause) || "未知错误。"}`);
     }
   }, [api, phase]);
+
+  const clearHistory = useCallback(async () => {
+    if (phase !== "idle") return false;
+    if (typeof api?.clearHistory !== "function") {
+      setError("当前版本没有连接到问 Suzu 的记录清理功能。");
+      return false;
+    }
+    if (!window.confirm("会清空“问 Suzu”过往的对话与工具记录，下一次提问将从新的会话开始。\n\n联系人聊天、联系人资料和软件设置不会受影响。确定清空吗？")) return false;
+    setError("");
+    setPhase("clearing");
+    try {
+      const result = await api.clearHistory();
+      if (result?.cleared !== true) throw new Error("软件助手记录没有被清空。");
+      activeRequestRef.current = "";
+      setMessages([]);
+      setPendingMessages([]);
+      setLiveReplies(new Map());
+      setSessionId("");
+      await refresh();
+      return true;
+    } catch (cause) {
+      setError(`无法清空记录：${clean(cause?.message || cause) || "未知错误。"}`);
+      return false;
+    } finally {
+      setPhase("idle");
+    }
+  }, [api, phase, refresh]);
 
   useEffect(() => {
     if (!open) {
@@ -197,7 +224,7 @@ export function SoftwareAssistantDialog({ api, initialPrompt = "", onClose, onPr
   // running. Poll that same transcript cadence as the main conversation so a
   // multi-step software task arrives in sequence instead of all at completion.
   useEffect(() => {
-    if (!open || phase === "idle") return undefined;
+    if (!open || !["thinking", "replying"].includes(phase)) return undefined;
     const timer = window.setInterval(() => { void refresh(); }, 2_000);
     return () => window.clearInterval(timer);
   }, [open, phase, refresh]);
@@ -288,7 +315,8 @@ export function SoftwareAssistantDialog({ api, initialPrompt = "", onClose, onPr
     kind: "assistant",
   }];
   const messageRows = visibleHistory.map((message) => conversationRow(message, owner)).filter(Boolean);
-  const assistantName = busy ? "正在输入中..." : "Suzu";
+  const assistantName = phase === "clearing" ? "正在清空记录..." : busy ? "正在输入中..." : "Suzu";
+  const canStop = ["thinking", "replying"].includes(phase);
 
   const dialog = (
     <div className="software-assistant-overlay" onMouseDown={onClose}>
@@ -298,7 +326,10 @@ export function SoftwareAssistantDialog({ api, initialPrompt = "", onClose, onPr
             <span>SUZU LIVES</span>
             <h2 aria-live="polite">{assistantName}</h2>
           </div>
-          <button aria-label="关闭问 Suzu" className="software-assistant-dialog__close" onClick={onClose} type="button">×</button>
+          <div className="software-assistant-dialog__header-actions">
+            <button aria-label="清空问 Suzu 的记录" className="software-assistant-dialog__clear" disabled={busy || !sessionId} onClick={() => { void clearHistory(); }} type="button">清空记录</button>
+            <button aria-label="关闭问 Suzu" className="software-assistant-dialog__close" onClick={onClose} type="button">×</button>
+          </div>
         </header>
         <div aria-live="polite" className="software-assistant-dialog__history content--conversation" ref={historyRef} role="log">
           <ConversationMessageList rows={messageRows} />
@@ -326,7 +357,7 @@ export function SoftwareAssistantDialog({ api, initialPrompt = "", onClose, onPr
               size="lg"
               value={draft}
             />
-            {busy ? <button className="software-assistant-dialog__stop" onClick={() => { void stop(); }} type="button">停止</button> : <button className="software-assistant-dialog__send" disabled={!clean(draft) || !sessionId} type="submit">发送</button>}
+            {canStop ? <button className="software-assistant-dialog__stop" onClick={() => { void stop(); }} type="button">停止</button> : <button className="software-assistant-dialog__send" disabled={busy || !clean(draft) || !sessionId} type="submit">发送</button>}
           </form>
         </footer>
       </section>

@@ -734,6 +734,19 @@ function FileContextMenu({ actions, menu }) {
   </div>;
 }
 
+function MessageContextMenu({ actions, menu }) {
+  if (!menu) return null;
+  return <div
+    aria-label="消息菜单"
+    className="conversation-message-context-menu"
+    onContextMenu={(event) => event.preventDefault()}
+    role="menu"
+    style={{ left: menu.x, top: menu.y }}
+  >
+    <button className="conversation-message-context-menu__danger" onClick={() => { void actions.deleteMessage?.(menu); }} role="menuitem" type="button">删除</button>
+  </div>;
+}
+
 function ConversationFileIcon() {
   return (
     <svg aria-hidden="true" viewBox="0 0 64 76">
@@ -812,7 +825,7 @@ function ConversationUsage({ usage }) {
   return <div className="conversation-usage">{items.join(" · ")}</div>;
 }
 
-function ConversationMessage({ onOpenExternal, onOpenFile, onOpenFileContextMenu, onPreview, row }) {
+function ConversationMessage({ onOpenExternal, onOpenFile, onOpenFileContextMenu, onOpenMessageContextMenu, onPreview, row }) {
   const className = [
     "conversation-message",
     row.kind,
@@ -827,6 +840,18 @@ function ConversationMessage({ onOpenExternal, onOpenFile, onOpenFileContextMenu
       data-conversation-anchor-id={row.anchorId || undefined}
       data-conversation-line-number={row.lineNumber || undefined}
       data-conversation-message-id={row.sourceMessageId || undefined}
+      onContextMenu={(event) => {
+        if (event.defaultPrevented || !row.deletable || !onOpenMessageContextMenu) return;
+        event.preventDefault();
+        onOpenMessageContextMenu(row, { x: event.clientX, y: event.clientY });
+      }}
+      onKeyDown={(event) => {
+        if (!row.deletable || !onOpenMessageContextMenu || (event.key !== "ContextMenu" && !(event.shiftKey && event.key === "F10"))) return;
+        event.preventDefault();
+        const bounds = event.currentTarget.getBoundingClientRect();
+        onOpenMessageContextMenu(row, { x: bounds.left + 12, y: bounds.bottom + 6 });
+      }}
+      tabIndex={row.deletable ? 0 : undefined}
     >
       {row.avatar ? <div className="conversation-avatar"><PersonAvatar avatar={row.avatar} /></div> : null}
       <div className="conversation-bubble">
@@ -838,7 +863,7 @@ function ConversationMessage({ onOpenExternal, onOpenFile, onOpenFileContextMenu
   );
 }
 
-export function ConversationMessageList({ onOpenExternal, onOpenFile, onOpenFileContextMenu, onPreview, rows }) {
+export function ConversationMessageList({ onOpenExternal, onOpenFile, onOpenFileContextMenu, onOpenMessageContextMenu, onPreview, rows }) {
   if (!rows.length) return null;
   return rows.map((row, index) => {
     const key = row.type === "message"
@@ -847,7 +872,7 @@ export function ConversationMessageList({ onOpenExternal, onOpenFile, onOpenFile
     if (row.type === "day") return <div className="conversation-day" key={key}>{row.label}</div>;
     if (row.type === "time") return <div className="conversation-time-divider" key={key}>{row.label}</div>;
     if (row.type === "empty") return <div className="conversation-empty" key={key}>{row.text}</div>;
-    return <ConversationMessage key={key} onOpenExternal={onOpenExternal} onOpenFile={onOpenFile} onOpenFileContextMenu={onOpenFileContextMenu} onPreview={onPreview} row={row} />;
+    return <ConversationMessage key={key} onOpenExternal={onOpenExternal} onOpenFile={onOpenFile} onOpenFileContextMenu={onOpenFileContextMenu} onOpenMessageContextMenu={onOpenMessageContextMenu} onPreview={onPreview} row={row} />;
   });
 }
 
@@ -1071,6 +1096,7 @@ export function ConversationPage({ actions, api = null, incomingCall = null, sna
   const ui = snapshot.ui || {};
   const contactContextMenu = snapshot.contactContextMenu || null;
   const fileContextMenu = snapshot.fileContextMenu || null;
+  const messageContextMenu = snapshot.messageContextMenu || null;
   const openExternalLink = useCallback((url) => {
     if (typeof api?.settings?.openExternal !== "function") return;
     return api.settings.openExternal(url).catch(() => undefined);
@@ -1320,15 +1346,17 @@ export function ConversationPage({ actions, api = null, incomingCall = null, sna
     void Promise.resolve().then(() => actions.consumeIncomingVoiceCall?.(requestId));
   }, [actions, callControl.call, incomingCall?.requestId]);
   useEffect(() => {
-    if (!contactContextMenu && !fileContextMenu) return undefined;
+    if (!contactContextMenu && !fileContextMenu && !messageContextMenu) return undefined;
     const close = (event) => {
-      if (event.target?.closest?.(".conversation-contact-context-menu, .conversation-file-context-menu")) return;
+      if (event.target?.closest?.(".conversation-contact-context-menu, .conversation-file-context-menu, .conversation-message-context-menu")) return;
       actions.closeContactContextMenu?.();
       actions.closeFileContextMenu?.();
+      actions.closeMessageContextMenu?.();
     };
     const closeOnResize = () => {
       actions.closeContactContextMenu?.();
       actions.closeFileContextMenu?.();
+      actions.closeMessageContextMenu?.();
     };
     window.addEventListener("pointerdown", close);
     window.addEventListener("resize", closeOnResize);
@@ -1336,7 +1364,7 @@ export function ConversationPage({ actions, api = null, incomingCall = null, sna
       window.removeEventListener("pointerdown", close);
       window.removeEventListener("resize", closeOnResize);
     };
-  }, [actions, contactContextMenu, fileContextMenu]);
+  }, [actions, contactContextMenu, fileContextMenu, messageContextMenu]);
   useLayoutEffect(() => {
     const list = listRef.current;
     if (!list) return;
@@ -1373,7 +1401,7 @@ export function ConversationPage({ actions, api = null, incomingCall = null, sna
     event.preventDefault();
   };
   const dismissOnWorkspaceClick = (event) => {
-    const interactive = event.target.closest?.(".conversation-pane__actions, .conversation-menu, .conversation-session-settings, .conversation-search-panel, .conversation-composer, .conversation-composer-resizer, .conversation-roster, .conversation-roster-resizer, .conversation-contact-context-menu, .conversation-file-context-menu, .conversation-permissions, .conversation-media__preview, .conversation-contact-create-dialog, .conversation-wechat-qr-dialog, .conversation-media-preview-dialog, .conversation-avatar-crop-dialog");
+    const interactive = event.target.closest?.(".conversation-pane__actions, .conversation-menu, .conversation-session-settings, .conversation-search-panel, .conversation-composer, .conversation-composer-resizer, .conversation-roster, .conversation-roster-resizer, .conversation-contact-context-menu, .conversation-file-context-menu, .conversation-message-context-menu, .conversation-permissions, .conversation-media__preview, .conversation-contact-create-dialog, .conversation-wechat-qr-dialog, .conversation-media-preview-dialog, .conversation-avatar-crop-dialog");
     if (!interactive) actions.dismissOverlays();
   };
   return (
@@ -1382,6 +1410,7 @@ export function ConversationPage({ actions, api = null, incomingCall = null, sna
       <div aria-label="调整联系人栏宽度" aria-orientation="vertical" aria-valuemax={CONVERSATION_ROSTER_MAX_WIDTH} aria-valuemin={CONVERSATION_ROSTER_MIN_WIDTH} aria-valuenow={fixedRosterViewport ? CONVERSATION_ROSTER_NARROW_WIDTH : rosterWidth} className="conversation-roster-resizer" onKeyDown={resizeRosterFromKeyboard} onPointerCancel={cancelRosterResize} onPointerDown={beginRosterResize} onPointerMove={resizeRoster} onPointerUp={finishRosterResize} role="separator" tabIndex={fixedRosterViewport ? -1 : 0} title="拖动调整联系人栏宽度" />
       <ContactContextMenu actions={actions} menu={contactContextMenu} />
       <FileContextMenu actions={actions} menu={fileContextMenu} />
+      <MessageContextMenu actions={actions} menu={messageContextMenu} />
       <section className={`conversation-pane${callControl.call ? " has-active-call" : ""}`}>
         <ConversationHeader actions={actions} callControl={callControl} snapshot={snapshot} />
         <ConversationCallBar call={callControl.call} onEnd={callControl.end} />
@@ -1392,7 +1421,7 @@ export function ConversationPage({ actions, api = null, incomingCall = null, sna
         <div className="conversation-chat-shell" ref={chatShellRef}>
           <ConversationPermissions actions={actions} permissions={permissions} />
           <div className="conversation-transcript">
-            <div aria-label={snapshot.listLabel || "Suzu 的聊天记录"} aria-live="polite" className="conversation-list" data-conversation-list="" onPointerDown={revealConversationScrollbar} onScroll={(event) => { actions.setListScroll(event.currentTarget); updateConversationScrollbar(event.currentTarget); revealConversationScrollbar(); }} onWheel={revealConversationScrollbar} ref={listRef} role="log"><ConversationMessageList onOpenExternal={openExternalLink} onOpenFile={actions.openMediaFile} onOpenFileContextMenu={actions.openFileContextMenu} onPreview={actions.openMediaPreview} rows={messageRows} /></div>
+            <div aria-label={snapshot.listLabel || "Suzu 的聊天记录"} aria-live="polite" className="conversation-list" data-conversation-list="" onPointerDown={revealConversationScrollbar} onScroll={(event) => { actions.setListScroll(event.currentTarget); updateConversationScrollbar(event.currentTarget); revealConversationScrollbar(); }} onWheel={revealConversationScrollbar} ref={listRef} role="log"><ConversationMessageList onOpenExternal={openExternalLink} onOpenFile={actions.openMediaFile} onOpenFileContextMenu={actions.openFileContextMenu} onOpenMessageContextMenu={actions.openMessageContextMenu} onPreview={actions.openMediaPreview} rows={messageRows} /></div>
             <div aria-hidden="true" className={`conversation-scrollbar${conversationScrollbarVisible && conversationScrollbar.scrollable ? " is-visible" : ""}`} onPointerCancel={finishConversationScrollbarDrag} onPointerDown={beginConversationScrollbarDrag} onPointerMove={dragConversationScrollbar} onPointerUp={finishConversationScrollbarDrag} ref={conversationScrollbarRailRef}>
               <div className="conversation-scrollbar__thumb" style={{ height: `${conversationScrollbar.thumbHeight}px`, transform: `translateY(${conversationScrollbar.thumbTop}px)` }} />
             </div>

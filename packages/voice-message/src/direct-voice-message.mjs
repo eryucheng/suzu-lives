@@ -7,15 +7,23 @@ import { spawn } from "node:child_process";
 import { resolveAgentDataRoot } from "@suzu-lives/agent-registry";
 import { appendUsageEvent } from "@suzu-lives/cost-ledger";
 import {
+  findCustomTtsAdapter,
+  interpolateCustomTtsEndpointPath,
+  interpolateCustomTtsTemplate,
+  valueAtCustomTtsPath,
+} from "./custom-tts-adapters.mjs";
+import {
   normalizeTtsAdapter,
   resolveTtsAdapterForService,
   ttsAdapterEndpointCompatibilityError,
+  ttsAdapterModelCompatibilityError,
   ttsAdapterVoiceCompatibilityError,
   ttsAdapterDefinition,
   ttsAdapterLabel,
   ttsAdapterSupportsConnection,
   ttsProtocolForRuntime,
 } from "./tts-adapters.mjs";
+import { resolveVoiceProfile } from "./voice-services.mjs";
 
 const MAX_RESPONSE_BYTES = 100 * 1024 * 1024;
 const MAX_AGENT_VOICE_CANDIDATES = 200;
@@ -151,6 +159,18 @@ function customVoiceIdFromConfig(value) {
   return clean(config.customVoiceId || tts.customVoiceId);
 }
 
+function voiceProfileIdFromConfig(value) {
+  const config = objectValue(value);
+  const tts = objectValue(config.tts);
+  return clean(config.voiceProfileId || tts.voiceProfileId).toLowerCase();
+}
+
+function customAdapterIdFromConfig(value) {
+  const config = objectValue(value);
+  const tts = objectValue(config.tts);
+  return clean(config.customAdapterId || tts.customAdapterId).toLowerCase();
+}
+
 function sourceAgentId(value) {
   const agentId = clean(value).toLowerCase();
   return AGENT_ID.test(agentId) ? agentId : "";
@@ -186,7 +206,9 @@ function withoutVoiceSelection(value) {
   const {
     voiceId: _voiceId,
     voice: _voice,
+    voiceProfileId: _voiceProfileId,
     customVoiceId: _customVoiceId,
+    customAdapterId: _customAdapterId,
     sourceAgentId: _sourceAgentId,
     sourceCandidateId: _sourceCandidateId,
     customVoiceSource: _customVoiceSource,
@@ -198,7 +220,9 @@ function withoutVoiceSelection(value) {
     voiceId: _ttsVoiceId,
     voice_id: _ttsVoiceIdSnakeCase,
     voice: _ttsVoice,
+    voiceProfileId: _ttsVoiceProfileId,
     customVoiceId: _ttsCustomVoiceId,
+    customAdapterId: _ttsCustomAdapterId,
     sourceAgentId: _ttsSourceAgentId,
     sourceCandidateId: _ttsSourceCandidateId,
     customVoiceSource: _ttsCustomVoiceSource,
@@ -224,13 +248,15 @@ function customVoicesAt(customVoicesPath) {
       const name = clean(voice.name);
       const adapter = normalizeTtsAdapter(voice.adapter || voice.provider);
       const voiceId = clean(voice.voiceId);
-      if (!id || !name || !adapter || !voiceId || seen.has(id)) continue;
+      const customAdapterId = clean(voice.customAdapterId).toLowerCase();
+      if (!id || !name || !adapter || !voiceId || (adapter === "custom-http-tts" && !customAdapterId) || seen.has(id)) continue;
       seen.add(id);
       voices.push({
         id,
         name,
         adapter,
         voiceId,
+        customAdapterId,
         model: clean(voice.model),
       });
     }
@@ -318,8 +344,13 @@ function assertAgentVoiceCandidate({ dataRoot, agentId, voiceId, sourceAgentId: 
   }
 }
 
-function selectedCustomVoice({ dataRoot, agentId, adapter, customVoiceId, voiceId, customVoiceSource, customVoiceSourceAgentId }) {
-  const exact = (voices) => voices.find((voice) => voice.adapter === adapter && voice.id === customVoiceId && voice.voiceId === voiceId) || null;
+function selectedCustomVoice({ dataRoot, agentId, adapter, customVoiceId, customAdapterId, voiceId, customVoiceSource, customVoiceSourceAgentId }) {
+  const exact = (voices) => voices.find((voice) => (
+    voice.adapter === adapter
+    && voice.id === customVoiceId
+    && voice.voiceId === voiceId
+    && voice.customAdapterId === customAdapterId
+  )) || null;
   if (customVoiceSource === "global") return exact(globalCustomVoices(dataRoot));
   if (customVoiceSource === "contact") {
     return customVoiceSourceAgentId ? exact(agentCustomVoices(dataRoot, customVoiceSourceAgentId)) : null;
@@ -328,12 +359,12 @@ function selectedCustomVoice({ dataRoot, agentId, adapter, customVoiceId, voiceI
   return exact(agentCustomVoices(dataRoot, agentId));
 }
 
-function assertAgentVoiceSelection({ dataRoot, agentId, adapter, voiceId, customVoiceId, sourceAgentId: configuredSourceAgentId = "", sourceCandidateId = "", customVoiceSource = "", customVoiceSourceAgentId = "" }) {
+function assertAgentVoiceSelection({ dataRoot, agentId, adapter, voiceId, customVoiceId, customAdapterId = "", sourceAgentId: configuredSourceAgentId = "", sourceCandidateId = "", customVoiceSource = "", customVoiceSourceAgentId = "" }) {
   if (adapter === "dashscope-qwen" && !clean(customVoiceId)) {
     assertAgentVoiceCandidate({ dataRoot, agentId, voiceId, sourceAgentId: configuredSourceAgentId, sourceCandidateId });
     return null;
   }
-  const selected = selectedCustomVoice({ dataRoot, agentId, adapter, customVoiceId, voiceId, customVoiceSource, customVoiceSourceAgentId });
+  const selected = selectedCustomVoice({ dataRoot, agentId, adapter, customVoiceId, customAdapterId, voiceId, customVoiceSource, customVoiceSourceAgentId });
   if (!selected) {
     throw failure(
       "voice_not_available_for_agent",
@@ -344,54 +375,103 @@ function assertAgentVoiceSelection({ dataRoot, agentId, adapter, voiceId, custom
   return selected;
 }
 
+/**
+ * New voice selections are global profiles. A profile identifies an audio
+ * voice, and its service identifies both protocol and saved API connection.
+ * This small resolver deliberately reads no credentials.
+ */
+export function resolveConfiguredVoiceService({ dataRoot, agentId = "" } = {}) {
+  const root = requiredDataRoot(dataRoot);
+  const identity = clean(agentId);
+  if (!identity) return null;
+  const config = readOptionalVoiceConfig(defaultConfigPath(root, identity)) || {};
+  const profileId = voiceProfileIdFromConfig(config);
+  return profileId ? resolveVoiceProfile(root, profileId) : null;
+}
+
 function resolveAgentVoiceConfig({ dataRoot, agentId, requireVoiceSelection }) {
   const contactConfigPath = defaultConfigPath(dataRoot, agentId);
   const contactConfig = readOptionalVoiceConfig(contactConfigPath) || {};
   const sharedConfig = withoutVoiceSelection(readOptionalVoiceConfig(sharedConfigPath(dataRoot)) || {});
+  const profileId = voiceProfileIdFromConfig(contactConfig);
+  const profileSelection = profileId ? resolveVoiceProfile(dataRoot, profileId) : null;
   const contactVoiceId = voiceIdFromConfig(contactConfig);
   const contactAdapter = contactVoiceId ? voiceAdapterFromConfig(contactConfig) : "dashscope-qwen";
   const contactCustomVoiceId = customVoiceIdFromConfig(contactConfig);
+  const contactCustomAdapterId = customAdapterIdFromConfig(contactConfig);
   const contactSourceAgentId = sourceAgentIdFromConfig(contactConfig);
   const contactSourceCandidateId = sourceCandidateIdFromConfig(contactConfig);
   const contactCustomVoiceSource = customVoiceSourceFromConfig(contactConfig);
   const contactCustomVoiceSourceAgentId = customVoiceSourceAgentIdFromConfig(contactConfig);
-  const selection = contactVoiceId
+  const selection = profileSelection
+    ? {
+      voiceId: profileSelection.profile.voiceId,
+      adapter: profileSelection.service.adapter,
+      customVoiceId: "",
+      customAdapterId: profileSelection.service.customAdapterId || "",
+      sourceAgentId: "",
+      sourceCandidateId: "",
+      customVoiceSource: "",
+      customVoiceSourceAgentId: "",
+      voiceProfileId: profileSelection.profile.id,
+      voiceServiceId: profileSelection.service.id,
+      voiceConnectionId: profileSelection.service.connectionId,
+      model: profileSelection.profile.model || profileSelection.service.model,
+      source: "profile",
+    }
+    : contactVoiceId
     ? {
       voiceId: contactVoiceId,
       adapter: contactAdapter,
       customVoiceId: contactCustomVoiceId,
+      customAdapterId: contactCustomAdapterId,
       sourceAgentId: contactSourceAgentId,
       sourceCandidateId: contactSourceCandidateId,
       customVoiceSource: contactCustomVoiceSource,
       customVoiceSourceAgentId: contactCustomVoiceSourceAgentId,
+      voiceProfileId: "",
+      voiceServiceId: "",
+      voiceConnectionId: "",
+      model: "",
       source: "contact",
     }
     : {
       voiceId: "",
       adapter: "dashscope-qwen",
       customVoiceId: "",
+      customAdapterId: "",
       sourceAgentId: "",
       sourceCandidateId: "",
       customVoiceSource: "",
       customVoiceSourceAgentId: "",
+      voiceProfileId: profileId,
+      voiceServiceId: "",
+      voiceConnectionId: "",
+      model: "",
       source: "missing",
     };
   let customVoice = null;
   if (requireVoiceSelection) {
+    if (profileId && !profileSelection) {
+      throw failure("voice_profile_missing", "当前联系人所选音色不可用。请到“能力 → 语音消息”重新选择音色。", 10);
+    }
     if (!selection.voiceId) {
       throw failure("tts_voice_missing", "当前联系人尚未选择音色；请到“能力”中的“语音消息”配置联系人音色后再发送。", 10);
     }
-    customVoice = assertAgentVoiceSelection({
-      dataRoot,
-      agentId,
-      adapter: selection.adapter,
-      voiceId: selection.voiceId,
-      customVoiceId: selection.customVoiceId,
-      sourceAgentId: selection.sourceAgentId,
-      sourceCandidateId: selection.sourceCandidateId,
-      customVoiceSource: selection.customVoiceSource,
-      customVoiceSourceAgentId: selection.customVoiceSourceAgentId,
-    });
+    if (selection.source !== "profile") {
+      customVoice = assertAgentVoiceSelection({
+        dataRoot,
+        agentId,
+        adapter: selection.adapter,
+        voiceId: selection.voiceId,
+        customVoiceId: selection.customVoiceId,
+        customAdapterId: selection.customAdapterId,
+        sourceAgentId: selection.sourceAgentId,
+        sourceCandidateId: selection.sourceCandidateId,
+        customVoiceSource: selection.customVoiceSource,
+        customVoiceSourceAgentId: selection.customVoiceSourceAgentId,
+      });
+    }
   }
   return {
     configPath: contactConfigPath,
@@ -400,15 +480,22 @@ function resolveAgentVoiceConfig({ dataRoot, agentId, requireVoiceSelection }) {
         ...sharedConfig,
         voiceId: selection.voiceId,
         adapter: selection.adapter,
+        ...(selection.voiceProfileId ? { voiceProfileId: selection.voiceProfileId } : {}),
         customVoiceId: selection.customVoiceId,
+        ...(selection.customAdapterId ? { customAdapterId: selection.customAdapterId } : {}),
         ...(selection.sourceAgentId ? { sourceAgentId: selection.sourceAgentId } : {}),
         ...(selection.sourceCandidateId ? { sourceCandidateId: selection.sourceCandidateId } : {}),
         ...(selection.customVoiceSource ? { customVoiceSource: selection.customVoiceSource } : {}),
         ...(selection.customVoiceSourceAgentId ? { customVoiceSourceAgentId: selection.customVoiceSourceAgentId } : {}),
-        ...(customVoice?.model ? { model: customVoice.model } : {}),
+        ...(selection.model || customVoice?.model ? { model: selection.model || customVoice.model } : {}),
+        ...(selection.voiceConnectionId ? { voiceConnectionId: selection.voiceConnectionId } : {}),
+        ...(selection.voiceServiceId ? { voiceServiceId: selection.voiceServiceId } : {}),
       }
       : { ...sharedConfig },
     selectionSource: selection.source,
+    voiceConnectionId: selection.voiceConnectionId,
+    voiceProfileId: selection.voiceProfileId,
+    voiceServiceId: selection.voiceServiceId,
   };
 }
 
@@ -417,7 +504,14 @@ function positiveNumber(value, fallback) {
   return Number.isFinite(number) && number > 0 ? number : fallback;
 }
 
+function customTemplateUses(value, token) {
+  if (Array.isArray(value)) return value.some((item) => customTemplateUses(item, token));
+  if (value && typeof value === "object") return Object.values(value).some((item) => customTemplateUses(item, token));
+  return typeof value === "string" && value.includes(`{{${token}}}`);
+}
+
 function resolveTts(localConfig, {
+  dataRoot = "",
   apiKeyOverride = "",
   baseUrlOverride = "",
   modelOverride = "",
@@ -425,19 +519,38 @@ function resolveTts(localConfig, {
   connectionType = "",
   requireCredentials = true,
 } = {}) {
-  const config = objectValue(localConfig);
+  const originalConfig = objectValue(localConfig);
+  const configuredProfileId = voiceProfileIdFromConfig(originalConfig);
+  const configuredProfile = configuredProfileId ? resolveVoiceProfile(dataRoot, configuredProfileId) : null;
+  if (configuredProfileId && !configuredProfile) {
+    throw failure("voice_profile_missing", "当前联系人所选音色不可用。请到“能力 → 语音消息”重新选择音色。", 10);
+  }
+  const config = configuredProfile ? {
+    ...originalConfig,
+    adapter: configuredProfile.service.adapter,
+    voiceId: configuredProfile.profile.voiceId,
+    model: configuredProfile.profile.model || configuredProfile.service.model,
+    ...(configuredProfile.service.customAdapterId ? { customAdapterId: configuredProfile.service.customAdapterId } : {}),
+  } : originalConfig;
   const tts = objectValue(config.tts);
   const configuredAdapter = voiceAdapterFromConfig(config);
   const voice = clean(config.voiceId || config.voice || tts.voiceId || tts.voice_id || tts.voice);
   const configuredBaseUrl = clean(baseUrlOverride || config.baseUrl || tts.baseUrl || tts.base_url);
   const configuredModel = clean(config.model || tts.model || modelOverride);
-  const adapter = resolveTtsAdapterForService({
-    adapter: configuredAdapter,
-    baseUrl: configuredBaseUrl,
-    model: configuredModel,
-    voiceId: voice,
-  }) || configuredAdapter;
+  const adapter = configuredProfile
+    ? configuredAdapter
+    : resolveTtsAdapterForService({
+      adapter: configuredAdapter,
+      baseUrl: configuredBaseUrl,
+      model: configuredModel,
+      voiceId: voice,
+    }) || configuredAdapter;
   const definition = ttsAdapterDefinition(adapter);
+  const customAdapterId = customAdapterIdFromConfig(config);
+  const customAdapter = adapter === "custom-http-tts" ? findCustomTtsAdapter(dataRoot, customAdapterId) : null;
+  if (adapter === "custom-http-tts" && !customAdapter) {
+    throw failure("tts_custom_adapter_missing", "当前音色引用的自定义 TTS 适配器不可用。请在“语音消息”中重新选择或创建适配器。", 10);
+  }
   const normalizedConnectionType = clean(connectionType).toLowerCase();
   if (normalizedConnectionType && !ttsAdapterSupportsConnection(adapter, normalizedConnectionType)) {
     throw failure(
@@ -450,7 +563,11 @@ function resolveTts(localConfig, {
   if (requireCredentials && !apiKey) {
     throw failure("tts_api_key_missing", `缺少${ttsAdapterLabel(adapter)} API Key：请为“语音消息”选择并配置 API。`);
   }
-  const baseUrl = configuredBaseUrl || definition.defaultBaseUrl;
+  const baseUrl = configuredProfile
+    ? (adapter === "custom-http-tts"
+      ? clean(customAdapter?.baseUrl || configuredBaseUrl)
+      : clean(definition.defaultBaseUrl || configuredBaseUrl))
+    : configuredBaseUrl || definition.defaultBaseUrl;
   if (requireCredentials && !baseUrl) {
     throw failure("tts_base_url_missing", `缺少${ttsAdapterLabel(adapter)}服务地址：请检查“语音消息”选择的 API。`);
   }
@@ -459,8 +576,16 @@ function resolveTts(localConfig, {
     throw failure("tts_endpoint_incompatible", endpointCompatibilityError, 10);
   }
   const model = configuredModel || definition.defaultModel;
-  if (requireCredentials && !model) {
+  const customAdapterNeedsModel = customAdapter && (
+    customTemplateUses(customAdapter.requestHeaders, "model")
+    || customTemplateUses(customAdapter.requestBody, "model")
+  );
+  if (requireCredentials && !model && (adapter !== "custom-http-tts" || customAdapterNeedsModel)) {
     throw failure("tts_model_missing", `缺少${ttsAdapterLabel(adapter)}模型：请在声音设置中填写模型，或为所选 API 设置默认模型。`);
+  }
+  const modelCompatibilityError = ttsAdapterModelCompatibilityError({ adapter, model });
+  if (modelCompatibilityError) {
+    throw failure("tts_model_incompatible", modelCompatibilityError, 10);
   }
   if (requireCredentials && !voice) {
     throw failure("tts_voice_missing", "缺少音色：请在 Suzu 的语音设置中选择一个音色。");
@@ -472,6 +597,8 @@ function resolveTts(localConfig, {
   return {
     adapter,
     provider: adapter,
+    customAdapterId,
+    customAdapter,
     apiKey,
     baseUrl,
     model,
@@ -481,7 +608,7 @@ function resolveTts(localConfig, {
     languageType: adapter === "dashscope-qwen" ? clean(config.languageType || tts.languageType) : "",
     connectionName: clean(connectionName),
     connectionType: normalizedConnectionType,
-    ledgerProvider: clean(connectionName) || definition.ledgerProvider,
+    ledgerProvider: clean(connectionName) || customAdapter?.name || definition.ledgerProvider,
   };
 }
 
@@ -517,9 +644,13 @@ export function resolveDirectVoiceRuntime({
     agentId: identity,
     configPath: resolved.configPath,
     selectionSource: resolved.selectionSource,
+    voiceConnectionId: clean(resolved.voiceConnectionId),
+    voiceProfileId: clean(resolved.voiceProfileId),
+    voiceServiceId: clean(resolved.voiceServiceId),
     timeoutMs: Math.round(positiveNumber(timeoutMs || resolved.localConfig.timeoutMs, 30000)),
     ffmpegPath: clean(resolved.localConfig.ffmpegPath) || "ffmpeg",
     tts: resolveTts(resolved.localConfig, {
+      dataRoot: root,
       apiKeyOverride,
       baseUrlOverride,
       modelOverride,
@@ -887,6 +1018,214 @@ async function synthesizeOpenAiSpeech({ text, runtime, fetchImpl, ledgerPath, ag
   return { audio, format: "mp3", requestId: "" };
 }
 
+function elevenLabsEndpoint(baseUrl, voiceId) {
+  const root = clean(baseUrl).replace(/\/+$/u, "");
+  const version = /\/v1$/iu.test(root) ? root : `${root}/v1`;
+  return `${version}/text-to-speech/${encodeURIComponent(voiceId)}?output_format=mp3_44100_128`;
+}
+
+async function synthesizeElevenLabs({ text, runtime, fetchImpl, ledgerPath, agentId, feature = "voice-message-tts", abortSignal = null }) {
+  if (!text) throw failure("voice_text_missing", "语音文本不能为空。");
+  if (runtime.tts.maxTextLength > 0 && [...text].length > runtime.tts.maxTextLength) {
+    throw failure("voice_text_too_long", "语音文本超过 " + runtime.tts.maxTextLength + " 字符，请缩短内容。");
+  }
+  if (typeof fetchImpl !== "function") throw failure("tts_fetch_unavailable", "没有可用的 TTS HTTP 客户端。", 5);
+  const audio = await fetchBuffer(
+    fetchImpl,
+    elevenLabsEndpoint(runtime.tts.baseUrl, runtime.tts.voice),
+    runtime.timeoutMs,
+    "ElevenLabs TTS",
+    abortSignal,
+    {
+      method: "POST",
+      headers: {
+        "xi-api-key": runtime.tts.apiKey,
+        "Content-Type": "application/json",
+        Accept: "audio/mpeg",
+      },
+      body: JSON.stringify({
+        text,
+        model_id: runtime.tts.model,
+      }),
+    },
+  );
+  if (!audio.length) throw failure("tts_response_invalid", "ElevenLabs TTS 返回了空音频。", 5);
+  const targetLedger = clean(ledgerPath);
+  if (!targetLedger) throw failure("ledger_path_missing", "缺少 Suzu Lives 用量账本路径。", 10);
+  try {
+    await appendUsageEvent(targetLedger, {
+      agentId: clean(agentId),
+      provider: runtime.tts.ledgerProvider,
+      model: runtime.tts.model,
+      source: "语音合成",
+      feature,
+      requestId: "",
+      usage: {},
+      units: { inputCharacters: [...text].length },
+      metadata: { adapter: runtime.tts.adapter, voice: runtime.tts.voice, outputFormat: "mp3" },
+    });
+  } catch (error) {
+    throw failure("ledger_write_failed", "无法写入 Suzu Lives 用量账本：" + (clean(error?.message) || "未知错误"), 10);
+  }
+  return { audio, format: "mp3", requestId: "" };
+}
+
+function mimoAudioBuffer(value) {
+  const encoded = clean(value);
+  if (!encoded || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u.test(encoded)) {
+    throw failure("tts_response_invalid", "小米 MiMo TTS 响应缺少有效的 Base64 音频数据。", 5);
+  }
+  const audio = Buffer.from(encoded, "base64");
+  if (!audio.length) throw failure("tts_response_invalid", "小米 MiMo TTS 返回了空音频。", 5);
+  return audio;
+}
+
+async function synthesizeXiaomiMimo({ text, runtime, fetchImpl, ledgerPath, agentId, feature = "voice-message-tts", abortSignal = null }) {
+  if (!text) throw failure("voice_text_missing", "语音文本不能为空。");
+  if (runtime.tts.maxTextLength > 0 && [...text].length > runtime.tts.maxTextLength) {
+    throw failure("voice_text_too_long", "语音文本超过 " + runtime.tts.maxTextLength + " 字符，请缩短内容。");
+  }
+  if (typeof fetchImpl !== "function") throw failure("tts_fetch_unavailable", "没有可用的 TTS HTTP 客户端。", 5);
+  const endpoint = runtime.tts.baseUrl.replace(/\/+$/u, "") + "/chat/completions";
+  const result = await fetchJson(
+    fetchImpl,
+    endpoint,
+    {
+      method: "POST",
+      headers: {
+        "api-key": runtime.tts.apiKey,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: runtime.tts.model,
+        messages: [{ role: "assistant", content: text }],
+        audio: { format: "wav", voice: runtime.tts.voice },
+      }),
+    },
+    runtime.timeoutMs,
+    "小米 MiMo TTS",
+    abortSignal,
+  );
+  const providerError = objectValue(result.error);
+  if (clean(providerError.message) || clean(result.code) || Number(result.status_code || 200) >= 400) {
+    throw failure("tts_provider_error", ("小米 MiMo TTS 失败：" + clean(providerError.message || result.code || result.message)).trim(), 5);
+  }
+  const audio = mimoAudioBuffer(result.choices?.[0]?.message?.audio?.data);
+  const targetLedger = clean(ledgerPath);
+  if (!targetLedger) throw failure("ledger_path_missing", "缺少 Suzu Lives 用量账本路径。", 10);
+  try {
+    await appendUsageEvent(targetLedger, {
+      agentId: clean(agentId),
+      provider: runtime.tts.ledgerProvider,
+      model: runtime.tts.model,
+      source: "语音合成",
+      feature,
+      requestId: clean(result.id || result.request_id),
+      usage: result.usage && typeof result.usage === "object" ? result.usage : {},
+      units: { inputCharacters: [...text].length },
+      metadata: { adapter: runtime.tts.adapter, voice: runtime.tts.voice, outputFormat: "wav" },
+    });
+  } catch (error) {
+    throw failure("ledger_write_failed", "无法写入 Suzu Lives 用量账本：" + (clean(error?.message) || "未知错误"), 10);
+  }
+  return { audio, format: "wav", requestId: clean(result.id || result.request_id) };
+}
+
+function customBase64AudioBuffer(value) {
+  const source = clean(value).replace(/^data:[^;,]+;base64,/iu, "");
+  if (!source || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u.test(source)) {
+    throw failure("tts_response_invalid", "自定义 TTS 响应中的音频不是有效的 Base64 数据。", 5);
+  }
+  const audio = Buffer.from(source, "base64");
+  if (!audio.length) throw failure("tts_response_invalid", "自定义 TTS 返回了空音频。", 5);
+  return audio;
+}
+
+function customTtsHeaders(adapter, runtime) {
+  const headers = interpolateCustomTtsTemplate(adapter.requestHeaders, {
+    apiKey: runtime.tts.apiKey,
+    model: runtime.tts.model,
+    text: "",
+    voice: runtime.tts.voice,
+  });
+  if (!Object.keys(headers).some((name) => name.toLowerCase() === "content-type")) {
+    headers["Content-Type"] = "application/json";
+  }
+  return headers;
+}
+
+function customTtsRequestBody(adapter, runtime, text) {
+  return interpolateCustomTtsTemplate(adapter.requestBody, {
+    apiKey: runtime.tts.apiKey,
+    model: runtime.tts.model,
+    text,
+    voice: runtime.tts.voice,
+  });
+}
+
+async function recordCustomTtsUsage({ adapter, text, runtime, ledgerPath, agentId, feature }) {
+  const targetLedger = clean(ledgerPath);
+  if (!targetLedger) throw failure("ledger_path_missing", "缺少 Suzu Lives 用量账本路径。", 10);
+  try {
+    await appendUsageEvent(targetLedger, {
+      agentId: clean(agentId),
+      provider: runtime.tts.ledgerProvider,
+      model: runtime.tts.model,
+      source: "语音合成",
+      feature,
+      requestId: "",
+      usage: {},
+      units: { inputCharacters: [...text].length },
+      metadata: {
+        adapter: runtime.tts.adapter,
+        customAdapterId: adapter.id,
+        voice: runtime.tts.voice,
+        outputFormat: adapter.outputFormat,
+      },
+    });
+  } catch (error) {
+    throw failure("ledger_write_failed", "无法写入 Suzu Lives 用量账本：" + (clean(error?.message) || "未知错误"), 10);
+  }
+}
+
+async function synthesizeCustomHttp({ text, runtime, fetchImpl, ledgerPath, agentId, feature = "voice-message-tts", abortSignal = null }) {
+  if (!text) throw failure("voice_text_missing", "语音文本不能为空。");
+  if (runtime.tts.maxTextLength > 0 && [...text].length > runtime.tts.maxTextLength) {
+    throw failure("voice_text_too_long", "语音文本超过 " + runtime.tts.maxTextLength + " 字符，请缩短内容。");
+  }
+  if (typeof fetchImpl !== "function") throw failure("tts_fetch_unavailable", "没有可用的 TTS HTTP 客户端。", 5);
+  const adapter = runtime.tts.customAdapter;
+  if (!adapter) throw failure("tts_custom_adapter_missing", "当前自定义 TTS 适配器不可用。", 10);
+  const endpoint = runtime.tts.baseUrl.replace(/\/+$/u, "") + interpolateCustomTtsEndpointPath(adapter.endpointPath, {
+    voice: runtime.tts.voice,
+  });
+  const request = {
+    method: "POST",
+    headers: customTtsHeaders(adapter, runtime),
+    body: JSON.stringify(customTtsRequestBody(adapter, runtime, text)),
+  };
+  let audio;
+  if (adapter.responseMode === "binary") {
+    audio = await fetchBuffer(fetchImpl, endpoint, runtime.timeoutMs, adapter.name, abortSignal, request);
+  } else {
+    const result = await fetchJson(fetchImpl, endpoint, request, runtime.timeoutMs, adapter.name, abortSignal);
+    const providerError = objectValue(result.error);
+    if (clean(providerError.message) || Number(result.status_code || 200) >= 400) {
+      throw failure("tts_provider_error", `${adapter.name}失败：${clean(providerError.message || result.message || result.code) || "服务拒绝请求"}`, 5);
+    }
+    const audioValue = valueAtCustomTtsPath(result, adapter.audioPath);
+    if (adapter.responseMode === "json-url") {
+      const audioUrl = clean(audioValue);
+      if (!audioUrl) throw failure("tts_response_invalid", `${adapter.name}响应缺少 ${adapter.audioPath}`, 5);
+      audio = await fetchBuffer(fetchImpl, audioUrl, runtime.timeoutMs, "下载合成音频", abortSignal);
+    } else {
+      audio = customBase64AudioBuffer(audioValue);
+    }
+  }
+  await recordCustomTtsUsage({ adapter, text, runtime, ledgerPath, agentId, feature });
+  return { audio, format: adapter.outputFormat, requestId: "" };
+}
+
 function minimaxAudioBuffer(value) {
   const hex = clean(value);
   if (!hex || hex.length % 2 !== 0 || !/^[0-9a-f]+$/iu.test(hex)) {
@@ -1043,6 +1382,12 @@ export async function synthesizeDirectVoiceAudio({
   if (!runtime?.tts?.adapter) throw failure("tts_runtime_missing", "缺少联系人语音运行配置。", 10);
   const synthesized = runtime.tts.adapter === "minimax-speech"
     ? await synthesizeMiniMax({ text: message, runtime, fetchImpl, ledgerPath, agentId, feature, abortSignal })
+    : runtime.tts.adapter === "custom-http-tts"
+      ? await synthesizeCustomHttp({ text: message, runtime, fetchImpl, ledgerPath, agentId, feature, abortSignal })
+      : runtime.tts.adapter === "xiaomi-mimo-tts"
+      ? await synthesizeXiaomiMimo({ text: message, runtime, fetchImpl, ledgerPath, agentId, feature, abortSignal })
+    : runtime.tts.adapter === "elevenlabs-speech"
+      ? await synthesizeElevenLabs({ text: message, runtime, fetchImpl, ledgerPath, agentId, feature, abortSignal })
     : runtime.tts.adapter === "dashscope-cosyvoice"
       ? await synthesizeCosyVoice({ text: message, runtime, fetchImpl, ledgerPath, agentId, feature, abortSignal })
       : runtime.tts.adapter === "openai-speech"

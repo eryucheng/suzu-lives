@@ -10,6 +10,7 @@ import {
   hasMarkdownFormatting,
   isScheduledAgentReply,
   liveReplyPresentationChanged,
+  filterDeletedConversationMessages,
   mergeConversationMessages,
   parseSuzuConversationCommand,
   conversationReactSnapshot,
@@ -18,6 +19,30 @@ import {
   splitAssistantMessageOnBlankLines,
   splitCompanionReplyBuffer,
 } from "../src/features/conversation/index.mjs";
+
+test("renderer keeps a deleted historical dynamic context out of the visible projection", () => {
+  const visible = filterDeletedConversationMessages([
+    {
+      id: "dynamic-88",
+      kind: "dynamic-context",
+      lineNumber: 88,
+      blocks: [{ kind: "text", text: "本轮动态上下文" }],
+    },
+    {
+      id: "assistant-89",
+      kind: "assistant",
+      lineNumber: 89,
+      blocks: [{ kind: "text", text: "仍应保留的回复" }],
+    },
+    {
+      id: "live-system",
+      kind: "system",
+      blocks: [{ kind: "text", text: "本地状态" }],
+    },
+  ], [88]);
+
+  assert.deepEqual(visible.map((item) => item.id), ["assistant-89", "live-system"]);
+});
 
 const messages = [
   { kind: "user", blocks: [{ kind: "text", text: "保留的普通文本" }] },
@@ -116,6 +141,22 @@ test("local chat overlays reconcile across tool-heavy transcripts without hiding
   }], new Map(), "session-1");
   assert.deepEqual(
     assistantBeforeDurableInput.map((item) => item.blocks[0]?.text),
+    ["上一个问题", "帮我配置识图", "我先检查当前设置。"],
+  );
+
+  const durableInputAfterAgentStep = mergeConversationMessages([
+    { id: "old-question", kind: "user", timestamp: "2026-08-14T09:58:00.000Z", blocks: [{ kind: "text", text: "上一个问题" }] },
+    { id: "stored-agent-step", kind: "assistant", timestamp: "2026-08-14T10:00:01.000Z", blocks: [{ kind: "text", text: "我先检查当前设置。" }] },
+    { id: "stored-current-question", kind: "user", timestamp: "2026-08-14T10:00:02.000Z", blocks: [{ kind: "text", text: "帮我配置识图" }] },
+  ], [{
+    id: "pending-current-question",
+    requestId: "turn-durable-order",
+    sessionId: "session-1",
+    content: "帮我配置识图",
+    timestamp: "2026-08-14T10:00:00.000Z",
+  }], new Map(), "session-1");
+  assert.deepEqual(
+    durableInputAfterAgentStep.map((item) => item.blocks[0]?.text),
     ["上一个问题", "帮我配置识图", "我先检查当前设置。"],
   );
 
@@ -337,9 +378,9 @@ test("companion header substitutes the contact note only during a real thinking 
 });
 
 test("conversation overlays close together when the user clicks away or presses Escape", () => {
-  const state = { avatarCrop: { source: "data:image/png;base64,avatar" }, contactCreateOpen: true, contactContextMenu: { contactId: "contact-test" }, contactRenameOpen: true, emojiOpen: true, fileContextMenu: { fileUrl: "file:///C:/temp/report.txt" }, mediaPreview: { url: "file:///C:/temp/image.png" }, menuOpen: true, searchOpen: false, settingsOpen: true, wechatQrOpen: true };
+  const state = { avatarCrop: { source: "data:image/png;base64,avatar" }, contactCreateOpen: true, contactContextMenu: { contactId: "contact-test" }, contactRenameOpen: true, emojiOpen: true, fileContextMenu: { fileUrl: "file:///C:/temp/report.txt" }, mediaPreview: { url: "file:///C:/temp/image.png" }, menuOpen: true, messageContextMenu: { lineNumber: 42 }, searchOpen: false, settingsOpen: true, wechatQrOpen: true };
   assert.equal(dismissConversationOverlays(state), true);
-  assert.deepEqual(state, { avatarCrop: null, contactCreateOpen: false, contactContextMenu: null, contactRenameOpen: false, emojiOpen: false, fileContextMenu: null, mediaPreview: null, menuOpen: false, searchOpen: false, settingsOpen: false, wechatQrOpen: false });
+  assert.deepEqual(state, { avatarCrop: null, contactCreateOpen: false, contactContextMenu: null, contactRenameOpen: false, emojiOpen: false, fileContextMenu: null, mediaPreview: null, menuOpen: false, messageContextMenu: null, searchOpen: false, settingsOpen: false, wechatQrOpen: false });
   assert.equal(dismissConversationOverlays(state), false);
 });
 

@@ -1048,7 +1048,8 @@
 }
 
 .content--conversation .conversation-contact-context-menu,
-.content--conversation .conversation-file-context-menu {
+.content--conversation .conversation-file-context-menu,
+.content--conversation .conversation-message-context-menu {
   position: fixed;
   z-index: 90;
   width: 196px;
@@ -1064,8 +1065,13 @@
   width: 164px;
 }
 
+.content--conversation .conversation-message-context-menu {
+  width: 164px;
+}
+
 .content--conversation .conversation-contact-context-menu button,
-.content--conversation .conversation-file-context-menu button {
+.content--conversation .conversation-file-context-menu button,
+.content--conversation .conversation-message-context-menu button {
   width: 100%;
   border: 0;
   border-radius: 7px;
@@ -1078,13 +1084,15 @@
 }
 
 .content--conversation .conversation-contact-context-menu button:hover:not(:disabled),
-.content--conversation .conversation-file-context-menu button:hover:not(:disabled) {
+.content--conversation .conversation-file-context-menu button:hover:not(:disabled),
+.content--conversation .conversation-message-context-menu button:hover:not(:disabled) {
   background: rgba(88, 212, 153, .13);
   color: #baf4d4;
 }
 
 .content--conversation .conversation-contact-context-menu button:disabled,
-.content--conversation .conversation-file-context-menu button:disabled {
+.content--conversation .conversation-file-context-menu button:disabled,
+.content--conversation .conversation-message-context-menu button:disabled {
   color: #8791a1;
   cursor: default;
 }
@@ -1098,6 +1106,15 @@
 }
 
 .content--conversation .conversation-contact-context-menu button.conversation-contact-context-menu__danger:hover:not(:disabled) {
+  background: rgba(239, 91, 104, .13);
+  color: #ffb0b6;
+}
+
+.content--conversation .conversation-message-context-menu button.conversation-message-context-menu__danger {
+  color: #ff8b94;
+}
+
+.content--conversation .conversation-message-context-menu button.conversation-message-context-menu__danger:hover:not(:disabled) {
   background: rgba(239, 91, 104, .13);
   color: #ffb0b6;
 }
@@ -3214,25 +3231,29 @@
 }
 
 :root[data-theme="light"] .content--conversation .conversation-contact-context-menu,
-:root[data-theme="light"] .content--conversation .conversation-file-context-menu {
+:root[data-theme="light"] .content--conversation .conversation-file-context-menu,
+:root[data-theme="light"] .content--conversation .conversation-message-context-menu {
   border-color: #dfe1e5;
   background: #fff;
   box-shadow: 0 16px 34px rgba(31, 39, 53, .16);
 }
 
 :root[data-theme="light"] .content--conversation .conversation-contact-context-menu button,
-:root[data-theme="light"] .content--conversation .conversation-file-context-menu button {
+:root[data-theme="light"] .content--conversation .conversation-file-context-menu button,
+:root[data-theme="light"] .content--conversation .conversation-message-context-menu button {
   color: #2b313c;
 }
 
 :root[data-theme="light"] .content--conversation .conversation-contact-context-menu button:hover:not(:disabled),
-:root[data-theme="light"] .content--conversation .conversation-file-context-menu button:hover:not(:disabled) {
+:root[data-theme="light"] .content--conversation .conversation-file-context-menu button:hover:not(:disabled),
+:root[data-theme="light"] .content--conversation .conversation-message-context-menu button:hover:not(:disabled) {
   background: #edf8f2;
   color: #14724d;
 }
 
 :root[data-theme="light"] .content--conversation .conversation-contact-context-menu button:disabled,
-:root[data-theme="light"] .content--conversation .conversation-file-context-menu button:disabled {
+:root[data-theme="light"] .content--conversation .conversation-file-context-menu button:disabled,
+:root[data-theme="light"] .content--conversation .conversation-message-context-menu button:disabled {
   color: #9aa0a9;
 }
 
@@ -3242,6 +3263,15 @@
 }
 
 :root[data-theme="light"] .content--conversation .conversation-contact-context-menu button.conversation-contact-context-menu__danger:hover:not(:disabled) {
+  background: #fff0f1;
+  color: #bf3341;
+}
+
+:root[data-theme="light"] .content--conversation .conversation-message-context-menu button.conversation-message-context-menu__danger {
+  color: #d94c59;
+}
+
+:root[data-theme="light"] .content--conversation .conversation-message-context-menu button.conversation-message-context-menu__danger:hover:not(:disabled) {
   background: #fff0f1;
   color: #bf3341;
 }

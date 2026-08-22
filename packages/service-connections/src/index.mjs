@@ -84,7 +84,7 @@ function namedBaseUrl(value, type) {
   const raw = clean(value || (type === "dashscope" ? DEFAULT_BASE_URL : "")).replace(/\/+$/u, "");
   if (!raw && type === "generic-api") return "";
   if (!raw && type === "openai-compatible") throw new Error("OpenAI Compatible 连接必须填写 Base URL。 ");
-  if (!raw && type === "tts-api") throw new Error("TTS API 连接必须填写服务地址。 ");
+  if (!raw && type === "tts-api") return "";
   if (!raw && type === "asr-api") throw new Error("ASR API 连接必须填写服务地址。 ");
   return baseUrl(raw);
 }
@@ -239,5 +239,21 @@ export function createNamedApiConnectionService({ dataRoot, safeStorage }) {
       credentialStatus: credential.status,
     };
   }
-  return { snapshot, save, remove, bind, resolve };
+  async function resolveById(connectionId) {
+    const id = clean(connectionId);
+    if (!id) return null;
+    const store = await readStore();
+    const connection = store.connections.find((item) => item.id === id);
+    if (!connection) return null;
+    const credential = credentialState(connection.encryptedApiKey, safeStorage);
+    return {
+      ...connection,
+      provider: typeLabel(connection.type),
+      apiKey: credential.key,
+      key: credential.key,
+      source: credential.key ? "saved" : "none",
+      credentialStatus: credential.status,
+    };
+  }
+  return { snapshot, save, remove, bind, resolve, resolveById };
 }

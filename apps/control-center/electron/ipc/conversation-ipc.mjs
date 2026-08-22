@@ -124,6 +124,20 @@ function contactRemovalValue(value) {
   return { id: clean(source.id), confirmed: source.confirmed === true };
 }
 
+function conversationMessageDeletionValue(value) {
+  const source = plainObject(value);
+  if (Object.hasOwn(source, "sessionId") || Object.hasOwn(source, "projectRoot") || Object.hasOwn(source, "contactId")) {
+    throw new Error("删除消息只接受当前联系人中的消息标识。 ");
+  }
+  const lineNumber = Number(source.lineNumber);
+  if (!Number.isSafeInteger(lineNumber) || lineNumber < 0) throw new Error("要删除的消息标识无效。 ");
+  return {
+    confirmed: source.confirmed === true,
+    lineNumber,
+    messageId: clean(source.messageId),
+  };
+}
+
 function callStartValue(value) {
   const source = plainObject(value);
   return { initiator: clean(source.initiator).toLowerCase() === "agent" ? "agent" : "user" };
@@ -280,6 +294,7 @@ export function registerConversationIpc({
   const reader = createConversationReader({
     contactProjectsService,
     dataRoot,
+    memoryRuntime,
     onContactCreated: initializeContactCapabilities,
     onAgentUsageEvents: (value) => usageLedger?.reconcile(value) || Object.freeze({
       completed: false,
@@ -584,6 +599,10 @@ export function registerConversationIpc({
   ipcMain.handle("conversation:remove-contact", async (event, value) => {
     sender = event.sender;
     return reader.removeContact(contactRemovalValue(value));
+  });
+  ipcMain.handle("conversation:delete-message", async (event, value) => {
+    sender = event.sender;
+    return reader.deleteMessage(conversationMessageDeletionValue(value));
   });
   ipcMain.handle("conversation:send", async (event, value) => {
     sender = event.sender;

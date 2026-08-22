@@ -8,5 +8,9 @@ test("voice message settings keep voice management inside the capability page", 
   assert.match(detail, /realtime-asr/u);
   assert.match(detail, /新增音色/u);
   assert.match(detail, /deleteCustomVoice/u);
+  assert.match(detail, /自定义协议/u);
+  assert.match(detail, /saveCustomTtsAdapter/u);
+  assert.match(detail, /saveService/u);
+  assert.match(detail, /saveProfile/u);
   assert.doesNotMatch(detail, /new Audio\(objectUrl\)/u);
 });

@@ -39,7 +39,9 @@ test("voice message settings own voice management and contact assignment in the 
   assert.match(detail, /新增音色/u);
   assert.match(detail, /音色 ID/u);
   assert.match(detail, /voiceDesign\?\.snapshot/u);
-  assert.match(detail, /voiceDesign\?\.saveCustomAudio/u);
+  assert.match(detail, /voiceDesign\?\.saveService/u);
+  assert.match(detail, /voiceDesign\?\.saveProfile/u);
+  assert.match(detail, /voiceDesign\?\.saveCustomTtsAdapter/u);
   assert.match(detail, /voiceDesign\?\.deleteCustomVoice/u);
   assert.match(detail, /voiceDesign\.saveContactVoice/u);
   assert.match(detail, /CreateStudioDialog/u);

@@ -5,8 +5,10 @@
   "type": "module",
   "exports": {
     ".": "./src/index.mjs",
+    "./custom-tts-adapters": "./src/custom-tts-adapters.mjs",
     "./direct-voice-message": "./src/direct-voice-message.mjs",
-    "./tts-adapters": "./src/tts-adapters.mjs"
+    "./tts-adapters": "./src/tts-adapters.mjs",
+    "./voice-services": "./src/voice-services.mjs"
   },
   "scripts": {
     "test": "node --test test/*.test.mjs"

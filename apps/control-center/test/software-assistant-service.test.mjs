@@ -39,6 +39,7 @@ function createFakeRuntime({ historyEvents = [] } = {}) {
     cancelTurn: [],
     ensureSession: [],
     history: [],
+    purgeSession: [],
     respondLifecycleRequest: [],
     sendTurn: [],
   };
@@ -60,6 +61,11 @@ function createFakeRuntime({ historyEvents = [] } = {}) {
       async cancelTurn(value) {
         calls.cancelTurn.push(value);
         return { accepted: true };
+      },
+      async purgeSession(value) {
+        calls.purgeSession.push(value);
+        state.historyEvents = [];
+        return { sessionDirectoryRemoved: true };
       },
       async respondLifecycleRequest(value) {
         calls.respondLifecycleRequest.push(value);
@@ -222,6 +228,72 @@ test("software assistant uses a fixed, non-contact DSH session and injects no me
     automatic: { enabled: true, tokenThreshold: 32_000, retainTokens: 8_000 },
     manual: { retainTokens: 8_000 },
   });
+  service.dispose();
+});
+
+test("software assistant clears only its fixed helper session while retaining its workspace", async (t) => {
+  const root = await temporaryRoot();
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const dataRoot = path.join(root, "Suzu Lives");
+  const fake = createFakeRuntime({
+    historyEvents: [{
+      type: "user/message",
+      seq: 1,
+      data: {
+        id: "prior-question",
+        source: { kind: "user" },
+        content: [{ type: "text", text: "之前问过的问题" }],
+      },
+    }],
+  });
+  const settings = createSettings();
+  const service = createSoftwareAssistantService({
+    dataRoot,
+    runtime: fake.runtime,
+    settingsService: settings.service,
+  });
+  const events = [];
+  service.subscribe((event) => events.push(event));
+
+  await service.snapshot();
+  const workspaceDirectory = resolveSoftwareAssistantWorkspace(dataRoot);
+  const result = await service.clearHistory();
+
+  assert.deepEqual(result, {
+    accepted: true,
+    cleared: true,
+    sessionId: SUZU_SOFTWARE_ASSISTANT_SESSION_ID,
+  });
+  assert.deepEqual(fake.calls.purgeSession, [{
+    sessionId: SUZU_SOFTWARE_ASSISTANT_SESSION_ID,
+    cwd: workspaceDirectory,
+    imageAttachmentIds: [],
+    protectedImageAttachmentIds: [],
+  }]);
+  assert.equal("contactId" in fake.calls.purgeSession[0], false);
+  assert.equal(events.length, 1);
+  assert.equal(events[0]?.type, "history-cleared");
+  assert.equal(events[0]?.sessionId, SUZU_SOFTWARE_ASSISTANT_SESSION_ID);
+  assert.deepEqual((await service.snapshot()).messages, []);
+  await assert.doesNotReject(fs.stat(workspaceDirectory));
+  await assert.doesNotReject(fs.stat(resolveSoftwareAssistantManualPath(dataRoot)));
+  service.dispose();
+});
+
+test("software assistant does not clear its record while a reply is active", async (t) => {
+  const root = await temporaryRoot();
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const fake = createFakeRuntime();
+  const settings = createSettings();
+  const service = createSoftwareAssistantService({
+    dataRoot: path.join(root, "Suzu Lives"),
+    runtime: fake.runtime,
+    settingsService: settings.service,
+  });
+
+  await service.send({ content: "还在吗" });
+  await assert.rejects(service.clearHistory(), (error) => error?.code === "TURN_ACTIVE");
+  assert.deepEqual(fake.calls.purgeSession, []);
   service.dispose();
 });
 
