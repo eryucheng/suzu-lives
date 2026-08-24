@@ -9,6 +9,7 @@ test("onboarding dialog renders through React callbacks instead of DOM bindings"
   assert.match(source, /export function OnboardingDialog/u);
   assert.match(source, /onSubmit=/u);
   assert.match(source, /actions\.saveMainModel/u);
+  assert.match(source, /\{ Input, Select, Switch \} from "suzu-design-system"/u);
   assert.match(source, /服务地址/u);
   assert.match(source, /接口协议/u);
   assert.match(source, /主模型/u);
@@ -18,6 +19,7 @@ test("onboarding dialog renders through React callbacks instead of DOM bindings"
   assert.doesNotMatch(source, /dangerouslySetInnerHTML/u);
   assert.doesNotMatch(source, /多模态 API/u);
   assert.doesNotMatch(source, /actions\.createContact/u);
+  assert.doesNotMatch(source, /<input\b/u);
 });
 
 test("application mounts the first-run guide with its overlay stylesheet and derives its visible step from saved setup", async () => {

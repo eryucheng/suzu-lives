@@ -740,6 +740,7 @@ export function createLongTermMemoryService({
         // lease or requiring another chat turn to kick the queue.
         const recovery = entry.memory.recoverProcessingEvents({ force: true });
         const maintenanceRecovery = entry.memory.recoverRunningMaintenance({ force: true });
+        const hasPendingMaintenance = maintenanceHasRunnableWork(entry.memory.maintenanceStatus({ limit: 500 }));
         resumed.push({
           contactId,
           sessionId,
@@ -748,7 +749,13 @@ export function createLongTermMemoryService({
           failedMaintenanceTasks: Number(maintenanceRecovery?.tasks?.failed || 0),
           recoveredConsolidations: Number(maintenanceRecovery?.consolidations?.requeued || 0),
           failedConsolidations: Number(maintenanceRecovery?.consolidations?.failed || 0),
-          result: await queueMaintenance(entry, sessionId, { automatic: true, rebuildWhenIdle: true }),
+          // A clean database no longer gets a fresh full maintenance/graph
+          // rebuild merely because the app launched.  Interrupted or pending
+          // work is still recovered automatically once the background runtime
+          // has started.
+          result: hasPendingMaintenance
+            ? await queueMaintenance(entry, sessionId, { automatic: true, rebuildWhenIdle: true })
+            : { status: "idle", passes: 0, graphRebuilt: false },
         });
       } catch {
         // Startup recovery is opportunistic; one unavailable contact must not

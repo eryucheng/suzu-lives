@@ -15,7 +15,7 @@ const ELECTRON_PROFILE_ENTRIES = new Set([
   "Cache", "Code Cache", "DawnGraphiteCache", "DawnWebGPUCache", "Dictionaries", "GPUCache", "Local Storage", "Network", "Session Storage", "Shared Dictionary", "SharedStorage", "DevToolsActivePort", "DIPS", "Local State", "Preferences",
 ]);
 const SUZU_CAPABILITY_ENTRIES = new Set([
-  "computer-camera", "image-generation", "image-vision", "mail-bridge", "managed-registrations-v1.json", "phone-camera", "time-awareness", "video-understanding", "voice-message", "web-browser",
+  "image-generation", "image-vision", "mail-bridge", "managed-registrations-v1.json", "time-awareness", "video-understanding", "voice-message", "web-browser",
 ]);
 
 function clean(value) {

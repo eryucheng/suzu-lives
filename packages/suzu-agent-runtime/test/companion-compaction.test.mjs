@@ -13,6 +13,7 @@ import {
   DEFAULT_SUZU_COMPACTION_TOKEN_THRESHOLD,
   adaptiveSuzuCompactionRetainTokens,
 } from "../src/compaction-defaults.mjs";
+import { DEFAULT_SUZU_COMPACTION_PROMPT } from "../src/companion-compaction-prompt.mjs";
 
 function sessionWithSurface(nodes, events) {
   return {
@@ -20,6 +21,14 @@ function sessionWithSurface(nodes, events) {
     events,
   };
 }
+
+test("Suzu default companion checkpoint retains role, scene, and relationship continuity", () => {
+  assert.match(DEFAULT_SUZU_COMPACTION_PROMPT, /当前角色的第一人称/u);
+  assert.match(DEFAULT_SUZU_COMPACTION_PROMPT, /称呼、关系、身份、性格、说话方式和相处习惯/u);
+  assert.match(DEFAULT_SUZU_COMPACTION_PROMPT, /承诺、线索和下一步/u);
+  assert.match(DEFAULT_SUZU_COMPACTION_PROMPT, /持续场景、故事或角色扮演/u);
+  assert.match(DEFAULT_SUZU_COMPACTION_PROMPT, /只依据聊天中已经明确的信息写作/u);
+});
 
 test("Suzu manual compaction selects an older prefix and retains a balanced raw tail", () => {
   const events = [];

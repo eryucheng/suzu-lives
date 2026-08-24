@@ -411,9 +411,13 @@ export function registerConversationIpc({
     agentHooks.dispose();
     agentLifecycle.close();
   });
-  ipcMain.handle("conversation:snapshot", (event) => {
+  ipcMain.handle("conversation:register-event-recipient", (event) => {
     sender = event.sender;
-    return reader.snapshot();
+    return { registered: true };
+  });
+  ipcMain.handle("conversation:snapshot", (event, value = {}) => {
+    sender = event.sender;
+    return reader.snapshot(value);
   });
   ipcMain.handle("conversation:select-attachments", async (event, value) => {
     sender = event.sender;
@@ -638,6 +642,10 @@ export function registerConversationIpc({
     callSender = event.sender;
     return call.start({ ...callStartValue(value), senderId: String(event.sender.id) });
   });
+  ipcMain.handle("conversation:call-dismiss-request", async (event, value) => {
+    sender = event.sender;
+    return call.dismissAgentCallRequest({ requestId: clean(plainObject(value).requestId) });
+  });
   ipcMain.handle("conversation:call-open", async (event, value) => {
     sender = event.sender;
     return call.open({ ...(value && typeof value === "object" ? value : {}), senderId: String(event.sender.id) });
@@ -678,5 +686,5 @@ export function registerConversationIpc({
     if (result?.stopped) voiceInputSender = null;
     return result;
   });
-  return { agentLifecycle, agentRuntime, attachmentService, call, chat, compactor, reader, sessionSettings, voiceInput };
+  return { agentLifecycle, agentRuntime, attachmentService, call, chat, compactor, reader, sessionSettings, usageLedger, voiceInput };
 }

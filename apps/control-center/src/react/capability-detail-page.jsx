@@ -1,5 +1,8 @@
 import { useEffect, useState } from "react";
 import { Button, Empty, GlassPanel, PageHeader, Select, Status, Switch } from "suzu-design-system";
+import { imageGenerationAdapterDefinition, imageGenerationAdapterSupportsConnection, IMAGE_GENERATION_ADAPTER_OPTIONS, normalizeImageGenerationAdapter } from "@suzu-lives/image-workbench/image-generation-adapters";
+import { normalizeVisionAdapter, VISION_ADAPTER_OPTIONS, visionAdapterDefinition, visionAdapterSupportsConnection } from "@suzu-lives/media-understanding/vision-adapters";
+import { normalizeVideoAdapter, VIDEO_ADAPTER_OPTIONS, videoAdapterDefinition, videoAdapterSupportsConnection } from "@suzu-lives/media-understanding/video-adapters";
 import { TTS_ADAPTER_OPTIONS, ttsAdapterDefinition, ttsAdapterLabel } from "@suzu-lives/voice-message/tts-adapters";
 
 import { API_BINDINGS } from "../features/agent/runtime.mjs";
@@ -9,6 +12,7 @@ import {
   capabilityVisibleInCatalog,
   createWechatConnectionCapability,
   WECHAT_DELIVERY_OPTIONS,
+  WECHAT_TEXT_SEGMENTATION_OPTIONS,
   wechatConnectionSettings,
 } from "../features/capabilities/overview.mjs";
 import { ApiConnectionPicker } from "./api-connections-ui.jsx";
@@ -20,7 +24,7 @@ const EXTERNAL_TYPE_LABELS = Object.freeze({
   mcp: "MCP",
   skill: "Skill",
 });
-const CONTACT_SCOPED_CAPABILITY_IDS = new Set(["time-awareness", "image-vision", "video-understanding", "image-generation", "phone-camera", "voice-message", "web-browser", "mail-bridge", "agent-journal", "proactive-contact"]);
+const CONTACT_SCOPED_CAPABILITY_IDS = new Set(["image-vision", "video-understanding", "image-generation", "voice-message", "web-browser", "mail-bridge", "agent-journal", "proactive-contact"]);
 
 function savedSettings(capability) {
   return capability?.savedSettings && typeof capability.savedSettings === "object"
@@ -80,7 +84,7 @@ function FormField({ children, className = "", hint, label }) {
   );
 }
 
-function ChoiceSelect({ name, options, value }) {
+function ChoiceSelect({ name, onChange = null, options, value }) {
   const choices = options.map(([choiceValue, label]) => ({ label, value: String(choiceValue) }));
   const preferred = String(value ?? "");
   const initial = choices.some((choice) => choice.value === preferred) ? preferred : choices[0]?.value || "";
@@ -93,7 +97,10 @@ function ChoiceSelect({ name, options, value }) {
   return (
     <>
       <input name={name} type="hidden" value={selected} />
-      <Select className="capability-select-react" fullWidth onChange={setSelected} options={choices} value={selected} />
+      <Select className="capability-select-react" fullWidth onChange={(next) => {
+        setSelected(next);
+        onChange?.(next);
+      }} options={choices} value={selected} />
     </>
   );
 }
@@ -148,12 +155,15 @@ function CapabilitySettingsForm({ abilityId, actions, children, submitLabel = "�
   );
 }
 
-function ApiBinding({ actions, apiServices, bindingId }) {
+function ApiBinding({ actions, apiServices, bindingId, connectionFilter = null }) {
   const item = API_BINDINGS.find((candidate) => candidate.id === bindingId);
   if (!item) return null;
   const connections = Array.isArray(apiServices?.connections) ? apiServices.connections : [];
   const bindings = apiServices?.bindings && typeof apiServices.bindings === "object" ? apiServices.bindings : {};
-  const available = connections.filter((connection) => item.types.includes(connection.type));
+  const available = connections.filter((connection) => (
+    item.types.includes(connection.type)
+    && (typeof connectionFilter !== "function" || connectionFilter(connection))
+  ));
   const selectedId = item.selected(bindings);
   const selected = available.some((connection) => connection.id === selectedId) ? selectedId : "";
   return (
@@ -290,7 +300,7 @@ function VoiceContactConfigDialog({ onClose, open, voiceDesign }) {
     <CreateStudioDialog ariaLabel="配置联系人音色" onClose={close} open={open}>
       {!selectedContactId ? <>
         <SettingsDialogHeader onClose={close} title="配置联系人音色">联系人</SettingsDialogHeader>
-        <div className="voice-settings-copy"><p>选择一位联系人，再为他或她设置保存过的音色。每个人的设置互不影响。</p></div>
+        <div className="voice-settings-copy"><p>选择一位联系人，再为 ta 设置保存过的音色。每个人的设置互不影响。</p></div>
         {feedback ? <div className="voice-settings-copy"><p>{feedback}</p></div> : null}
         {loading ? <div className="voice-history-empty voice-contact-empty">正在读取可用音色…</div> : contacts.length ? <div className="voice-contact-list">{contacts.map((item) => <article className="voice-contact-row" key={item.id}><div><strong>{item.name}</strong><small>{voiceChoiceLabel(item, choices)}</small></div><button className="secondary-button" onClick={() => setSelectedContactId(item.id)} type="button">配置音色</button></article>)}</div> : <div className="voice-history-empty voice-contact-empty">还没有联系人。请先在“关系”中创建联系人。</div>}
         <div className="voice-form-actions voice-contact-dialog-actions"><button className="secondary-button" onClick={close} type="button">关闭</button></div>
@@ -298,7 +308,7 @@ function VoiceContactConfigDialog({ onClose, open, voiceDesign }) {
         <SettingsDialogHeader onClose={close} title={`为“${contact.name}”配置音色`}>联系人</SettingsDialogHeader>
         <div className="voice-settings-copy"><p>{`这里列出已保存的音色；保存后只影响“${contact.name}”。`}</p></div>
         {feedback ? <div className="voice-settings-copy"><p>{feedback}</p></div> : null}
-        {choices.length ? <form className="voice-form voice-contact-config-form" onSubmit={save}><div className="voice-contact-choice-list">{choices.map((item) => { const selected = item.selection === "profile" ? contact.voiceProfileId === item.id : item.id ? contact.adapter === item.adapter && item.id === contact.customVoiceId && item.customAdapterId === contact.customAdapterId && item.voiceId === contact.voiceId : contact.adapter === item.adapter && item.voiceId === contact.voiceId; return <label className="voice-contact-choice" key={item.key}><input defaultChecked={selected} name="voiceSelection" required type="radio" value={item.key} /><span><strong>{item.name}</strong><small>{selected ? `${contact.name}正在使用` : item.kindLabel}</small></span></label>; })}</div><div className="voice-form-actions"><button className="secondary-button" disabled={saving} onClick={() => setSelectedContactId("")} type="button">返回联系人列表</button><button className="primary-button" disabled={saving}>{saving ? "正在保存…" : "使用这个音色"}</button></div></form> : <><div className="voice-history-empty voice-contact-empty">还没有可用音色。请先在“语音消息”设置中添加语音服务和音色。</div><div className="voice-form-actions voice-contact-dialog-actions"><button className="secondary-button" onClick={() => setSelectedContactId("")} type="button">返回联系人列表</button></div></>}
+        {choices.length ? <form className="voice-form voice-contact-config-form" onSubmit={save}><div className="voice-contact-choice-list">{choices.map((item) => { const selected = item.selection === "profile" ? contact.voiceProfileId === item.id : item.id ? contact.adapter === item.adapter && item.id === contact.customVoiceId && item.customAdapterId === contact.customAdapterId && item.voiceId === contact.voiceId : contact.adapter === item.adapter && item.voiceId === contact.voiceId; return <label className="voice-contact-choice" key={item.key}><input defaultChecked={selected} name="voiceSelection" required type="radio" value={item.key} /><span><strong>{item.name}</strong><small>{selected ? `${contact.name}正在使用` : item.kindLabel}</small></span></label>; })}</div><div className="voice-form-actions"><button className="secondary-button" disabled={saving} onClick={() => setSelectedContactId("")} type="button">返回联系人列表</button><button className="primary-button" disabled={saving}>{saving ? "正在保存…" : "使用这个音色"}</button></div></form> : <><div className="voice-history-empty voice-contact-empty">还没有可用音色。请先在“语音消息”设置中添加语音适配器和音色。</div><div className="voice-form-actions voice-contact-dialog-actions"><button className="secondary-button" onClick={() => setSelectedContactId("")} type="button">返回联系人列表</button></div></>}
       </> : null}
     </CreateStudioDialog>
   );
@@ -373,54 +383,86 @@ export function CapabilityCategoryPage({ actions = {}, capabilitySnapshot, categ
   );
 }
 
-function ImageGenerationSettings({ actions, apiServices, capability, contactsSnapshot }) {
-  const settings = savedSettings(capability);
-  const comfy = settings.comfyui || {};
-  return (
-    <>
-    <CapabilitySettingsForm abilityId="image-generation" actions={actions}>
-      <SettingSurface description="云端 API 适合日常使用；本机绘画只在你本机运行 ComfyUI 时启用。" eyebrow="图片生成" title="出图方式">
-        <FormGrid>
-          <FormField label="默认方式"><ChoiceSelect name="defaultBackend" options={[["api", "云端 API"], ["comfyui", "本机 ComfyUI"]]} value={settings.defaultBackend || "api"} /></FormField>
-          <ApiBinding actions={actions} apiServices={apiServices} bindingId="image-generation" />
-        </FormGrid>
-      </SettingSurface>
-      <SettingSurface description="只在默认方式选择本机 ComfyUI 时调整。" eyebrow="本机绘画" title="ComfyUI 设置">
-        <FormGrid>
-          <FormField className="capability-form-field--wide" label="ComfyUI 地址"><input defaultValue={comfy.baseUrl || "http://127.0.0.1:8188"} maxLength="500" name="comfyBaseUrl" /></FormField>
-          <FormField label="最长等待（秒）"><input defaultValue={comfy.timeoutSeconds ?? 600} max="600" min="1" name="comfyTimeoutSeconds" type="number" /></FormField>
-          <FormField label="进度间隔（秒）"><input defaultValue={comfy.pollIntervalSeconds ?? 1} max="30" min="0.1" name="comfyPollIntervalSeconds" step="0.1" type="number" /></FormField>
-          <FormField className="capability-form-field--wide" label="默认工作流（可选）"><input defaultValue={comfy.defaultWorkflow || ""} maxLength="200" name="comfyDefaultWorkflow" placeholder="留空时由任务自行选择" /></FormField>
-        </FormGrid>
-      </SettingSurface>
-    </CapabilitySettingsForm>
-      <ContactDeliverySettings actions={actions} capability={capability} contactsSnapshot={contactsSnapshot} description="所选联系人会通过 Suzu Agent Core 使用这套生图设置。" emptyDescription="先创建联系人，再选择允许哪些联系人使用图像生成。" />
-    </>
-  );
+const IMAGE_GENERATION_CUSTOM_PROTOCOL_PREFIX = "custom:";
+
+function imageGenerationProtocolSelection(value) {
+  const selected = String(value || "").trim();
+  if (selected.startsWith(IMAGE_GENERATION_CUSTOM_PROTOCOL_PREFIX)) {
+    return {
+      adapter: "custom-http-image",
+      customAdapterId: selected.slice(IMAGE_GENERATION_CUSTOM_PROTOCOL_PREFIX.length),
+    };
+  }
+  return {
+    adapter: normalizeImageGenerationAdapter(selected),
+    customAdapterId: "",
+  };
 }
 
-function PhoneCameraSettings({ actions, apiServices, capability, contactsSnapshot }) {
+function ImageGenerationSettings({ actions, apiServices, capability, contactsSnapshot }) {
   const settings = savedSettings(capability);
-  const sizes = settings.sizeByShot || {};
-  const references = settings.references || {};
-  const prompt = settings.prompt || {};
+  const phoneCamera = settings.phoneCamera || {};
+  const phoneSizes = phoneCamera.sizeByShot || {};
+  const phoneReferences = phoneCamera.references || {};
+  const phonePrompt = phoneCamera.prompt || {};
+  const configuredAdapter = normalizeImageGenerationAdapter(settings.adapter);
+  const [customDialogOpen, setCustomDialogOpen] = useState(false);
+  const customAdapters = Array.isArray(settings.customAdapters) ? settings.customAdapters : [];
+  const configuredCustomAdapterId = String(settings.customAdapterId || "").trim().toLowerCase();
+  const configuredCustomAdapter = customAdapters.find((protocol) => protocol.id === configuredCustomAdapterId) || null;
+  const unavailableConfiguredProtocol = configuredAdapter === "custom-http-image" && configuredCustomAdapterId && !configuredCustomAdapter;
+  const configuredProtocol = configuredAdapter === "custom-http-image" && configuredCustomAdapter
+    ? `${IMAGE_GENERATION_CUSTOM_PROTOCOL_PREFIX}${configuredCustomAdapter.id}`
+    : unavailableConfiguredProtocol
+      ? `${IMAGE_GENERATION_CUSTOM_PROTOCOL_PREFIX}${configuredCustomAdapterId}`
+      : configuredAdapter;
+  const [protocol, setProtocol] = useState(configuredProtocol);
+  const selectedProtocol = imageGenerationProtocolSelection(protocol);
+  const adapter = selectedProtocol.adapter;
+  const adapterOptions = IMAGE_GENERATION_ADAPTER_OPTIONS
+    .filter((option) => option.value !== "custom-http-image")
+    .map((option) => [option.value, option.label]);
+  const protocolOptions = [
+    ...(unavailableConfiguredProtocol ? [[configuredProtocol, "已不可用的自定义协议"]] : []),
+    ...adapterOptions,
+    ...customAdapters.map((item) => [`${IMAGE_GENERATION_CUSTOM_PROTOCOL_PREFIX}${item.id}`, item.name]),
+  ];
+
+  useEffect(() => {
+    setProtocol(configuredProtocol);
+  }, [configuredProtocol]);
+
   return (
     <>
-    <CapabilitySettingsForm abilityId="phone-camera" actions={actions}>
-      <SettingSurface description="这些偏好会与后置、自拍和镜前的基础画面规则共同生效。" eyebrow="手机拍照式图片" title="画面偏好">
-        <FormGrid>
-          <FormField label="默认方式"><ChoiceSelect name="defaultBackend" options={[["api", "云端 API"], ["comfyui", "本机 ComfyUI"]]} value={settings.defaultBackend || "api"} /></FormField>
-          <ApiBinding actions={actions} apiServices={apiServices} bindingId="image-generation" />
-          <FormField label="后置画面尺寸"><input defaultValue={sizes.rear || "1536x1024"} maxLength="20" name="rearSize" placeholder="1536x1024" /></FormField>
-          <FormField label="自拍画面尺寸"><input defaultValue={sizes.selfie || "1024x1536"} maxLength="20" name="selfieSize" placeholder="1024x1536" /></FormField>
-          <FormField label="镜前画面尺寸"><input defaultValue={sizes.mirror || "1024x1536"} maxLength="20" name="mirrorSize" placeholder="1024x1536" /></FormField>
-          <FormField label="最多参考图"><input defaultValue={references.maxImages ?? 8} max="16" min="1" name="maxImages" type="number" /></FormField>
-          <FormField className="capability-form-field--wide" label="画面前置提示"><textarea defaultValue={prompt.prefix || ""} maxLength="12000" name="promptPrefix" placeholder="例如：人物保持自然生活感，避免精致棚拍。" /></FormField>
-          <FormField className="capability-form-field--wide" label="画面补充提示"><textarea defaultValue={prompt.suffix || ""} maxLength="12000" name="promptSuffix" placeholder="例如：服装与环境以当前视觉参考为准。" /></FormField>
-        </FormGrid>
-      </SettingSurface>
-    </CapabilitySettingsForm>
-      <ContactDeliverySettings actions={actions} capability={capability} contactsSnapshot={contactsSnapshot} description="所选联系人会通过 Suzu Agent Core 使用这套画面偏好。" emptyDescription="先创建联系人，再选择允许哪些联系人使用手机拍照式生图。" />
+      <CapabilitySettingsForm abilityId="image-generation" actions={actions}>
+        <SettingSurface description="选择图片生成服务的请求协议和 API。" eyebrow="图片生成" title="请求设置">
+          <FormGrid>
+            <div className="capability-form-field image-vision-protocol-field">
+              <span>请求协议</span>
+              <div className="image-vision-protocol-field__controls">
+                <ChoiceSelect name="imageGenerationProtocol" onChange={setProtocol} options={protocolOptions} value={protocol} />
+                <Button onClick={() => setCustomDialogOpen(true)} type="button" variant="secondary">新增自定义协议</Button>
+              </div>
+              <input name="adapter" type="hidden" value={adapter} />
+              <input name="customAdapterId" type="hidden" value={selectedProtocol.customAdapterId} />
+              <small>{unavailableConfiguredProtocol ? "当前自定义协议已不可用，请选择其他协议后保存。" : adapter === "custom-http-image" ? "请求格式保存在所选协议中；API Key 继续使用下方选择的 API 连接。" : imageGenerationAdapterDefinition(adapter)?.detail || "选择图片生成服务使用的请求格式。"}</small>
+            </div>
+            <ApiBinding actions={actions} apiServices={apiServices} bindingId="image-generation" connectionFilter={(connection) => imageGenerationAdapterSupportsConnection(adapter, connection.type)} />
+          </FormGrid>
+        </SettingSurface>
+        <SettingSurface description="作为图像生成的专用画面预设，使用同一套请求协议、API 与联系人开关。" eyebrow="手机拍照式图片" title="画面预设">
+          <FormGrid>
+            <FormField label="后置画面尺寸"><input defaultValue={phoneSizes.rear || "1536x1024"} maxLength="20" name="rearSize" placeholder="1536x1024" /></FormField>
+            <FormField label="自拍画面尺寸"><input defaultValue={phoneSizes.selfie || "1024x1536"} maxLength="20" name="selfieSize" placeholder="1024x1536" /></FormField>
+            <FormField label="镜前画面尺寸"><input defaultValue={phoneSizes.mirror || "1024x1536"} maxLength="20" name="mirrorSize" placeholder="1024x1536" /></FormField>
+            <FormField label="最多参考图"><input defaultValue={phoneReferences.maxImages ?? 8} max="16" min="1" name="maxImages" type="number" /></FormField>
+            <FormField className="capability-form-field--wide" label="画面前置提示"><textarea defaultValue={phonePrompt.prefix || ""} maxLength="12000" name="promptPrefix" /></FormField>
+            <FormField className="capability-form-field--wide" label="画面补充提示"><textarea defaultValue={phonePrompt.suffix || ""} maxLength="12000" name="promptSuffix" /></FormField>
+          </FormGrid>
+        </SettingSurface>
+      </CapabilitySettingsForm>
+      <ContactDeliverySettings actions={actions} capability={capability} contactsSnapshot={contactsSnapshot} description="所选联系人会通过 Suzu Agent Core 使用这套生图设置。" emptyDescription="先创建联系人，再选择允许哪些联系人使用图像生成。" />
+      <CustomImageGenerationAdapterDialog imageGenerationDesign={actions.imageGenerationDesign} onClose={() => setCustomDialogOpen(false)} open={customDialogOpen} />
     </>
   );
 }
@@ -462,9 +504,9 @@ function CustomTtsAdapterDialog({ onClose, onSaved, open, voiceDesign }) {
     }
   };
   return (
-    <CreateStudioDialog ariaLabel="新增自定义语音协议" onClose={close} open={open}>
-      <SettingsDialogHeader onClose={close} title="新增自定义语音协议">语音服务</SettingsDialogHeader>
-      <div className="voice-settings-copy"><p>这里描述未内置服务的地址、请求和返回格式。创建语音服务时再选择它要使用的 API Key。Headers 和请求 JSON 可使用 {"{{apiKey}}"}、{"{{model}}"}、{"{{voice}}"}、{"{{text}}"}；请求路径还可使用 {"{{voice}}"}。</p></div>
+    <CreateStudioDialog ariaLabel="新增自定义协议" onClose={close} open={open}>
+      <SettingsDialogHeader onClose={close} title="新增自定义协议">语音适配器</SettingsDialogHeader>
+      <div className="voice-settings-copy"><p>这里保存未内置服务的请求与返回格式。新建语音适配器时可从“请求协议”中选择它，再绑定 API 连接。Headers 和请求 JSON 可使用 {"{{apiKey}}"}、{"{{model}}"}、{"{{voice}}"}、{"{{text}}"}；请求路径还可使用 {"{{voice}}"}。</p></div>
       {feedback ? <div className="voice-settings-copy"><p>{feedback}</p></div> : null}
       <form className="voice-form voice-contact-config-form" onSubmit={save}>
         <label>协议备注名<input autoFocus disabled={saving} maxLength="80" name="name" required /></label>
@@ -481,13 +523,171 @@ function CustomTtsAdapterDialog({ onClose, onSaved, open, voiceDesign }) {
   );
 }
 
-const VOICE_SERVICE_TYPE_OPTIONS = Object.freeze(TTS_ADAPTER_OPTIONS.map((option) => ({
-  label: option.value === "custom-http-tts" ? "自定义协议" : option.label,
-  value: option.value,
-})));
+const CUSTOM_IMAGE_RESPONSE_OPTIONS = Object.freeze([
+  { label: "JSON 中的图片下载地址", value: "json-url" },
+  { label: "JSON 中的 Base64 图片", value: "json-base64" },
+  { label: "直接返回图片文件", value: "binary" },
+]);
 
-function voiceServiceTypeLabel(adapter) {
-  return adapter === "custom-http-tts" ? "自定义协议" : ttsAdapterLabel(adapter);
+function CustomImageGenerationAdapterDialog({ imageGenerationDesign, onClose, onSaved, open }) {
+  const [saving, setSaving] = useState(false);
+  const [feedback, setFeedback] = useState("");
+  const [responseMode, setResponseMode] = useState("json-url");
+  const close = () => { if (!saving) onClose?.(); };
+  const save = async (event) => {
+    event.preventDefault();
+    if (saving || typeof imageGenerationDesign?.saveCustomAdapter !== "function") return;
+    const form = new FormData(event.currentTarget);
+    setSaving(true);
+    setFeedback("");
+    try {
+      const next = await imageGenerationDesign.saveCustomAdapter({
+        baseUrl: form.get("baseUrl"),
+        endpointPath: form.get("endpointPath"),
+        imagePath: form.get("imagePath"),
+        name: form.get("name"),
+        requestBody: form.get("requestBody"),
+        requestHeaders: form.get("requestHeaders"),
+        responseMode,
+      });
+      onSaved?.(next);
+      onClose?.();
+    } catch (error) {
+      setFeedback(error?.message || "自定义图像协议没有保存，请检查填写内容。 ");
+    } finally {
+      setSaving(false);
+    }
+  };
+  return (
+    <CreateStudioDialog ariaLabel="新增自定义图像协议" onClose={close} open={open}>
+      <SettingsDialogHeader onClose={close} title="新增自定义图像协议">图像生成</SettingsDialogHeader>
+      <div className="voice-settings-copy"><p>这里保存未内置服务的地址、请求格式和图片返回方式。API Key 仍由已选 API 连接保存。Headers 和请求 JSON 可使用 {"{{apiKey}}"}、{"{{model}}"}、{"{{prompt}}"}、{"{{size}}"}、{"{{referenceImages}}"}；参考图变量会替换为 Data URL 数组。</p></div>
+      {feedback ? <div className="voice-settings-copy"><p>{feedback}</p></div> : null}
+      <form className="voice-form voice-contact-config-form" onSubmit={save}>
+        <label>协议备注名<input autoFocus disabled={saving} maxLength="80" name="name" required /></label>
+        <label>服务地址<input disabled={saving} maxLength="500" name="baseUrl" required /></label>
+        <label>请求路径<input defaultValue="/images/generations" disabled={saving} maxLength="300" name="endpointPath" required /></label>
+        <label>请求 Headers（JSON）<textarea defaultValue={'{"Authorization":"Bearer {{apiKey}}","Content-Type":"application/json"}'} disabled={saving} maxLength="8000" name="requestHeaders" required /></label>
+        <label>请求 JSON<textarea defaultValue={'{\n  "model": "{{model}}",\n  "prompt": "{{prompt}}",\n  "size": "{{size}}",\n  "n": 1\n}'} disabled={saving} maxLength="24000" name="requestBody" required /></label>
+        <label>图片返回方式<input name="responseMode" type="hidden" value={responseMode} /><Select className="create-select-react" disabled={saving} fullWidth onChange={setResponseMode} options={CUSTOM_IMAGE_RESPONSE_OPTIONS} value={responseMode} /></label>
+        {responseMode !== "binary" ? <label>图片返回位置<input defaultValue="data[0].url" disabled={saving} maxLength="300" name="imagePath" required /></label> : <input name="imagePath" type="hidden" value="" />}
+        <div className="voice-form-actions"><button className="secondary-button" disabled={saving} onClick={close} type="button">取消</button><button className="primary-button" disabled={saving}>{saving ? "正在保存…" : "保存协议"}</button></div>
+      </form>
+    </CreateStudioDialog>
+  );
+}
+
+function CustomVisionAdapterDialog({ imageVisionDesign, onClose, onSaved, open }) {
+  const [saving, setSaving] = useState(false);
+  const [feedback, setFeedback] = useState("");
+  const close = () => { if (!saving) onClose?.(); };
+  const save = async (event) => {
+    event.preventDefault();
+    if (saving || typeof imageVisionDesign?.saveCustomAdapter !== "function") return;
+    const form = new FormData(event.currentTarget);
+    setSaving(true);
+    setFeedback("");
+    try {
+      const next = await imageVisionDesign.saveCustomAdapter({
+        baseUrl: form.get("baseUrl"),
+        endpointPath: form.get("endpointPath"),
+        name: form.get("name"),
+        requestBody: form.get("requestBody"),
+        requestHeaders: form.get("requestHeaders"),
+        responseTextPath: form.get("responseTextPath"),
+      });
+      onSaved?.(next);
+      onClose?.();
+    } catch (error) {
+      setFeedback(error?.message || "自定义视觉协议没有保存，请检查填写内容。 ");
+    } finally {
+      setSaving(false);
+    }
+  };
+  return (
+    <CreateStudioDialog ariaLabel="新增自定义视觉协议" onClose={close} open={open}>
+      <SettingsDialogHeader onClose={close} title="新增自定义视觉协议">图像理解</SettingsDialogHeader>
+      <div className="voice-settings-copy"><p>这里保存未内置服务的地址、请求格式和文字返回位置。API Key 仍由已选 API 连接保存。Headers 和请求 JSON 可使用 {"{{apiKey}}"}、{"{{model}}"}、{"{{question}}"}、{"{{systemPrompt}}"}、{"{{detail}}"}、{"{{imageDataUrl}}"}、{"{{imageBase64}}"}、{"{{imageMimeType}}"}。</p></div>
+      {feedback ? <div className="voice-settings-copy"><p>{feedback}</p></div> : null}
+      <form className="voice-form voice-contact-config-form" onSubmit={save}>
+        <label>协议备注名<input autoFocus disabled={saving} maxLength="80" name="name" required /></label>
+        <label>服务地址<input disabled={saving} maxLength="500" name="baseUrl" required /></label>
+        <label>请求路径<input defaultValue="/chat/completions" disabled={saving} maxLength="300" name="endpointPath" required /></label>
+        <label>请求 Headers（JSON）<textarea defaultValue={'{"Authorization":"Bearer {{apiKey}}","Content-Type":"application/json"}'} disabled={saving} maxLength="8000" name="requestHeaders" required /></label>
+        <label>请求 JSON<textarea defaultValue={'{\n  "model": "{{model}}",\n  "messages": [\n    { "role": "system", "content": "{{systemPrompt}}" },\n    {\n      "role": "user",\n      "content": [\n        { "type": "text", "text": "{{question}}" },\n        { "type": "image_url", "image_url": { "url": "{{imageDataUrl}}", "detail": "{{detail}}" } }\n      ]\n    }\n  ]\n}'} disabled={saving} maxLength="24000" name="requestBody" required /></label>
+        <label>文字返回位置<input defaultValue="choices[0].message.content" disabled={saving} maxLength="300" name="responseTextPath" required /></label>
+        <div className="voice-form-actions"><button className="secondary-button" disabled={saving} onClick={close} type="button">取消</button><button className="primary-button" disabled={saving}>{saving ? "正在保存…" : "保存协议"}</button></div>
+      </form>
+    </CreateStudioDialog>
+  );
+}
+
+function CustomVideoAdapterDialog({ onClose, onSaved, open, videoUnderstandingDesign }) {
+  const [saving, setSaving] = useState(false);
+  const [feedback, setFeedback] = useState("");
+  const close = () => { if (!saving) onClose?.(); };
+  const save = async (event) => {
+    event.preventDefault();
+    if (saving || typeof videoUnderstandingDesign?.saveCustomAdapter !== "function") return;
+    const form = new FormData(event.currentTarget);
+    setSaving(true);
+    setFeedback("");
+    try {
+      const next = await videoUnderstandingDesign.saveCustomAdapter({
+        baseUrl: form.get("baseUrl"),
+        endpointPath: form.get("endpointPath"),
+        name: form.get("name"),
+        requestBody: form.get("requestBody"),
+        requestHeaders: form.get("requestHeaders"),
+        responseTextPath: form.get("responseTextPath"),
+      });
+      onSaved?.(next);
+      onClose?.();
+    } catch (error) {
+      setFeedback(error?.message || "自定义视频协议没有保存，请检查填写内容。 ");
+    } finally {
+      setSaving(false);
+    }
+  };
+  return (
+    <CreateStudioDialog ariaLabel="新增自定义视频协议" onClose={close} open={open}>
+      <SettingsDialogHeader onClose={close} title="新增自定义视频协议">视频理解</SettingsDialogHeader>
+      <div className="voice-settings-copy"><p>这里保存未内置服务的地址、请求格式和文字返回位置。API Key 仍由已选 API 连接保存。Headers 和请求 JSON 可使用 {"{{apiKey}}"}、{"{{model}}"}、{"{{question}}"}、{"{{systemPrompt}}"}、{"{{videoDataUrl}}"}、{"{{videoBase64}}"}、{"{{videoMimeType}}"}、{"{{fps}}"}、{"{{maxOutputTokens}}"}、{"{{temperature}}"}。</p></div>
+      {feedback ? <div className="voice-settings-copy"><p>{feedback}</p></div> : null}
+      <form className="voice-form voice-contact-config-form" onSubmit={save}>
+        <label>协议备注名<input autoFocus disabled={saving} maxLength="80" name="name" required /></label>
+        <label>服务地址<input disabled={saving} maxLength="500" name="baseUrl" required /></label>
+        <label>请求路径<input defaultValue="/chat/completions" disabled={saving} maxLength="300" name="endpointPath" required /></label>
+        <label>请求 Headers（JSON）<textarea defaultValue={'{"Authorization":"Bearer {{apiKey}}","Content-Type":"application/json"}'} disabled={saving} maxLength="8000" name="requestHeaders" required /></label>
+        <label>请求 JSON<textarea defaultValue={'{\n  "model": "{{model}}",\n  "messages": [\n    { "role": "system", "content": "{{systemPrompt}}" },\n    {\n      "role": "user",\n      "content": [\n        { "type": "text", "text": "{{question}}" },\n        { "type": "video_url", "video_url": { "url": "{{videoDataUrl}}" } }\n      ]\n    }\n  ]\n}'} disabled={saving} maxLength="24000" name="requestBody" required /></label>
+        <label>文字返回位置<input defaultValue="choices[0].message.content" disabled={saving} maxLength="300" name="responseTextPath" required /></label>
+        <div className="voice-form-actions"><button className="secondary-button" disabled={saving} onClick={close} type="button">取消</button><button className="primary-button" disabled={saving}>{saving ? "正在保存…" : "保存协议"}</button></div>
+      </form>
+    </CreateStudioDialog>
+  );
+}
+
+const VOICE_SERVICE_CUSTOM_PROTOCOL_PREFIX = "custom:";
+const VOICE_SERVICE_PROTOCOL_OPTIONS = Object.freeze(TTS_ADAPTER_OPTIONS
+  .filter((option) => option.value !== "custom-http-tts")
+  .map((option) => ({ label: option.label, value: option.value })));
+
+function voiceServiceProtocolSelection(value) {
+  const selected = String(value || "").trim();
+  if (selected.startsWith(VOICE_SERVICE_CUSTOM_PROTOCOL_PREFIX)) {
+    return {
+      adapter: "custom-http-tts",
+      customAdapterId: selected.slice(VOICE_SERVICE_CUSTOM_PROTOCOL_PREFIX.length),
+    };
+  }
+  return {
+    adapter: selected || "dashscope-qwen",
+    customAdapterId: "",
+  };
+}
+
+function voiceServiceTypeLabel(adapter, customProtocol = null) {
+  return adapter === "custom-http-tts" ? customProtocol?.name || "自定义协议" : ttsAdapterLabel(adapter);
 }
 
 function compatibleVoiceApiConnections(apiConnections, adapter) {
@@ -497,28 +697,42 @@ function compatibleVoiceApiConnections(apiConnections, adapter) {
   ));
 }
 
-function VoiceServiceDialog({ apiConnections, customProtocols, onClose, onOpenApiServices, onSaved, open, service, voiceDesign }) {
-  const [serviceType, setServiceType] = useState("dashscope-qwen");
+function VoiceServiceDialog({ apiConnections, customProtocols, onClose, onOpenApiServices, onOpenCustomProtocol, onSaved, open, service, voiceDesign }) {
+  const [protocol, setProtocol] = useState("dashscope-qwen");
   const [connectionId, setConnectionId] = useState("");
-  const [customProtocolId, setCustomProtocolId] = useState("");
   const [name, setName] = useState("");
   const [model, setModel] = useState("");
   const [feedback, setFeedback] = useState("");
   const [saving, setSaving] = useState(false);
   const editing = Boolean(service?.id);
+  const savedCustomProtocols = Array.isArray(customProtocols) ? customProtocols : [];
+  const configuredAdapter = service?.adapter || "dashscope-qwen";
+  const configuredCustomProtocolId = String(service?.customAdapterId || "").trim().toLowerCase();
+  const configuredCustomProtocol = savedCustomProtocols.find((item) => String(item.id || "").trim().toLowerCase() === configuredCustomProtocolId) || null;
+  const unavailableConfiguredProtocol = configuredAdapter === "custom-http-tts" && !configuredCustomProtocol;
+  const configuredProtocol = configuredAdapter === "custom-http-tts" && configuredCustomProtocol
+    ? `${VOICE_SERVICE_CUSTOM_PROTOCOL_PREFIX}${configuredCustomProtocol.id}`
+    : unavailableConfiguredProtocol
+      ? configuredCustomProtocolId ? `${VOICE_SERVICE_CUSTOM_PROTOCOL_PREFIX}${configuredCustomProtocolId}` : configuredAdapter
+      : configuredAdapter;
+  const selectedProtocol = voiceServiceProtocolSelection(protocol);
+  const serviceType = selectedProtocol.adapter;
+  const customProtocolId = selectedProtocol.customAdapterId;
   const availableConnections = compatibleVoiceApiConnections(apiConnections, serviceType);
-  const protocolOptions = (Array.isArray(customProtocols) ? customProtocols : []).map((protocol) => ({ label: protocol.name, value: protocol.id }));
+  const protocolOptions = [
+    ...(unavailableConfiguredProtocol ? [{ label: "已不可用的自定义协议", value: configuredProtocol }] : []),
+    ...VOICE_SERVICE_PROTOCOL_OPTIONS,
+    ...savedCustomProtocols.map((item) => ({ label: item.name, value: `${VOICE_SERVICE_CUSTOM_PROTOCOL_PREFIX}${item.id}` })),
+  ];
 
   useEffect(() => {
     if (!open) return;
-    const nextType = service?.adapter || "dashscope-qwen";
-    setServiceType(nextType);
+    setProtocol(configuredProtocol);
     setConnectionId(service?.connectionId || "");
-    setCustomProtocolId(service?.customAdapterId || "");
     setName(service?.name || "");
-    setModel(service?.model || ttsAdapterDefinition(nextType)?.defaultModel || "");
+    setModel(service?.model || ttsAdapterDefinition(configuredAdapter)?.defaultModel || "");
     setFeedback("");
-  }, [open, service]);
+  }, [configuredAdapter, configuredProtocol, open, service]);
 
   useEffect(() => {
     if (!open) return;
@@ -527,16 +741,10 @@ function VoiceServiceDialog({ apiConnections, customProtocols, onClose, onOpenAp
     }
   }, [availableConnections, connectionId, open]);
 
-  useEffect(() => {
-    if (!open || serviceType !== "custom-http-tts") return;
-    if (!protocolOptions.some((option) => option.value === customProtocolId)) {
-      setCustomProtocolId(protocolOptions[0]?.value || "");
-    }
-  }, [customProtocolId, open, protocolOptions, serviceType]);
-
-  const changeType = (nextType) => {
-    setServiceType(nextType);
-    setModel(ttsAdapterDefinition(nextType)?.defaultModel || "");
+  const changeProtocol = (nextProtocol) => {
+    const next = voiceServiceProtocolSelection(nextProtocol);
+    setProtocol(nextProtocol);
+    setModel(ttsAdapterDefinition(next.adapter)?.defaultModel || "");
   };
   const close = () => { if (!saving) onClose?.(); };
   const save = async (event) => {
@@ -556,25 +764,24 @@ function VoiceServiceDialog({ apiConnections, customProtocols, onClose, onOpenAp
       onSaved?.(next);
       onClose?.();
     } catch (error) {
-      setFeedback(error?.message || "语音服务没有保存，请检查填写内容。");
+      setFeedback(error?.message || "语音适配器没有保存，请检查填写内容。");
     } finally {
       setSaving(false);
     }
   };
 
   return (
-    <CreateStudioDialog ariaLabel={editing ? "编辑语音服务" : "新增语音服务"} onClose={close} open={open}>
-      <SettingsDialogHeader onClose={close} title={editing ? "编辑语音服务" : "新增语音服务"}>语音服务</SettingsDialogHeader>
-      <div className="voice-settings-copy"><p>一个语音服务对应一种服务类型和一条已保存的 API 连接。音色会引用这项服务，联系人只需要选择音色。</p></div>
+    <CreateStudioDialog ariaLabel={editing ? "编辑语音适配器" : "新增语音适配器"} onClose={close} open={open}>
+      <SettingsDialogHeader onClose={close} title={editing ? "编辑语音适配器" : "新增语音适配器"}>语音适配器</SettingsDialogHeader>
+      <div className="voice-settings-copy"><p>一个语音适配器对应一套请求协议、一条已保存的 API 连接和默认模型。音色会引用这项适配器，联系人只需要选择音色。</p></div>
       {feedback ? <div className="voice-settings-copy"><p>{feedback}</p></div> : null}
       <form className="voice-form voice-contact-config-form" onSubmit={save}>
-        <label>服务备注名<input autoFocus disabled={saving} maxLength="80" onChange={(event) => setName(event.target.value)} required value={name} /></label>
-        <label>服务类型<Select className="create-select-react" disabled={saving} fullWidth onChange={changeType} options={VOICE_SERVICE_TYPE_OPTIONS} value={serviceType} /></label>
-        {serviceType === "custom-http-tts" ? <label>自定义协议<Select className="create-select-react" disabled={saving || !protocolOptions.length} fullWidth onChange={setCustomProtocolId} options={protocolOptions.length ? protocolOptions : [{ label: "请先新增自定义协议", value: "" }]} value={customProtocolId} /></label> : null}
+        <label>适配器备注名<input autoFocus disabled={saving} maxLength="80" onChange={(event) => setName(event.target.value)} required value={name} /></label>
+        <label className="voice-service-protocol-field"><span>请求协议</span><div className="voice-service-protocol-field__controls"><Select className="create-select-react" disabled={saving} fullWidth onChange={changeProtocol} options={protocolOptions} value={protocol} /><Button onClick={() => onOpenCustomProtocol?.()} type="button" variant="secondary">新增自定义协议</Button></div><small>{unavailableConfiguredProtocol ? "当前自定义协议已不可用，请选择其他协议后保存。" : serviceType === "custom-http-tts" ? "请求格式保存在所选协议中；API Key 继续使用下方选择的 API 连接。" : ttsAdapterDefinition(serviceType)?.detail || "选择语音适配器使用的请求格式。"}</small></label>
         <label>API 连接<Select className="create-select-react" disabled={saving || !availableConnections.length} fullWidth onChange={setConnectionId} options={availableConnections.length ? availableConnections.map((connection) => ({ label: `${connection.name}${connection.configured ? "" : "（未填写 Key）"}`, value: connection.id })) : [{ label: "没有兼容的已保存 API", value: "" }]} value={connectionId} /></label>
         {!availableConnections.length ? <div className="voice-form-actions"><button className="secondary-button" disabled={saving} onClick={() => onOpenApiServices?.()} type="button">前往 API 设置</button></div> : null}
         <label>默认模型<input disabled={saving} maxLength="160" onChange={(event) => setModel(event.target.value)} placeholder="可留空" value={model} /></label>
-        <div className="voice-form-actions"><button className="secondary-button" disabled={saving} onClick={close} type="button">取消</button><button className="primary-button" disabled={saving || !connectionId || (serviceType === "custom-http-tts" && !customProtocolId)}>{saving ? "正在保存…" : editing ? "保存修改" : "保存语音服务"}</button></div>
+        <div className="voice-form-actions"><button className="secondary-button" disabled={saving} onClick={close} type="button">取消</button><button className="primary-button" disabled={saving || !connectionId || (serviceType === "custom-http-tts" && !customProtocolId)}>{saving ? "正在保存…" : editing ? "保存修改" : "保存语音适配器"}</button></div>
       </form>
     </CreateStudioDialog>
   );
@@ -629,13 +836,13 @@ function VoiceProfileDialog({ onClose, onSaved, open, profile, services, voiceDe
   return (
     <CreateStudioDialog ariaLabel={editing ? "编辑音色" : "新增音色"} onClose={close} open={open}>
       <SettingsDialogHeader onClose={close} title={editing ? "编辑音色" : "新增音色"}>音色</SettingsDialogHeader>
-      <div className="voice-settings-copy"><p>音色属于一个语音服务。联系人选中它后，会自动使用该服务的 API 连接、协议和模型。</p></div>
+      <div className="voice-settings-copy"><p>音色属于一个语音适配器。联系人选中它后，会自动使用该适配器的 API 连接、协议和模型。</p></div>
       {feedback ? <div className="voice-settings-copy"><p>{feedback}</p></div> : null}
       <form className="voice-form voice-contact-config-form" onSubmit={save}>
         <label>声音备注名<input autoFocus disabled={saving} maxLength="80" onChange={(event) => setName(event.target.value)} required value={name} /></label>
-        <label>语音服务<Select className="create-select-react" disabled={saving || !serviceOptions.length} fullWidth onChange={setServiceId} options={serviceOptions.length ? serviceOptions : [{ label: "请先新增语音服务", value: "" }]} value={serviceId} /></label>
+        <label>语音适配器<Select className="create-select-react" disabled={saving || !serviceOptions.length} fullWidth onChange={setServiceId} options={serviceOptions.length ? serviceOptions : [{ label: "请先新增语音适配器", value: "" }]} value={serviceId} /></label>
         <label>音色 ID<input disabled={saving} maxLength="200" onChange={(event) => setVoiceId(event.target.value)} placeholder="填写服务商提供的 voice ID" required value={voiceId} /></label>
-        <label>模型（可选）<input disabled={saving} maxLength="160" onChange={(event) => setModel(event.target.value)} placeholder={selectedService?.model || "留空时使用语音服务的默认模型"} value={model} /></label>
+        <label>模型（可选）<input disabled={saving} maxLength="160" onChange={(event) => setModel(event.target.value)} placeholder={selectedService?.model || "留空时使用语音适配器的默认模型"} value={model} /></label>
         <div className="voice-form-actions"><button className="secondary-button" disabled={saving} onClick={close} type="button">取消</button><button className="primary-button" disabled={saving || !serviceId}>{saving ? "正在保存…" : editing ? "保存修改" : "保存音色"}</button></div>
       </form>
     </CreateStudioDialog>
@@ -652,7 +859,6 @@ function VoiceMessageSettings({ actions, apiServices, capability, contactsSnapsh
   const [deletingServiceId, setDeletingServiceId] = useState("");
   const [deletingProfileId, setDeletingProfileId] = useState("");
   const [deletingLegacyVoiceId, setDeletingLegacyVoiceId] = useState("");
-  const [deletingProtocolId, setDeletingProtocolId] = useState("");
 
   const refreshVoice = async () => {
     try {
@@ -684,7 +890,7 @@ function VoiceMessageSettings({ actions, apiServices, capability, contactsSnapsh
     try {
       updateSnapshot(await actions.voiceDesign?.deleteService({ id: service.id }));
     } catch (error) {
-      setVoiceError(error?.message || "删除语音服务失败，请稍后重试。");
+      setVoiceError(error?.message || "删除语音适配器失败，请稍后重试。");
     } finally {
       setDeletingServiceId("");
     }
@@ -717,32 +923,19 @@ function VoiceMessageSettings({ actions, apiServices, capability, contactsSnapsh
       setDeletingLegacyVoiceId("");
     }
   };
-  const deleteProtocol = async (protocol) => {
-    if (!protocol?.id || deletingProtocolId) return;
-    setDeletingProtocolId(protocol.id);
-    setVoiceError("");
-    try {
-      updateSnapshot(await actions.voiceDesign?.deleteCustomTtsAdapter({ id: protocol.id }));
-    } catch (error) {
-      setVoiceError(error?.message || "删除自定义协议失败，请稍后重试。");
-    } finally {
-      setDeletingProtocolId("");
-    }
-  };
-
   return (
     <>
       <SettingSurface
-        action={<Button onClick={() => setServiceDraft({})} type="button" variant="secondary">新建语音服务</Button>}
-        description="每项语音服务单独选择 API 连接和请求类型，可以同时保留多个服务。"
-        eyebrow="VOICE SERVICES"
-        title="语音服务"
+        action={<Button onClick={() => setServiceDraft({})} type="button" variant="secondary">新建语音适配器</Button>}
+        description="每项语音适配器单独选择请求协议、API 连接和默认模型，可以同时保留多个适配器。"
+        eyebrow="VOICE ADAPTERS"
+        title="语音适配器"
       >
         {voiceError ? <p className="voice-settings-copy">{voiceError}</p> : null}
         {voiceServices.length ? <div className="voice-candidate-list">{voiceServices.map((service) => (
           <article className="voice-candidate" key={service.id}>
             <div className="voice-candidate-copy">
-              <span className="reference-kicker">{voiceServiceTypeLabel(service.adapter)}</span>
+              <span className="reference-kicker">{voiceServiceTypeLabel(service.adapter, customProtocols.find((protocol) => String(protocol.id || "").trim().toLowerCase() === String(service.customAdapterId || "").trim().toLowerCase()))}</span>
               <h3>{service.name}</h3>
               <p>{connectionNames.get(service.connectionId) || "已移除的 API 连接"}{service.model ? ` · 模型 ${service.model}` : ""}</p>
             </div>
@@ -751,30 +944,11 @@ function VoiceMessageSettings({ actions, apiServices, capability, contactsSnapsh
               <button className="danger-button" disabled={deletingServiceId === service.id} onClick={() => void deleteService(service)} type="button">{deletingServiceId === service.id ? "正在删除…" : "删除"}</button>
             </div>
           </article>
-        ))}</div> : <Empty className="capability-inline-empty" description="先新建一项服务，并选择它使用的 API 连接。" title="暂无语音服务" />}
-      </SettingSurface>
-      <SettingSurface
-        action={<Button onClick={() => setCustomProtocolOpen(true)} type="button" variant="secondary">新建协议</Button>}
-        description="用于接入尚未内置的语音服务。协议保存服务地址、请求与返回格式；API 连接只保存 Key。"
-        eyebrow="CUSTOM PROTOCOLS"
-        title="自定义协议"
-      >
-        {customProtocols.length ? <div className="voice-candidate-list">{customProtocols.map((protocol) => (
-          <article className="voice-candidate" key={protocol.id}>
-            <div className="voice-candidate-copy">
-              <span className="reference-kicker">自定义语音协议</span>
-              <h3>{protocol.name}</h3>
-              <p>{protocol.baseUrl || "旧配置未填写地址"} · {protocol.endpointPath} · {protocol.responseMode === "binary" ? "直接返回音频" : protocol.audioPath} · {protocol.outputFormat.toUpperCase()}</p>
-            </div>
-            <div className="voice-candidate-actions">
-              <button className="danger-button" disabled={deletingProtocolId === protocol.id} onClick={() => void deleteProtocol(protocol)} type="button">{deletingProtocolId === protocol.id ? "正在删除…" : "删除"}</button>
-            </div>
-          </article>
-        ))}</div> : <Empty className="capability-inline-empty" description="新建后，可在创建语音服务时选择它。" title="暂无自定义协议" />}
+        ))}</div> : <Empty className="capability-inline-empty" description="先新建一项语音适配器，并选择它使用的 API 连接。" title="暂无语音适配器" />}
       </SettingSurface>
       <SettingSurface
         action={<div className="voice-candidate-actions"><Button onClick={() => setVoiceDialogOpen(true)} type="button" variant="secondary">配置联系人音色</Button><Button onClick={() => setProfileDraft({})} type="button" variant="secondary">新建音色</Button></div>}
-        description="音色绑定到一项语音服务；联系人只需选择音色，不需要再分别配置 API。"
+        description="音色绑定到一项语音适配器；联系人只需选择音色，不需要再分别配置 API。"
         eyebrow="VOICES"
         title="音色"
       >
@@ -782,9 +956,9 @@ function VoiceMessageSettings({ actions, apiServices, capability, contactsSnapsh
           {voiceProfiles.map((profile) => (
             <article className="voice-candidate" key={profile.id}>
               <div className="voice-candidate-copy">
-                <span className="reference-kicker">{profile.serviceName ? `${profile.serviceName} · ${voiceServiceTypeLabel(profile.adapter)}` : "语音服务不可用"}</span>
+                <span className="reference-kicker">{profile.serviceName ? `${profile.serviceName} · ${voiceServiceTypeLabel(profile.adapter)}` : "语音适配器不可用"}</span>
                 <h3>{profile.name}</h3>
-                <p>{profile.model ? `模型 ${profile.model}` : "使用服务默认模型"} · 音色 {profile.voiceId}</p>
+                <p>{profile.model ? `模型 ${profile.model}` : "使用适配器默认模型"} · 音色 {profile.voiceId}</p>
               </div>
               <div className="voice-candidate-actions">
                 <button className="secondary-button" onClick={() => setProfileDraft(profile)} type="button">编辑</button>
@@ -804,7 +978,7 @@ function VoiceMessageSettings({ actions, apiServices, capability, contactsSnapsh
               </div>
             </article>
           ))}
-        </div> : <Empty className="capability-inline-empty" description="先创建语音服务，再新增它可用的音色。" title="暂无音色" />}
+        </div> : <Empty className="capability-inline-empty" description="先创建语音适配器，再新增它可用的音色。" title="暂无音色" />}
       </SettingSurface>
       <SettingSurface description="语音通话时用这条 API 把声音转写为文字。" eyebrow="VOICE INPUT" title="语音输入">
         <ApiConnectionPicker
@@ -829,37 +1003,95 @@ function VoiceMessageSettings({ actions, apiServices, capability, contactsSnapsh
       </CapabilitySettingsForm>
       <ContactDeliverySettings actions={actions} capability={capability} contactsSnapshot={contactsSnapshot} description="所选联系人可以调用语音消息，并使用各自选择的音色。" emptyDescription="先创建联系人，再选择允许哪些联系人使用语音消息。" />
       <VoiceContactConfigDialog onClose={() => setVoiceDialogOpen(false)} open={voiceDialogOpen} voiceDesign={actions.voiceDesign} />
-      <VoiceServiceDialog apiConnections={apiConnections} customProtocols={customProtocols} onClose={() => setServiceDraft(null)} onOpenApiServices={actions.openApiServices} onSaved={updateSnapshot} open={Boolean(serviceDraft)} service={serviceDraft?.id ? serviceDraft : null} voiceDesign={actions.voiceDesign} />
+      <VoiceServiceDialog apiConnections={apiConnections} customProtocols={customProtocols} onClose={() => setServiceDraft(null)} onOpenApiServices={actions.openApiServices} onOpenCustomProtocol={() => setCustomProtocolOpen(true)} onSaved={updateSnapshot} open={Boolean(serviceDraft)} service={serviceDraft?.id ? serviceDraft : null} voiceDesign={actions.voiceDesign} />
       <VoiceProfileDialog onClose={() => setProfileDraft(null)} onSaved={updateSnapshot} open={Boolean(profileDraft)} profile={profileDraft?.id ? profileDraft : null} services={voiceServices} voiceDesign={actions.voiceDesign} />
       <CustomTtsAdapterDialog onClose={() => setCustomProtocolOpen(false)} onSaved={updateSnapshot} open={customProtocolOpen} voiceDesign={actions.voiceDesign} />
     </>
   );
 }
 
+const IMAGE_VISION_CUSTOM_PROTOCOL_PREFIX = "custom:";
+const VIDEO_UNDERSTANDING_CUSTOM_PROTOCOL_PREFIX = "custom:";
+
+function imageVisionProtocolSelection(value) {
+  const selected = String(value || "").trim();
+  if (selected.startsWith(IMAGE_VISION_CUSTOM_PROTOCOL_PREFIX)) {
+    return {
+      adapter: "custom-http-vision",
+      customAdapterId: selected.slice(IMAGE_VISION_CUSTOM_PROTOCOL_PREFIX.length),
+    };
+  }
+  return {
+    adapter: normalizeVisionAdapter(selected, { fallback: "openai-chat-completions" }),
+    customAdapterId: "",
+  };
+}
+
+function videoUnderstandingProtocolSelection(value) {
+  const selected = String(value || "").trim();
+  if (selected.startsWith(VIDEO_UNDERSTANDING_CUSTOM_PROTOCOL_PREFIX)) {
+    return {
+      adapter: "custom-http-video",
+      customAdapterId: selected.slice(VIDEO_UNDERSTANDING_CUSTOM_PROTOCOL_PREFIX.length),
+    };
+  }
+  return {
+    adapter: normalizeVideoAdapter(selected, { fallback: "dashscope-openai-video" }),
+    customAdapterId: "",
+  };
+}
+
 function ImageVisionSettings({ actions, apiServices, capability, contactsSnapshot }) {
   const settings = savedSettings(capability);
   const vision = settings.vision || {};
+  const configuredAdapter = normalizeVisionAdapter(vision.adapter, { fallback: "openai-chat-completions" });
+  const [customDialogOpen, setCustomDialogOpen] = useState(false);
+  const customAdapters = Array.isArray(vision.customAdapters) ? vision.customAdapters : [];
+  const configuredCustomAdapterId = String(vision.customAdapterId || "").trim().toLowerCase();
+  const configuredCustomAdapter = customAdapters.find((protocol) => protocol.id === configuredCustomAdapterId) || null;
+  const unavailableConfiguredProtocol = configuredAdapter === "custom-http-vision" && configuredCustomAdapterId && !configuredCustomAdapter;
+  const configuredProtocol = configuredAdapter === "custom-http-vision" && configuredCustomAdapter
+    ? `${IMAGE_VISION_CUSTOM_PROTOCOL_PREFIX}${configuredCustomAdapter.id}`
+    : unavailableConfiguredProtocol
+      ? `${IMAGE_VISION_CUSTOM_PROTOCOL_PREFIX}${configuredCustomAdapterId}`
+      : configuredAdapter;
+  const [protocol, setProtocol] = useState(configuredProtocol);
+  const selectedProtocol = imageVisionProtocolSelection(protocol);
+  const adapter = selectedProtocol.adapter;
+  const adapterOptions = VISION_ADAPTER_OPTIONS
+    .filter((option) => option.value !== "custom-http-vision")
+    .map((option) => [option.value, option.label]);
+  const protocolOptions = [
+    ...(unavailableConfiguredProtocol ? [[configuredProtocol, "已不可用的自定义协议"]] : []),
+    ...adapterOptions,
+    ...customAdapters.map((item) => [`${IMAGE_VISION_CUSTOM_PROTOCOL_PREFIX}${item.id}`, item.name]),
+  ];
+
+  useEffect(() => {
+    setProtocol(configuredProtocol);
+  }, [configuredProtocol]);
+
   return (
     <>
       <CapabilitySettingsForm abilityId="image-vision" actions={actions}>
-        <SettingSurface description="选择已在设置中保存的图片理解 API；模型、地址和 Key 均由该 API 连接统一管理。" eyebrow="理解图片" title="读取偏好">
+        <SettingSurface description="选择图片理解请求格式和使用的 API。主模型本身支持视觉时，聊天会直接使用主模型，不受这里限制。" eyebrow="图像理解" title="请求方式">
           <FormGrid>
-            <ApiBinding actions={actions} apiServices={apiServices} bindingId="image-vision" />
-            <FormField className="capability-form-field--wide" label="图片读取精度"><ChoiceSelect name="detail" options={[["auto", "自动"], ["low", "快速"], ["high", "细看"]]} value={vision.detail || "auto"} /></FormField>
-            <FormField label="等待时间（秒）"><input defaultValue={vision.timeoutSeconds ?? 90} max="600" min="5" name="timeoutSeconds" type="number" /></FormField>
-            <FormField label="最长回复（tokens）"><input defaultValue={vision.maxOutputTokens ?? 800} max="32000" min="32" name="maxOutputTokens" type="number" /></FormField>
-          </FormGrid>
-        </SettingSurface>
-        <SettingSurface description="只有图片过大或细节不足时才需要调整。" eyebrow="图片处理" title="处理细节">
-          <FormGrid>
-            <FormField label="最大图片大小（字节）"><input defaultValue={vision.maxImageBytes ?? 1572864} max="26214400" min="262144" name="maxImageBytes" type="number" /></FormField>
-            <FormField label="最长边（像素）"><input defaultValue={vision.maxEdge ?? 1600} max="8192" min="256" name="maxEdge" type="number" /></FormField>
-            <FormField label="压缩质量"><input defaultValue={vision.jpegQuality ?? 90} max="100" min="1" name="jpegQuality" type="number" /></FormField>
-            <CheckboxField defaultChecked={vision.retryOnRefusal !== false} label="遇到拒答时尝试一次兼容处理" name="retryOnRefusal" />
+            <div className="capability-form-field image-vision-protocol-field">
+              <span>请求协议</span>
+              <div className="image-vision-protocol-field__controls">
+                <ChoiceSelect name="imageVisionProtocol" onChange={setProtocol} options={protocolOptions} value={protocol} />
+                <Button onClick={() => setCustomDialogOpen(true)} type="button" variant="secondary">新增自定义协议</Button>
+              </div>
+              <input name="adapter" type="hidden" value={adapter} />
+              <input name="customAdapterId" type="hidden" value={selectedProtocol.customAdapterId} />
+              <small>{unavailableConfiguredProtocol ? "当前自定义协议已不可用，请选择其他协议后保存。" : adapter === "custom-http-vision" ? "请求格式保存在所选协议中；API Key 继续使用下方选择的 API 连接。" : visionAdapterDefinition(adapter)?.detail || "选择图片理解服务使用的请求格式。"}</small>
+            </div>
+            <ApiBinding actions={actions} apiServices={apiServices} bindingId="image-vision" connectionFilter={(connection) => visionAdapterSupportsConnection(adapter, connection.type)} />
           </FormGrid>
         </SettingSurface>
       </CapabilitySettingsForm>
-      <ContactDeliverySettings actions={actions} capability={capability} contactsSnapshot={contactsSnapshot} description="所选联系人会通过 Suzu Agent Core 使用这里的图片读取偏好与 API。" emptyDescription="先创建联系人，再选择允许哪些联系人使用图像理解。" />
+      <ContactDeliverySettings actions={actions} capability={capability} contactsSnapshot={contactsSnapshot} description="为联系人启用后，Suzu 会在需要时使用这里的 API 读取图片内容。" emptyDescription="先创建联系人，再选择哪些联系人可以使用图像理解。" />
+      <CustomVisionAdapterDialog imageVisionDesign={actions.imageVisionDesign} onClose={() => setCustomDialogOpen(false)} open={customDialogOpen} />
     </>
   );
 }
@@ -867,44 +1099,54 @@ function ImageVisionSettings({ actions, apiServices, capability, contactsSnapsho
 function VideoUnderstandingSettings({ actions, apiServices, capability, contactsSnapshot }) {
   const settings = savedSettings(capability);
   const video = settings.video || {};
+  const configuredAdapter = normalizeVideoAdapter(video.adapter, { fallback: "dashscope-openai-video" });
+  const [customDialogOpen, setCustomDialogOpen] = useState(false);
+  const customAdapters = Array.isArray(video.customAdapters) ? video.customAdapters : [];
+  const configuredCustomAdapterId = String(video.customAdapterId || "").trim().toLowerCase();
+  const configuredCustomAdapter = customAdapters.find((protocol) => protocol.id === configuredCustomAdapterId) || null;
+  const unavailableConfiguredProtocol = configuredAdapter === "custom-http-video" && configuredCustomAdapterId && !configuredCustomAdapter;
+  const configuredProtocol = configuredAdapter === "custom-http-video" && configuredCustomAdapter
+    ? `${VIDEO_UNDERSTANDING_CUSTOM_PROTOCOL_PREFIX}${configuredCustomAdapter.id}`
+    : unavailableConfiguredProtocol
+      ? `${VIDEO_UNDERSTANDING_CUSTOM_PROTOCOL_PREFIX}${configuredCustomAdapterId}`
+      : configuredAdapter;
+  const [protocol, setProtocol] = useState(configuredProtocol);
+  const selectedProtocol = videoUnderstandingProtocolSelection(protocol);
+  const adapter = selectedProtocol.adapter;
+  const adapterOptions = VIDEO_ADAPTER_OPTIONS
+    .filter((option) => option.value !== "custom-http-video")
+    .map((option) => [option.value, option.label]);
+  const protocolOptions = [
+    ...(unavailableConfiguredProtocol ? [[configuredProtocol, "已不可用的自定义协议"]] : []),
+    ...adapterOptions,
+    ...customAdapters.map((item) => [`${VIDEO_UNDERSTANDING_CUSTOM_PROTOCOL_PREFIX}${item.id}`, item.name]),
+  ];
+
+  useEffect(() => {
+    setProtocol(configuredProtocol);
+  }, [configuredProtocol]);
+
   return (
     <>
       <CapabilitySettingsForm abilityId="video-understanding" actions={actions}>
-        <SettingSurface description="选择已在设置中保存的视频理解 API，并设置模型读取完整视频时的时间密度。视频会作为视频输入直接交给模型；这里不做本地抽帧理解。" eyebrow="理解视频" title="读取偏好">
+        <SettingSurface description="选择完整视频输入的请求格式和使用的 API。" eyebrow="理解视频" title="请求方式">
           <FormGrid>
-            <ApiBinding actions={actions} apiServices={apiServices} bindingId="video-understanding" />
-            <FormField className="capability-form-field--wide" label="模型读取密度"><ChoiceSelect name="fps" options={[["0.5", "节省：约每 2 秒读取一次"], ["1", "平衡：约每秒读取一次"], ["2", "细看：约每秒读取两次"]]} value={String(video.fps ?? 1)} /></FormField>
-            <CheckboxField defaultChecked={video.cacheEnabled !== false} label="保留本地缓存，加快同一视频的再次理解" name="cacheEnabled" />
-          </FormGrid>
-        </SettingSurface>
-        <SettingSurface description="设置处理速度、回复长度和本机工具。" eyebrow="视频处理" title="处理细节">
-          <FormGrid>
-            <FormField label="等待时间（秒）"><input defaultValue={video.timeoutSeconds ?? 240} max="3600" min="5" name="timeoutSeconds" type="number" /></FormField>
-            <FormField label="最长回复（tokens）"><input defaultValue={video.maxOutputTokens ?? 350} max="32000" min="32" name="maxOutputTokens" type="number" /></FormField>
-            <FormField label="表达随机度"><input defaultValue={video.temperature ?? 0.2} max="2" min="0" name="temperature" step="0.1" type="number" /></FormField>
-            <FormField label="最大处理大小（字节）"><input defaultValue={video.maxBinaryBytes ?? 7000000} max="536870912" min="1048576" name="maxBinaryBytes" type="number" /></FormField>
-            <FormField label="FFmpeg 命令"><input defaultValue={video.ffmpegPath || "ffmpeg"} maxLength="300" name="ffmpegPath" /></FormField>
-            <FormField label="FFprobe 命令"><input defaultValue={video.ffprobePath || "ffprobe"} maxLength="300" name="ffprobePath" /></FormField>
+            <div className="capability-form-field video-understanding-protocol-field">
+              <span>请求协议</span>
+              <div className="video-understanding-protocol-field__controls">
+                <ChoiceSelect name="videoUnderstandingProtocol" onChange={setProtocol} options={protocolOptions} value={protocol} />
+                <Button onClick={() => setCustomDialogOpen(true)} type="button" variant="secondary">新增自定义协议</Button>
+              </div>
+              <input name="adapter" type="hidden" value={adapter} />
+              <input name="customAdapterId" type="hidden" value={selectedProtocol.customAdapterId} />
+              <small>{unavailableConfiguredProtocol ? "当前自定义协议已不可用，请选择其他协议后保存。" : adapter === "custom-http-video" ? "请求格式保存在所选协议中；API Key 继续使用下方选择的 API 连接。" : videoAdapterDefinition(adapter)?.detail || "选择视频理解服务使用的请求格式。"}</small>
+            </div>
+            <ApiBinding actions={actions} apiServices={apiServices} bindingId="video-understanding" connectionFilter={(connection) => videoAdapterSupportsConnection(adapter, connection.type)} />
           </FormGrid>
         </SettingSurface>
       </CapabilitySettingsForm>
       <ContactDeliverySettings actions={actions} capability={capability} contactsSnapshot={contactsSnapshot} description="所选联系人会通过 Suzu Agent Core 使用这里的视频读取偏好与 API。" emptyDescription="先创建联系人，再选择允许哪些联系人使用视频理解。" />
-    </>
-  );
-}
-
-function TimeAwarenessSettings({ actions, capability, contactsSnapshot }) {
-  const settings = savedSettings(capability);
-  return (
-    <>
-      <CapabilitySettingsForm abilityId="time-awareness" actions={actions}>
-        <SettingSurface description="同一对话超过这个间隔后，时间感知会把新的本机时间作为本轮额外上下文注入。" eyebrow="时间间隔" title="多久感知一次">
-          <FormGrid>
-            <FormField hint="默认 10 分钟；可设为 1 到 1440 分钟。" label="间隔（分钟）"><input defaultValue={settings.intervalMinutes ?? 10} max="1440" min="1" name="intervalMinutes" type="number" /></FormField>
-          </FormGrid>
-        </SettingSurface>
-      </CapabilitySettingsForm>
-      <ContactDeliverySettings actions={actions} capability={capability} contactsSnapshot={contactsSnapshot} defaultEnabled={settings.defaultEnabled === true} description="所选联系人会按这里的间隔获得本机时间上下文。" emptyDescription="先创建联系人，再选择在哪些联系人中启用时间感知。" />
+      <CustomVideoAdapterDialog onClose={() => setCustomDialogOpen(false)} open={customDialogOpen} videoUnderstandingDesign={actions.videoUnderstandingDesign} />
     </>
   );
 }
@@ -944,17 +1186,16 @@ function ProactiveContactSettings({ actions, capability, contactsSnapshot }) {
     <>
       <CapabilitySettingsForm abilityId="proactive-contact" actions={actions}>
         {({ submitButton }) => (
-          <SettingSurface action={submitButton} description="A 负责判断此刻是否联系；A 完成后，B 会安排下一次 A。这里用于补充这段关系的联系语气、节奏与边界。" eyebrow="主动关心" title="触发提示词">
+          <SettingSurface action={submitButton} description="每次检查时，Suzu 先判断此刻是否联系，再依据相处节奏给出下一次检查时间；软件会按该时间安排下一次检查。这里用于补充这段关系的联系语气、节奏与边界。" eyebrow="主动关心" title="联系判断">
             <AsyncSwitchRow
               checked={capability.enabled === true && autoMaintain}
-              description="软件启动或开启联系人时会补上第一条 A；之后由 A → B → 下一条 A 自己闭环。"
+              description="软件启动或为联系人启用后会安排第一次联系判断；之后由 Suzu 的时间判断决定下一次检查。"
               disabled={capability.enabled !== true}
-              label="自动链式唤醒"
+              label="自动安排联系检查"
               onChange={(enabled) => actions.saveSettings?.("proactive-contact", { autoMaintain: enabled })}
             />
             <FormGrid>
-              <FormField className="capability-form-field--wide" label="A · 主动联系补充原则"><textarea defaultValue={settings.chainPrompt || ""} maxLength="12000" name="chainPrompt" /></FormField>
-              <FormField className="capability-form-field--wide" label="临时回访提示词"><textarea defaultValue={settings.followUpPrompt || ""} maxLength="12000" name="followUpPrompt" /></FormField>
+              <FormField className="capability-form-field--wide" label="主动关心补充原则"><textarea defaultValue={settings.contactPrompt || ""} maxLength="12000" name="contactPrompt" /></FormField>
             </FormGrid>
           </SettingSurface>
         )}
@@ -1044,20 +1285,20 @@ function MailBridgeSettings({ actions, capability, contactsSnapshot }) {
 
 function WechatSettings({ actions, wechatSnapshot }) {
   const settings = wechatConnectionSettings(wechatSnapshot);
-  const status = settings.enabled
-    ? "软件正在维护已绑定会话的微信长连接；每个聊天可在“··· → 设置”里扫码或断开。"
-    : "关闭后会停止所有微信收发；已绑定会话会保留，再次开启即可恢复。";
   return (
     <section className="capability-settings-stack">
-      <SettingSurface description={status} eyebrow="陪伴 / 软件连接" title="连接微信">
-        <AsyncSwitchRow checked={settings.enabled} label={settings.enabled ? "微信连接已开启" : "微信连接已关闭"} onChange={(enabled) => actions.saveWechatSettings?.({ enabled })} />
-      </SettingSurface>
-      <SettingSurface description="这组设置独立于聊天页面的显示设置。默认发送 Agent 的最终回复和审批提示；收到提示后可在微信回复“允许”或“拒绝”。" eyebrow="DELIVERY" title="投递到微信的内容">
+      <SettingSurface description="选择已连接微信要接收的消息类型。" eyebrow="WECHAT" title="投送到微信的内容">
         <div className="capability-delivery-grid">
           {WECHAT_DELIVERY_OPTIONS.map(([key, label, description]) => <AsyncSwitchRow checked={settings.delivery[key] === true} description={description} key={key} label={label} onChange={(enabled) => actions.saveWechatSettings?.({ delivery: { ...settings.delivery, [key]: enabled } })} />)}
         </div>
       </SettingSurface>
-      <SettingSurface description={"已有 " + settings.linkedContacts.toLocaleString("zh-CN") + " 位联系人连接。每个二维码只路由到生成它的联系人固定对话，可以用不同微信号绑定不同联系人。"} eyebrow="SCOPE" title="按联系人绑定" />
+      <SettingSurface description="一段回复需要投递为多条微信消息时，按此方式决定拆分位置；超过微信单条长度上限时仍会继续自动拆分。" eyebrow="MESSAGE FORMAT" title="回复分段方式">
+        <FormGrid>
+          <FormField hint="空行分段会保留同一段内的完整内容；句子分段会按句号、问号和感叹号分别投递。" label="分段方式">
+            <ChoiceSelect name="wechatTextSegmentation" onChange={(textSegmentation) => actions.saveWechatSettings?.({ textSegmentation })} options={WECHAT_TEXT_SEGMENTATION_OPTIONS} value={settings.textSegmentation} />
+          </FormField>
+        </FormGrid>
+      </SettingSurface>
     </section>
   );
 }
@@ -1069,9 +1310,7 @@ function GenericCapabilitySettings() {
 function CapabilitySettings({ actions, apiServices, capability, contactsSnapshot, wechatSnapshot }) {
   if (capability.id === "wechat-connection") return <WechatSettings actions={actions} wechatSnapshot={wechatSnapshot} />;
   if (capability.id === "image-generation") return <ImageGenerationSettings actions={actions} apiServices={apiServices} capability={capability} contactsSnapshot={contactsSnapshot} />;
-  if (capability.id === "phone-camera") return <PhoneCameraSettings actions={actions} apiServices={apiServices} capability={capability} contactsSnapshot={contactsSnapshot} />;
   if (capability.id === "voice-message") return <VoiceMessageSettings actions={actions} apiServices={apiServices} capability={capability} contactsSnapshot={contactsSnapshot} />;
-  if (capability.id === "time-awareness") return <TimeAwarenessSettings actions={actions} capability={capability} contactsSnapshot={contactsSnapshot} />;
   if (capability.id === "image-vision") return <ImageVisionSettings actions={actions} apiServices={apiServices} capability={capability} contactsSnapshot={contactsSnapshot} />;
   if (capability.id === "video-understanding") return <VideoUnderstandingSettings actions={actions} apiServices={apiServices} capability={capability} contactsSnapshot={contactsSnapshot} />;
   if (capability.id === "web-browser") return <WebBrowserSettings actions={actions} capability={capability} contactsSnapshot={contactsSnapshot} />;

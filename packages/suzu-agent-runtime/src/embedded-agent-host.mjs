@@ -34,6 +34,7 @@ const MODULE_DIRECTORY = fileURLToPath(new URL(".", import.meta.url));
 const CORE_CONFIG_FILE = resolve(MODULE_DIRECTORY, "..", "assets", "suzu-agent-core", "cordis.yml");
 const CORE_PATCH_FILE = resolve(MODULE_DIRECTORY, "..", "assets", "suzu-agent-core", "cordis.patch.yml");
 const MAX_IDENTIFIER_LENGTH = 256;
+const MAX_HISTORY_PAGE_EVENTS = 2_000;
 const PERMISSION_MODES = new Set(["danger-full-access", "workspace-write", "read-only"]);
 
 function clean(value) {
@@ -154,6 +155,58 @@ function promptBlocks(value) {
     throw new Error("消息只支持文本和图片内容。 ");
   }
   return blocks;
+}
+
+function historyPageRequest(value = {}) {
+  const source = plainObject(value);
+  const requestedLimit = Number(source.maxMessages);
+  const maxMessages = Number.isSafeInteger(requestedLimit) && requestedLimit > 0
+    ? Math.min(requestedLimit, MAX_HISTORY_PAGE_EVENTS)
+    : 500;
+  if (!Object.hasOwn(source, "beforeSeq")) return { beforeSeq: null, maxMessages };
+  const beforeSeq = Number(source.beforeSeq);
+  if (!Number.isSafeInteger(beforeSeq) || beforeSeq < 0) {
+    throw new Error("会话历史分页游标无效。 ");
+  }
+  return { beforeSeq, maxMessages };
+}
+
+function eventSequence(value) {
+  const sequence = Number(plainObject(value).seq);
+  return Number.isSafeInteger(sequence) && sequence >= 0 ? sequence : null;
+}
+
+function historyPage(events, value = {}) {
+  const request = historyPageRequest(value);
+  const source = Array.isArray(events) ? events : [];
+  // `beforeSeq` is exclusive: the next request starts strictly before the
+  // earliest event already rendered by the desktop client.
+  const eligible = request.beforeSeq === null
+    ? source
+    : source.filter((event) => {
+      const sequence = eventSequence(event);
+      return sequence === null || sequence < request.beforeSeq;
+    });
+  const requestedStart = Math.max(eligible.length - request.maxMessages, 0);
+  // A human-facing history page must never begin halfway through an Agent
+  // turn.  Internal task turns carry their visibility policy in their opening
+  // context snapshot; dropping that opening event would make the reader see a
+  // later internal result as an ordinary assistant message.
+  let start = requestedStart;
+  if (start > 0 && clean(eligible[start]?.type) !== "turn/end") {
+    for (let index = start - 1; index >= 0; index -= 1) {
+      const type = clean(eligible[index]?.type);
+      if (type === "turn/end") break;
+      if (type === "turn/start") {
+        start = index;
+        break;
+      }
+    }
+  }
+  return {
+    events: eligible.slice(start),
+    hasMore: start > 0,
+  };
 }
 
 function taskTriggerSource(value) {
@@ -427,11 +480,16 @@ export class SuzuAgentHost {
   async history(payload) {
     const sessionId = identifier(payload.sessionId, "会话标识");
     const live = this.ctx.sessions.get(sessionId);
-    if (live) return { events: [...live.events], hasMore: false };
+    if (live) return historyPage(live.events, payload);
     const persistence = this.ctx.get("sessionPersistence");
     if (!persistence) throw new Error("会话持久化服务不可用。 ");
+    // Reading the transcript must not resume an Agent just to render a chat
+    // page. New contacts have no persisted session until their first send;
+    // represent that state as an empty history rather than creating one here.
+    const stored = (await persistence.list()).find((entry) => entry.id === sessionId);
+    if (!stored) return { events: [], hasMore: false };
     const inspected = await persistence.inspect(sessionId);
-    return { events: [...inspected.events], hasMore: false };
+    return historyPage(inspected.events, payload);
   }
 
   async handle(method, payload) {

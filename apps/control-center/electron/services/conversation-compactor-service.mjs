@@ -30,7 +30,11 @@ function plainObject(value) {
 
 function publicContact(value) {
   const source = plainObject(value);
-  return { id: clean(source.id), name: clean(source.name) };
+  return {
+    id: clean(source.id),
+    name: clean(source.name),
+    agentId: clean(source.agentId),
+  };
 }
 
 function timestamp(now) {
@@ -305,6 +309,7 @@ export function createConversationCompactorService({
       || catalog[0]
       || null;
     const contacts = catalog.map((item) => ({
+      agentId: item.agentId,
       id: item.id,
       name: item.name,
       hasConversation: item.sessions.length > 0,

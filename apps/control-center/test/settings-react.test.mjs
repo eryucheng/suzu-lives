@@ -92,6 +92,15 @@ test("settings owns the reusable API connection library without a global capabil
   assert.match(app, /state\.settingsTab === "api"\) void loadApiServices\(context\)/u);
 });
 
+test("API editor exposes DashScope as a normal reusable connection type", () => {
+  const apiConnections = readFileSync(resolve(ROOT, "src", "react", "api-connections-ui.jsx"), "utf8");
+
+  assert.match(apiConnections, /\{ label: "DashScope", value: "dashscope" \}/u);
+  assert.match(apiConnections, /type: "dashscope", value: "dashscope", label: "DashScope"/u);
+  assert.match(apiConnections, /options=\{CONNECTION_TYPE_OPTIONS\}/u);
+  assert.doesNotMatch(apiConnections, /DashScope 原生协议（已有连接）/u);
+});
+
 test("system status results can be collapsed without shrinking the settings tabs", () => {
   const page = readFileSync(resolve(ROOT, "src", "react", "settings-page.jsx"), "utf8");
   const styles = readFileSync(resolve(ROOT, "src", "react", "settings-page.css"), "utf8");

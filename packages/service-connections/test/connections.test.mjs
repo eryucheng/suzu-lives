@@ -22,7 +22,7 @@ test("named DashScope connections keep keys masked, retain an edited key, and bi
   assert.equal(connection.name, "阿里百炼");
   assert.equal(JSON.stringify(first).includes(opaque()), false);
   await service.bind("image-generation", connection.id);
-  const resolved = await service.resolve("phone-camera");
+  const resolved = await service.resolve("image-generation");
   assert.equal(resolved.apiKey, opaque());
   assert.equal(resolved.type, "dashscope");
   await service.save({ id: connection.id, name: "百炼图像", type: "dashscope" });
@@ -63,7 +63,7 @@ test("named connection bindings reject incompatible types", async () => {
   await service.bind("image-generation", dash.connections[0].id);
   assert.equal((await service.resolve("image-generation")).apiKey, opaque());
   await service.bind("image-generation", generic.connections.find((item) => item.name === "通用").id);
-  assert.equal((await service.resolve("phone-camera")).type, "generic-api");
+  assert.equal((await service.resolve("image-generation")).type, "generic-api");
   await service.bind("image-generation", openai.connections.find((item) => item.name === "开放语音").id);
   assert.equal((await service.resolve("image-workbench")).type, "openai-compatible");
   await service.bind("realtime-asr", dash.connections[0].id);

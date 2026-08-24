@@ -167,6 +167,25 @@ test("Agent Core driver maps one public FIFO text turn into neutral stream event
     coreTurn: 7,
     step: 1,
   });
+  assert.equal(events.find((event) => event.type === "assistant-completed")?.data?.assistantMessageCount, 1);
+});
+
+test("Agent Core driver reports how many visible assistant steps completed the turn", async () => {
+  const { driver, fake } = setup();
+  const events = [];
+  driver.subscribe((event) => events.push(event));
+  const { runtimeSessionId } = await createSession(driver);
+
+  await driver.sendTurn({ runtimeSessionId, turnId: "turn-multi-step", input: "处理这个文件" });
+  fake.emitMux({ type: "session/event", sessionId: runtimeSessionId, event: { type: "turn/start", seq: 1, time: 1, data: { turn: 8 } } });
+  fake.emitMux({ type: "session/event", sessionId: runtimeSessionId, event: { type: "assistant/message", seq: 2, time: 2, data: { turn: 8, step: 1, message: { content: [{ type: "text", text: "我先检查。" }] } } } });
+  fake.emitMux({ type: "session/event", sessionId: runtimeSessionId, event: { type: "assistant/message", seq: 3, time: 3, data: { turn: 8, step: 2, message: { content: [{ type: "text", text: "检查完成。" }] } } } });
+  fake.emitMux({ type: "session/event", sessionId: runtimeSessionId, event: { type: "turn/end", seq: 4, time: 4, data: { turn: 8, reason: { kind: "completed" } } } });
+  await flushEvents();
+
+  const completed = events.find((event) => event.type === "assistant-completed");
+  assert.equal(completed?.text, "检查完成。");
+  assert.equal(completed?.data?.assistantMessageCount, 2);
 });
 
 test("Agent Core driver wakes an internal task without serializing its body as a prompt", async () => {
@@ -206,15 +225,46 @@ test("Agent Core driver turns a host-side failed task into a terminal runtime ev
     type: "host/agent-error",
     sessionId: runtimeSessionId,
     message: "session persistence failed",
+    coreTurn: 21,
   });
   await flushEvents();
 
   assert.deepEqual(events.map((event) => ({ type: event.type, turnId: event.turnId, error: event.error })), [
     { type: "turn-started", turnId: "task-failed-before-turn-end", error: "" },
     {
-      type: "runtime-unavailable",
+      type: "turn-failed",
       turnId: "task-failed-before-turn-end",
-      error: "Agent Core host 事件流不可用：session persistence failed",
+      error: "session persistence failed",
+    },
+  ]);
+});
+
+test("Agent Core driver reports a provider balance error as a failed turn, not a broken host stream", async () => {
+  const { driver, fake } = setup();
+  const events = [];
+  driver.subscribe((event) => events.push(event));
+  const { runtimeSessionId } = await createSession(driver);
+  await driver.sendTurn({ runtimeSessionId, turnId: "balance-failed-turn", input: "你好" });
+
+  fake.emitMux({
+    type: "session/event",
+    sessionId: runtimeSessionId,
+    event: { type: "turn/start", seq: 1, time: 1, data: { turn: 22 } },
+  });
+  fake.emitHost({
+    type: "host/agent-error",
+    sessionId: runtimeSessionId,
+    message: "Insufficient Balance",
+    coreTurn: 22,
+  });
+  await flushEvents();
+
+  assert.deepEqual(events.map((event) => ({ type: event.type, turnId: event.turnId, error: event.error })), [
+    { type: "turn-started", turnId: "balance-failed-turn", error: "" },
+    {
+      type: "turn-failed",
+      turnId: "balance-failed-turn",
+      error: "模型服务商余额不足（Insufficient Balance）。",
     },
   ]);
 });
@@ -308,6 +358,38 @@ test("Agent Core driver preserves approval rpcId and tool correlation", async ()
   const completion = events.find((event) => event.type === "tool-completed");
   assert.equal(completion.turnId, "turn-tool");
   assert.equal(completion.toolName, "filesystem");
+});
+
+test("Agent Core driver preserves the concrete tool failure message", async () => {
+  const { driver, fake } = setup();
+  const events = [];
+  driver.subscribe((event) => events.push(event));
+  const { runtimeSessionId } = await createSession(driver);
+  await driver.sendTurn({ runtimeSessionId, turnId: "turn-tool-error", input: "执行一下" });
+  fake.emitMux({ type: "session/event", sessionId: runtimeSessionId, event: { type: "turn/start", seq: 0, time: 0, data: { turn: 9 } } });
+
+  fake.emitMux({
+    type: "session/event",
+    sessionId: runtimeSessionId,
+    event: {
+      type: "tool/result",
+      seq: 1,
+      time: 1,
+      data: {
+        turn: 9,
+        step: 1,
+        error: { code: "BROWSER_UNAVAILABLE", message: "浏览器可执行文件不存在。" },
+        message: {
+          source: { callId: "call-error" },
+          content: [{ type: "tool-result", toolCallId: "call-error", content: "", isError: true }],
+        },
+      },
+    },
+  });
+  await flushEvents();
+
+  const failure = events.find((event) => event.type === "tool-failed");
+  assert.equal(failure?.error, "浏览器可执行文件不存在。");
 });
 
 test("Agent Core driver exposes approval resolution and durable compaction outcomes", async () => {

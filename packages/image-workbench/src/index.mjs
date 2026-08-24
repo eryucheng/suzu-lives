@@ -5,6 +5,32 @@ import https from "node:https";
 import net from "node:net";
 import path from "node:path";
 
+import {
+  DEFAULT_IMAGE_GENERATION_ADAPTER,
+  resolveImageGenerationAdapter,
+} from "./image-generation-adapters.mjs";
+
+export {
+  DEFAULT_IMAGE_GENERATION_ADAPTER,
+  IMAGE_GENERATION_ADAPTER_OPTIONS,
+  IMAGE_GENERATION_ADAPTERS,
+  imageGenerationAdapterDefinition,
+  imageGenerationAdapterLabel,
+  imageGenerationAdapterSupportsConnection,
+  normalizeImageGenerationAdapter,
+  resolveImageGenerationAdapter,
+} from "./image-generation-adapters.mjs";
+export {
+  CUSTOM_IMAGE_GENERATION_ADAPTER_FILE,
+  CUSTOM_IMAGE_GENERATION_ADAPTER_SCHEMA_VERSION,
+  MAX_CUSTOM_IMAGE_GENERATION_ADAPTERS,
+  customImageGenerationAdaptersPath,
+  findCustomImageGenerationAdapter,
+  normalizeCustomImageGenerationAdapter,
+  publicCustomImageGenerationAdapter,
+  readCustomImageGenerationAdapters,
+} from "./custom-image-generation-adapters.mjs";
+
 export class ImageWorkbenchError extends Error {}
 const ROLES = new Set(["identity", "location", "object", "style"]);
 function clean(value) { return String(value ?? "").trim(); }
@@ -15,6 +41,8 @@ function imageExtension(data) { return data.subarray(0, 8).equals(Buffer.from([1
 const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
 const MAX_JSON_BYTES = 2 * 1024 * 1024;
 const MAX_IMAGE_JSON_BYTES = Math.ceil(MAX_IMAGE_BYTES / 3) * 4 + 512 * 1024;
+const MAX_ERROR_RESPONSE_BYTES = 16 * 1024;
+const MAX_ERROR_PREVIEW_CHARS = 600;
 function validPng(data) { if (data.length < 45 || !data.subarray(0, 8).equals(Buffer.from([137,80,78,71,13,10,26,10]))) return false; let offset = 8; let ihdr = false; let idat = false; while (offset < data.length) { if (offset + 12 > data.length) return false; const length = data.readUInt32BE(offset); const type = data.subarray(offset + 4, offset + 8).toString("ascii"); const end = offset + 12 + length; if (end > data.length) return false; if (!ihdr) { if (type !== "IHDR" || length !== 13 || data.readUInt32BE(offset + 8) === 0 || data.readUInt32BE(offset + 12) === 0) return false; ihdr = true; } if (type === "IDAT") idat = true; if (type === "IEND") return ihdr && idat && length === 0 && end === data.length; offset = end; } return false; }
 function validJpeg(data) { if (data.length < 4 || data[0] !== 255 || data[1] !== 216) return false; let offset = 2; let sof = false; let scan = false; while (offset < data.length) { if (data[offset] !== 255) return false; while (data[offset] === 255) offset += 1; const marker = data[offset++]; if (marker === 217) return sof && scan && offset === data.length; if (marker === 216 || marker === 1 || (marker >= 208 && marker <= 215)) continue; if (offset + 2 > data.length) return false; const length = data.readUInt16BE(offset); if (length < 2 || offset + length > data.length) return false; if ((marker >= 192 && marker <= 195) || (marker >= 197 && marker <= 199) || (marker >= 201 && marker <= 203) || (marker >= 205 && marker <= 207)) { if (length < 8 || data.readUInt16BE(offset + 3) === 0 || data.readUInt16BE(offset + 5) === 0) return false; sof = true; } if (marker === 218) { scan = true; offset += length; for (;;) { if (offset + 1 >= data.length) return false; if (data[offset] !== 255) { offset += 1; continue; } let next = offset + 1; while (data[next] === 255) next += 1; const code = data[next]; if (code === 0) { offset = next + 1; continue; } if (code >= 208 && code <= 215) { offset = next + 1; continue; } if (code === 217) return sof && offset + 2 === data.length; return false; } } offset += length; } return false; }
 function validWebp(data) { if (data.length < 20 || !data.subarray(0, 4).equals(Buffer.from("RIFF")) || !data.subarray(8, 12).equals(Buffer.from("WEBP")) || data.readUInt32LE(4) + 8 !== data.length) return false; let offset = 12; let imageChunk = false; while (offset < data.length) { if (offset + 8 > data.length) return false; const type = data.subarray(offset, offset + 4).toString("ascii"); const length = data.readUInt32LE(offset + 4); const end = offset + 8 + length; if (end > data.length) return false; if (["VP8 ", "VP8L", "VP8X"].includes(type)) imageChunk = true; offset = end + (length % 2); } return imageChunk && offset === data.length; }
@@ -22,14 +50,14 @@ function ensureImage(data) { if (!Buffer.isBuffer(data) || !data.length || data.
 
 export function validateInput(value = {}) {
   const prompt = clean(value.prompt);
-  const backend = clean(value.backend);
+  const backend = clean(value.backend || "api");
   const count = Number(value.count);
   const size = clean(value.size || "1024x1024");
   if (!prompt || prompt.length > 4000) throw new ImageWorkbenchError("提示词不能为空，且最多 4000 个字符。");
-  if (!["api", "comfyui"].includes(backend)) throw new ImageWorkbenchError("请选择 API 或 ComfyUI 后端。");
+  if (backend !== "api") throw new ImageWorkbenchError("图像生成只支持 API 请求。");
   if (!Number.isInteger(count) || count < 1 || count > 20) throw new ImageWorkbenchError("候选数量必须在 1 到 20 之间。");
   if (!/^\d{2,5}x\d{2,5}$/iu.test(size)) throw new ImageWorkbenchError("图片尺寸必须是 WIDTHxHEIGHT。");
-  return { prompt, backend, count, size, workflow: clean(value.workflow), seed: Number.isInteger(value.seed) ? value.seed : null, includeReferencePrompt: value.includeReferencePrompt !== false };
+  return { prompt, backend, count, size, includeReferencePrompt: value.includeReferencePrompt !== false };
 }
 export function validateReferences(value = [], { maxReferences = 12 } = {}) {
   if (!Number.isInteger(maxReferences) || maxReferences < 1 || maxReferences > 16) throw new ImageWorkbenchError("参考图数量上限无效。");
@@ -57,6 +85,34 @@ export function validateApiConnection(value = {}) {
 function endpoint(base, value) { return /^https?:\/\//iu.test(value) ? value : base + "/" + value.replace(/^\/+/, ""); }
 function header(response, name) { return clean(response?.headers?.get?.(name) ?? response?.headers?.[name.toLowerCase()]); }
 function responseOk(response) { const status = Number(response?.status ?? response?.statusCode); return response?.ok === true || (status >= 200 && status < 300); }
+function responseContentType(response) { return header(response, "content-type").toLowerCase().slice(0, 160); }
+function jsonContentType(value) { return /(?:^|[+/])json(?:\s*;|$)/iu.test(clean(value).toLowerCase()); }
+function binaryContentType(value) { return /^(?:image|audio|video)\//iu.test(value) || /^application\/(?:octet-stream|pdf)\b/iu.test(value); }
+function previewOnlyContentType(value) { return /^(?:text\/(?:html|event-stream)|application\/(?:xhtml\+xml|xml))\b/iu.test(value); }
+function responseDetails(response) { const status = Number(response?.status ?? response?.statusCode); const contentType = responseContentType(response); const values = []; if (Number.isInteger(status) && status > 0) values.push(`HTTP ${status}`); if (contentType) values.push(`响应类型 ${contentType}`); return { contentType, value: values.length ? `（${values.join("，")}）` : "" }; }
+function responsePreview(body, contentType) {
+  if (!Buffer.isBuffer(body) || !body.length || binaryContentType(contentType)) return "";
+  let text = body.toString("utf8");
+  if (/^(?:text\/html|application\/(?:xhtml\+xml|xml)|text\/xml)\b/iu.test(contentType)) text = text.replace(/<[^>]*>/gu, " ");
+  text = text
+    .replace(/((?:api[_-]?key|authorization|access[_-]?token|refresh[_-]?token|secret|password)\s*["']?\s*[:=]\s*)(?:["']?)(?:Bearer\s+)?[^,\s;<>}"']+/giu, "$1[已隐藏]")
+    .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]{8,}/giu, "Bearer [已隐藏]")
+    .replace(/[\u0000-\u001F\u007F-\u009F]+/gu, " ")
+    .replace(/\s+/gu, " ")
+    .trim();
+  return text.length > MAX_ERROR_PREVIEW_CHARS ? `${text.slice(0, MAX_ERROR_PREVIEW_CHARS)}…` : text;
+}
+function invalidJsonResponseError(label, response, body = null) {
+  const details = responseDetails(response); const prefix = responseOk(response)
+    ? `${label}${jsonContentType(details.contentType) ? "返回了无法解析的 JSON" : "返回了非 JSON 数据"}`
+    : `${label}失败`;
+  const preview = responsePreview(body, details.contentType);
+  return new ImageWorkbenchError(`${prefix}${details.value}${preview ? `：${preview}` : "。"}`);
+}
+function oversizedNonJsonResponseError(label, response, maximum) {
+  const details = responseDetails(response); const prefix = responseOk(response) ? `${label}返回了非 JSON 数据` : `${label}失败`;
+  return new ImageWorkbenchError(`${prefix}${details.value}：响应正文超过 ${Math.floor(maximum / 1024)} KB，已停止读取。`);
+}
 function checkedLength(response, maxBytes, label) { const value = header(response, "content-length"); if (value && (!/^\d+$/u.test(value) || Number(value) > maxBytes)) throw new ImageWorkbenchError(label + "超过大小限制。"); }
 async function readBoundedBody(response, { timeoutMs, maxBytes, label, abort, setBodyAbort }) {
   const chunks = []; let size = 0;
@@ -84,7 +140,16 @@ async function boundedFetch(fetchImpl, target, options, timeoutMs, label, consum
 async function responseJson(fetchImpl, target, options, timeoutMs, label, maxBytes = MAX_JSON_BYTES, readErrorBody = true) {
   return boundedFetch(fetchImpl, target, options, timeoutMs, label, async (response, abort, setBodyAbort) => {
     if (!responseOk(response) && !readErrorBody) { abort(); return { response, payload: {} }; }
-    let body; let payload; try { body = await readBoundedBody(response, { timeoutMs, maxBytes, label, abort, setBodyAbort }); payload = JSON.parse(body.toString("utf8")); } catch (error) { if (error instanceof ImageWorkbenchError) throw error; abort(); throw new ImageWorkbenchError(label + "返回无效数据。"); }
+    const contentType = responseContentType(response);
+    if (binaryContentType(contentType)) { abort(); throw invalidJsonResponseError(label, response); }
+    if (previewOnlyContentType(contentType)) {
+      let body;
+      try { body = await readBoundedBody(response, { timeoutMs, maxBytes: Math.min(maxBytes, MAX_ERROR_RESPONSE_BYTES), label, abort, setBodyAbort }); }
+      catch (error) { if (error instanceof ImageWorkbenchError && error.message === label + "超过大小限制。") throw oversizedNonJsonResponseError(label, response, Math.min(maxBytes, MAX_ERROR_RESPONSE_BYTES)); throw error; }
+      abort();
+      throw invalidJsonResponseError(label, response, body);
+    }
+    let body; let payload; try { body = await readBoundedBody(response, { timeoutMs, maxBytes, label, abort, setBodyAbort }); payload = JSON.parse(body.toString("utf8")); } catch (error) { if (error instanceof ImageWorkbenchError) throw error; abort(); throw invalidJsonResponseError(label, response, body); }
     if (!responseOk(response)) abort();
     return { response, payload, bodyBytes: body.length };
   });
@@ -223,45 +288,122 @@ async function apiImage({ connection, input, references, fetchImpl, imageDownloa
   if (!clean(item?.b64_json || item?.b64 || item?.image_base64) && bodyBytes > MAX_JSON_BYTES) throw new ImageWorkbenchError("图像 API 的 URL 或普通 JSON 响应超过大小限制。");
   return { image: await responseImage(item, config.timeoutMs, imageDownloader), model: clean(payload?.model) || config.model, requestId: clean(payload?.request_id || payload?.id), usage: json(payload?.usage), mode: references.length ? "edit" : "generation" };
 }
-export function validateComfyRegistry(value = {}) {
-  if (value.version !== 1 || !json(value.workflows)) throw new ImageWorkbenchError("ComfyUI registry 必须包含 version: 1 和 workflows 对象。");
-  const workflows = {};
-  for (const [id, raw] of Object.entries(value.workflows)) {
-    const entry = json(raw); const workflow = json(entry.workflow); const bindings = json(entry.bindings);
-    if (!/^[a-z0-9][a-z0-9._-]{0,120}$/iu.test(id) || !Object.keys(workflow).length || Array.isArray(workflow.nodes) || !json(bindings.prompt)) throw new ImageWorkbenchError("ComfyUI 工作流注册格式无效：" + id);
-    for (const node of Object.values(workflow)) if (!json(node).class_type || !json(node).inputs) throw new ImageWorkbenchError("ComfyUI 工作流必须是 API Format：" + id);
-    const validateBinding = (binding, label) => { const node = clean(binding?.node); const input = clean(binding?.input); if (!node || !input || !json(workflow[node]).inputs || !Object.hasOwn(workflow[node].inputs, input)) throw new ImageWorkbenchError("ComfyUI " + label + " 未映射到真实节点输入：" + id); return { node, input }; };
-    const normalizedBindings = {}; for (const [name, binding] of Object.entries(bindings)) normalizedBindings[name] = validateBinding(binding, "binding " + name);
-    const defaults = json(entry.defaults); for (const name of Object.keys(defaults)) if (!normalizedBindings[name]) throw new ImageWorkbenchError("ComfyUI defaults 缺少对应 binding：" + id);
-    if (!Array.isArray(entry.reference_slots) || !Array.isArray(entry.output_nodes)) throw new ImageWorkbenchError("ComfyUI reference_slots 与 output_nodes 必须是数组：" + id);
-    const referenceSlots = entry.reference_slots.map((slot, index) => { if (!json(slot) || !Array.isArray(slot.roles) || !slot.roles.every((role) => ROLES.has(clean(role))) || typeof slot.required !== "boolean") throw new ImageWorkbenchError("ComfyUI reference slot 无效：" + id); return { ...validateBinding(slot, "reference slot " + index), roles: slot.roles.map(clean), required: slot.required }; });
-    const outputNodes = entry.output_nodes.map(clean); if (outputNodes.some((node) => !workflow[node])) throw new ImageWorkbenchError("ComfyUI output_nodes 不存在：" + id);
-    workflows[id] = { id, enabled: entry.enabled === true, description: clean(entry.description), workflow, bindings: normalizedBindings, defaults, referenceSlots, outputNodes };
+
+function customImageEndpoint(baseUrl, endpointPath) {
+  const base = clean(baseUrl).replace(/\/+$/u, "");
+  const endpointPathValue = clean(endpointPath);
+  if (!base || !endpointPathValue.startsWith("/") || endpointPathValue.startsWith("//") || endpointPathValue.includes("://")) {
+    throw new ImageWorkbenchError("自定义图像协议的地址或接口路径无效。 ");
   }
-  return { version: 1, workflows };
+  let parsed;
+  try { parsed = new URL(base); } catch { throw new ImageWorkbenchError("自定义图像协议的服务地址必须是 HTTP(S) URL。 "); }
+  if (!["http:", "https:"].includes(parsed.protocol)) throw new ImageWorkbenchError("自定义图像协议的服务地址必须是 HTTP(S) URL。 ");
+  return base + endpointPathValue;
 }
-function setBinding(workflow, binding, value) { const node = clean(binding?.node); const input = clean(binding?.input); if (!node || !input || !json(workflow[node]).inputs || !Object.hasOwn(workflow[node].inputs, input)) throw new ImageWorkbenchError("ComfyUI binding 无效。"); workflow[node].inputs[input] = value; }
-async function uploadComfyReference(server, reference, fetchImpl, subfolder, timeoutMs) { const form = new FormData(); form.append("image", new Blob([reference.data], { type: reference.mime }), reference.filename); form.append("type", "input"); form.append("subfolder", subfolder); form.append("overwrite", "true"); const { response, payload: result } = await responseJson(fetchImpl, server + "/upload/image", { method: "POST", body: form }, timeoutMs, "ComfyUI 上传参考图"); const name = clean(result?.name); if (!responseOk(response) || !name) throw new ImageWorkbenchError("ComfyUI 上传参考图失败。"); return clean(result.subfolder) ? clean(result.subfolder) + "/" + name : name; }
-async function comfyImage({ connection, input, references, registry, fetchImpl }) {
-  const server = clean(connection.baseUrl).replace(/\/+$/u, ""); if (!server) throw new ImageWorkbenchError("请先配置 ComfyUI 地址。");
-  const all = validateComfyRegistry(registry).workflows; const entry = all[input.workflow]; if (!entry) throw new ImageWorkbenchError("COMFYUI_WORKFLOW_NOT_CONFIGURED：未找到已注册工作流。"); if (!entry.enabled) throw new ImageWorkbenchError("COMFYUI_WORKFLOW_NOT_ENABLED：" + entry.id);
-  const workflow = structuredClone(entry.workflow); for (const [name, value] of Object.entries(entry.defaults)) setBinding(workflow, entry.bindings[name], value); setBinding(workflow, entry.bindings.prompt, input.includeReferencePrompt ? promptWithReferenceRoles(input.prompt, references) : input.prompt);
-  const seed = input.seed ?? Math.floor(Math.random() * Number.MAX_SAFE_INTEGER); if (entry.bindings.seed) setBinding(workflow, entry.bindings.seed, seed);
-  const [width, height] = input.size.split("x").map(Number); if (entry.bindings.width) setBinding(workflow, entry.bindings.width, width); if (entry.bindings.height) setBinding(workflow, entry.bindings.height, height);
-  const timeoutMs = Math.min(600000, Math.max(1000, Number(connection.timeoutMs) || 600000)); const pollIntervalMs = Math.min(30000, Math.max(100, Number(connection.pollIntervalMs) || 1000)); const unused = [...references]; const subfolder = "suzu-lives/" + randomUUID();
-  for (const slot of entry.referenceSlots) { const allowed = slot.roles; const index = unused.findIndex((item) => !allowed.length || allowed.includes(item.role)); if (index < 0) { if (slot.required) throw new ImageWorkbenchError("ComfyUI 工作流缺少必需参考图。"); continue; } const reference = unused.splice(index, 1)[0]; setBinding(workflow, slot, await uploadComfyReference(server, reference, fetchImpl, subfolder, Math.min(timeoutMs, 120000))); }
-  if (unused.length) throw new ImageWorkbenchError("当前已注册 ComfyUI 工作流没有足够的参考图输入槽。");
-  const { response: submit, payload: submitted } = await responseJson(fetchImpl, server + "/prompt", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt: workflow, client_id: randomUUID() }) }, Math.min(timeoutMs, 120000), "ComfyUI 提交工作流"); const promptId = clean(submitted.prompt_id); if (!responseOk(submit) || !promptId) throw new ImageWorkbenchError("ComfyUI 拒绝工作流：" + JSON.stringify(submitted.node_errors || submitted).slice(0, 500));
-  const deadline = Date.now() + timeoutMs; let output;
-  while (Date.now() < deadline) { const { response, payload: history } = await responseJson(fetchImpl, server + "/history/" + encodeURIComponent(promptId), {}, Math.min(timeoutMs, 30000), "ComfyUI 查询任务", 5 * MAX_JSON_BYTES, false); if (!responseOk(response)) throw new ImageWorkbenchError("ComfyUI 查询任务失败：HTTP " + response.status); const run = json(history[promptId]); const status = json(run.status); const messages = Array.isArray(status.messages) ? status.messages : []; const failed = ["error", "failed", "cancelled", "canceled"].includes(clean(status.status_str).toLowerCase()) || messages.some((item) => Array.isArray(item) && clean(item[0]).toLowerCase() === "execution_error"); if (failed) throw new ImageWorkbenchError("ComfyUI 工作流执行失败：" + JSON.stringify(messages).slice(0, 500)); const nodes = entry.outputNodes.length ? entry.outputNodes : Object.keys(json(run.outputs)); for (const id of nodes) { const image = json(run.outputs)[id]?.images?.[0]; if (image) { output = image; break; } } if (output) break; if (status.completed) throw new ImageWorkbenchError("ComfyUI 工作流结束但没有图片输出。"); await new Promise((resolve) => setTimeout(resolve, pollIntervalMs)); }
-  if (!output) throw new ImageWorkbenchError("ComfyUI 工作流等待超时或没有图片输出。");
-  const query = new URLSearchParams({ filename: clean(output.filename), subfolder: clean(output.subfolder), type: clean(output.type) || "output" }); const image = await boundedFetch(fetchImpl, server + "/view?" + query, {}, Math.min(timeoutMs, 120000), "下载 ComfyUI 输出", async (view, abort, setBodyAbort) => { if (!responseOk(view)) { abort(); throw new ImageWorkbenchError("下载 ComfyUI 输出失败：HTTP " + view.status); } const type = header(view, "content-type").toLowerCase(); if (type && !type.startsWith("image/")) { abort(); throw new ImageWorkbenchError("下载 ComfyUI 输出不是图片类型。"); } return ensureImage(await readBoundedBody(view, { timeoutMs: Math.min(timeoutMs, 120000), maxBytes: MAX_IMAGE_BYTES, label: "下载 ComfyUI 输出", abort, setBodyAbort })); }); return { image, model: "ComfyUI / " + entry.id, requestId: promptId, usage: {}, mode: "workflow", seed, workflow: entry.id };
+
+function customImageValueAtPath(value, rawPath) {
+  const sourcePath = clean(rawPath);
+  if (!/^[A-Za-z_$][\w$]*(?:\[\d+\]|\.[A-Za-z_$][\w$])*$/u.test(sourcePath)) return undefined;
+  const tokens = sourcePath.match(/[A-Za-z_$][\w$]*|\d+/gu) || [];
+  let current = value;
+  for (const token of tokens) {
+    if (current === null || current === undefined || ["__proto__", "prototype", "constructor"].includes(token)) return undefined;
+    if (Array.isArray(current)) {
+      const index = Number(token);
+      if (!Number.isSafeInteger(index)) return undefined;
+      current = current[index];
+      continue;
+    }
+    const source = json(current);
+    if (!Object.hasOwn(source, token)) return undefined;
+    current = source[token];
+  }
+  return current;
+}
+
+function customImageTemplate(value, variables) {
+  if (Array.isArray(value)) return value.map((item) => customImageTemplate(item, variables));
+  const source = json(value);
+  if (Object.keys(source).length) return Object.fromEntries(Object.entries(source).map(([key, item]) => [key, customImageTemplate(item, variables)]));
+  if (typeof value !== "string") return value;
+  const exact = /^\{\{(apiKey|model|prompt|referenceImages|size)\}\}$/u.exec(value);
+  if (exact) return structuredClone(variables[exact[1]] ?? "");
+  return value.replace(/\{\{(apiKey|model|prompt|referenceImages|size)\}\}/gu, (_match, key) => {
+    const variable = variables[key];
+    return Array.isArray(variable) ? JSON.stringify(variable) : String(variable ?? "");
+  });
+}
+
+function customImageBase64(value) {
+  const raw = clean(value);
+  const matched = /^data:image\/[a-z0-9.+-]+;base64,([A-Za-z0-9+/=\r\n]+)$/iu.exec(raw);
+  const encoded = (matched ? matched[1] : raw).replace(/\s+/gu, "");
+  if (!encoded || encoded.length > Math.ceil(MAX_IMAGE_BYTES * 4 / 3) + 4 || !/^[A-Za-z0-9+/]+={0,2}$/u.test(encoded)) {
+    throw new ImageWorkbenchError("自定义图像协议返回了无效或过大的 Base64 图片。 ");
+  }
+  return ensureImage(Buffer.from(encoded, "base64"));
+}
+
+function customImageAdapter(value) {
+  const adapter = json(value);
+  const responseMode = clean(adapter.responseMode);
+  if (!clean(adapter.baseUrl) || !clean(adapter.endpointPath) || !json(adapter.requestHeaders) || !json(adapter.requestBody) || !["binary", "json-base64", "json-url"].includes(responseMode)) {
+    throw new ImageWorkbenchError("请先选择已保存的自定义图像协议。 ");
+  }
+  if (responseMode !== "binary" && !clean(adapter.imagePath)) throw new ImageWorkbenchError("自定义图像协议缺少图片返回位置。 ");
+  return adapter;
+}
+
+async function customHttpImage({ connection, input, references, fetchImpl, imageDownloader }) {
+  const adapter = customImageAdapter(connection?.customImageGenerationAdapter);
+  const timeoutMs = Math.min(600000, Math.max(1000, Number(connection?.timeoutMs) || 180000));
+  const variables = {
+    apiKey: clean(connection?.apiKey),
+    model: clean(connection?.model),
+    prompt: input.includeReferencePrompt ? promptWithReferenceRoles(input.prompt, references) : input.prompt,
+    referenceImages: references.map((reference) => `data:${reference.mime};base64,${reference.data.toString("base64")}`),
+    size: input.size,
+  };
+  const headers = Object.fromEntries(Object.entries(json(customImageTemplate(adapter.requestHeaders, variables))).map(([name, value]) => [name, String(value ?? "")]));
+  headers.Accept ||= adapter.responseMode === "binary" ? "image/*" : "application/json";
+  headers["Content-Type"] ||= "application/json";
+  const target = customImageEndpoint(adapter.baseUrl, adapter.endpointPath);
+  if (adapter.responseMode === "binary") {
+    const image = await boundedFetch(fetchImpl, target, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(customImageTemplate(adapter.requestBody, variables)),
+    }, timeoutMs, "自定义图像请求", async (response, abort, setBodyAbort) => {
+      if (!responseOk(response)) {
+        abort();
+        throw new ImageWorkbenchError(`自定义图像请求失败：HTTP ${Number(response?.status) || "未知"}`);
+      }
+      const contentType = header(response, "content-type").toLowerCase();
+      if (contentType && !contentType.startsWith("image/")) {
+        abort();
+        throw new ImageWorkbenchError("自定义图像协议没有直接返回图片文件。 ");
+      }
+      return ensureImage(await readBoundedBody(response, { timeoutMs, maxBytes: MAX_IMAGE_BYTES, label: "读取自定义图像", abort, setBodyAbort }));
+    });
+    return { image, model: clean(connection?.model), requestId: "", usage: {}, mode: references.length ? "edit" : "generation" };
+  }
+  const { response, payload } = await responseJson(fetchImpl, target, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(customImageTemplate(adapter.requestBody, variables)),
+  }, timeoutMs, "自定义图像请求", MAX_IMAGE_JSON_BYTES);
+  if (!responseOk(response)) throw new ImageWorkbenchError("自定义图像请求失败：" + clean(payload?.error?.message || payload?.message || response.status).slice(0, 500));
+  const result = customImageValueAtPath(payload, adapter.imagePath);
+  const image = adapter.responseMode === "json-base64"
+    ? customImageBase64(result)
+    : await imageDownloader(clean(result), { timeoutMs });
+  return { image, model: clean(payload?.model) || clean(connection?.model), requestId: clean(payload?.request_id || payload?.id), usage: json(payload?.usage), mode: references.length ? "edit" : "generation" };
 }
 async function writeRun(root, record) { await fs.mkdir(safeRoot(root), { recursive: true }); await fs.appendFile(safeFile(root, "runs.jsonl"), JSON.stringify(record) + "\n", "utf8"); }
-export async function createCandidates({ root, connection, registry, input: rawInput, references: rawReferences = [], maxReferences = 12, fetchImpl = fetch, imageDownloader = downloadImageUrl, onSuccess = async () => {} }) {
+export async function createCandidates({ root, connection, input: rawInput, references: rawReferences = [], maxReferences = 12, fetchImpl = fetch, imageDownloader = downloadImageUrl, onSuccess = async () => {} }) {
   const input = validateInput(rawInput); const references = validateReferences(rawReferences, { maxReferences }); if (!clean(connection?.apiKey) && input.backend === "api") throw new ImageWorkbenchError("请先在 设置 → API 为“生图”选择并配置 API。 ");
-  const runId = randomUUID(); const record = { id: runId, createdAt: new Date().toISOString(), prompt: input.prompt, backend: input.backend, workflow: input.workflow, size: input.size, countRequested: input.count, references: references.map(({ id, role, description, filename }) => ({ id, role, description, filename })), candidates: [], status: "running", note: "人工候选批次；尚未写入视觉参考库。" }; await writeRun(root, record);
-  try { for (let index = 0; index < input.count; index += 1) { const result = input.backend === "api" ? (clean(connection?.type).toLowerCase() === "dashscope" ? await dashscopeImage({ connection, input, references, fetchImpl, imageDownloader }) : await apiImage({ connection, input, references, fetchImpl, imageDownloader })) : await comfyImage({ connection, input: { ...input, seed: input.seed === null ? null : input.seed + index }, references, registry, fetchImpl }); const name = "candidate-" + runId + "-" + String(index + 1).padStart(2, "0") + imageExtension(result.image); await fs.writeFile(safeFile(root, name), result.image, { flag: "wx" }); const candidate = { id: runId + "-" + (index + 1), file: name, backend: input.backend, model: result.model, requestId: result.requestId, seed: result.seed ?? null, mode: result.mode, workflow: result.workflow || "", createdAt: new Date().toISOString() }; record.candidates.push(candidate); await onSuccess({ candidate, result, input, referenceCount: references.length }); } record.status = "complete"; }
+  const runId = randomUUID(); const record = { id: runId, createdAt: new Date().toISOString(), prompt: input.prompt, backend: input.backend, size: input.size, countRequested: input.count, references: references.map(({ id, role, description, filename }) => ({ id, role, description, filename })), candidates: [], status: "running", note: "人工候选批次；尚未写入视觉参考库。" }; await writeRun(root, record);
+  try { for (let index = 0; index < input.count; index += 1) { const adapter = resolveImageGenerationAdapter(connection?.imageGenerationAdapter ?? DEFAULT_IMAGE_GENERATION_ADAPTER, { connectionType: connection?.type }); const result = adapter === "dashscope-image" ? await dashscopeImage({ connection, input, references, fetchImpl, imageDownloader }) : adapter === "custom-http-image" ? await customHttpImage({ connection, input, references, fetchImpl, imageDownloader }) : await apiImage({ connection, input, references, fetchImpl, imageDownloader }); const name = "candidate-" + runId + "-" + String(index + 1).padStart(2, "0") + imageExtension(result.image); await fs.writeFile(safeFile(root, name), result.image, { flag: "wx" }); const candidate = { id: runId + "-" + (index + 1), file: name, backend: input.backend, model: result.model, requestId: result.requestId, mode: result.mode, createdAt: new Date().toISOString() }; record.candidates.push(candidate); await onSuccess({ candidate, result, input, referenceCount: references.length }); } record.status = "complete"; }
   catch (error) { record.status = record.candidates.length ? "partial" : "failed"; record.error = error?.message || String(error); throw error; }
   finally { await writeRun(root, record); }
   return record;

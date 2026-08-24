@@ -17,6 +17,7 @@ async function temporaryRoot() {
 function fixture(root, { hasHistory = true } = {}) {
   const projectRoot = path.join(root, "contact-suzu");
   const contact = {
+    agentId: "agent-suzu",
     id: "contact-suzu",
     name: "Suzu",
     projectRoot,
@@ -80,6 +81,8 @@ test("Agent compactor keeps editable per-contact rewind settings and uses only n
 
   const initial = await service.snapshot({ contactId: fake.contact.id });
   assert.equal(initial.runtime, "agent-core");
+  assert.equal(initial.contacts[0]?.agentId, fake.contact.agentId);
+  assert.equal(initial.selectedContact?.agentId, fake.contact.agentId);
   assert.equal(initial.settings.prompt, DEFAULT_SUZU_COMPACTION_PROMPT);
   assert.deepEqual(initial.settings.automatic, { enabled: false, tokenThreshold: 32_000, retainTokens: 8_000 });
   assert.deepEqual(initial.settings.manual, { retainTokens: 8_000 });

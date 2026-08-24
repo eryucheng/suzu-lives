@@ -128,3 +128,66 @@ test("Agent Core history backfills a missed usage ledger record exactly once", a
   assert.equal(capabilityCalls.length, 2);
   assert.equal((await readUsageEvents(ledgerPath)).events.length, 2);
 });
+
+test("Agent Core usage accepts an explicit non-contact billing subject", async () => {
+  const root = await temporaryRoot();
+  const projectRoot = path.join(root, "software-assistant", "workspace");
+  const ledgerPath = path.join(root, "agents", "suzu-software-assistant", "cost-ledger", "events.jsonl");
+  await fs.mkdir(projectRoot, { recursive: true });
+  const calls = [];
+  const usageLedger = createAgentUsageLedger({
+    capabilityRuntime: {
+      async recordUsage(value) {
+        calls.push(value);
+        return [{ status: "completed" }];
+      },
+    },
+    settingsService: {
+      load: () => ({ dataRoot: root }),
+      usageLedgerPath: ({ agentId }) => {
+        assert.equal(agentId, "suzu-software-assistant");
+        return ledgerPath;
+      },
+    },
+  });
+
+  const result = await usageLedger.record({
+    event: {
+      type: "model-usage",
+      sessionId: "suzu-software-assistant",
+      data: {
+        coreSequence: 7,
+        coreTime: 1_000,
+        model: "deepseek-v4-flash",
+        provider: "DeepSeek",
+        purpose: "agent-step",
+        usage: { inputTokens: 50, outputTokens: 10 },
+      },
+    },
+    subject: {
+      agentId: "suzu-software-assistant",
+      projectRoot,
+      sessionId: "suzu-software-assistant",
+      subjectId: "suzu-software-assistant",
+    },
+    turn: {
+      requestId: "suzu-software-turn-1",
+      userText: "费用怎么统计？",
+      toolNames: new Set(["read_file"]),
+    },
+  });
+
+  assert.equal(result.status, "recorded");
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].capabilityId, "conversation-model");
+  assert.equal(calls[0].event.agentId, "suzu-software-assistant");
+  assert.deepEqual(calls[0].event.metadata, {
+    runtime: "agent-core",
+    purpose: "agent-step",
+    sessionId: "suzu-software-assistant",
+    coreSequence: 7,
+    turnId: "suzu-software-turn-1",
+    turnPrompt: "费用怎么统计？",
+    toolNames: ["read_file"],
+  });
+});

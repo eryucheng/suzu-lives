@@ -25,6 +25,7 @@ export const state = {
   globalNotice: "",
   settings: null,
   data: null,
+  todayUsage: null,
   todayCalendar: null,
   todayMonth: "",
   todaySelectedDate: "",

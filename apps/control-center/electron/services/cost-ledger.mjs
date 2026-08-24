@@ -8,6 +8,8 @@ import {
   createPriceCatalog,
   priceCatalogView,
   readUsageEvents,
+  readUsageSummary,
+  rebuildUsageSummary,
   resolveCatalogModel,
 } from "@suzu-lives/cost-ledger";
 
@@ -37,25 +39,48 @@ function existsDirectory(directory) {
   }
 }
 
-function contactScope(value = {}) {
-  const contactId = clean(value.contactId);
-  const contactName = clean(value.contactName);
+function usageScope(value = {}, defaultType = "usage") {
+  const subjectId = clean(value.subjectId || value.contactId);
+  const subjectName = clean(value.subjectName || value.contactName);
+  const subjectType = clean(value.subjectType) || defaultType;
   const projectRoot = clean(value.projectRoot);
   const sessionId = clean(value.sessionId);
-  if (!contactId || !contactName || !projectRoot || !SESSION_ID_PATTERN.test(sessionId)) return null;
+  if (!subjectId || !subjectName || !projectRoot || !SESSION_ID_PATTERN.test(sessionId)) return null;
+  const isContact = subjectType === "contact";
   return {
-    contactId,
-    contactName,
+    subjectId,
+    subjectName,
+    subjectType,
+    contactId: isContact ? clean(value.contactId || subjectId) : "",
+    contactName: isContact ? clean(value.contactName || subjectName) : "",
     projectRoot: path.resolve(projectRoot),
     sessionId,
     usageLedgerPath: clean(value.usageLedgerPath),
   };
 }
 
-function contactEventFields(contact) {
+function contactScope(value = {}) {
+  return usageScope({ ...value, subjectType: "contact" }, "contact");
+}
+
+function normalizedScopes(contactScopes = [], usageScopes = []) {
+  const byId = new Map();
+  for (const scope of [
+    ...(Array.isArray(contactScopes) ? contactScopes.map(contactScope) : []),
+    ...(Array.isArray(usageScopes) ? usageScopes.map((value) => usageScope(value)) : []),
+  ].filter(Boolean)) {
+    byId.set(scope.subjectId, scope);
+  }
+  return [...byId.values()];
+}
+
+function subjectEventFields(subject) {
   return {
-    contactId: clean(contact?.contactId),
-    contactName: clean(contact?.contactName) || "未归属联系人",
+    subjectId: clean(subject?.subjectId),
+    subjectName: clean(subject?.subjectName) || "未归属计费主体",
+    subjectType: clean(subject?.subjectType) || "usage",
+    contactId: clean(subject?.contactId),
+    contactName: clean(subject?.contactName),
   };
 }
 
@@ -176,10 +201,10 @@ async function scanVideoCache(projectRoot, catalog, customRevisions, contact) {
       customRevisions,
     });
     result.events.push({
-      id: `video:${clean(contact?.contactId)}:${identity}`,
+      id: `video:${clean(contact?.subjectId)}:${identity}`,
       timestamp,
       date: dateKey(timestamp),
-      ...contactEventFields(contact),
+      ...subjectEventFields(contact),
       source: "视频理解",
       feature: "视频分析",
       provider: modelProvider(catalog, model),
@@ -222,37 +247,42 @@ async function scanUnifiedLedger(ledgerPath, catalog, customRevisions, contact) 
       continue;
     }
     seen.add(identity);
-    const cost = pricedUsage({
-      catalog,
-      model: event.model,
-      usage: event.usage,
-      units: event.units,
-      timestamp: event.timestamp,
-      customRevisions,
-    });
-    result.events.push({
-      id: `ledger:${clean(contact?.contactId)}:${identity}`,
-      timestamp: clean(event.timestamp),
-      date: dateKey(event.timestamp),
-      ...contactEventFields(contact),
-      source: clean(event.source || event.feature || "统一流水"),
-      feature: clean(event.feature || "API 调用"),
-      provider: clean(event.provider) || modelProvider(catalog, event.model),
-      model: clean(event.model),
-      requestId: clean(event.requestId),
-      turnId: clean(event.metadata?.turnId),
-      turnPrompt: clean(event.metadata?.turnPrompt || event.feature).slice(0, 180),
-      toolNames: Array.isArray(event.metadata?.toolNames)
-        ? event.metadata.toolNames.map(clean).filter(Boolean)
-        : [],
-      amountCny: cost.amountCny,
-      costStatus: cost.status,
-      priceRevision: cost.price,
-      units: cost.units,
-      metadata: event.metadata || {},
-    });
+    result.events.push(presentLedgerEvent(event, catalog, customRevisions, contact));
   }
   return result;
+}
+
+function presentLedgerEvent(event, catalog, customRevisions, contact) {
+  const identity = clean(event?.id) || clean(event?.requestId);
+  const cost = pricedUsage({
+    catalog,
+    model: event?.model,
+    usage: event?.usage,
+    units: event?.units,
+    timestamp: event?.timestamp,
+    customRevisions,
+  });
+  return {
+    id: `ledger:${clean(contact?.subjectId)}:${identity}`,
+    timestamp: clean(event?.timestamp),
+    date: dateKey(event?.timestamp),
+    ...subjectEventFields(contact),
+    source: clean(event?.source || event?.feature || "统一流水"),
+    feature: clean(event?.feature || "API 调用"),
+    provider: clean(event?.provider) || modelProvider(catalog, event?.model),
+    model: clean(event?.model),
+    requestId: clean(event?.requestId),
+    turnId: clean(event?.metadata?.turnId),
+    turnPrompt: clean(event?.metadata?.turnPrompt || event?.feature).slice(0, 180),
+    toolNames: Array.isArray(event?.metadata?.toolNames)
+      ? event.metadata.toolNames.map(clean).filter(Boolean)
+      : [],
+    amountCny: cost.amountCny,
+    costStatus: cost.status,
+    priceRevision: cost.price,
+    units: cost.units,
+    metadata: event?.metadata || {},
+  };
 }
 
 function emptyTotal() {
@@ -312,11 +342,14 @@ function summarize(events, today) {
     sourceMap.set(event.source, source);
 
     if (event.turnId) {
-      const contactId = clean(event.contactId);
-      const conversationKey = `${contactId || "unassigned"}:${event.turnId}`;
+      const subjectId = clean(event.subjectId || event.contactId);
+      const conversationKey = `${subjectId || "unassigned"}:${event.turnId}`;
       const conversation = conversationMap.get(conversationKey) || {
-        contactId,
-        contactName: clean(event.contactName) || "未归属联系人",
+        subjectId,
+        subjectName: clean(event.subjectName || event.contactName) || "未归属计费主体",
+        subjectType: clean(event.subjectType) || "usage",
+        contactId: clean(event.contactId),
+        contactName: clean(event.contactName),
         turnId: event.turnId,
         prompt: event.turnPrompt || "未识别的会话轮次",
         firstAt: event.timestamp,
@@ -342,7 +375,7 @@ function summarize(events, today) {
 function sourceStatus(scans = []) {
   const ledgerEvents = scans.flatMap((scan) => Array.isArray(scan.ledger?.events) ? scan.ledger.events : []);
   const videoEvents = scans.flatMap((scan) => Array.isArray(scan.video?.events) ? scan.video.events : []);
-  const contactCount = new Set(scans.map((scan) => clean(scan.contactId)).filter(Boolean)).size;
+  const subjectCount = new Set(scans.map((scan) => clean(scan.subjectId)).filter(Boolean)).size;
   const firstSourcePath = (key) => scans.map((scan) => clean(scan[key]?.path)).find(Boolean) || "";
   const eventCount = (matches, extraEvents = []) => {
     const identities = new Set();
@@ -354,7 +387,7 @@ function sourceStatus(scans = []) {
         clean(event.feature),
         clean(event.model),
       ].join(":");
-      identities.add(`${clean(event.contactId)}:${localIdentity}`);
+      identities.add(`${clean(event.subjectId || event.contactId)}:${localIdentity}`);
     }
     return identities.size;
   };
@@ -362,7 +395,7 @@ function sourceStatus(scans = []) {
     id,
     name,
     status: "ready",
-    detail: `${contactCount} 个联系人${count ? `，已记录 ${count} 次调用。` : "，已接入；等待首次调用记录。"}`,
+    detail: `${subjectCount} 个计费主体${count ? `，已记录 ${count} 次调用。` : "，已接入；等待首次调用记录。"}`,
     path: sourcePath,
     tracked: true,
   });
@@ -409,11 +442,6 @@ function sourceStatus(scans = []) {
       count: eventCount((event) => ["memory-compactor", "memory-structurer"].includes(clean(event.source))),
     }),
     connected({
-      id: "voice-design",
-      name: "音色设计",
-      count: eventCount((event) => clean(event.feature) === "voice-design"),
-    }),
-    connected({
       id: "memory-vector",
       name: "记忆向量",
       count: eventCount((event) => ["memory-embedding-indexer", "memory-retriever"].includes(clean(event.source)) || clean(event.feature).endsWith("-embedding")),
@@ -431,7 +459,7 @@ function mergeEvents(...eventGroups) {
   for (const events of eventGroups) {
     for (const event of events) {
       if (!event?.timestamp) continue;
-      const scope = clean(event.contactId) || "unassigned";
+      const scope = clean(event.subjectId || event.contactId) || "unassigned";
       const identity = event.requestId
         ? `request:${scope}:${event.model}:${event.requestId}`
         : `event:${scope}:${event.id}`;
@@ -443,7 +471,98 @@ function mergeEvents(...eventGroups) {
     .slice(-MAX_EVENTS);
 }
 
-export async function scanCostLedger(settings = {}, { contactScopes = [] } = {}) {
+async function readTodayUnifiedLedgerSummary(ledgerPath, catalog, customRevisions, contact, today) {
+  const stored = await readUsageSummary(ledgerPath, { timeZone: TIME_ZONE });
+  const needsRefresh = stored.status === "stale"
+    || (stored.status === "missing" && Number(stored.ledgerByteLength || 0) > 0);
+  const present = (event) => presentLedgerEvent(event, catalog, customRevisions, contact);
+  return {
+    ...stored,
+    needsRefresh,
+    todayEvents: Array.isArray(stored.days?.[today]) ? stored.days[today].map(present) : [],
+    recentEvents: Array.isArray(stored.recentEvents) ? stored.recentEvents.map(present) : [],
+  };
+}
+
+/**
+ * Lightweight data for the home dashboard.  It reads compact per-ledger
+ * summaries only; detailed history and legacy video-cache recovery stay in
+ * scanCostLedger and run when the user opens the usage page.
+ */
+export async function readTodayCostLedger(settings = {}, { contactScopes = [], usageScopes = [] } = {}) {
+  const startedAt = Date.now();
+  const catalog = createPriceCatalog({ customPriceModels: settings.customPriceModels || [] });
+  const customRevisions = settings.priceRevisions || [];
+  const today = dateKey(new Date());
+  const subjects = normalizedScopes(contactScopes, usageScopes);
+  if (!subjects.length) {
+    return {
+      status: "needs-project",
+      today,
+      contactScopes: [],
+      usageScopes: [],
+      events: [],
+      summary: { today: emptyTotal() },
+      needsRefresh: false,
+      warning: "没有可统计的计费主体。",
+    };
+  }
+  const ledgers = await Promise.all(subjects.map((subject) => readTodayUnifiedLedgerSummary(
+    subject.usageLedgerPath,
+    catalog,
+    customRevisions,
+    subject,
+    today,
+  )));
+  const todayEvents = mergeEvents(...ledgers.map((ledger) => ledger.todayEvents));
+  const recentEvents = mergeEvents(...ledgers.map((ledger) => ledger.recentEvents));
+  const totals = summarize(todayEvents, today);
+  const needsRefresh = ledgers.some((ledger) => ledger.needsRefresh);
+  return {
+    status: needsRefresh ? "warming" : "ready",
+    contactScopes: subjects
+      .filter((subject) => subject.subjectType === "contact")
+      .map((subject) => ({ contactId: subject.contactId, contactName: subject.contactName })),
+    usageScopes: subjects.map((subject) => ({
+      subjectId: subject.subjectId,
+      subjectName: subject.subjectName,
+      subjectType: subject.subjectType,
+    })),
+    today,
+    scannedAt: new Date().toISOString(),
+    durationMs: Date.now() - startedAt,
+    events: recentEvents,
+    summary: {
+      all: totals.today,
+      today: totals.today,
+      month: totals.today,
+      daily: [{ date: today, ...totals.today }],
+      sources: [],
+      conversations: [],
+    },
+    needsRefresh,
+    warning: "",
+  };
+}
+
+/**
+ * One-time repair path for old JSONL files that predate the summary sidecar.
+ * It is intentionally separate from readTodayCostLedger so opening the app
+ * never performs an unbounded scan merely to paint the home screen.
+ */
+export async function warmTodayCostLedger(settings = {}, { contactScopes = [], usageScopes = [] } = {}) {
+  const subjects = normalizedScopes(contactScopes, usageScopes);
+  await Promise.all(subjects.map(async (subject) => {
+    const current = await readUsageSummary(subject.usageLedgerPath, { timeZone: TIME_ZONE });
+    const requiresRebuild = current.status === "stale"
+      || (current.status === "missing" && Number(current.ledgerByteLength || 0) > 0);
+    if (!requiresRebuild) return null;
+    return rebuildUsageSummary(subject.usageLedgerPath, { timeZone: TIME_ZONE });
+  }));
+  return readTodayCostLedger(settings, { contactScopes, usageScopes });
+}
+
+export async function scanCostLedger(settings = {}, { contactScopes = [], usageScopes = [] } = {}) {
   const startedAt = Date.now();
   const catalog = createPriceCatalog({ customPriceModels: settings.customPriceModels || [] });
   const customRevisions = settings.priceRevisions || [];
@@ -452,25 +571,24 @@ export async function scanCostLedger(settings = {}, { contactScopes = [] } = {})
     catalog,
     customRevisions,
   });
-  const contacts = Array.isArray(contactScopes)
-    ? contactScopes.map(contactScope).filter(Boolean)
-    : [];
-  if (!contacts.length) {
+  const subjects = normalizedScopes(contactScopes, usageScopes);
+  if (!subjects.length) {
     return {
       status: "needs-project",
       today,
       contactScopes: [],
+      usageScopes: [],
       priceCatalog,
-      warning: "请先创建至少一个联系人。",
+      warning: "没有可统计的计费主体。",
     };
   }
 
-  const scans = await Promise.all(contacts.map(async (contact) => {
+  const scans = await Promise.all(subjects.map(async (subject) => {
     const [video, ledger] = await Promise.all([
-      scanVideoCache(contact.projectRoot, catalog, customRevisions, contact),
-      scanUnifiedLedger(contact.usageLedgerPath, catalog, customRevisions, contact),
+      scanVideoCache(subject.projectRoot, catalog, customRevisions, subject),
+      scanUnifiedLedger(subject.usageLedgerPath, catalog, customRevisions, subject),
     ]);
-    return { ...contact, video, ledger };
+    return { ...subject, video, ledger };
   }));
   const events = mergeEvents(...scans.flatMap((scan) => [scan.video.events, scan.ledger.events]));
   const agentCoreEvents = events.filter((event) => ["agent-chat", "agent-compaction"].includes(clean(event.feature)));
@@ -478,7 +596,14 @@ export async function scanCostLedger(settings = {}, { contactScopes = [] } = {})
   const sum = (key, field) => scans.reduce((total, scan) => total + Number(scan[key]?.[field] || 0), 0);
   return {
     status: "ready",
-    contactScopes: scans.map((scan) => ({ contactId: scan.contactId, contactName: scan.contactName })),
+    contactScopes: scans
+      .filter((scan) => scan.subjectType === "contact")
+      .map((scan) => ({ contactId: scan.contactId, contactName: scan.contactName })),
+    usageScopes: scans.map((scan) => ({
+      subjectId: scan.subjectId,
+      subjectName: scan.subjectName,
+      subjectType: scan.subjectType,
+    })),
     today,
     currentMonth: monthKey(new Date()),
     scannedAt: new Date().toISOString(),

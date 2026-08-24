@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "updatedAt": "2026-08-21",
+  "updatedAt": "2026-08-23",
   "models": {
     "deepseek-v4-pro": {
       "label": "DeepSeek V4 Pro",
@@ -75,6 +75,45 @@
               }
             ]
           }
+        },
+        {
+          "id": "official-2026-08-23-weekend-offpeak",
+          "effectiveFrom": "2026-08-22T16:00:00.000Z",
+          "publishedAt": "2026-08-23",
+          "label": "官方工作日峰谷价",
+          "rates": {
+            "inputUncachedTokens": 4.5,
+            "inputCachedTokens": 0.15,
+            "outputTextTokens": 13.5
+          },
+          "rateSchedule": {
+            "timeZone": "Asia/Shanghai",
+            "defaultLabel": "空闲时段",
+            "intervals": [
+              {
+                "label": "高峰时段",
+                "weekdays": ["mon", "tue", "wed", "thu", "fri"],
+                "start": "09:00",
+                "end": "12:00",
+                "rates": {
+                  "inputUncachedTokens": 9,
+                  "inputCachedTokens": 0.3,
+                  "outputTextTokens": 27
+                }
+              },
+              {
+                "label": "高峰时段",
+                "weekdays": ["mon", "tue", "wed", "thu", "fri"],
+                "start": "14:00",
+                "end": "18:00",
+                "rates": {
+                  "inputUncachedTokens": 9,
+                  "inputCachedTokens": 0.3,
+                  "outputTextTokens": 27
+                }
+              }
+            ]
+          }
         }
       ]
     },
@@ -83,7 +122,8 @@
       "provider": "DeepSeek",
       "currency": "CNY",
       "aliases": [
-        "deepseek-v4-flash"
+        "deepseek-v4-flash",
+        "deepseek-v4-flash-vision-exp"
       ],
       "sourceUrl": "https://api-docs.deepseek.com/zh-cn/quick_start/pricing/",
       "rateDefinitions": {
@@ -141,6 +181,45 @@
               },
               {
                 "label": "高峰时段",
+                "start": "14:00",
+                "end": "18:00",
+                "rates": {
+                  "inputUncachedTokens": 3,
+                  "inputCachedTokens": 0.1,
+                  "outputTextTokens": 9
+                }
+              }
+            ]
+          }
+        },
+        {
+          "id": "official-2026-08-23-weekend-offpeak",
+          "effectiveFrom": "2026-08-22T16:00:00.000Z",
+          "publishedAt": "2026-08-23",
+          "label": "官方工作日峰谷价",
+          "rates": {
+            "inputUncachedTokens": 1.5,
+            "inputCachedTokens": 0.05,
+            "outputTextTokens": 4.5
+          },
+          "rateSchedule": {
+            "timeZone": "Asia/Shanghai",
+            "defaultLabel": "空闲时段",
+            "intervals": [
+              {
+                "label": "高峰时段",
+                "weekdays": ["mon", "tue", "wed", "thu", "fri"],
+                "start": "09:00",
+                "end": "12:00",
+                "rates": {
+                  "inputUncachedTokens": 3,
+                  "inputCachedTokens": 0.1,
+                  "outputTextTokens": 9
+                }
+              },
+              {
+                "label": "高峰时段",
+                "weekdays": ["mon", "tue", "wed", "thu", "fri"],
                 "start": "14:00",
                 "end": "18:00",
                 "rates": {
@@ -305,33 +384,6 @@
           "label": "北京地域当前官方公开价",
           "rates": {
             "inputAudioSeconds": 0.00033
-          }
-        }
-      ]
-    },
-    "qwen-voice-design": {
-      "label": "Qwen Voice Design",
-      "provider": "阿里云百炼",
-      "currency": "CNY",
-      "aliases": [
-        "qwen-voice-design"
-      ],
-      "sourceUrl": "https://help.aliyun.com/zh/model-studio/voice-design-user-guide",
-      "rateDefinitions": {
-        "generatedVoices": {
-          "label": "成功创建音色",
-          "unitLabel": "元 / 个",
-          "per": 1
-        }
-      },
-      "revisions": [
-        {
-          "id": "official-current",
-          "effectiveFrom": "1970-01-01T00:00:00.000Z",
-          "publishedAt": "2026-07-30",
-          "label": "官方标准价，不扣除新账号免费额度",
-          "rates": {
-            "generatedVoices": 0.2
           }
         }
       ]

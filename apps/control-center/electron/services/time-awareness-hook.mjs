@@ -25,7 +25,11 @@ export const TIME_AWARENESS_HOOK_MOUNT = Object.freeze({
 const CONTACT_ID = /^contact-[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
 const SESSION_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
 const STATE_FILE_NAME = "time-awareness.json";
+const DAY_NOTICE_INTERVAL_MILLISECONDS = 6 * 60 * 60 * 1_000;
 const WEEKDAYS = ["星期日", "星期一", "星期二", "星期三", "星期四", "星期五", "星期六"];
+const TIME_PART_FORMATTERS = new Map();
+const VALID_TIME_ZONES = new Set(["UTC"]);
+const INVALID_TIME_ZONES = new Set();
 const PUBLIC_DATES = new Map([
   ["01-01", "元旦"],
   ["05-01", "劳动节"],
@@ -42,6 +46,84 @@ function plainObject(value) {
 
 function pad(value) {
   return String(value).padStart(2, "0");
+}
+
+function supportedTimeZone(value) {
+  const zone = clean(value);
+  if (!zone) return "";
+  if (VALID_TIME_ZONES.has(zone)) return zone;
+  if (INVALID_TIME_ZONES.has(zone)) return "";
+  try {
+    new Intl.DateTimeFormat("en-GB", { timeZone: zone }).format(0);
+    VALID_TIME_ZONES.add(zone);
+    return zone;
+  } catch {
+    INVALID_TIME_ZONES.add(zone);
+    return "";
+  }
+}
+
+function detectSystemTimeZone() {
+  try {
+    return supportedTimeZone(new Intl.DateTimeFormat().resolvedOptions().timeZone);
+  } catch {
+    return "";
+  }
+}
+
+function configuredTimeZone(value) {
+  return supportedTimeZone(plainObject(value).timeZone);
+}
+
+function timePartFormatter(timeZone) {
+  const zone = supportedTimeZone(timeZone) || "UTC";
+  let formatter = TIME_PART_FORMATTERS.get(zone);
+  if (!formatter) {
+    formatter = new Intl.DateTimeFormat("en-GB", {
+      calendar: "gregory",
+      day: "2-digit",
+      hour: "2-digit",
+      hourCycle: "h23",
+      minute: "2-digit",
+      month: "2-digit",
+      numberingSystem: "latn",
+      timeZone: zone,
+      year: "numeric",
+    });
+    TIME_PART_FORMATTERS.set(zone, formatter);
+  }
+  return formatter;
+}
+
+function localTimeParts(value, timeZone) {
+  const current = asDate(value);
+  if (!current) return null;
+  try {
+    const parts = Object.fromEntries(timePartFormatter(timeZone)
+      .formatToParts(current)
+      .filter((part) => ["year", "month", "day", "hour", "minute"].includes(part.type))
+      .map((part) => [part.type, part.value]));
+    const year = Number(parts.year);
+    const month = Number(parts.month);
+    const day = Number(parts.day);
+    const hour = Number(parts.hour);
+    const minute = Number(parts.minute);
+    if (![year, month, day, hour, minute].every(Number.isSafeInteger)) return null;
+    return Object.freeze({
+      year,
+      month,
+      day,
+      hour,
+      minute,
+      weekday: new Date(Date.UTC(year, month - 1, day)).getUTCDay(),
+    });
+  } catch {
+    return null;
+  }
+}
+
+function localDateKey(value) {
+  return `${value.year}-${pad(value.month)}-${pad(value.day)}`;
 }
 
 function absoluteDirectory(value) {
@@ -72,10 +154,6 @@ function intervalMinutes(value) {
     return DEFAULT_TIME_AWARENESS_INTERVAL_MINUTES;
   }
   return candidate;
-}
-
-function includesContact(value, contactId) {
-  return Array.isArray(value) && value.some((candidate) => clean(candidate) === contactId);
 }
 
 function timeConfigPath(dataRoot) {
@@ -122,6 +200,41 @@ async function writeJsonAtomically(fsOps, filePath, value) {
   }
 }
 
+/**
+ * The application time zone is selected once when Suzu Lives first starts and
+ * then remains part of product configuration. Dynamic context reads this
+ * persisted value instead of repeatedly asking the operating system which
+ * time zone it currently reports.
+ */
+export async function ensureTimeAwarenessConfig({
+  dataRoot,
+  detectTimeZone = detectSystemTimeZone,
+  fsOps = fs,
+} = {}) {
+  const root = absoluteDirectory(dataRoot);
+  if (!root) return Object.freeze({ timeZone: "UTC" });
+  const filePath = timeConfigPath(root);
+  const existing = await readJson(fsOps, filePath, {});
+  const saved = configuredTimeZone(existing);
+  if (saved) return Object.freeze({ ...existing, timeZone: saved });
+
+  const detected = typeof detectTimeZone === "function" ? detectTimeZone() : detectTimeZone;
+  const timeZone = supportedTimeZone(detected) || "UTC";
+  const next = { ...existing, timeZone };
+  try {
+    await writeJsonAtomically(fsOps, filePath, next);
+  } catch {
+    // The first request still receives the in-memory selection. A later start
+    // can persist it if the data directory was temporarily unavailable.
+  }
+  return Object.freeze(next);
+}
+
+export async function configuredTimeAwarenessTimeZone(options = {}) {
+  const config = await ensureTimeAwarenessConfig(options);
+  return configuredTimeZone(config) || "UTC";
+}
+
 function injectedWithinInterval(value, now, milliseconds) {
   const last = asDate(value?.lastInjectedAt);
   if (!last) return false;
@@ -131,11 +244,41 @@ function injectedWithinInterval(value, now, milliseconds) {
   return elapsed >= 0 && elapsed <= milliseconds;
 }
 
-async function currentCalendarEvents(fsOps, filePath, now, agentId) {
+function dayNoticeIsDue(value, now, dateKey) {
+  if (clean(value?.lastDayNoticeDate) !== dateKey) return true;
+  const last = asDate(value?.lastDayNoticeAt);
+  if (!last) return true;
+  const elapsed = now.getTime() - last.getTime();
+  return elapsed < 0 || elapsed >= DAY_NOTICE_INTERVAL_MILLISECONDS;
+}
+
+function openingTaskContext(payload) {
+  return Boolean(clean(plainObject(payload?.taskContext).text));
+}
+
+function persistedState(value, { current, dateKey, includeDayNotice } = {}) {
+  const previousNoticeAt = asDate(value?.lastDayNoticeAt);
+  const previousNoticeDate = clean(value?.lastDayNoticeDate);
+  const next = {
+    version: 2,
+    lastInjectedAt: current.toISOString(),
+  };
+  if (previousNoticeAt && previousNoticeDate) {
+    next.lastDayNoticeAt = previousNoticeAt.toISOString();
+    next.lastDayNoticeDate = previousNoticeDate;
+  }
+  if (includeDayNotice) {
+    next.lastDayNoticeAt = current.toISOString();
+    next.lastDayNoticeDate = dateKey;
+  }
+  return next;
+}
+
+async function currentCalendarEvents(fsOps, filePath, dateKey, agentId) {
   if (!agentId) return [];
   const calendar = await readJson(fsOps, filePath, {});
   if (!Array.isArray(calendar.events)) return [];
-  const date = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+  const date = clean(dateKey);
   const recurringDate = date.slice(5);
   return calendar.events
     .filter((event) => plainObject(event).enabled !== false)
@@ -145,25 +288,55 @@ async function currentCalendarEvents(fsOps, filePath, now, agentId) {
     .filter(Boolean);
 }
 
+async function timeAwarenessDetails({
+  fsOps = fs,
+  dataRoot,
+  now = new Date(),
+  projectRoot,
+  timeZone = "UTC",
+} = {}) {
+  const root = absoluteDirectory(dataRoot);
+  const workspace = absoluteDirectory(projectRoot);
+  const current = asDate(now);
+  if (!root || !workspace || !current) return null;
+  const agentId = stableAgentId(workspace);
+  const localTime = localTimeParts(current, timeZone);
+  if (!localTime) return null;
+  const dateKey = localDateKey(localTime);
+  const publicDateKey = dateKey.slice(5);
+  const dayNoticeNames = [...new Set([
+    PUBLIC_DATES.get(publicDateKey),
+    ...(await currentCalendarEvents(fsOps, calendarPath(root), dateKey, agentId)),
+  ].filter(Boolean))];
+  return {
+    current,
+    dateKey,
+    dayNoticeNames,
+    localTime,
+  };
+}
+
+function renderTimeAwarenessText({ dayNoticeNames = [], localTime } = {}) {
+  if (!localTime) return "";
+  const base = `你知道现在是${localTime.month}月${localTime.day}日 ${WEEKDAYS[localTime.weekday]} ${pad(localTime.hour)}:${pad(localTime.minute)}。`;
+  if (!dayNoticeNames.length) return base;
+  return `${base}今天是${dayNoticeNames.map((name, index) => index ? `也是${name}` : name).join("，")}。`;
+}
+
 export async function timeAwarenessText({
   fsOps = fs,
   dataRoot,
   now = new Date(),
   projectRoot,
+  includeDayNotice = true,
 } = {}) {
-  const root = absoluteDirectory(dataRoot);
-  const workspace = absoluteDirectory(projectRoot);
-  const current = asDate(now);
-  if (!root || !workspace || !current) return "";
-  const agentId = stableAgentId(workspace);
-  const dateKey = `${pad(current.getMonth() + 1)}-${pad(current.getDate())}`;
-  const names = [...new Set([
-    PUBLIC_DATES.get(dateKey),
-    ...(await currentCalendarEvents(fsOps, calendarPath(root), current, agentId)),
-  ].filter(Boolean))];
-  const base = `你知道现在是${current.getMonth() + 1}月${current.getDate()}日 ${WEEKDAYS[current.getDay()]} ${pad(current.getHours())}:${pad(current.getMinutes())}。`;
-  if (!names.length) return base;
-  return `${base}今天是${names.map((name, index) => index ? `也是${name}` : name).join("，")}。`;
+  const timeZone = await configuredTimeAwarenessTimeZone({ dataRoot, fsOps });
+  const details = await timeAwarenessDetails({ fsOps, dataRoot, now, projectRoot, timeZone });
+  if (!details) return "";
+  return renderTimeAwarenessText({
+    dayNoticeNames: includeDayNotice ? details.dayNoticeNames : [],
+    localTime: details.localTime,
+  });
 }
 
 /**
@@ -178,6 +351,11 @@ export function createTimeAwarenessContextHook({
 } = {}) {
   const root = absoluteDirectory(dataRoot);
   const pendingByStatePath = new Map();
+  // Start the one-time configuration write as soon as the application mounts
+  // the capability. Every later collection only reads this persisted choice.
+  const timeConfiguration = root
+    ? ensureTimeAwarenessConfig({ dataRoot: root, fsOps })
+    : Promise.resolve(Object.freeze({ timeZone: "UTC" }));
 
   const serialize = async (filePath, operation) => {
     const previous = pendingByStatePath.get(filePath) || Promise.resolve();
@@ -201,31 +379,39 @@ export function createTimeAwarenessContextHook({
     if (!persistedStatePath) return null;
 
     return serialize(persistedStatePath, async () => {
-      const config = await readJson(fsOps, timeConfigPath(root), {});
-      // 未配置过联系人范围时默认对全部联系人启用；一旦显式配置过，按配置生效。
-      const hasExplicitScope = Object.hasOwn(config, "enabledContactIds");
-      const enabled = hasExplicitScope ? includesContact(config.enabledContactIds, contactId) : true;
-      if (!enabled) return null;
+      const initializedConfig = await timeConfiguration;
+      const config = await readJson(fsOps, timeConfigPath(root), initializedConfig);
+      const timeZone = configuredTimeZone(config)
+        || configuredTimeZone(initializedConfig)
+        || "UTC";
       const current = asDate(typeof now === "function" ? now() : now);
       if (!current) return null;
       const interval = intervalMinutes(config.intervalMinutes);
       const state = await readJson(fsOps, persistedStatePath, {});
-      if (injectedWithinInterval(state, current, interval * 60 * 1_000)) return null;
-      const text = await timeAwarenessText({
+      const taskOpening = openingTaskContext(source);
+      if (!taskOpening && injectedWithinInterval(state, current, interval * 60 * 1_000)) return null;
+      const details = await timeAwarenessDetails({
         dataRoot: root,
         fsOps,
         now: current,
         projectRoot,
+        timeZone,
+      });
+      if (!details) return null;
+      const includeDayNotice = details.dayNoticeNames.length > 0
+        && dayNoticeIsDue(state, current, details.dateKey);
+      const text = renderTimeAwarenessText({
+        dayNoticeNames: includeDayNotice ? details.dayNoticeNames : [],
+        localTime: details.localTime,
       });
       if (!text) return null;
-      // State only prevents duplicates. A local persistence failure must not
-      // make the agent lose a legitimate current-time reminder.
       try {
-        await writeJsonAtomically(fsOps, persistedStatePath, {
-          version: 1,
-          lastInjectedAt: current.toISOString(),
-        });
-      } catch { /* The next request may repeat the time, which is preferable to silence. */ }
+        await writeJsonAtomically(fsOps, persistedStatePath, persistedState(state, {
+          current,
+          dateKey: details.dateKey,
+          includeDayNotice,
+        }));
+      } catch { /* A later collection will refresh the current time. */ }
       return Object.freeze({
         id: `time-awareness:${sessionId}`,
         kind: "time-awareness",
@@ -239,6 +425,8 @@ export function createTimeAwarenessContextHook({
         metadata: Object.freeze({
           intervalMinutes: interval,
           observedAt: current.toISOString(),
+          ...(includeDayNotice ? { dayNotice: true } : {}),
+          ...(taskOpening ? { trigger: "task" } : {}),
         }),
         text,
       });

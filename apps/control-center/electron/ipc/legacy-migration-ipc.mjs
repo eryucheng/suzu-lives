@@ -1,5 +1,6 @@
 import { createExternalCapabilitiesIpcService } from "./external-capabilities-ipc.mjs";
 import { createLegacyMigrationService } from "../services/legacy-migration-service.mjs";
+import { formatErrorForDisplay } from "@suzu-lives/suzu-agent-runtime/error-detail";
 
 function clean(value) {
   return String(value ?? "").trim();
@@ -13,7 +14,7 @@ function migrationIpcResult(action) {
       ok: false,
       error: {
         code: clean(error?.code),
-        message: clean(error?.message) || "无法安全迁移旧版数据。",
+        message: formatErrorForDisplay(error, { fallback: "无法安全迁移旧版数据。" }),
       },
     }));
 }

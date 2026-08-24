@@ -24,7 +24,7 @@ function item({ detail, featured = false, icon, id, keywords = [], target, title
 /**
  * Product destination catalog. The old command palette used this list
  * directly; the built-in software assistant now uses the same canonical
- * entries as its manual and navigation action source. It never inspects
+ * entries as its navigation action source. It never inspects
  * conversations, memories, files, or other user-created text.
  */
 export const SUZU_SEARCH_ITEMS = Object.freeze([
@@ -40,7 +40,6 @@ export const SUZU_SEARCH_ITEMS = Object.freeze([
   item({ id: "voice-message", title: "语音消息", detail: "能力 · TTS、ASR、音色与语音通话设置", keywords: ["语音", "tts", "asr", "音色", "声音", "通话", "语音通话"], icon: "sliders", target: { view: "capabilities", capabilityPage: "detail", capabilityCategory: "create", capabilityId: "voice-message" } }),
   item({ id: "image-vision", title: "图像理解", detail: "能力 · 图片理解 API 与读取偏好", keywords: ["图像理解", "图片理解", "看图", "识图"], icon: "sliders", target: { view: "capabilities", capabilityPage: "detail", capabilityCategory: "perceive", capabilityId: "image-vision" } }),
   item({ id: "video-understanding", title: "视频理解", detail: "能力 · 直接把完整视频交给模型", keywords: ["视频理解", "看视频", "视频", "阿里视频"], icon: "sliders", target: { view: "capabilities", capabilityPage: "detail", capabilityCategory: "perceive", capabilityId: "video-understanding" } }),
-  item({ id: "time-awareness", title: "时间感知", detail: "能力 · 联系人的动态时间上下文间隔", keywords: ["时间感知", "时间", "间隔", "10分钟"], icon: "sliders", target: { view: "capabilities", capabilityPage: "detail", capabilityCategory: "perceive", capabilityId: "time-awareness" } }),
   item({ id: "settings", title: "设置", detail: "软件 · 常规", keywords: ["偏好", "软件设置", "选项"], icon: "gear", target: { view: "settings", settingsTab: "general" }, featured: true }),
   item({ id: "appearance", title: "外观", detail: "设置 · 常规", keywords: ["主题", "浅色", "深色", "颜色"], icon: "gear", target: { view: "settings", settingsTab: "general" } }),
   item({ id: "software-update", title: "软件更新", detail: "设置 · 常规", keywords: ["更新", "版本", "下载", "安装"], icon: "gear", target: { view: "settings", settingsTab: "general" } }),

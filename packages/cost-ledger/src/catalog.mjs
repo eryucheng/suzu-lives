@@ -39,6 +39,23 @@ function clockMinutes(value, timeZone) {
   }
 }
 
+const WEEKDAY_IDS = new Set(["mon", "tue", "wed", "thu", "fri", "sat", "sun"]);
+
+function localWeekday(value, timeZone) {
+  const timestamp = new Date(value);
+  if (!Number.isFinite(timestamp.getTime())) return "";
+  try {
+    const weekday = new Intl.DateTimeFormat("en-US", {
+      timeZone: clean(timeZone),
+      weekday: "short",
+    }).format(timestamp);
+    const normalized = clean(weekday).slice(0, 3).toLowerCase();
+    return WEEKDAY_IDS.has(normalized) ? normalized : "";
+  } catch {
+    return "";
+  }
+}
+
 function parseClockMinutes(value) {
   const match = /^(?:[01]\d|2[0-3]):[0-5]\d$/u.exec(clean(value));
   if (!match) return null;
@@ -53,16 +70,32 @@ function intervalContains(minutes, start, end) {
     : minutes >= start || minutes < end;
 }
 
+function intervalIncludesWeekday(interval, weekday) {
+  if (!Array.isArray(interval.weekdays)) return true;
+  const selected = new Set(
+    interval.weekdays
+      .map((value) => clean(value).slice(0, 3).toLowerCase())
+      .filter((value) => WEEKDAY_IDS.has(value)),
+  );
+  return Boolean(weekday) && selected.has(weekday);
+}
+
 function scheduledRates(rateSchedule, timestamp) {
   const schedule = plainObject(rateSchedule);
   const timeZone = clean(schedule.timeZone);
   const minutes = timeZone ? clockMinutes(timestamp, timeZone) : null;
-  if (minutes === null) return null;
+  const weekday = timeZone ? localWeekday(timestamp, timeZone) : "";
+  if (minutes === null || !weekday) return null;
   for (const value of Array.isArray(schedule.intervals) ? schedule.intervals : []) {
     const interval = plainObject(value);
     const start = parseClockMinutes(interval.start);
     const end = parseClockMinutes(interval.end);
-    if (start === null || end === null || !intervalContains(minutes, start, end)) continue;
+    if (
+      start === null
+      || end === null
+      || !intervalContains(minutes, start, end)
+      || !intervalIncludesWeekday(interval, weekday)
+    ) continue;
     const rates = {};
     for (const [key, candidate] of Object.entries(plainObject(interval.rates))) {
       const rate = finiteNonNegative(candidate);
@@ -85,7 +118,6 @@ const CUSTOM_RATE_DEFINITIONS = Object.freeze({
   inputAudioSeconds: Object.freeze({ label: "输入音频时长", unitLabel: "元 / 秒", per: 1 }),
   imageRequests: Object.freeze({ label: "图片请求", unitLabel: "元 / 次", per: 1 }),
   generatedImages: Object.freeze({ label: "生成图片", unitLabel: "元 / 张", per: 1 }),
-  generatedVoices: Object.freeze({ label: "成功创建音色", unitLabel: "元 / 个", per: 1 }),
 });
 
 function plainObject(value) {

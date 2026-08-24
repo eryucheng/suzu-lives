@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Avatar, Banner, Button, Dialog, Empty, GlassPanel, Input, PageHeader, Roster, Tabs, Textarea } from "suzu-design-system";
 
-import { getIdentity } from "../core/identity.mjs";
+import { contactAvatarSource } from "../core/contact-avatar.mjs";
 import { PageScaffold } from "./page-scaffold.jsx";
 import "./relationship-settings-page.css";
 
@@ -23,12 +23,6 @@ function fileLabel(file) {
 
 function contactName(contact) {
   return clean(contact?.name) || "未命名联系人";
-}
-
-function contactAvatarSource(contact, settings) {
-  const identity = getIdentity(settings);
-  const agentId = clean(contact?.agentId);
-  return clean(identity?.agents?.[agentId]?.avatarDataUrl || identity?.defaultAgent?.avatarDataUrl);
 }
 
 function WorkspaceEmpty({ description, title }) {

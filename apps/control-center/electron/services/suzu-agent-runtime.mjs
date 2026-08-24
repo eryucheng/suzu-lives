@@ -11,11 +11,16 @@ import {
   createSuzuAgentRuntimeDriver,
   createSuzuAgentCoreSupervisor,
 } from "@suzu-lives/suzu-agent-runtime";
+import { formatErrorForDisplay } from "@suzu-lives/suzu-agent-runtime/error-detail";
 import {
   SUZU_COMPANION_AGENT_PRESET,
   createSuzuAgentComposition,
 } from "@suzu-lives/suzu-agent-composition";
 import { ensureSuzuAgentExternalCapabilitiesPatch } from "./agent-external-capabilities.mjs";
+import {
+  EMPTY_AGENT_MODEL_CAPABILITIES,
+  normalizeAgentModelCapabilities,
+} from "./agent-model-capabilities.mjs";
 import { deleteAgentSessionStorage } from "./agent-session-storage.mjs";
 import { createSuzuInstructionBridge } from "./suzu-instruction-bridge.mjs";
 
@@ -42,7 +47,21 @@ const SUZU_SOFTWARE_ASSISTANT_PRESET_ASSET_DIRECTORY = path.join(
   SUZU_SOFTWARE_ASSISTANT_AGENT_PRESET,
 );
 const SUZU_SOFTWARE_ASSISTANT_PRESET_FILES = ["agent.cordis.yml", "preset.yml"];
-const AGENT_DEFAULT_MODEL_SETTINGS_NAMESPACE = "agent-default-model";
+const SUZU_SOFTWARE_ASSISTANT_SKILL_DIRECTORY = "software-assistant-skills";
+const SUZU_SOFTWARE_ASSISTANT_SKILL_NAMES = Object.freeze([
+  "software-navigation",
+  "model-and-api-setup",
+  "capability-setup",
+  "contact-creation",
+  "contact-and-relationship",
+  "chat-and-context",
+  "today-and-schedules",
+  "app-management",
+  "software-diagnostics",
+]);
+const SUZU_SOFTWARE_ASSISTANT_LEGACY_SKILL_NAMES = Object.freeze([
+  "plans-and-management",
+]);
 export class SuzuAgentRuntimeServiceError extends Error {
   constructor(message, { cause, code = "SUZU_AGENT_RUNTIME_ERROR" } = {}) {
     super(message, cause ? { cause } : undefined);
@@ -69,7 +88,7 @@ function requiredAbsoluteDirectory(value, label) {
 }
 
 function errorMessage(error, fallback) {
-  return clean(error?.message || error) || fallback;
+  return formatErrorForDisplay(error, { fallback });
 }
 
 function notFound(error) {
@@ -149,28 +168,6 @@ function unwrapAgentCoreResponse(response, operation) {
   );
 }
 
-function selectedModelCapabilities(settings, catalog) {
-  const namespaces = Array.isArray(settings?.namespaces) ? settings.namespaces : [];
-  const selectionNamespace = namespaces.find((entry) => clean(entry?.ns) === AGENT_DEFAULT_MODEL_SETTINGS_NAMESPACE);
-  const selection = plainObject(selectionNamespace?.value);
-  const provider = clean(selection.provider);
-  const model = clean(selection.model);
-  const groups = Array.isArray(catalog?.groups) ? catalog.groups : [];
-  const group = groups.find((entry) => clean(entry?.id) === provider);
-  const entry = (Array.isArray(group?.models) ? group.models : [])
-    .find((candidate) => clean(candidate?.id) === model);
-  const inputModalities = [...new Set((Array.isArray(entry?.inputModalities) ? entry.inputModalities : [])
-    .map((modality) => clean(modality).toLowerCase())
-    .filter((modality) => modality === "text" || modality === "image"))];
-  return Object.freeze({
-    provider,
-    model,
-    known: Boolean(provider && model && entry),
-    inputModalities: Object.freeze(inputModalities),
-    supportsImageInput: inputModalities.includes("image"),
-  });
-}
-
 // Keep the product-side history contract stable even when Agent Core changes
 // its wire shape.  Core currently returns raw event records in `events`; all
 // Suzu consumers receive `{ event: rawEvent }` entries instead.  That makes
@@ -230,9 +227,9 @@ export function resolveSuzuAgentRuntimePaths({
 
 /**
  * The product-use assistant is a fixed internal composition rather than a
- * user-editable companion preset.  Refresh its two tiny files at startup so
- * an app update cannot leave an old tool contract or a stale
- * compaction prompt inside the managed Agent Core home.
+ * user-editable companion preset. Refresh its composition and curated product
+ * Skills at startup so an app update cannot leave an old tool contract,
+ * compaction prompt, or product instruction in the managed Agent Core home.
  */
 export async function ensureSuzuSoftwareAssistantAgentPreset({
   runtimeHome,
@@ -241,7 +238,7 @@ export async function ensureSuzuSoftwareAssistantAgentPreset({
 } = {}) {
   const home = requiredAbsoluteDirectory(runtimeHome, "Suzu Agent Core 数据目录");
   const sourceDirectory = requiredAbsoluteDirectory(assetDirectory, "Suzu 软件助手 preset 资源目录");
-  if (!fsOps?.mkdir || !fsOps?.readFile || !fsOps?.writeFile) {
+  if (!fsOps?.mkdir || !fsOps?.readFile || !fsOps?.writeFile || !fsOps?.rm) {
     throw new SuzuAgentRuntimeServiceError("Suzu 软件助手 preset 文件接口无效。", { code: "PRESET_FILESYSTEM_INVALID" });
   }
   const contents = await Promise.all(SUZU_SOFTWARE_ASSISTANT_PRESET_FILES.map(async (fileName) => {
@@ -254,40 +251,79 @@ export async function ensureSuzuSoftwareAssistantAgentPreset({
       );
     }
   }));
+  const skillContents = await Promise.all(SUZU_SOFTWARE_ASSISTANT_SKILL_NAMES.map(async (skillName) => {
+    const relativePath = path.join("skills", skillName, "SKILL.md");
+    try {
+      return [skillName, await fsOps.readFile(path.join(sourceDirectory, relativePath), "utf8")];
+    } catch (error) {
+      throw new SuzuAgentRuntimeServiceError(
+        `无法读取 Suzu 软件助手 Skill：${skillName}。`,
+        { cause: error, code: "PRESET_SKILL_ASSET_MISSING" },
+      );
+    }
+  }));
   const targetDirectory = path.join(home, ".agent-presets", SUZU_SOFTWARE_ASSISTANT_AGENT_PRESET);
+  const skillsDirectory = path.join(home, SUZU_SOFTWARE_ASSISTANT_SKILL_DIRECTORY);
   await fsOps.mkdir(targetDirectory, { recursive: true });
+  await fsOps.mkdir(skillsDirectory, { recursive: true });
   let created = false;
   let updated = false;
-  for (const [fileName, content] of contents) {
-    const target = path.join(targetDirectory, fileName);
+  const refreshManagedFile = async ({ target, content, label }) => {
     let existing = null;
     try {
       existing = await fsOps.readFile(target, "utf8");
     } catch (error) {
       if (!notFound(error)) {
         throw new SuzuAgentRuntimeServiceError(
-          `无法读取已安装的 Suzu 软件助手 preset：${fileName}。`,
+          `无法读取已安装的 Suzu 软件助手资源：${label}。`,
           { cause: error, code: "PRESET_READ_FAILED" },
         );
       }
     }
-    if (existing === content) continue;
+    if (existing === content) return;
     try {
       await fsOps.writeFile(target, content, "utf8");
     } catch (error) {
       throw new SuzuAgentRuntimeServiceError(
-        `无法安装 Suzu 软件助手 preset：${fileName}。`,
+        `无法安装 Suzu 软件助手资源：${label}。`,
         { cause: error, code: "PRESET_INSTALL_FAILED" },
       );
     }
     if (existing === null) created = true;
     else updated = true;
+  };
+  for (const [fileName, content] of contents) {
+    await refreshManagedFile({
+      target: path.join(targetDirectory, fileName),
+      content,
+      label: fileName,
+    });
+  }
+  for (const [skillName, content] of skillContents) {
+    const skillDirectory = path.join(skillsDirectory, skillName);
+    await fsOps.mkdir(skillDirectory, { recursive: true });
+    await refreshManagedFile({
+      target: path.join(skillDirectory, "SKILL.md"),
+      content,
+      label: `${skillName}/SKILL.md`,
+    });
+  }
+  for (const skillName of SUZU_SOFTWARE_ASSISTANT_LEGACY_SKILL_NAMES) {
+    try {
+      await fsOps.rm(path.join(skillsDirectory, skillName), { recursive: true, force: true });
+    } catch (error) {
+      throw new SuzuAgentRuntimeServiceError(
+        `无法清理已替换的 Suzu 软件助手 Skill：${skillName}。`,
+        { cause: error, code: "PRESET_SKILL_CLEANUP_FAILED" },
+      );
+    }
   }
   return Object.freeze({
     agentPreset: SUZU_SOFTWARE_ASSISTANT_AGENT_PRESET,
     created,
     updated,
     directory: targetDirectory,
+    skillsDirectory,
   });
 }
 
@@ -362,6 +398,7 @@ export function createSuzuAgentRuntime({
   let lastInstructionSync = null;
   let externalCapabilitiesPatchFile = "";
   let activeTemporaryDirectory = storage.temporaryDirectory;
+  let cachedModelCapabilities = EMPTY_AGENT_MODEL_CAPABILITIES;
 
   const publish = (event) => {
     for (const listener of listeners) {
@@ -580,8 +617,15 @@ export function createSuzuAgentRuntime({
     const safeLimit = Number.isSafeInteger(maxMessages) && maxMessages > 0
       ? Math.min(maxMessages, 2_000)
       : 500;
-    const opened = await ensureSession({ sessionId, contactId, cwd, presentation });
-    const coreSessionId = clean(opened?.runtimeSessionId) || clean(sessionId);
+    const coreSessionId = clean(sessionId);
+    if (!coreSessionId) {
+      throw new SuzuAgentRuntimeServiceError("Suzu Agent 会话标识无效。", { code: "AGENT_SESSION_ID_INVALID" });
+    }
+    // A transcript page is read-only. Do not resume the contact Agent (and its
+    // workspace/preset) merely because the user opens a conversation. A send,
+    // compaction, or other execution operation still goes through
+    // `ensureSession()` and owns the normal lifecycle.
+    await start();
     const current = supervisor?.status?.();
     if (!runtime || current?.state !== "ready" || !supervisor) {
       throw new SuzuAgentRuntimeServiceError("Suzu Agent 会话未就绪。", { code: "AGENT_NOT_READY" });
@@ -743,26 +787,14 @@ export function createSuzuAgentRuntime({
     return started.api;
   };
 
-  /**
-   * The model setting is live and user-editable, so do not cache this answer.
-   * A failed capability lookup deliberately reports no image support: the chat
-   * layer will retain its configured image-understanding fallback instead of
-   * risking a native image request to an unknown model.
-   */
-  const currentModelCapabilities = async () => {
-    try {
-      const api = await controlPlane();
-      if (!api?.settings?.describe || !api?.llm?.models) {
-        return Object.freeze({ provider: "", model: "", known: false, inputModalities: Object.freeze([]), supportsImageInput: false });
-      }
-      const [settings, catalog] = await Promise.all([
-        api.settings.describe({}).then((reply) => unwrapAgentCoreResponse(reply, "读取模型设置")),
-        api.llm.models({}).then((reply) => unwrapAgentCoreResponse(reply, "读取模型目录")),
-      ]);
-      return selectedModelCapabilities(settings, catalog);
-    } catch {
-      return Object.freeze({ provider: "", model: "", known: false, inputModalities: Object.freeze([]), supportsImageInput: false });
-    }
+  // The configuration service refreshes this snapshot on application startup
+  // and after every successful model save. Chat attachment routing reads only
+  // this in-process value; it never opens the Agent Core control plane.
+  const currentModelCapabilities = () => cachedModelCapabilities;
+
+  const setCurrentModelCapabilities = (value = {}) => {
+    cachedModelCapabilities = normalizeAgentModelCapabilities(value);
+    return cachedModelCapabilities;
   };
 
   return Object.freeze({
@@ -775,6 +807,10 @@ export function createSuzuAgentRuntime({
 
     async currentModelCapabilities() {
       return currentModelCapabilities();
+    },
+
+    setCurrentModelCapabilities(value) {
+      return setCurrentModelCapabilities(value);
     },
 
     async prepareInstructions() {

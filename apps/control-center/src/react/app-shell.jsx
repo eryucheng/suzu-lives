@@ -1,9 +1,11 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import { Avatar, Button, Dialog, Input, SideNav, SideNavItem } from "suzu-design-system";
+import { releasePointerCapture } from "../core/pointer-capture.mjs";
 import { ApplicationRouter } from "./app-router.jsx";
 import { ConversationCallProvider } from "./conversation-call.jsx";
 import { OnboardingDialog } from "./onboarding-dialog.jsx";
+import { usePointerCaptureRecovery } from "./pointer-capture-recovery.mjs";
 import { SoftwareAssistantDialog } from "./software-assistant-dialog.jsx";
 
 let latestWorkspace = null;
@@ -106,8 +108,11 @@ function IncomingConversationNotice({ notice = null }) {
     <aside aria-atomic="true" aria-live="polite" className="incoming-conversation-notice" role="status">
       <img alt="" className="incoming-conversation-notice__icon" src="./app-icon.png" />
       <div className="incoming-conversation-notice__copy">
-        <div className="incoming-conversation-notice__meta"><strong>Suzu Lives</strong><time>刚刚</time></div>
-        <strong className="incoming-conversation-notice__sender">{notice.senderName || "Suzu"}</strong>
+        <div className="incoming-conversation-notice__meta">
+          <strong>{notice.senderName || "Suzu"}</strong>
+          <span className="incoming-conversation-notice__app-name">Suzu Lives</span>
+          <time>刚刚</time>
+        </div>
         <p>{notice.preview}</p>
       </div>
     </aside>
@@ -311,7 +316,7 @@ export function AppShell() {
     sidebarWidthRef.current = nextWidth;
     setSidebarWidth(nextWidth);
     setSidebarResizing(false);
-    if (event.currentTarget?.hasPointerCapture?.(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+    releasePointerCapture(event.currentTarget || activeResize.target, activeResize.pointerId);
     if (save) saveSidebarWidth(nextWidth);
   };
 
@@ -322,6 +327,7 @@ export function AppShell() {
       autoCompact: compactSidebarViewport && !sidebarViewportOverride,
       moved: false,
       pointerId: event.pointerId,
+      target: event.currentTarget,
     };
     event.currentTarget.setPointerCapture?.(event.pointerId);
     setSidebarResizing(true);
@@ -341,6 +347,16 @@ export function AppShell() {
     if (sidebarResizeRef.current?.pointerId !== event.pointerId) return;
     finishSidebarResize(event, { save: false, useCurrentWidth: true });
   };
+
+  const abortSidebarResize = () => {
+    const activeResize = sidebarResizeRef.current;
+    if (!activeResize) return;
+    sidebarResizeRef.current = null;
+    setSidebarResizing(false);
+    releasePointerCapture(activeResize.target, activeResize.pointerId);
+  };
+
+  usePointerCaptureRecovery(abortSidebarResize);
 
   const resizeSidebarFromKeyboard = (event) => {
     const sidebarAutoCompact = compactSidebarViewport && !sidebarViewportOverride;
@@ -401,6 +417,7 @@ export function AppShell() {
           aria-valuenow={effectiveSidebarWidth}
           className="shell-sidebar-resizer"
           onKeyDown={resizeSidebarFromKeyboard}
+          onLostPointerCapture={cancelSidebarResize}
           onPointerCancel={cancelSidebarResize}
           onPointerDown={beginSidebarResize}
           onPointerMove={resizeSidebar}

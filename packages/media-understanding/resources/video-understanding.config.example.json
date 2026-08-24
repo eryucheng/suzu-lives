@@ -1,11 +1,7 @@
 {
-  "provider": {
-    "api_key": "",
-    "api_key_env": "DASHSCOPE_API_KEY",
-    "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-    "model": "qwen3.5-omni-flash"
-  },
   "video": {
+    "adapter": "dashscope-openai-video",
+    "custom_adapter_id": "",
     "fps": 1,
     "timeout_seconds": 240,
     "max_output_tokens": 350,

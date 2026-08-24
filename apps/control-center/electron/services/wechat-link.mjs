@@ -4,7 +4,7 @@ import path from "node:path";
 import QRCode from "qrcode";
 
 import { resolveAgentConversationDataRoot } from "@suzu-lives/agent-registry";
-import { hasTerminalNoReply, isExactNoReply } from "../../shared/agent-reply-markers.mjs";
+import { hasBoundaryNoReply, isExactNoReply } from "../../shared/agent-reply-markers.mjs";
 import { parseSuzuConversationCommand } from "../../shared/conversation-command.mjs";
 
 const DEFAULT_BASE_URL = "https://ilinkai.weixin.qq.com";
@@ -15,6 +15,11 @@ const MAX_RECENT_MESSAGE_IDS = 160;
 const MAX_WECHAT_TEXT_RUNES = 3800;
 const POLL_BACKOFF_MAX_MS = 30_000;
 const TYPING_REFRESH_MS = 5_000;
+export const WECHAT_TEXT_SEGMENTATION = Object.freeze({
+  PARAGRAPH: "paragraph",
+  SENTENCE: "sentence",
+});
+export const DEFAULT_WECHAT_TEXT_SEGMENTATION = WECHAT_TEXT_SEGMENTATION.PARAGRAPH;
 const INTERNAL_SCHEDULE_MARKER = /<\/?suzu-schedule-task\b[^>]*>|<!--\s*suzu-lives:display-system\s*-->/iu;
 const LEADING_REASONING_BLOCK = /^\s*<(?:think|thinking|analysis|reasoning)\b[^>]*>[\s\S]*?<\/(?:think|thinking|analysis|reasoning)\s*>\s*/iu;
 const REASONING_TAG = /<\/?(?:think|thinking|analysis|reasoning)\b[^>]*>/iu;
@@ -48,16 +53,15 @@ function clean(value) {
 // the visible completion, so enforce the final external boundary here too.
 function publicAgentReply(value, { scheduled = false } = {}) {
   const source = clean(value);
-  if (!source || (scheduled ? hasTerminalNoReply(source) : isExactNoReply(source)) || INTERNAL_SCHEDULE_MARKER.test(source)) return "";
+  if (!source || (scheduled ? hasBoundaryNoReply(source) : isExactNoReply(source)) || INTERNAL_SCHEDULE_MARKER.test(source)) return "";
   const visible = source.replace(LEADING_REASONING_BLOCK, "").trim();
   return REASONING_TAG.test(visible) || /^NO_REPLY$/iu.test(visible) ? "" : visible;
 }
 
 function isWechatEligibleEvent(event = {}) {
   if (event.deliverToWechat !== true || event.displayAsSystem === true) return false;
-  // The only scheduled turn intended to initiate external contact is the
-  // user-facing A phase. General timers and the internal B phase remain local.
-  return event.kind !== "schedule" || clean(event.scheduleSource) === "proactive-chain";
+  if (event.kind !== "schedule") return true;
+  return ["proactive-contact", "agent-schedule"].includes(clean(event.scheduleSource));
 }
 
 function wechatPermissionDecision(value) {
@@ -206,8 +210,19 @@ function normalizeDelivery(value = {}) {
   return Object.fromEntries(Object.entries(DEFAULT_WECHAT_DELIVERY).map(([key, fallback]) => [key, input[key] === undefined ? fallback : input[key] === true]));
 }
 
+function normalizeTextSegmentation(value) {
+  return clean(value) === WECHAT_TEXT_SEGMENTATION.SENTENCE
+    ? WECHAT_TEXT_SEGMENTATION.SENTENCE
+    : DEFAULT_WECHAT_TEXT_SEGMENTATION;
+}
+
 function emptyPublicStore() {
-  return { version: 1, enabled: true, delivery: { ...DEFAULT_WECHAT_DELIVERY }, links: [] };
+  return {
+    version: 2,
+    delivery: { ...DEFAULT_WECHAT_DELIVERY },
+    textSegmentation: DEFAULT_WECHAT_TEXT_SEGMENTATION,
+    links: [],
+  };
 }
 
 function normalizePublicLink(value = {}) {
@@ -240,11 +255,17 @@ function normalizePublicLink(value = {}) {
 
 function normalizePublicStore(value) {
   const raw = plainObject(value);
+  const links = (Array.isArray(raw.links) ? raw.links : [])
+    .map(normalizePublicLink)
+    .filter(Boolean)
+    .slice(0, 80);
   return {
-    version: 1,
-    enabled: raw.enabled !== false,
+    version: 2,
     delivery: normalizeDelivery(raw.delivery),
-    links: (Array.isArray(raw.links) ? raw.links : []).map(normalizePublicLink).filter(Boolean).slice(0, 80),
+    textSegmentation: normalizeTextSegmentation(raw.textSegmentation),
+    // Older versions had a global switch. Preserve a previous global pause by
+    // pausing each saved contact connection when it is read for the first time.
+    links: raw.enabled === false ? links.map((link) => ({ ...link, enabled: false })) : links,
   };
 }
 
@@ -321,12 +342,43 @@ function chunks(value, maximum = MAX_WECHAT_TEXT_RUNES) {
   return result;
 }
 
-/** Split on blank lines before enforcing the remote text-size limit. */
-export function splitWechatText(value) {
+function splitWechatSentences(paragraph) {
+  const output = [];
+  const characters = Array.from(String(paragraph ?? ""));
+  const ending = new Set(["。", "！", "？", "!", "?", ".", "…"]);
+  const trailing = new Set([...ending, "\"", "'", "”", "’", ")", "）", "]", "】", "》"]);
+  let current = "";
+  let sentenceEnded = false;
+
+  const flush = () => {
+    const value = current.trim();
+    if (value) output.push(value);
+    current = "";
+    sentenceEnded = false;
+  };
+
+  for (let index = 0; index < characters.length; index += 1) {
+    const character = characters[index];
+    const previous = characters[index - 1] || "";
+    const next = characters[index + 1] || "";
+    const decimalPoint = character === "." && /\d/u.test(previous) && /\d/u.test(next);
+    if (sentenceEnded && !trailing.has(character)) flush();
+    current += character;
+    if (!decimalPoint && ending.has(character)) sentenceEnded = true;
+  }
+  flush();
+  return output;
+}
+
+/** Split on the selected message boundary before enforcing the remote text-size limit. */
+export function splitWechatText(value, { textSegmentation = DEFAULT_WECHAT_TEXT_SEGMENTATION } = {}) {
   const text = String(value ?? "").trim();
   if (!text) return [];
   const paragraphs = text.split(/\r?\n[\t ]*\r?\n+/u).map((item) => item.trim()).filter(Boolean);
-  return paragraphs.flatMap((paragraph) => chunks(paragraph));
+  const segments = normalizeTextSegmentation(textSegmentation) === WECHAT_TEXT_SEGMENTATION.SENTENCE
+    ? paragraphs.flatMap(splitWechatSentences)
+    : paragraphs;
+  return segments.flatMap((segment) => chunks(segment));
 }
 
 async function readJson(fsOps, target, fallback) {
@@ -741,7 +793,7 @@ export function createWeChatLinkService({
   };
 
   const deliverText = async (link, text, options = {}) => {
-    for (const segment of splitWechatText(text)) await sendText(link, segment, options);
+    for (const segment of splitWechatText(text, { textSegmentation: publicStore.textSegmentation })) await sendText(link, segment, options);
   };
 
   const queueTask = (link, task) => {
@@ -978,7 +1030,7 @@ export function createWeChatLinkService({
         while (!disposed && !controller.signal.aborted) {
           await ensureLoaded();
           const link = findLinkById(linkId);
-          if (!publicStore.enabled || !link || link.enabled === false) break;
+          if (!link || link.enabled === false) break;
           try {
             const response = await apiPost(link, "ilink/bot/getupdates", {
               get_updates_buf: link.cursor || "",
@@ -1017,7 +1069,7 @@ export function createWeChatLinkService({
 
   const startStoredLoops = async () => {
     await ensureLoaded();
-    if (!publicStore.enabled || disposed) return;
+    if (disposed) return;
     for (const link of publicStore.links) if (link.enabled !== false) startLoop(link.id);
   };
 
@@ -1062,7 +1114,7 @@ export function createWeChatLinkService({
     publicStore.links.push(link);
     saveCredentials(link.id, { token, contextToken: "" });
     await persist();
-    if (publicStore.enabled) startLoop(link.id);
+    startLoop(link.id);
     attempts.delete(attempt.id);
     emit({ type: "connected", linkId: link.id, contactId: link.contactId });
   };
@@ -1107,7 +1159,6 @@ export function createWeChatLinkService({
 
   const begin = async ({ contactId } = {}) => {
     await ensureLoaded();
-    if (publicStore.enabled !== true) throw new WeChatLinkError("请先在“能力 → 行动”中开启“连接微信”。 ");
     const id = normalizedContactId(contactId);
     removedContactIds.delete(id);
     const session = await scopeForContact(id);
@@ -1145,8 +1196,8 @@ export function createWeChatLinkService({
       attempt = [...attempts.values()].find((item) => item.contactId === id) || null;
     }
     return {
-      enabled: publicStore.enabled === true,
       delivery: { ...publicStore.delivery },
+      textSegmentation: publicStore.textSegmentation,
       linkedContacts: publicStore.links.length,
       contact: publicLink(link),
       pendingQr: attempt ? {
@@ -1158,16 +1209,14 @@ export function createWeChatLinkService({
     };
   };
 
-  const saveSettings = async ({ enabled, delivery } = {}) => {
+  const saveSettings = async (value = {}) => {
     await ensureLoaded();
-    if (enabled !== undefined) publicStore.enabled = enabled === true;
+    const input = plainObject(value);
+    const { delivery, textSegmentation } = input;
     if (delivery !== undefined) publicStore.delivery = normalizeDelivery(delivery);
+    if (textSegmentation !== undefined) publicStore.textSegmentation = normalizeTextSegmentation(textSegmentation);
     await persist();
-    if (publicStore.enabled) await startStoredLoops();
-    else {
-      await stopAllTyping();
-      stopLoops();
-    }
+    await startStoredLoops();
     emit({ type: "settings" });
     return snapshot();
   };
@@ -1181,7 +1230,7 @@ export function createWeChatLinkService({
     link.enabled = enabled === true;
     link.updatedAt = nowIso(now);
     await persist();
-    if (link.enabled && publicStore.enabled) startLoop(link.id);
+    if (link.enabled) startLoop(link.id);
     else {
       await stopTyping(link);
       typingTickets.delete(link.id);
@@ -1240,7 +1289,7 @@ export function createWeChatLinkService({
     if (!projectRoot) return;
     void (async () => {
       const contactId = await reader.contactIdForSession({ sessionId: event.sessionId, projectRoot });
-      if (!contactId || !publicStore.enabled) return;
+      if (!contactId) return;
       const links = publicStore.links.filter((link) => link.contactId === contactId && link.enabled !== false);
       if (!links.length) return;
       const requestId = clean(event.requestId);

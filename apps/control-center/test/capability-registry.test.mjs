@@ -12,11 +12,10 @@ test("capability registry is the single source for catalog, contact config clean
   const registry = createCapabilityRegistry();
   assert.deepEqual(registry.catalog().map((entry) => entry.id), [
     "image-generation",
-    "phone-camera",
-    "time-awareness",
     "image-vision",
     "video-understanding",
     "voice-message",
+    "voice-call",
     "web-browser",
     "mail-bridge",
     "agent-journal",
@@ -41,8 +40,23 @@ test("capability registry is the single source for catalog, contact config clean
   const cleanup = registry.contactConfigEntries();
   assert.equal(cleanup.some((entry) => entry.path.join("/") === "automation/agent-journal/config.json"), true);
   assert.equal(cleanup.some((entry) => entry.path.join("/") === "automation/mail-bridge/config.json"), true);
+  assert.equal(registry.catalog().some((entry) => entry.id === "time-awareness"), false);
+  assert.equal(registry.get("time-awareness")?.internal, true);
+  assert.equal(registry.isContactScoped("time-awareness"), false);
   assert.equal(registry.catalog().some((entry) => entry.id === "memory-recall"), false);
   assert.equal(registry.catalog().some((entry) => entry.id === "conversation-attachment"), false);
+  assert.equal(registry.catalog().some((entry) => entry.id === "schedule"), false);
+  assert.deepEqual(registry.agentActions({ capabilityId: "schedule" }).map((action) => ({
+    capabilityId: action.capabilityId,
+    action: action.action,
+    resourceId: action.resourceId,
+  })), [
+    { capabilityId: "schedule", action: "add", resourceId: "agent-add" },
+    { capabilityId: "schedule", action: "list", resourceId: "agent-list" },
+    { capabilityId: "schedule", action: "remove", resourceId: "agent-remove" },
+  ]);
+  assert.match(registry.agentActions({ capabilityId: "schedule" })[0].actionDescription, /当前联系人/u);
+  assert.match(registry.agentActions({ capabilityId: "schedule" })[0].actionDescription, /delay/u);
   assert.equal(registry.get("traveling-merchant"), null);
   assert.deepEqual(registry.agentActions({ capabilityId: "conversation-attachment" }).map((action) => ({
     capabilityId: action.capabilityId,
@@ -62,6 +76,21 @@ test("capability registry is the single source for catalog, contact config clean
     action: "generate",
     resourceId: "agent-action",
   }]);
+  assert.match(registry.agentActions({ capabilityId: "image-generation" })[0].actionDescription, /stylePreset/u);
+  assert.deepEqual(registry.agentActions({ capabilityId: "voice-call" }).map((action) => ({
+    capabilityId: action.capabilityId,
+    action: action.action,
+    resourceId: action.resourceId,
+  })), [
+    { capabilityId: "voice-call", action: "dial", resourceId: "agent-dial" },
+    { capabilityId: "voice-call", action: "hangup", resourceId: "agent-hangup" },
+  ]);
+  assert.match(registry.agentActions({ capabilityId: "voice-call" })[0].actionDescription, /接听/u);
+  assert.equal(registry.get("phone-camera"), null);
+  const [imageVision] = registry.agentActions({ capabilityId: "image-vision" });
+  assert.match(imageVision.actionDescription, /当前回合附件清单/u);
+  assert.match(imageVision.actionDescription, /同一图片与同一问题/u);
+  assert.match(imageVision.actionDescription, /question/u);
   assert.deepEqual(registry.agentActions({ capabilityId: "mail-bridge" }).map((action) => ({
     capabilityId: action.capabilityId,
     action: action.action,
@@ -71,6 +100,7 @@ test("capability registry is the single source for catalog, contact config clean
     action: "send",
     resourceId: "agent-action",
   }]);
+  assert.deepEqual(registry.agentActions({ capabilityId: "proactive-contact" }), []);
   const browserActions = registry.agentActions({ capabilityId: "web-browser" });
   assert.equal(browserActions.length, 16);
   assert.deepEqual(browserActions.filter((action) => ["open", "upload", "evaluate"].includes(action.action)).map((action) => action.action), ["open", "upload", "evaluate"]);
@@ -118,7 +148,6 @@ test("user-facing creation actions declare automatic attachment delivery, while 
     .resources.find((resource) => resource.id === "agent-action")
     ?.agentAction?.outputDelivery;
   assert.deepEqual(outputDelivery("image-generation"), { kind: "image", pathField: "path" });
-  assert.deepEqual(outputDelivery("phone-camera"), { kind: "image", pathField: "path" });
   assert.deepEqual(outputDelivery("voice-message"), { kind: "audio", pathField: "savedPath" });
   assert.equal(
     registry.get("web-browser").resources.find((resource) => resource.id === "browser-screenshot")
@@ -146,9 +175,9 @@ test("automation task context is mounted as a one-turn dynamic Hook, not a conta
   const block = await hook.handler({
     sessionId: "session-a",
     turnId: "turn-a",
-    scheduleSource: "proactive-chain-planning",
+    scheduleSource: "internal-task",
     outputPolicy: "silent",
-    taskContext: { id: "schedule-a", text: "安排下一次主动关心。" },
+    taskContext: { id: "scheduled-internal-task", text: "整理本轮内部检查。" },
   });
   assert.equal(block.kind, "automation-task");
   assert.equal(block.display.transcript, false);
@@ -327,7 +356,17 @@ test("capability registry exposes only adapter-connected agent actions through o
 
   const disconnected = createCapabilityRuntime({ registry });
   assert.deepEqual(disconnected.availableActions(), []);
-  assert.equal((await disconnected.invoke({ capabilityId: "daily-note", action: "create" })).status, "adapter-not-connected");
+  assert.deepEqual(await disconnected.invoke({ capabilityId: "daily-note", action: "create" }), {
+    capabilityId: "daily-note",
+    action: "create",
+    resourceId: "note-cli",
+    kind: "cli",
+    status: "adapter-not-connected",
+    error: {
+      code: "CAPABILITY_ADAPTER_NOT_CONNECTED",
+      message: "这项能力的执行适配器尚未连接，无法执行。",
+    },
+  });
 });
 
 test("capability registry rejects a model action without a declared invoke lifecycle", () => {

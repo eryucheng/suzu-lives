@@ -9,7 +9,7 @@
   name: '@suzu-lives/suzu-agent-runtime/core/persona'
   config:
     text: |-
-      以自然的人类对话方式回应：理解语境，表达有分寸，使用具体且贴合当下的语言。
+      以自然的人类对话方式回应：理解语境，表达有分寸，使用具体且贴合当下的语言。默认不用 Unicode emoji。
     complete: true
     includeRuntimeContext: false
 
@@ -36,10 +36,9 @@
   config:
     timeoutMs: 5000
 
-# This generic Agent Core tool is the empty routing seam for separately installed
-# product abilities.  It can expose only actions that a connected capability
-# module has declared; by itself it grants the model no calendar, browser,
-# voice, visual, or external-service action.
+# This generic Agent Core tool executes one action that a loaded product Skill
+# declares. It does not itself reveal product action contracts or grant a
+# calendar, browser, voice, visual, or external-service action.
 - id: capability-bridge
   name: '@suzu-lives/suzu-agent-runtime/capability-bridge'
   config:
@@ -47,6 +46,14 @@
     # minutes. Their own product settings still control request timeouts; the
     # bridge merely must not cut an installed action off first.
     timeoutMs: 3600000
+
+# Product abilities are real Core Skills. The short catalog is contact-aware;
+# detailed input contracts are loaded by the native `skill` tool only when the
+# current request needs that ability.
+- id: capability-skills
+  name: '@suzu-lives/suzu-agent-runtime/capability-skills'
+  config:
+    timeoutMs: 5000
 
 # A private bridge for product-maintained structured work such as extracting
 # long-term memory after a reply.  It calls the current Agent Core model inside

@@ -267,31 +267,7 @@ export const CAPABILITY_DEFINITIONS = freezeArray([
         agentAction: {
           id: "generate",
           name: "生成图片",
-          description: "生成或编辑一张图片。input 必须包含 { prompt: " + '"图片提示词"' + " }；可选 backend: \"api\" | \"comfyui\"、workflow、size、seed、outputDirectory，以及最多 16 个 references: [{ role: \"identity\" | \"location\" | \"object\" | \"style\", path: \"本机绝对图片路径\" }]。成功后图片会自动投放到当前聊天；已绑定微信的会话会自动转发。",
-          outputDelivery: { kind: "image", pathField: "path" },
-        },
-      },
-      { id: "usage-ledger", kind: "usage", driver: "cost-ledger" },
-    ],
-  }),
-  defineCapability({
-    id: "phone-camera",
-    name: "手机拍照式图像",
-    description: "生成具有手机拍摄感的图片。",
-    category: "create",
-    setting: { route: "api", label: "设置图片" },
-    runtimeStatus: "agent-capability-bridge",
-    config: { path: ["capabilities", "phone-camera", "config.json"], contactScoped: true, contactFields: CONTACT_SCOPE_FIELDS },
-    resources: [
-      {
-        id: "agent-action",
-        kind: "runtime",
-        driver: "phone-camera",
-        lifecycle: ["install", "sync", "uninstall", "invoke"],
-        agentAction: {
-          id: "generate",
-          name: "生成手机拍照式图片",
-          description: "按手机后置、自拍或镜前拍照的既有构图规则生成一张图片。input 必须包含 { shot: \"rear\" | \"selfie\" | \"mirror\", scene: \"画面中可见的场景\" }；可选 backend、workflow、size、seed、outputDirectory，以及 references: [{ scope: \"contact\" | \"shared\", id: \"视觉资料或资料组 ID\" }]。成功后图片会自动投放到当前聊天；已绑定微信的会话会自动转发。",
+          description: "生成或编辑一张图片。普通图片的 input 必须包含 { prompt: " + '"图片提示词"' + " }；可选 size、outputDirectory，以及最多 16 个 references: [{ role: \"identity\" | \"location\" | \"object\" | \"style\", path: \"本机绝对图片路径\" }]。需要手机拍照式画面时，使用 { stylePreset: \"phone-camera\", shot: \"rear\" | \"selfie\" | \"mirror\", scene: \"画面中可见的场景\" }，可选 size、outputDirectory 和 references: [{ scope: \"contact\" | \"shared\", id: \"视觉资料或资料组 ID\" }]。成功后图片会自动投放到当前聊天；已绑定微信的会话会自动转发。",
           outputDelivery: { kind: "image", pathField: "path" },
         },
       },
@@ -301,10 +277,11 @@ export const CAPABILITY_DEFINITIONS = freezeArray([
   defineCapability({
     id: "time-awareness",
     name: "时间感知",
-    description: "按会话以设定的间隔感知本机日期、星期与当前时间。",
-    category: "perceive",
+    description: "按应用首次启动时保存的本地时区，为每个联系人提供日期、星期与当前时间。",
+    category: "system",
+    internal: true,
     runtimeStatus: "agent-core-context-hook",
-    config: { path: ["capabilities", "time-awareness", "config.json"], contactScoped: true, contactFields: CONTACT_SCOPE_FIELDS },
+    config: { path: ["capabilities", "time-awareness", "config.json"] },
     resources: [
       {
         id: "dynamic-context",
@@ -332,7 +309,7 @@ export const CAPABILITY_DEFINITIONS = freezeArray([
         agentAction: {
           id: "analyze",
           name: "理解图片",
-          description: "读取当前用户明确提供的一张本机图片。input 必须包含 { path: \"本机绝对图片路径\" }，可选 question。不要猜测图片路径；用户刚发送的附件路径会出现在当前消息的附件清单中。",
+          description: "用于理解当前回合附件清单中的一张本机图片。当回复需要依据图片内容时调用：先从附件清单取得准确的绝对路径，再传入 input { path: \"本机绝对图片路径\", question?: \"想了解的内容\" }。同一图片与同一问题已经得到结论时，沿用该结论继续回答。",
         },
       },
       { id: "usage-ledger", kind: "usage", driver: "cost-ledger" },
@@ -382,6 +359,37 @@ export const CAPABILITY_DEFINITIONS = freezeArray([
         },
       },
       { id: "usage-ledger", kind: "usage", driver: "cost-ledger" },
+    ],
+  }),
+  defineCapability({
+    id: "voice-call",
+    name: "语音通话",
+    description: "由陪伴 Agent 发起来电，并在合适的时候结束通话。",
+    category: "companion",
+    runtimeStatus: "agent-capability-bridge",
+    resources: [
+      {
+        id: "agent-dial",
+        kind: "runtime",
+        driver: "realtime-voice-call",
+        lifecycle: ["invoke"],
+        agentAction: {
+          id: "dial",
+          name: "发起来电",
+          description: "向当前联系人发起实时语音来电。input 可选 { reason: \"简短来电原因\" }。仅在确实适合即时通话、且可以等待对方接听时调用；返回 ringing 只表示来电已显示，用户接听后才会建立麦克风通话。",
+        },
+      },
+      {
+        id: "agent-hangup",
+        kind: "runtime",
+        driver: "realtime-voice-call",
+        lifecycle: ["invoke"],
+        agentAction: {
+          id: "hangup",
+          name: "挂断通话",
+          description: "结束当前联系人正在进行的实时语音通话；若来电仍在等待接听，则取消该来电。无需 input。成功后等待系统生成通话结束后的正常聊天回复。",
+        },
+      },
     ],
   }),
   defineCapability({
@@ -542,9 +550,52 @@ export const CAPABILITY_DEFINITIONS = freezeArray([
     ],
   }),
   defineCapability({
+    id: "schedule",
+    name: "计划",
+    description: "创建和维护当前联系人的对话定时任务。",
+    category: "act",
+    internal: true,
+    runtimeStatus: "agent-capability-bridge",
+    resources: [
+      {
+        id: "agent-add",
+        kind: "runtime",
+        driver: "schedule",
+        lifecycle: ["invoke"],
+        agentAction: {
+          id: "add",
+          name: "创建计划",
+          description: "创建当前联系人的一次性或循环对话计划。input 必须包含 prompt（届时应处理的事项）；按计划类型提供 delay（正整数加 s、m、h 或 d）或 cron（5 段 Cron 表达式）；可选 description。",
+        },
+      },
+      {
+        id: "agent-list",
+        kind: "runtime",
+        driver: "schedule",
+        lifecycle: ["invoke"],
+        agentAction: {
+          id: "list",
+          name: "查看定时任务",
+          description: "读取当前联系人由 Agent 创建的待执行定时任务。input 留空；结果包含每条任务的 id、说明和触发时间。",
+        },
+      },
+      {
+        id: "agent-remove",
+        kind: "runtime",
+        driver: "schedule",
+        lifecycle: ["invoke"],
+        agentAction: {
+          id: "remove",
+          name: "取消定时任务",
+          description: "取消当前联系人指定的由 Agent 创建的定时任务。input 必须包含 id；先通过查看定时任务取得对应 ID。",
+        },
+      },
+    ],
+  }),
+  defineCapability({
     id: "proactive-contact",
     name: "主动关心",
-    description: "在 Suzu 运行期间用自动任务安排主动联系。",
+    description: "由 Suzu 判断联系时机，并安排下一次联系检查。",
     category: "companion",
     config: { path: ["automation", "proactive-contact", "config.json"], contactScoped: true, contactFields: CONTACT_SCOPE_FIELDS },
     resources: [
@@ -605,7 +656,7 @@ export const CAPABILITY_DEFINITIONS = freezeArray([
         agentAction: {
           id: "deliver",
           name: "发送聊天附件",
-          description: "将已有且已确认的本机绝对路径作为附件交付到当前聊天。图片生成、手机拍照式图片和语音消息成功时由软件自动投放；本动作用于其他已有文件。input 必须是 { items: [{ path: \"绝对路径\", kind: \"image\" | \"audio\" | \"file\" }] }；图片支持 AVIF/BMP/GIF/HEIC/ICO/JPG/PNG/SVG/TIFF/WebP，音频仅支持 MP3。动作成功后，附件会出现在当前聊天；已绑定微信的会话会自动转发同一附件。",
+          description: "将已有且已确认的本机绝对路径作为附件交付到当前聊天。图像生成和语音消息成功时由软件自动投放；本动作用于其他已有文件。input 必须是 { items: [{ path: \"绝对路径\", kind: \"image\" | \"audio\" | \"file\" }] }；图片支持 AVIF/BMP/GIF/HEIC/ICO/JPG/PNG/SVG/TIFF/WebP，音频仅支持 MP3。动作成功后，附件会出现在当前聊天；已绑定微信的会话会自动转发同一附件。",
         },
       },
     ],
@@ -888,6 +939,12 @@ export function createCapabilityRuntime({ registry = createCapabilityRegistry(),
         capabilityId: targetCapabilityId,
         action: targetAction,
         status: "capability-not-found",
+        error: Object.freeze({
+          code: "CAPABILITY_NOT_FOUND",
+          message: targetCapabilityId
+            ? `找不到产品能力“${targetCapabilityId}”。`
+            : "没有提供要执行的产品能力。",
+        }),
       });
     }
     const declared = typeof registry.agentActions === "function"
@@ -899,6 +956,12 @@ export function createCapabilityRuntime({ registry = createCapabilityRegistry(),
         capabilityId: targetCapabilityId,
         action: targetAction,
         status: "action-not-found",
+        error: Object.freeze({
+          code: "CAPABILITY_ACTION_NOT_FOUND",
+          message: targetAction
+            ? `能力“${targetCapabilityId}”没有动作“${targetAction}”。`
+            : `能力“${targetCapabilityId}”没有提供要执行的动作。`,
+        }),
       });
     }
     if (!actionAllowed(selected, context)) {
@@ -923,6 +986,10 @@ export function createCapabilityRuntime({ registry = createCapabilityRegistry(),
         resourceId: selected.resourceId,
         kind: selected.resourceKind,
         status: "adapter-not-connected",
+        error: Object.freeze({
+          code: "CAPABILITY_ADAPTER_NOT_CONNECTED",
+          message: "这项能力的执行适配器尚未连接，无法执行。",
+        }),
       });
     }
     try {

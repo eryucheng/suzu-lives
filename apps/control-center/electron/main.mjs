@@ -5,6 +5,7 @@ import { app, BrowserWindow, ipcMain, Menu, screen } from "electron";
 import electronUpdater from "electron-updater";
 
 import { createSettingsService, registerIpcHandlers } from "./ipc/index.mjs";
+import { withDetailedIpcErrors } from "./ipc/ipc-error-boundary.mjs";
 import { registerLegacyMigrationIpc } from "./ipc/legacy-migration-ipc.mjs";
 import { createAppUpdateService, scheduleAppUpdateChecks } from "./services/app-update.mjs";
 import { createDataStorageLocationService } from "./services/data-storage-location.mjs";
@@ -201,7 +202,7 @@ const singleInstance = app.requestSingleInstanceLock();
         app,
         dataStorageService,
         getMigrationWindow: () => mainWindow,
-        ipcMain,
+        ipcMain: withDetailedIpcErrors(ipcMain),
         settingsService,
       });
       createLegacyMigrationWindow();

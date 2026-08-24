@@ -43,6 +43,32 @@ test("conversation viewport anchor preserves the visible message after rows abov
   assert.equal(fixture.list.scrollTop, 520);
 });
 
+test("conversation viewport anchor keeps the prior oldest message in place after an older page is prepended", () => {
+  const fixture = fakeList({
+    offsets: { firstVisible: 0, following: 88 },
+    scrollHeight: 760,
+    scrollTop: 0,
+  });
+  const anchor = captureConversationViewportAnchor(fixture.list);
+  assert.deepEqual(anchor, {
+    anchors: [
+      { anchorId: "firstVisible", offset: 0 },
+      { anchorId: "following", offset: 88 },
+    ],
+    mode: "messages",
+  });
+
+  // An older page appears above the message that was at the very top. The
+  // viewport must follow that original message rather than jump to the newly
+  // fetched oldest message, which also gives the scrollbar its new mid-rail
+  // position.
+  fixture.offsets.firstVisible += 360;
+  fixture.offsets.following += 360;
+  fixture.list.scrollHeight += 360;
+  assert.equal(restoreConversationViewportAnchor(fixture.list, anchor), true);
+  assert.equal(fixture.list.scrollTop, 360);
+});
+
 test("conversation viewport anchor falls back when its first visible row is hidden", () => {
   const fixture = fakeList({ offsets: { system: 280, user: 380 }, scrollTop: 300 });
   const anchor = captureConversationViewportAnchor(fixture.list);

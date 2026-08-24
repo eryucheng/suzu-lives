@@ -66,6 +66,109 @@ function scheduleTask(task) {
   };
 }
 
+function proactiveRelativeDelay(value) {
+  const dueAt = Date.parse(clean(value));
+  if (!Number.isFinite(dueAt)) return "";
+  const remainingMinutes = Math.max(0, Math.ceil((dueAt - Date.now()) / 60_000));
+  if (!remainingMinutes) return "即将";
+  const hours = Math.floor(remainingMinutes / 60);
+  const minutes = remainingMinutes % 60;
+  if (hours && minutes) return `${hours} 小时 ${minutes} 分钟`;
+  if (hours) return `${hours} 小时`;
+  return `${minutes} 分钟`;
+}
+
+function proactiveContactState(contact, autoMaintain) {
+  if (!contact?.enabled) {
+    return { detail: "不会为这位联系人安排主动关心。", label: "已关闭", tone: "muted" };
+  }
+  if (!autoMaintain) {
+    return { detail: "恢复自动安排后，会按这位联系人的开关重新创建下一次判断。", label: "全局暂停", tone: "muted" };
+  }
+  const dueAt = clean(contact?.dueAt);
+  if (!dueAt) {
+    return { detail: "正在等待本轮判断完成后安排下一次检查。", label: "正在安排", tone: "warning" };
+  }
+  const relative = proactiveRelativeDelay(dueAt);
+  return {
+    detail: `下次判断：${dateTime(dueAt)}${relative ? `（约 ${relative} 后）` : ""}`,
+    label: "已安排",
+    tone: "success",
+  };
+}
+
+function isProactiveContactTask(task) {
+  return clean(task?.systemKind) === "proactive-contact";
+}
+
+function ProactiveContactPlans({ actions = {}, value = {} }) {
+  const [error, setError] = useState("");
+  const [pendingKey, setPendingKey] = useState("");
+  const autoMaintain = value?.autoMaintain === true;
+  const contacts = Array.isArray(value?.contacts) ? value.contacts : [];
+  const update = async (key, action, input) => {
+    if (typeof action !== "function" || pendingKey) return;
+    setError("");
+    setPendingKey(key);
+    try {
+      await action(input);
+    } catch (actionError) {
+      setError(clean(actionError?.message) || "无法更新主动关心设置。 ");
+    } finally {
+      setPendingKey("");
+    }
+  };
+
+  return (
+    <GlassPanel as="section" className="plans-proactive" intensity="soft">
+      <header className="plans-proactive__header">
+        <div>
+          <span className="plans-proactive__eyebrow">COMPANION</span>
+          <h2>主动关心</h2>
+          <p>由 Suzu 决定下次检查时间；这里与联系人设置使用同一组开关。</p>
+        </div>
+        <label className="plans-proactive__master-switch">
+          <Switch
+            aria-label="自动安排主动关心"
+            checked={autoMaintain}
+            disabled={Boolean(pendingKey)}
+            onChange={(event) => { void update("auto-maintain", actions.setAutoMaintain, event.target.checked); }}
+          />
+          <span>{autoMaintain ? "自动安排已开启" : "自动安排已暂停"}</span>
+        </label>
+      </header>
+
+      {contacts.length ? (
+        <ul className="plans-proactive__contacts" aria-label="各联系人主动关心设置">
+          {contacts.map((contact) => {
+            const state = proactiveContactState(contact, autoMaintain);
+            const key = `contact:${contact.id}`;
+            return (
+              <li className="plans-proactive__contact" key={contact.id}>
+                <div className="plans-proactive__contact-copy">
+                  <strong>{contact.name}</strong>
+                  <p>{state.detail}</p>
+                </div>
+                <Status label={state.label} tone={state.tone} />
+                <label className="plans-proactive__contact-switch">
+                  <Switch
+                    aria-label={`为${contact.name}启用主动关心`}
+                    checked={contact.enabled === true}
+                    disabled={Boolean(pendingKey)}
+                    onChange={(event) => { void update(key, actions.setContactEnabled, { contactId: contact.id, enabled: event.target.checked }); }}
+                  />
+                  <span>{contact.enabled ? "已开启" : "已关闭"}</span>
+                </label>
+              </li>
+            );
+          })}
+        </ul>
+      ) : <p className="plans-proactive__empty">还没有联系人；创建联系人后，可在这里统一查看和控制主动关心。</p>}
+      {error ? <p className="plans-proactive__error" role="alert">{error}</p> : null}
+    </GlassPanel>
+  );
+}
+
 function scheduleHistoryStatus(value) {
   const status = clean(value).toLowerCase();
   if (status === "running") return { label: "执行中", tone: "warning" };
@@ -389,10 +492,25 @@ export function PlansPage({ actions = {}, snapshot = null }) {
     remove: typeof actions.remove === "function" ? (value) => updateSnapshot("remove", value) : undefined,
     setEnabled: typeof actions.setEnabled === "function" ? (value) => updateSnapshot("setEnabled", value) : undefined,
   };
+  const updateProactiveSnapshot = async (method, value) => {
+    const action = actions?.[method];
+    if (typeof action !== "function") return undefined;
+    const result = await action(value);
+    if (result?.snapshot) setCurrentSnapshot(result.snapshot);
+    return result;
+  };
+  const proactiveActions = {
+    setAutoMaintain: (enabled) => updateProactiveSnapshot("setProactiveContactAutoMaintain", enabled),
+    setContactEnabled: (value) => updateProactiveSnapshot("setProactiveContactEnabled", value),
+  };
   const loading = currentSnapshot === null;
   const tasks = Array.isArray(currentSnapshot?.tasks) ? currentSnapshot.tasks : [];
+  const regularTasks = tasks.filter((task) => !isProactiveContactTask(task));
   const history = Array.isArray(currentSnapshot?.history) ? currentSnapshot.history : [];
   const contacts = Array.isArray(currentSnapshot?.contacts) ? currentSnapshot.contacts : [];
+  const proactiveContact = currentSnapshot?.proactiveContact && typeof currentSnapshot.proactiveContact === "object"
+    ? currentSnapshot.proactiveContact
+    : null;
 
   return (
     <>
@@ -423,11 +541,13 @@ export function PlansPage({ actions = {}, snapshot = null }) {
           ))}
         </ol>
 
+        {!loading && proactiveContact ? <ProactiveContactPlans actions={proactiveActions} value={proactiveContact} /> : null}
+
         {loading ? (
           <PlansEmpty contacts={contacts} loading onCreate={() => setEditorOpen(true)} />
-        ) : tasks.length ? (
+        ) : regularTasks.length ? (
           <section className="plans-task-list" aria-label="已保存的自动任务">
-            {tasks.map((task, index) => (
+            {regularTasks.map((task, index) => (
               <PlansTaskCard
                 actions={pageActions}
                 key={task?.id || `${task?.kind || "task"}-${index}`}
@@ -436,9 +556,9 @@ export function PlansPage({ actions = {}, snapshot = null }) {
               />
             ))}
           </section>
-        ) : (
+        ) : !proactiveContact ? (
           <PlansEmpty contacts={contacts} loading={false} onCreate={() => setEditorOpen(true)} />
-        )}
+        ) : null}
       </PageScaffold>
 
       {editorOpen ? <PlanEditor actions={pageActions} contacts={contacts} onClose={() => setEditorOpen(false)} /> : null}

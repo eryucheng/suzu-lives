@@ -260,7 +260,7 @@ function voiceProfileChoices(services, profiles, customTtsAdapters) {
       ...publicVoiceProfile(profile, service || null),
       adapter: service?.adapter || "",
       key: `profile:${profile.id}`,
-      kindLabel: service ? `${service.name} · ${ttsAdapterLabel(service.adapter)}` : "语音服务不可用",
+      kindLabel: service ? `${service.name} · ${ttsAdapterLabel(service.adapter)}` : "语音适配器不可用",
       selectable,
       selection: "profile",
     };
@@ -341,11 +341,11 @@ export function registerVoiceDesignIpc({ connectionsService, contactProjectsServ
     const services = readVoiceServices(dataRoot);
     const requestedId = clean(plainObject(value).id).toLowerCase();
     const current = requestedId ? services.find((item) => item.id === requestedId) : null;
-    if (requestedId && !current) throw new Error("找不到要编辑的语音服务。 ");
-    if (!current && services.length >= MAX_VOICE_SERVICES) throw new Error(`语音服务不能超过 ${MAX_VOICE_SERVICES} 个。`);
+    if (requestedId && !current) throw new Error("找不到要编辑的语音适配器。 ");
+    if (!current && services.length >= MAX_VOICE_SERVICES) throw new Error(`语音适配器不能超过 ${MAX_VOICE_SERVICES} 个。`);
     const service = await checkedVoiceService(value, { current });
     const duplicate = services.find((item) => item.id !== service.id && item.name.localeCompare(service.name, "zh-CN", { sensitivity: "accent" }) === 0);
-    if (duplicate) throw new Error("已经有同名的语音服务。请换一个备注名。 ");
+    if (duplicate) throw new Error("已经有同名的语音适配器。请换一个备注名。 ");
     const next = current ? services.map((item) => item.id === current.id ? service : item) : [service, ...services];
     await writeVoiceServices(dataRoot, next);
     return snapshot(settingsService, contactProjectsService);
@@ -355,11 +355,11 @@ export function registerVoiceDesignIpc({ connectionsService, contactProjectsServ
     const id = clean(plainObject(value).id).toLowerCase();
     const services = readVoiceServices(dataRoot);
     const service = services.find((item) => item.id === id);
-    if (!service) throw new Error("找不到这个语音服务。 ");
+    if (!service) throw new Error("找不到这个语音适配器。 ");
     const profiles = readVoiceProfiles(dataRoot);
     const references = profiles.filter((item) => item.serviceId === service.id);
     if (references.length) {
-      throw new Error(`这个语音服务仍有 ${references.length} 个音色。请先删除或迁移这些音色。`);
+      throw new Error(`这个语音适配器仍有 ${references.length} 个音色。请先删除或迁移这些音色。`);
     }
     await writeVoiceServices(dataRoot, services.filter((item) => item.id !== service.id));
     return snapshot(settingsService, contactProjectsService);
@@ -378,9 +378,9 @@ export function registerVoiceDesignIpc({ connectionsService, contactProjectsServ
       createdAt: clean(current?.createdAt) || clean(value?.createdAt) || new Date().toISOString(),
     });
     const service = findVoiceService(dataRoot, profile.serviceId);
-    if (!service) throw new Error("请选择一个可用的语音服务。 ");
+    if (!service) throw new Error("请选择一个可用的语音适配器。 ");
     if (service.adapter === "custom-http-tts" && !findCustomTtsAdapter(dataRoot, service.customAdapterId)) {
-      throw new Error("该语音服务使用的自定义协议已经不可用。 ");
+      throw new Error("该语音适配器使用的自定义协议已经不可用。 ");
     }
     const model = profile.model || service.model;
     const modelError = ttsAdapterModelCompatibilityError({ adapter: service.adapter, model });
@@ -436,7 +436,7 @@ export function registerVoiceDesignIpc({ connectionsService, contactProjectsServ
     const serviceReferences = readVoiceServices(dataRoot).filter((item) => item.adapter === "custom-http-tts" && item.customAdapterId === id);
     if (serviceReferences.length) {
       const labels = serviceReferences.slice(0, 3).map((item) => item.name).join("、");
-      throw new Error(`这个自定义协议仍被语音服务“${labels}${serviceReferences.length > 3 ? "等" : ""}”使用。请先调整或删除对应服务。`);
+      throw new Error(`这个自定义协议仍被语音适配器“${labels}${serviceReferences.length > 3 ? "等" : ""}”使用。请先调整或删除对应适配器。`);
     }
     const contacts = await contactsFor(contactProjectsService);
     const libraries = [

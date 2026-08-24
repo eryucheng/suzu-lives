@@ -18,6 +18,9 @@ function clean(value) { return String(value ?? "").trim(); }
 function isStandardFile(value) { return [...STANDARD_FILES].some((file) => file.toLowerCase() === String(value).toLowerCase()); }
 function isPrimaryFile(value) { return PRIMARY_FILE.toLowerCase() === String(value).toLowerCase(); }
 function inside(root, target) { const relative = path.relative(root, target); return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative)); }
+function assertRelationshipContent(content) {
+  if (typeof content !== "string" || content.length > MAX_TEXT_LENGTH) throw new RelationshipFilesError("关系文本必须是少于 1 MB 的普通文本。 ");
+}
 
 export function normalizeRelationshipPath(value, { allowStandard = true } = {}) {
   const raw = clean(value).replaceAll("\\", "/");
@@ -178,25 +181,33 @@ function expandedReferenceHeading(reference) {
   return `相处资料（${reference}）`;
 }
 
-async function expandSuzuReferences(root, suzuContent, fsOps) {
+async function expandSuzuReferences(root, suzuContent, fsOps, { contentOverrides = new Map() } = {}) {
   const source = String(suzuContent ?? "");
   const references = managedSuzuReferences(source);
   if (!references.length) return source;
+  // Relationship files and SUZU.md commit together. Expand against staged
+  // values so the instruction context never trails the saved file by one write.
+  const stagedContent = contentOverrides instanceof Map ? contentOverrides : new Map();
   const sections = [];
   let total = 0;
   for (const reference of references) {
     if (reference.toLowerCase() === EXCLUDED_FILE) continue;
-    const checked = await safeTarget(root, reference, fsOps);
-    if (!checked.exists) {
-      sections.push(`## ${expandedReferenceHeading(reference)}\n\n（文件不存在）`);
-      continue;
-    }
     let text;
-    try {
-      text = await fsOps.readFile(checked.target, "utf8");
-    } catch {
-      sections.push(`## ${expandedReferenceHeading(reference)}\n\n（无法读取）`);
-      continue;
+    const stagedKey = reference.toLowerCase();
+    if (stagedContent.has(stagedKey)) {
+      text = stagedContent.get(stagedKey);
+    } else {
+      const checked = await safeTarget(root, reference, fsOps);
+      if (!checked.exists) {
+        sections.push(`## ${expandedReferenceHeading(reference)}\n\n（文件不存在）`);
+        continue;
+      }
+      try {
+        text = await fsOps.readFile(checked.target, "utf8");
+      } catch {
+        sections.push(`## ${expandedReferenceHeading(reference)}\n\n（无法读取）`);
+        continue;
+      }
     }
     const limited = text.length > MAX_EXPANDED_FILE_CHARS ? `${text.slice(0, MAX_EXPANDED_FILE_CHARS)}\n[内容已截断]` : text;
     total += limited.length;
@@ -258,12 +269,24 @@ function referencedFiles(suzuContent) {
   return [...result];
 }
 
-export function createRelationshipFilesService({ settingsService, fsOps = fs } = {}) {
+export function createRelationshipFilesService({ contactProjectsService = null, settingsService, fsOps = fs } = {}) {
   if (!settingsService?.load) throw new RelationshipFilesError("关系文件服务需要设置服务。 ");
   const root = () => projectRoot(settingsService.load()?.projectRoot, fsOps);
-  const snapshot = async () => {
-    const configured = clean(settingsService.load()?.projectRoot); if (!configured) return { status: "needs-project", files: [] };
-    const selectedRoot = await root();
+  const contactRoot = async (contactId) => {
+    const id = clean(contactId);
+    if (!id) throw new RelationshipFilesError("缺少要保存相处资料的联系人标识。 ");
+    if (typeof contactProjectsService?.snapshot !== "function") {
+      throw new RelationshipFilesError("关系文件服务未连接联系人项目目录。 ");
+    }
+    const catalog = await contactProjectsService.snapshot();
+    const contact = (Array.isArray(catalog?.contacts) ? catalog.contacts : [])
+      .find((item) => clean(item?.id) === id) || null;
+    if (!clean(contact?.projectRoot)) {
+      throw new RelationshipFilesError("指定联系人不存在或无法从联系人存储目录读取。 ");
+    }
+    return projectRoot(contact.projectRoot, fsOps);
+  };
+  const snapshotForRoot = async (selectedRoot) => {
     const suzu = await readText(selectedRoot, PRIMARY_FILE, fsOps);
     const requested = [...STANDARD_FILES, ...referencedFiles(suzu.content)].filter((item, index, all) => all.indexOf(item) === index && item !== EXCLUDED_FILE);
     const visibleSuzu = { ...suzu, content: visibleSuzuContent(withoutRelationshipSection(suzu.content)) };
@@ -277,34 +300,58 @@ export function createRelationshipFilesService({ settingsService, fsOps = fs } =
       files,
     };
   };
-  const save = async ({ path: relativePath, content } = {}) => {
-    const selectedRoot = await root(); const normalized = normalizeRelationshipPath(relativePath);
+  const snapshot = async () => {
+    const configured = clean(settingsService.load()?.projectRoot); if (!configured) return { status: "needs-project", files: [] };
+    return snapshotForRoot(await root());
+  };
+  const write = async (selectedRoot, { path: relativePath, content } = {}) => {
+    assertRelationshipContent(content);
+    const normalized = normalizeRelationshipPath(relativePath);
     if (isPrimaryFile(normalized)) {
       const suzu = await readText(selectedRoot, PRIMARY_FILE, fsOps);
       const restored = restoreSuzuReferences(content, suzu.content);
       await writeAtomic(selectedRoot, PRIMARY_FILE, await expandSuzuReferences(selectedRoot, restored, fsOps), fsOps);
-      return snapshot();
+      return;
     }
     const suzu = await readText(selectedRoot, PRIMARY_FILE, fsOps);
     if (!isStandardFile(normalized) && !referencedFiles(suzu.content).includes(normalized)) throw new RelationshipFilesError("只能编辑当前相处设定页已引用的自定义 Markdown 文件。 ");
-    const nextSuzu = await expandSuzuReferences(selectedRoot, ensureUniqueSuzuReference(suzu.content, normalized), fsOps);
+    const nextSuzu = await expandSuzuReferences(
+      selectedRoot,
+      ensureUniqueSuzuReference(suzu.content, normalized),
+      fsOps,
+      { contentOverrides: new Map([[normalized.toLowerCase(), content]]) },
+    );
     await writeRelationshipTransaction(selectedRoot, [
       { path: normalized, content },
       { path: PRIMARY_FILE, content: nextSuzu },
     ], fsOps);
+  };
+  const save = async (value = {}) => {
+    await write(await root(), value);
     return snapshot();
   };
+  const saveForContact = async ({ contactId, ...value } = {}) => {
+    const selectedRoot = await contactRoot(contactId);
+    await write(selectedRoot, value);
+    return snapshotForRoot(selectedRoot);
+  };
   const create = async ({ path: relativePath, content = "" } = {}) => {
+    assertRelationshipContent(content);
     const selectedRoot = await root(); const normalized = normalizeRelationshipPath(relativePath, { allowStandard: false });
     const suzu = await readText(selectedRoot, PRIMARY_FILE, fsOps);
-    const nextSuzu = await expandSuzuReferences(selectedRoot, ensureUniqueSuzuReference(suzu.content, normalized), fsOps);
+    const nextSuzu = await expandSuzuReferences(
+      selectedRoot,
+      ensureUniqueSuzuReference(suzu.content, normalized),
+      fsOps,
+      { contentOverrides: new Map([[normalized.toLowerCase(), content]]) },
+    );
     await writeRelationshipTransaction(selectedRoot, [
       { path: normalized, content, requireMissing: true },
       { path: PRIMARY_FILE, content: nextSuzu },
     ], fsOps);
     return snapshot();
   };
-  return { snapshot, save, create };
+  return { snapshot, save, saveForContact, create };
 }
 
 export function registerRelationshipFilesIpc({ ipcMain, relationshipFilesService }) {

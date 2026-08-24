@@ -5,6 +5,7 @@ import {
 } from "@suzu-lives/suzu-agent-runtime/compaction-defaults";
 import { Avatar, Banner, Button, Empty, GlassPanel, Input, PageHeader, Roster, Status, Switch, Textarea } from "suzu-design-system";
 
+import { contactAvatarSource } from "../core/contact-avatar.mjs";
 import { PageScaffold } from "./page-scaffold.jsx";
 import "./conversation-compactor-page.css";
 
@@ -36,7 +37,7 @@ function runStatus(lastRun) {
   return { label: "还没有压缩记录", tone: "muted" };
 }
 
-function ContactRail({ contacts, disabled, selectedContactId, onSelect }) {
+function ContactRail({ contacts, disabled, selectedContactId, onSelect, settings }) {
   return (
     <GlassPanel as="aside" className="conversation-compactor-session-rail" intensity="soft">
       <div className="conversation-compactor-session-rail__heading">
@@ -49,7 +50,7 @@ function ContactRail({ contacts, disabled, selectedContactId, onSelect }) {
           const selected = clean(contact.id) === clean(selectedContactId);
           return (
             <Roster
-              avatar={<Avatar name={name} size="md" />}
+              avatar={<Avatar name={name} size="md" src={contactAvatarSource(contact, settings)} />}
               className="conversation-compactor-contact"
               key={contact.id}
               name={name}
@@ -69,7 +70,7 @@ function ContactRail({ contacts, disabled, selectedContactId, onSelect }) {
  * happens inside Agent Core; the rendered chat remains a full append-only
  * transcript even after compaction.
  */
-export function ConversationCompactorPage({ actions = {}, error = "", loading = false, snapshot = null }) {
+export function ConversationCompactorPage({ actions = {}, error = "", loading = false, settings = {}, snapshot = null }) {
   const [draft, setDraft] = useState(() => initialDraft(snapshot));
   const [pending, setPending] = useState("");
   const selectedContactId = clean(snapshot?.selectedContactId);
@@ -150,11 +151,11 @@ export function ConversationCompactorPage({ actions = {}, error = "", loading = 
           </GlassPanel>
         ) : !selectedConversation ? (
           <GlassPanel as="section" className="conversation-compactor-contact-empty" intensity="soft">
-            <Empty description="先创建并选择一位联系人，才能为她的固定对话设置压缩方式。" title="还没有可设置的联系人" />
+            <Empty description="先创建并选择一位联系人，才能为 ta 的固定对话设置压缩方式。" title="还没有可设置的联系人" />
           </GlassPanel>
         ) : (
           <div className="conversation-compactor-workspace">
-            <ContactRail contacts={contacts} disabled={busy} onSelect={selectContact} selectedContactId={selectedContactId} />
+            <ContactRail contacts={contacts} disabled={busy} onSelect={selectContact} selectedContactId={selectedContactId} settings={settings} />
 
           <GlassPanel as="section" className="conversation-compactor-workspace__main" intensity="soft">
             <header className="conversation-compactor-main-header">

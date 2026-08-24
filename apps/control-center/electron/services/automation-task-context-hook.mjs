@@ -33,6 +33,7 @@ export function createAutomationTaskContextHook() {
     if (!text || !turnId) return null;
     const taskId = clean(task.id);
     const outputPolicy = clean(source.outputPolicy) || "external";
+    const turnKind = clean(source.kind);
     return Object.freeze({
       id: `automation-task:${turnId}`,
       kind: "automation-task",
@@ -47,6 +48,7 @@ export function createAutomationTaskContextHook() {
       metadata: Object.freeze({
         ...(taskId ? { taskId } : {}),
         ...(clean(source.scheduleSource) ? { scheduleSource: clean(source.scheduleSource) } : {}),
+        ...(turnKind ? { turnKind } : {}),
         outputPolicy,
       }),
       text: [

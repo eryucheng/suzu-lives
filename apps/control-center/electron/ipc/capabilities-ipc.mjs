@@ -1,8 +1,49 @@
+import { randomUUID } from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 
 import { resolveAgentDataRoot } from "@suzu-lives/agent-registry";
+import { formatErrorForDisplay } from "@suzu-lives/suzu-agent-runtime/error-detail";
+import {
+  CUSTOM_IMAGE_GENERATION_ADAPTER_FILE,
+  CUSTOM_IMAGE_GENERATION_ADAPTER_SCHEMA_VERSION,
+  imageGenerationAdapterLabel,
+  imageGenerationAdapterSupportsConnection,
+  MAX_CUSTOM_IMAGE_GENERATION_ADAPTERS,
+  normalizeCustomImageGenerationAdapter,
+  normalizeImageGenerationAdapter,
+  publicCustomImageGenerationAdapter,
+  readCustomImageGenerationAdapters,
+} from "@suzu-lives/image-workbench";
+import {
+  CUSTOM_VISION_ADAPTER_SCHEMA_VERSION,
+  MAX_CUSTOM_VISION_ADAPTERS,
+  normalizeCustomVisionAdapter,
+  publicCustomVisionAdapter,
+  readCustomVisionAdapters,
+} from "@suzu-lives/media-understanding/custom-vision-adapters";
+import {
+  CUSTOM_VIDEO_ADAPTER_FILE,
+  CUSTOM_VIDEO_ADAPTER_SCHEMA_VERSION,
+  MAX_CUSTOM_VIDEO_ADAPTERS,
+  normalizeCustomVideoAdapter,
+  publicCustomVideoAdapter,
+  readCustomVideoAdapters,
+} from "@suzu-lives/media-understanding/custom-video-adapters";
+import {
+  DEFAULT_VISION_ADAPTER,
+  normalizeVisionAdapter,
+  visionAdapterEndpointCompatibilityError,
+  visionAdapterLabel,
+  visionAdapterSupportsConnection,
+} from "@suzu-lives/media-understanding/vision-adapters";
+import {
+  DEFAULT_VIDEO_ADAPTER,
+  normalizeVideoAdapter,
+  videoAdapterLabel,
+  videoAdapterSupportsConnection,
+} from "@suzu-lives/media-understanding/video-adapters";
 import { readCustomTtsAdapters } from "@suzu-lives/voice-message/custom-tts-adapters";
 import { normalizeTtsAdapter, ttsAdapterLabel } from "@suzu-lives/voice-message/tts-adapters";
 import { readVoiceProfiles, readVoiceServices, resolveVoiceProfile } from "@suzu-lives/voice-message/voice-services";
@@ -11,12 +52,7 @@ import { createCapabilityRegistry } from "../services/capability-registry.mjs";
 
 const COMPANION_CONTACT_ID = /^contact-[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
 const MAX_COMPANION_CONTACTS = 160;
-const TIME_AWARENESS_ID = "time-awareness";
 const DEFAULT_CAPABILITY_REGISTRY = createCapabilityRegistry();
-const TIME_AWARENESS_CONFIG_PATH = DEFAULT_CAPABILITY_REGISTRY.configPath(TIME_AWARENESS_ID);
-const DEFAULT_TIME_AWARENESS_INTERVAL_MINUTES = 10;
-const MIN_TIME_AWARENESS_INTERVAL_MINUTES = 1;
-const MAX_TIME_AWARENESS_INTERVAL_MINUTES = 24 * 60;
 const MAIL_BRIDGE_ID = "mail-bridge";
 const WEB_BROWSER_ID = "web-browser";
 const DEFAULT_MAIL_BRIDGE_SMTP_HOST = "smtp.163.com";
@@ -24,8 +60,7 @@ const DEFAULT_MAIL_BRIDGE_IMAP_HOST = "imap.163.com";
 const DEFAULT_MAIL_BRIDGE_PASSWORD_ENV = "SUZU_MAIL_PASSWORD";
 const DEFAULT_MAIL_BRIDGE_ROUTE_SUBJECT = "Suzu";
 const DEFAULT_MAIL_BRIDGE_ROUTE_PROMPT = "这是收到的一封邮件（{{subject}}，来自 {{from}}，{{receivedAt}}）：\n{{content}}\n{{attachments}}";
-const DEFAULT_PROACTIVE_CHAIN_PROMPT = "在自然合适的时候关心对方，保持真诚、克制和贴合关系的语气。";
-const DEFAULT_PROACTIVE_FOLLOW_UP_PROMPT = "临时回访：用户在 TIME 提到 EVENT。先检查当前会话里是否已经有结果；已经有结果就只输出 NO_REPLY；还没有结果就自然地关心或询问。不要提及自动任务、回访任务或系统机制。这是一次性回访，不要设置下一次自动任务。";
+const DEFAULT_PROACTIVE_CONTACT_PROMPT = "在自然合适的时候关心对方，保持真诚、克制和贴合关系的语气。";
 function clean(value) {
   return String(value ?? "").trim();
 }
@@ -73,8 +108,7 @@ function proactiveContactSettings(value) {
   const source = plainObject(value);
   return {
     saved: Object.keys(source).length > 0,
-    chainPrompt: clean(source.chainPrompt) || DEFAULT_PROACTIVE_CHAIN_PROMPT,
-    followUpPrompt: clean(source.followUpPrompt) || DEFAULT_PROACTIVE_FOLLOW_UP_PROMPT,
+    contactPrompt: clean(source.contactPrompt) || clean(source.chainPrompt) || DEFAULT_PROACTIVE_CONTACT_PROMPT,
     autoMaintain: source.autoMaintain !== false,
     enabledContactIds: companionContactIds(source),
   };
@@ -94,21 +128,6 @@ function journalTime(value) {
   const time = clean(value);
   if (!/^(?:[01]\d|2[0-3]):[0-5]\d$/u.test(time)) throw new Error("请设置每天写日记的时间。 ");
   return time;
-}
-
-function timeAwarenessSettings(value) {
-  const source = plainObject(value);
-  return {
-    saved: Object.keys(source).length > 0,
-    intervalMinutes: numberOrFallback(source.intervalMinutes, {
-      minimum: MIN_TIME_AWARENESS_INTERVAL_MINUTES,
-      maximum: MAX_TIME_AWARENESS_INTERVAL_MINUTES,
-      fallback: DEFAULT_TIME_AWARENESS_INTERVAL_MINUTES,
-      integer: true,
-    }),
-    enabledContactIds: companionContactIds(source),
-    defaultEnabled: !Object.hasOwn(source, "enabledContactIds"),
-  };
 }
 
 function mailBridgeSettings(value) {
@@ -281,36 +300,6 @@ function publicText(value, maximum = 200) {
   return clean(value).slice(0, maximum);
 }
 
-function publicJsonLines(rootValue, segments, limit = 30) {
-  const root = clean(rootValue);
-  if (!root) return [];
-  try {
-    const resolvedRoot = path.resolve(root);
-    const target = path.resolve(resolvedRoot, ...segments);
-    if (!inside(resolvedRoot, target)) return [];
-    const stat = fsSync.lstatSync(target);
-    if (stat.isSymbolicLink() || !stat.isFile()) return [];
-    return fsSync.readFileSync(target, "utf8").split(/\r?\n/u).filter(Boolean).slice(-limit).map((line) => {
-      try { return plainObject(JSON.parse(line)); } catch { return {}; }
-    });
-  } catch {
-    return [];
-  }
-}
-
-function publicVoiceCandidates(agentRoot) {
-  return publicJsonLines(agentRoot, ["voice-design", "candidates.jsonl"], 200)
-    .map((candidate) => ({
-      id: publicText(candidate.id, 100),
-      voiceId: publicText(candidate.voiceId, 200),
-      preferredName: publicText(candidate.preferredName, 80),
-      targetModel: publicText(candidate.targetModel, 200),
-      createdAt: publicText(candidate.createdAt, 100),
-    }))
-    .filter((candidate) => candidate.id && candidate.voiceId)
-    .reverse();
-}
-
 function publicCustomVoices(agentRoot) {
   const document = agentRoot ? publicJson(agentRoot, ["voice-message", "custom-voices.json"]) : {};
   const voices = [];
@@ -385,7 +374,7 @@ function configuredVoiceProfileId(value) {
   return clean(config.voiceProfileId || tts.voiceProfileId).toLowerCase();
 }
 
-function voiceMessageSettings({ dataRoot, agentRoot, voiceDesign, candidates, customVoices }) {
+function voiceMessageSettings({ dataRoot, agentRoot, customVoices }) {
   const shared = publicJson(dataRoot, ["capabilities", "voice-message", "config.json"]);
   const scope = contactScopedAgentCapabilitySettings(shared);
   const contact = agentRoot ? publicJson(agentRoot, ["voice-message", "config.json"]) : {};
@@ -397,7 +386,6 @@ function voiceMessageSettings({ dataRoot, agentRoot, voiceDesign, candidates, cu
   const selectedProfile = contactVoiceProfileId ? resolveVoiceProfile(dataRoot, contactVoiceProfileId) : null;
   const voiceServices = readVoiceServices(dataRoot);
   const voiceProfiles = readVoiceProfiles(dataRoot);
-  const availableVoiceIds = new Set(candidates.map((candidate) => candidate.voiceId));
   let voiceId = "";
   let voiceAdapter = "dashscope-qwen";
   let customVoiceId = "";
@@ -434,21 +422,17 @@ function voiceMessageSettings({ dataRoot, agentRoot, voiceDesign, candidates, cu
         selectionSource = "invalid-contact";
         diagnostic = `当前项目保存的${ttsAdapterLabel(contactAdapter)}自定义音色不存在；发送会被拒绝，请重新选择。`;
       }
-    } else if (contactAdapter === "dashscope-qwen" && availableVoiceIds.has(contactVoiceId)) {
-      voiceId = contactVoiceId;
-      voiceAdapter = contactAdapter;
-      selectionSource = "contact";
     } else {
       selectionSource = "invalid-contact";
-        diagnostic = "当前项目保存的音色不在候选库中；发送会被安全拒绝，请重新选择。";
+      diagnostic = "当前项目保存的音色已经不可用；发送会被拒绝，请重新选择。";
     }
-  } else if (!candidates.length && !customVoices.length && !voiceProfiles.length) {
+  } else if (!customVoices.length && !voiceProfiles.length) {
     diagnostic = "当前项目还没有可用音色；请先在“语音消息”中创建语音服务和音色。";
   } else {
     diagnostic = "当前联系人尚未选择音色；请点击“配置联系人音色”后再发送。";
   }
   return {
-    saved: Object.keys(shared).length > 0 || Object.keys(contact).length > 0 || Object.keys(voiceDesign).length > 0 || candidates.length > 0 || customVoices.length > 0 || voiceServices.length > 0 || voiceProfiles.length > 0,
+    saved: Object.keys(shared).length > 0 || Object.keys(contact).length > 0 || customVoices.length > 0 || voiceServices.length > 0 || voiceProfiles.length > 0,
     voiceId,
     voiceAdapter,
     voiceProfileId: contactVoiceProfileId,
@@ -457,12 +441,11 @@ function voiceMessageSettings({ dataRoot, agentRoot, voiceDesign, candidates, cu
     timeoutMs: numberOrFallback(shared.timeoutMs, { minimum: 1000, maximum: 600000, fallback: 30000, integer: true }),
     voiceEnergyThreshold: numberOrFallback(shared.voiceEnergyThreshold, { minimum: 0.001, maximum: 1, fallback: 0.025 }),
     voiceSilenceFrames: numberOrFallback(shared.voiceSilenceFrames, { minimum: 1, maximum: 120, fallback: 9, integer: true }),
-    candidates,
     customVoices,
     enabledContactIds: scope.enabledContactIds,
     selectionSource,
     voiceDiagnostic: diagnostic,
-    canSelectVoice: Boolean(agentRoot) && (candidates.length > 0 || customVoices.length > 0 || voiceProfiles.length > 0),
+    canSelectVoice: Boolean(agentRoot) && (customVoices.length > 0 || voiceProfiles.length > 0),
   };
 }
 
@@ -508,20 +491,16 @@ async function writeJsonBelow(rootValue, segments, value) {
 function savedCapabilitySettings(settings, dataRoot) {
   const imageVision = publicJson(dataRoot, ["capabilities", "image-vision", "config.json"]);
   const videoUnderstanding = publicJson(dataRoot, ["capabilities", "video-understanding", "config.json"]);
-  const timeAwareness = publicJson(dataRoot, TIME_AWARENESS_CONFIG_PATH);
   const vision = plainObject(imageVision.vision);
   const video = plainObject(videoUnderstanding.video);
   const imageVisionScope = contactScopedAgentCapabilitySettings(imageVision);
   const videoUnderstandingScope = contactScopedAgentCapabilitySettings(videoUnderstanding);
   const imageGeneration = publicJson(dataRoot, ["capabilities", "image-generation", "config.json"]);
   const imageGenerationScope = contactScopedAgentCapabilitySettings(imageGeneration);
-  const imageComfyui = plainObject(imageGeneration.comfyui);
   const voiceAgentRoot = currentVoiceAgentRoot(settings, dataRoot);
-  const voiceDesign = voiceAgentRoot ? publicJson(voiceAgentRoot, ["voice-design", "config.json"]) : {};
   const mailBridge = publicJson(dataRoot, ["automation", "mail-bridge", "config.json"]);
   const mailBridgeState = mailBridgeSettings(mailBridge);
-  const phoneCamera = publicJson(dataRoot, ["capabilities", "phone-camera", "config.json"]);
-  const phoneCameraScope = contactScopedAgentCapabilitySettings(phoneCamera);
+  const phoneCamera = plainObject(imageGeneration.phone_camera);
   const phoneSizes = plainObject(phoneCamera.size_by_shot);
   const phoneReferences = plainObject(phoneCamera.references);
   const webBrowser = publicJson(dataRoot, ["capabilities", "web-browser", "config.json"]);
@@ -530,28 +509,38 @@ function savedCapabilitySettings(settings, dataRoot) {
   const agentJournal = publicJson(dataRoot, ["automation", "agent-journal", "config.json"]);
   const proactiveContact = publicJson(dataRoot, ["automation", "proactive-contact", "config.json"]);
   const phonePrompt = plainObject(phoneCamera.prompt);
-  const candidates = voiceAgentRoot ? publicVoiceCandidates(voiceAgentRoot) : [];
+  const customImageGenerationAdapters = readCustomImageGenerationAdapters(dataRoot).map((adapter) => publicCustomImageGenerationAdapter(adapter));
+  const customVisionAdapters = readCustomVisionAdapters(dataRoot).map((adapter) => publicCustomVisionAdapter(adapter));
+  const customVideoAdapters = readCustomVideoAdapters(dataRoot).map((adapter) => publicCustomVideoAdapter(adapter));
   const customTtsAdapterIds = new Set(readCustomTtsAdapters(dataRoot).map((adapter) => adapter.id));
   const customVoices = voiceAgentRoot
     ? publicCustomVoices(voiceAgentRoot).filter((voice) => voice.adapter !== "custom-http-tts" || customTtsAdapterIds.has(voice.customAdapterId))
     : [];
-  const voiceMessage = voiceMessageSettings({ dataRoot, agentRoot: voiceAgentRoot, voiceDesign, candidates, customVoices });
+  const voiceMessage = voiceMessageSettings({ dataRoot, agentRoot: voiceAgentRoot, customVoices });
   return {
     "image-generation": {
       saved: Object.keys(imageGeneration).length > 0 || imageGenerationScope.knownContactIds.length > 0,
       enabledContactIds: imageGenerationScope.enabledContactIds,
-      defaultBackend: choiceOrFallback(imageGeneration.default_backend ?? imageGeneration.defaultBackend, ["api", "comfyui"], "api"),
-      comfyui: {
-        baseUrl: clean(imageComfyui.base_url ?? imageComfyui.baseUrl) || "http://127.0.0.1:8188",
-        timeoutSeconds: numberOrFallback(imageComfyui.timeout_seconds ?? (Number(imageComfyui.timeoutMs) ? Number(imageComfyui.timeoutMs) / 1000 : ""), { minimum: 1, maximum: 600, fallback: 600, integer: true }),
-        pollIntervalSeconds: numberOrFallback(imageComfyui.poll_interval_seconds ?? (Number(imageComfyui.pollIntervalMs) ? Number(imageComfyui.pollIntervalMs) / 1000 : ""), { minimum: 0.1, maximum: 30, fallback: 1 }),
-        defaultWorkflow: clean(imageComfyui.default_workflow ?? imageComfyui.defaultWorkflow),
+      adapter: normalizeImageGenerationAdapter(imageGeneration.adapter),
+      customAdapterId: clean(imageGeneration.custom_adapter_id).toLowerCase(),
+      customAdapters: customImageGenerationAdapters,
+      phoneCamera: {
+        sizeByShot: {
+          rear: sizeOrFallback(phoneSizes.rear, "1536x1024"),
+          selfie: sizeOrFallback(phoneSizes.selfie, "1024x1536"),
+          mirror: sizeOrFallback(phoneSizes.mirror, "1024x1536"),
+        },
+        references: { maxImages: numberOrFallback(phoneReferences.max_images, { minimum: 1, maximum: 16, fallback: 8, integer: true }) },
+        prompt: { prefix: clean(phonePrompt.prefix), suffix: clean(phonePrompt.suffix) },
       },
     },
     "image-vision": {
       saved: Boolean(Object.keys(vision).length || imageVisionScope.knownContactIds.length),
       enabledContactIds: imageVisionScope.enabledContactIds,
       vision: {
+        adapter: normalizeVisionAdapter(vision.adapter, { fallback: DEFAULT_VISION_ADAPTER }),
+        customAdapterId: clean(vision.custom_adapter_id).toLowerCase(),
+        customAdapters: customVisionAdapters,
         detail: choiceOrFallback(vision.detail, ["auto", "low", "high"], "auto"),
         timeoutSeconds: numberOrFallback(vision.timeout_seconds, { minimum: 5, maximum: 600, fallback: 90, integer: true }),
         maxOutputTokens: numberOrFallback(vision.max_output_tokens, { minimum: 32, maximum: 32000, fallback: 800, integer: true }),
@@ -565,6 +554,9 @@ function savedCapabilitySettings(settings, dataRoot) {
       saved: Boolean(Object.keys(video).length || videoUnderstandingScope.knownContactIds.length),
       enabledContactIds: videoUnderstandingScope.enabledContactIds,
       video: {
+        adapter: normalizeVideoAdapter(video.adapter, { fallback: DEFAULT_VIDEO_ADAPTER }),
+        customAdapterId: clean(video.custom_adapter_id).toLowerCase(),
+        customAdapters: customVideoAdapters,
         fps: numberOrFallback(video.fps, { minimum: 0.1, maximum: 10, fallback: 1 }),
         timeoutSeconds: numberOrFallback(video.timeout_seconds, { minimum: 5, maximum: 3600, fallback: 240, integer: true }),
         maxOutputTokens: numberOrFallback(video.max_output_tokens, { minimum: 32, maximum: 32000, fallback: 350, integer: true }),
@@ -575,25 +567,12 @@ function savedCapabilitySettings(settings, dataRoot) {
         ffprobePath: clean(video.ffprobe_path) || "ffprobe",
       },
     },
-    [TIME_AWARENESS_ID]: timeAwarenessSettings(timeAwareness),
     "voice-message": {
       ...voiceMessage,
     },
     [MAIL_BRIDGE_ID]: {
       ...mailBridgeState,
       enabledContactIds: companionContactIds(mailBridge),
-    },
-    "phone-camera": {
-      saved: Object.keys(phoneCamera).length > 0 || phoneCameraScope.knownContactIds.length > 0,
-      enabledContactIds: phoneCameraScope.enabledContactIds,
-      defaultBackend: choiceOrFallback(phoneCamera.default_backend, ["api", "comfyui"], "api"),
-      sizeByShot: {
-        rear: sizeOrFallback(phoneSizes.rear, "1536x1024"),
-        selfie: sizeOrFallback(phoneSizes.selfie, "1024x1536"),
-        mirror: sizeOrFallback(phoneSizes.mirror, "1024x1536"),
-      },
-      references: { maxImages: numberOrFallback(phoneReferences.max_images, { minimum: 1, maximum: 16, fallback: 8, integer: true }) },
-      prompt: { prefix: clean(phonePrompt.prefix), suffix: clean(phonePrompt.suffix) },
     },
     "agent-journal": agentJournalSettings(agentJournal),
     "proactive-contact": proactiveContactSettings(proactiveContact),
@@ -620,7 +599,7 @@ export async function capabilityIpcResult(action) {
       ok: false,
       error: {
         code: clean(error?.code),
-        message: clean(error?.message) || "能力操作未完成。",
+        message: formatErrorForDisplay(error, { fallback: "能力操作未完成。" }),
       },
     };
   }
@@ -629,6 +608,7 @@ export async function capabilityIpcResult(action) {
 export function createCapabilitiesService({
   capabilityRegistry = DEFAULT_CAPABILITY_REGISTRY,
   capabilityRuntime = null,
+  connectionsService = null,
   contactProjectsService = null,
   settingsService,
   resolveContactSession = null,
@@ -640,14 +620,10 @@ export function createCapabilitiesService({
   if (capabilityRuntime && (typeof capabilityRuntime.sync !== "function" || typeof capabilityRuntime.removeContact !== "function")) {
     throw new Error("能力服务收到的能力运行时无效。");
   }
+  if (connectionsService && typeof connectionsService.resolveNamedApiConnection !== "function") {
+    throw new Error("能力服务收到的 API 连接服务无效。");
+  }
   const registry = capabilityRegistry;
-  const timeAwarenessConfigPath = registry.configPath(TIME_AWARENESS_ID) || TIME_AWARENESS_CONFIG_PATH;
-  let timeAwarenessUpdate = Promise.resolve();
-  const queueTimeAwarenessUpdate = (operation) => {
-    const next = timeAwarenessUpdate.catch(() => undefined).then(operation);
-    timeAwarenessUpdate = next.catch(() => undefined);
-    return next;
-  };
   const capabilityDataRoot = (settings) => clean(settingsService.response?.(settings)?.dataRoot || settings?.dataRoot);
   const companionConfig = (abilityId, settings = settingsService.load()) => {
     const dataRoot = capabilityDataRoot(settings);
@@ -657,10 +633,12 @@ export function createCapabilitiesService({
     throw new Error("这项能力不支持联系人投递设置。 ");
   };
   const writeProactiveContactSettings = async (dataRoot, existing, next) => {
+    const stored = { ...plainObject(existing) };
+    delete stored.chainPrompt;
+    delete stored.followUpPrompt;
     await writeJsonBelow(dataRoot, ["automation", "proactive-contact", "config.json"], {
-      ...existing,
-      chainPrompt: next.chainPrompt,
-      followUpPrompt: next.followUpPrompt,
+      ...stored,
+      contactPrompt: next.contactPrompt,
       autoMaintain: next.autoMaintain,
       enabledContactIds: next.enabledContactIds,
     });
@@ -719,26 +697,6 @@ export function createCapabilitiesService({
       return [];
     }
   };
-  const writeTimeAwarenessSettings = async ({ dataRoot, existing, intervalMinutes, enabledContactIds } = {}) => {
-    const current = timeAwarenessSettings(existing);
-    const nextIntervalMinutes = intervalMinutes === undefined
-      ? current.intervalMinutes
-      : boundedNumber(intervalMinutes, "时间感知间隔", {
-        minimum: MIN_TIME_AWARENESS_INTERVAL_MINUTES,
-        maximum: MAX_TIME_AWARENESS_INTERVAL_MINUTES,
-        fallback: current.intervalMinutes,
-        integer: true,
-      });
-    const nextContactIds = enabledContactIds === undefined
-      ? current.enabledContactIds
-      : normalizedCompanionContactIds(enabledContactIds);
-    await writeJsonBelow(dataRoot, timeAwarenessConfigPath, {
-      ...plainObject(existing),
-      version: 1,
-      intervalMinutes: nextIntervalMinutes,
-      enabledContactIds: nextContactIds,
-    });
-  };
   const writeContactScopedAgentCapabilitySettings = async ({ abilityId, dataRoot, existing, enabledContactIds, knownContactIds } = {}) => {
     const configPath = registry.configPath(abilityId);
     if (!configPath) throw new Error("这项能力不支持联系人范围设置。 ");
@@ -792,6 +750,183 @@ export function createCapabilitiesService({
   const removeCapabilityContactResources = async (context = {}) => {
     if (!capabilityRuntime) return [];
     return capabilityRuntime.removeContact(plainObject(context));
+  };
+  const selectedCapabilityConnection = async (feature, label) => {
+    if (!connectionsService?.resolveNamedApiConnection) return null;
+    try {
+      return await connectionsService.resolveNamedApiConnection(feature);
+    } catch (error) {
+      throw new Error(
+        `无法读取${label}使用的 API：${formatErrorForDisplay(error, { fallback: "未知错误。" })}`,
+        { cause: error },
+      );
+    }
+  };
+  const selectedImageGenerationConnection = async () => selectedCapabilityConnection("image-generation", "图片生成");
+  const validateImageGenerationConnection = async (adapter) => {
+    const connection = await selectedImageGenerationConnection();
+    if (!connection) return;
+    if (!imageGenerationAdapterSupportsConnection(adapter, connection.type)) {
+      throw new Error(`${imageGenerationAdapterLabel(adapter)}不能使用当前选择的 API；请先选择兼容的 API。`);
+    }
+    if (adapter !== "custom-http-image" && !clean(connection.baseUrl)) {
+      throw new Error(`${imageGenerationAdapterLabel(adapter)}需要所选 API 填写服务地址。`);
+    }
+    if (adapter !== "custom-http-image" && !clean(connection.model)) {
+      throw new Error(`${imageGenerationAdapterLabel(adapter)}需要所选 API 填写模型名称。`);
+    }
+  };
+  const saveImageGenerationCustomAdapter = async (value = {}) => {
+    const settings = settingsService.load();
+    const dataRoot = capabilityDataRoot(settings);
+    if (!dataRoot) throw new Error("无法定位 Suzu Lives 软件数据目录。 ");
+    const adapters = readCustomImageGenerationAdapters(dataRoot);
+    if (adapters.length >= MAX_CUSTOM_IMAGE_GENERATION_ADAPTERS) {
+      throw new Error(`自定义图像协议不能超过 ${MAX_CUSTOM_IMAGE_GENERATION_ADAPTERS} 个。`);
+    }
+    const adapter = normalizeCustomImageGenerationAdapter({
+      ...plainObject(value),
+      id: randomUUID(),
+      createdAt: new Date().toISOString(),
+    }, { requireBaseUrl: true });
+    if (adapters.some((item) => item.name.localeCompare(adapter.name, "zh-CN", { sensitivity: "accent" }) === 0)) {
+      throw new Error("已经有同名的自定义图像协议。请换一个备注名。 ");
+    }
+    await writeJsonBelow(dataRoot, ["capabilities", "image-generation", CUSTOM_IMAGE_GENERATION_ADAPTER_FILE], {
+      schemaVersion: CUSTOM_IMAGE_GENERATION_ADAPTER_SCHEMA_VERSION,
+      adapters: [adapter, ...adapters],
+    });
+    return snapshot();
+  };
+  const deleteImageGenerationCustomAdapter = async (value = {}) => {
+    const settings = settingsService.load();
+    const dataRoot = capabilityDataRoot(settings);
+    if (!dataRoot) throw new Error("无法定位 Suzu Lives 软件数据目录。 ");
+    const id = clean(plainObject(value).id).toLowerCase();
+    if (!id) throw new Error("请选择要删除的自定义图像协议。 ");
+    const adapters = readCustomImageGenerationAdapters(dataRoot);
+    if (!adapters.some((item) => item.id === id)) throw new Error("找不到这个自定义图像协议。 ");
+    const config = publicJson(dataRoot, ["capabilities", "image-generation", "config.json"]);
+    if (normalizeImageGenerationAdapter(config.adapter) === "custom-http-image" && clean(config.custom_adapter_id).toLowerCase() === id) {
+      throw new Error("这个自定义图像协议正在被图像生成使用。请先改用其他协议，再删除。 ");
+    }
+    await writeJsonBelow(dataRoot, ["capabilities", "image-generation", CUSTOM_IMAGE_GENERATION_ADAPTER_FILE], {
+      schemaVersion: CUSTOM_IMAGE_GENERATION_ADAPTER_SCHEMA_VERSION,
+      adapters: adapters.filter((item) => item.id !== id),
+    });
+    return snapshot();
+  };
+  const selectedImageVisionConnection = async () => selectedCapabilityConnection("image-vision", "图片理解");
+  const validateImageVisionConnection = async (adapter) => {
+    const connection = await selectedImageVisionConnection();
+    if (!connection) return;
+    if (!visionAdapterSupportsConnection(adapter, connection.type)) {
+      throw new Error(`${visionAdapterLabel(adapter)}不能使用当前选择的 API；请先选择兼容的 API。`);
+    }
+    if (adapter !== "custom-http-vision" && !clean(connection.baseUrl)) {
+      throw new Error(`${visionAdapterLabel(adapter)}需要所选 API 填写服务地址。`);
+    }
+    if (adapter !== "custom-http-vision" && !clean(connection.model)) {
+      throw new Error(`${visionAdapterLabel(adapter)}需要所选 API 填写模型名称。`);
+    }
+    const endpointError = visionAdapterEndpointCompatibilityError({ adapter, baseUrl: connection.baseUrl });
+    if (endpointError) throw new Error(endpointError);
+  };
+  const saveImageVisionCustomAdapter = async (value = {}) => {
+    const settings = settingsService.load();
+    const dataRoot = capabilityDataRoot(settings);
+    if (!dataRoot) throw new Error("无法定位 Suzu Lives 软件数据目录。 ");
+    const adapters = readCustomVisionAdapters(dataRoot);
+    if (adapters.length >= MAX_CUSTOM_VISION_ADAPTERS) {
+      throw new Error(`自定义视觉协议不能超过 ${MAX_CUSTOM_VISION_ADAPTERS} 个。`);
+    }
+    const adapter = normalizeCustomVisionAdapter({
+      ...plainObject(value),
+      id: randomUUID(),
+      createdAt: new Date().toISOString(),
+    }, { requireBaseUrl: true });
+    if (adapters.some((item) => item.name.localeCompare(adapter.name, "zh-CN", { sensitivity: "accent" }) === 0)) {
+      throw new Error("已经有同名的自定义视觉协议。请换一个备注名。 ");
+    }
+    await writeJsonBelow(dataRoot, ["capabilities", "image-vision", "custom-vision-adapters.json"], {
+      schemaVersion: CUSTOM_VISION_ADAPTER_SCHEMA_VERSION,
+      adapters: [adapter, ...adapters],
+    });
+    return snapshot();
+  };
+  const deleteImageVisionCustomAdapter = async (value = {}) => {
+    const settings = settingsService.load();
+    const dataRoot = capabilityDataRoot(settings);
+    if (!dataRoot) throw new Error("无法定位 Suzu Lives 软件数据目录。 ");
+    const id = clean(plainObject(value).id).toLowerCase();
+    if (!id) throw new Error("请选择要删除的自定义视觉协议。 ");
+    const adapters = readCustomVisionAdapters(dataRoot);
+    if (!adapters.some((item) => item.id === id)) throw new Error("找不到这个自定义视觉协议。 ");
+    const config = publicJson(dataRoot, ["capabilities", "image-vision", "config.json"]);
+    const vision = plainObject(config.vision);
+    if (normalizeVisionAdapter(vision.adapter, { fallback: DEFAULT_VISION_ADAPTER }) === "custom-http-vision" && clean(vision.custom_adapter_id).toLowerCase() === id) {
+      throw new Error("这个自定义视觉协议正在被图像理解使用。请先改用其他协议，再删除。 ");
+    }
+    await writeJsonBelow(dataRoot, ["capabilities", "image-vision", "custom-vision-adapters.json"], {
+      schemaVersion: CUSTOM_VISION_ADAPTER_SCHEMA_VERSION,
+      adapters: adapters.filter((item) => item.id !== id),
+    });
+    return snapshot();
+  };
+  const selectedVideoUnderstandingConnection = async () => selectedCapabilityConnection("video-understanding", "视频理解");
+  const validateVideoUnderstandingConnection = async (adapter) => {
+    const connection = await selectedVideoUnderstandingConnection();
+    if (!connection) return;
+    if (!videoAdapterSupportsConnection(adapter, connection.type)) {
+      throw new Error(`${videoAdapterLabel(adapter)}不能使用当前选择的 API；请先选择兼容的 API。`);
+    }
+    if (adapter !== "custom-http-video" && !clean(connection.baseUrl)) {
+      throw new Error(`${videoAdapterLabel(adapter)}需要所选 API 填写服务地址。`);
+    }
+    if (adapter !== "custom-http-video" && !clean(connection.model)) {
+      throw new Error(`${videoAdapterLabel(adapter)}需要所选 API 填写模型名称。`);
+    }
+  };
+  const saveVideoUnderstandingCustomAdapter = async (value = {}) => {
+    const settings = settingsService.load();
+    const dataRoot = capabilityDataRoot(settings);
+    if (!dataRoot) throw new Error("无法定位 Suzu Lives 软件数据目录。 ");
+    const adapters = readCustomVideoAdapters(dataRoot);
+    if (adapters.length >= MAX_CUSTOM_VIDEO_ADAPTERS) {
+      throw new Error(`自定义视频协议不能超过 ${MAX_CUSTOM_VIDEO_ADAPTERS} 个。`);
+    }
+    const adapter = normalizeCustomVideoAdapter({
+      ...plainObject(value),
+      id: randomUUID(),
+      createdAt: new Date().toISOString(),
+    }, { requireBaseUrl: true });
+    if (adapters.some((item) => item.name.localeCompare(adapter.name, "zh-CN", { sensitivity: "accent" }) === 0)) {
+      throw new Error("已经有同名的自定义视频协议。请换一个备注名。 ");
+    }
+    await writeJsonBelow(dataRoot, ["capabilities", "video-understanding", CUSTOM_VIDEO_ADAPTER_FILE], {
+      schemaVersion: CUSTOM_VIDEO_ADAPTER_SCHEMA_VERSION,
+      adapters: [adapter, ...adapters],
+    });
+    return snapshot();
+  };
+  const deleteVideoUnderstandingCustomAdapter = async (value = {}) => {
+    const settings = settingsService.load();
+    const dataRoot = capabilityDataRoot(settings);
+    if (!dataRoot) throw new Error("无法定位 Suzu Lives 软件数据目录。 ");
+    const id = clean(plainObject(value).id).toLowerCase();
+    if (!id) throw new Error("请选择要删除的自定义视频协议。 ");
+    const adapters = readCustomVideoAdapters(dataRoot);
+    if (!adapters.some((item) => item.id === id)) throw new Error("找不到这个自定义视频协议。 ");
+    const config = publicJson(dataRoot, ["capabilities", "video-understanding", "config.json"]);
+    const video = plainObject(config.video);
+    if (normalizeVideoAdapter(video.adapter, { fallback: DEFAULT_VIDEO_ADAPTER }) === "custom-http-video" && clean(video.custom_adapter_id).toLowerCase() === id) {
+      throw new Error("这个自定义视频协议正在被视频理解使用。请先改用其他协议，再删除。 ");
+    }
+    await writeJsonBelow(dataRoot, ["capabilities", "video-understanding", CUSTOM_VIDEO_ADAPTER_FILE], {
+      schemaVersion: CUSTOM_VIDEO_ADAPTER_SCHEMA_VERSION,
+      adapters: adapters.filter((item) => item.id !== id),
+    });
+    return snapshot();
   };
   const snapshot = () => {
     const settings = settingsService.load();
@@ -870,12 +1005,25 @@ export function createCapabilitiesService({
     const dataRoot = capabilityDataRoot(settings);
     if (!dataRoot) return { refreshed: false, status: "needs-root", errors: [], snapshot: snapshot() };
     const existing = publicJson(dataRoot, ["automation", "proactive-contact", "config.json"]);
-    if (Object.hasOwn(plainObject(existing), "enabledContactIds")) {
-      return { refreshed: false, status: "ready", errors: [], snapshot: snapshot() };
+    const stored = plainObject(existing);
+    const hasSavedContactSelection = Object.hasOwn(stored, "enabledContactIds");
+    const hasObsoleteFollowUpPrompt = Object.hasOwn(stored, "followUpPrompt");
+    if (hasSavedContactSelection) {
+      if (hasObsoleteFollowUpPrompt) {
+        await writeProactiveContactSettings(dataRoot, existing, proactiveContactSettings(existing));
+      }
+      return { refreshed: hasObsoleteFollowUpPrompt, status: "ready", errors: [], snapshot: snapshot() };
     }
     const targets = await companionTargets();
     const enabledContactIds = targets.contacts.map((contact) => contact.id);
-    if (!enabledContactIds.length) return { refreshed: false, status: "ready", errors: [], snapshot: snapshot() };
+    if (!enabledContactIds.length) {
+      if (hasObsoleteFollowUpPrompt) {
+        const cleaned = { ...stored };
+        delete cleaned.followUpPrompt;
+        await writeJsonBelow(dataRoot, ["automation", "proactive-contact", "config.json"], cleaned);
+      }
+      return { refreshed: hasObsoleteFollowUpPrompt, status: "ready", errors: [], snapshot: snapshot() };
+    }
     const current = proactiveContactSettings(existing);
     await writeProactiveContactSettings(dataRoot, existing, {
       ...current,
@@ -890,32 +1038,6 @@ export function createCapabilitiesService({
     const settings = settingsService.load();
     const dataRoot = capabilityDataRoot(settings);
     if (!dataRoot) throw new Error("无法定位 Suzu Lives 软件数据目录。 ");
-    if (capabilityId === TIME_AWARENESS_ID) {
-      return queueTimeAwarenessUpdate(async () => {
-        const existing = publicJson(dataRoot, timeAwarenessConfigPath);
-        const current = timeAwarenessSettings(existing);
-        let enabledContactIds;
-        if (Object.hasOwn(input, "contactId") || Object.hasOwn(input, "contactEnabled")) {
-          if (!Object.hasOwn(input, "contactEnabled")) throw new Error("联系人开关状态无效。 ");
-          if (typeof input.contactEnabled !== "boolean") throw new Error("联系人开关状态无效。 ");
-          const contactId = await companionContactForInput(input);
-          enabledContactIds = withCompanionContact(current, contactId, input.contactEnabled);
-        }
-        await writeTimeAwarenessSettings({
-          dataRoot,
-          existing,
-          intervalMinutes: boundedNumber(input.intervalMinutes, "时间感知间隔", {
-            minimum: MIN_TIME_AWARENESS_INTERVAL_MINUTES,
-            maximum: MAX_TIME_AWARENESS_INTERVAL_MINUTES,
-            fallback: timeAwarenessSettings(existing).intervalMinutes,
-            integer: true,
-          }),
-          enabledContactIds,
-        });
-        await syncCapability(capabilityId, { reason: "settings-saved" });
-        return snapshot();
-      });
-    }
     if (Object.hasOwn(input, "contactId") || Object.hasOwn(input, "contactEnabled")) {
       if (!Object.hasOwn(input, "contactEnabled") || typeof input.contactEnabled !== "boolean") {
         throw new Error("联系人开关状态无效。 ");
@@ -948,42 +1070,39 @@ export function createCapabilitiesService({
     }
     if (capabilityId === "image-generation") {
       const existing = publicJson(dataRoot, ["capabilities", "image-generation", "config.json"]);
-      const comfyui = plainObject(existing.comfyui);
+      const adapter = normalizeImageGenerationAdapter(input.adapter ?? existing.adapter);
+      const customAdapterId = adapter === "custom-http-image"
+        ? clean(input.customAdapterId ?? existing.custom_adapter_id).toLowerCase()
+        : "";
+      if (adapter === "custom-http-image" && !readCustomImageGenerationAdapters(dataRoot).some((item) => item.id === customAdapterId)) {
+        throw new Error("请选择已保存的自定义图像协议。 ");
+      }
+      await validateImageGenerationConnection(adapter);
+      const phoneCamera = plainObject(existing.phone_camera);
+      const prompt = plainObject(phoneCamera.prompt);
+      const sizes = plainObject(phoneCamera.size_by_shot);
+      const references = plainObject(phoneCamera.references);
       await writeJsonBelow(dataRoot, ["capabilities", "image-generation", "config.json"], {
         ...existing,
-        default_backend: oneOf(input.defaultBackend, ["api", "comfyui"], "api", "图片生成方式"),
-        comfyui: {
-          ...comfyui,
-          base_url: httpUrl(input.comfyBaseUrl, "ComfyUI 地址", clean(comfyui.base_url ?? comfyui.baseUrl) || "http://127.0.0.1:8188"),
-          timeout_seconds: boundedNumber(input.comfyTimeoutSeconds, "ComfyUI 等待时间", { minimum: 1, maximum: 600, fallback: 600, integer: true }),
-          poll_interval_seconds: boundedNumber(input.comfyPollIntervalSeconds, "ComfyUI 进度间隔", { minimum: 0.1, maximum: 30, fallback: 1 }),
-          default_workflow: boundedText(input.comfyDefaultWorkflow, "默认 ComfyUI 工作流", 200),
-        },
-      });
-      return synchronizedSnapshot(capabilityId, { reason: "settings-saved" });
-    }
-    if (capabilityId === "phone-camera") {
-      const existing = publicJson(dataRoot, ["capabilities", "phone-camera", "config.json"]);
-      const prompt = plainObject(existing.prompt);
-      const sizes = plainObject(existing.size_by_shot);
-      const references = plainObject(existing.references);
-      await writeJsonBelow(dataRoot, ["capabilities", "phone-camera", "config.json"], {
-        ...existing,
-        default_backend: oneOf(input.defaultBackend, ["api", "comfyui"], "api", "自拍图片生成方式"),
-        size_by_shot: {
-          ...sizes,
-          rear: imageSize(input.rearSize, "后置画面尺寸", "1536x1024"),
-          selfie: imageSize(input.selfieSize, "自拍画面尺寸", "1024x1536"),
-          mirror: imageSize(input.mirrorSize, "镜前画面尺寸", "1024x1536"),
-        },
-        references: {
-          ...references,
-          max_images: boundedNumber(input.maxImages, "参考图数量", { minimum: 1, maximum: 16, fallback: 8, integer: true }),
-        },
-        prompt: {
-          ...prompt,
-          prefix: boundedText(input.promptPrefix, "自拍补充提示词"),
-          suffix: boundedText(input.promptSuffix, "自拍补充提示词"),
+        adapter,
+        custom_adapter_id: customAdapterId,
+        phone_camera: {
+          ...phoneCamera,
+          size_by_shot: {
+            ...sizes,
+            rear: imageSize(input.rearSize ?? sizes.rear, "后置画面尺寸", "1536x1024"),
+            selfie: imageSize(input.selfieSize ?? sizes.selfie, "自拍画面尺寸", "1024x1536"),
+            mirror: imageSize(input.mirrorSize ?? sizes.mirror, "镜前画面尺寸", "1024x1536"),
+          },
+          references: {
+            ...references,
+            max_images: boundedNumber(input.maxImages ?? references.max_images, "参考图数量", { minimum: 1, maximum: 16, fallback: 8, integer: true }),
+          },
+          prompt: {
+            ...prompt,
+            prefix: boundedText(input.promptPrefix ?? prompt.prefix, "手机拍照式画面前置提示"),
+            suffix: boundedText(input.promptSuffix ?? prompt.suffix, "手机拍照式画面补充提示"),
+          },
         },
       });
       return synchronizedSnapshot(capabilityId, { reason: "settings-saved" });
@@ -991,18 +1110,29 @@ export function createCapabilitiesService({
     if (capabilityId === "image-vision") {
       const existing = publicJson(dataRoot, ["capabilities", "image-vision", "config.json"]);
       const vision = plainObject(existing.vision);
+      const adapter = normalizeVisionAdapter(input.adapter ?? vision.adapter, { fallback: DEFAULT_VISION_ADAPTER });
+      const customAdapterId = adapter === "custom-http-vision"
+        ? clean(input.customAdapterId ?? vision.custom_adapter_id).toLowerCase()
+        : "";
+      if (adapter === "custom-http-vision" && !readCustomVisionAdapters(dataRoot).some((item) => item.id === customAdapterId)) {
+        throw new Error("请选择已保存的自定义视觉协议。 ");
+      }
+      await validateImageVisionConnection(adapter);
       const { openai: _legacyProvider, ...rest } = existing;
       await writeJsonBelow(dataRoot, ["capabilities", "image-vision", "config.json"], {
         ...rest,
         vision: {
           ...vision,
-          detail: oneOf(input.detail, ["auto", "low", "high"], "auto", "图片读取精度"),
-          timeout_seconds: boundedNumber(input.timeoutSeconds, "图片理解等待时间", { minimum: 5, maximum: 600, fallback: 90, integer: true }),
-          max_output_tokens: boundedNumber(input.maxOutputTokens, "图片理解输出长度", { minimum: 32, maximum: 32000, fallback: 800, integer: true }),
-          max_image_bytes: boundedNumber(input.maxImageBytes, "图片大小上限", { minimum: 262144, maximum: 25 * 1024 * 1024, fallback: 1572864, integer: true }),
-          max_edge: boundedNumber(input.maxEdge, "图片边长上限", { minimum: 256, maximum: 8192, fallback: 1600, integer: true }),
-          jpeg_quality: boundedNumber(input.jpegQuality, "图片压缩质量", { minimum: 1, maximum: 100, fallback: 90, integer: true }),
-          retry_on_refusal: boundedBoolean(input.retryOnRefusal, true),
+          adapter,
+          ...(customAdapterId ? { custom_adapter_id: customAdapterId } : {}),
+          ...(!customAdapterId ? { custom_adapter_id: "" } : {}),
+          detail: oneOf(input.detail ?? vision.detail, ["auto", "low", "high"], "auto", "图片读取精度"),
+          timeout_seconds: boundedNumber(input.timeoutSeconds ?? vision.timeout_seconds, "图片理解等待时间", { minimum: 5, maximum: 600, fallback: 90, integer: true }),
+          max_output_tokens: boundedNumber(input.maxOutputTokens ?? vision.max_output_tokens, "图片理解输出长度", { minimum: 32, maximum: 32000, fallback: 800, integer: true }),
+          max_image_bytes: boundedNumber(input.maxImageBytes ?? vision.max_image_bytes, "图片大小上限", { minimum: 262144, maximum: 25 * 1024 * 1024, fallback: 1572864, integer: true }),
+          max_edge: boundedNumber(input.maxEdge ?? vision.max_edge, "图片边长上限", { minimum: 256, maximum: 8192, fallback: 1600, integer: true }),
+          jpeg_quality: boundedNumber(input.jpegQuality ?? vision.jpeg_quality, "图片压缩质量", { minimum: 1, maximum: 100, fallback: 90, integer: true }),
+          retry_on_refusal: boundedBoolean(input.retryOnRefusal ?? vision.retry_on_refusal, true),
         },
       });
       return synchronizedSnapshot(capabilityId, { reason: "settings-saved" });
@@ -1010,17 +1140,28 @@ export function createCapabilitiesService({
     if (capabilityId === "video-understanding") {
       const existing = publicJson(dataRoot, ["capabilities", "video-understanding", "config.json"]);
       const video = plainObject(existing.video);
+      const adapter = normalizeVideoAdapter(input.adapter ?? video.adapter, { fallback: DEFAULT_VIDEO_ADAPTER });
+      const customAdapterId = adapter === "custom-http-video"
+        ? clean(input.customAdapterId ?? video.custom_adapter_id).toLowerCase()
+        : "";
+      if (adapter === "custom-http-video" && !readCustomVideoAdapters(dataRoot).some((item) => item.id === customAdapterId)) {
+        throw new Error("请选择已保存的自定义视频协议。 ");
+      }
+      await validateVideoUnderstandingConnection(adapter);
       const { provider: _legacyProvider, ...rest } = existing;
       await writeJsonBelow(dataRoot, ["capabilities", "video-understanding", "config.json"], {
         ...rest,
         video: {
           ...video,
-          fps: boundedNumber(input.fps, "视频模型读取帧率", { minimum: 0.1, maximum: 10, fallback: 1 }),
-          timeout_seconds: boundedNumber(input.timeoutSeconds, "视频理解等待时间", { minimum: 5, maximum: 3600, fallback: 240, integer: true }),
-          max_output_tokens: boundedNumber(input.maxOutputTokens, "视频理解输出长度", { minimum: 32, maximum: 32000, fallback: 350, integer: true }),
-          temperature: boundedNumber(input.temperature, "视频理解随机度", { minimum: 0, maximum: 2, fallback: 0.2 }),
-          max_binary_bytes: boundedNumber(input.maxBinaryBytes, "视频大小上限", { minimum: 1024 * 1024, maximum: 512 * 1024 * 1024, fallback: 7000000, integer: true }),
-          cache_enabled: boundedBoolean(input.cacheEnabled, true),
+          adapter,
+          ...(customAdapterId ? { custom_adapter_id: customAdapterId } : {}),
+          ...(!customAdapterId ? { custom_adapter_id: "" } : {}),
+          fps: boundedNumber(input.fps ?? video.fps, "视频模型读取帧率", { minimum: 0.1, maximum: 10, fallback: 1 }),
+          timeout_seconds: boundedNumber(input.timeoutSeconds ?? video.timeout_seconds, "视频理解等待时间", { minimum: 5, maximum: 3600, fallback: 240, integer: true }),
+          max_output_tokens: boundedNumber(input.maxOutputTokens ?? video.max_output_tokens, "视频理解输出长度", { minimum: 32, maximum: 32000, fallback: 350, integer: true }),
+          temperature: boundedNumber(input.temperature ?? video.temperature, "视频理解随机度", { minimum: 0, maximum: 2, fallback: 0.2 }),
+          max_binary_bytes: boundedNumber(input.maxBinaryBytes ?? video.max_binary_bytes, "视频大小上限", { minimum: 1024 * 1024, maximum: 512 * 1024 * 1024, fallback: 7000000, integer: true }),
+          cache_enabled: boundedBoolean(input.cacheEnabled ?? video.cache_enabled, true),
           ffmpeg_path: boundedText(input.ffmpegPath || video.ffmpeg_path || "ffmpeg", "FFmpeg 命令", 300),
           ffprobe_path: boundedText(input.ffprobePath || video.ffprobe_path || "ffprobe", "FFprobe 命令", 300),
         },
@@ -1073,26 +1214,8 @@ export function createCapabilitiesService({
             customVoiceId: customVoice.id,
             ...(customVoice.customAdapterId ? { customAdapterId: customVoice.customAdapterId } : {}),
           };
-        } else if (adapter === "dashscope-qwen") {
-          const candidates = publicVoiceCandidates(agentRoot);
-          if (!candidates.some((candidate) => candidate.voiceId === voiceId)) {
-            throw new Error("所选音色不属于当前项目的候选库，请重新选择。 ");
-          }
-          const {
-            customVoiceId: _customVoiceId,
-            customAdapterId: _customAdapterId,
-            provider: _provider,
-            adapter: _adapter,
-            ...contactWithoutCustomVoice
-          } = contact;
-          nextContact = {
-            ...contactWithoutCustomVoice,
-            schemaVersion: 5,
-            adapter,
-            voiceId,
-          };
         } else {
-          throw new Error("当前适配器需要先选择一个已保存的自定义音色。 ");
+          throw new Error("请通过语音消息设置选择已保存的音色。 ");
         }
         await writeJsonBelow(agentRoot, ["voice-message", "config.json"], {
           ...nextContact,
@@ -1200,8 +1323,7 @@ export function createCapabilitiesService({
       }
       await writeProactiveContactSettings(dataRoot, existing, {
         ...current,
-        chainPrompt: boundedText(input.chainPrompt || current.chainPrompt, "链式主动关心提示词", 12000),
-        followUpPrompt: boundedText(input.followUpPrompt || current.followUpPrompt, "临时回访提示词", 12000),
+        contactPrompt: boundedText(input.contactPrompt || current.contactPrompt, "主动关心补充原则", 12000),
       });
       return synchronizedSnapshot(capabilityId, { reason: "settings-saved" });
     }
@@ -1245,6 +1367,12 @@ export function createCapabilitiesService({
     initializeDefaultContactCapabilities,
     removeContact,
     refreshManagedRegistrations,
+    saveImageGenerationCustomAdapter,
+    deleteImageGenerationCustomAdapter,
+    saveImageVisionCustomAdapter,
+    deleteImageVisionCustomAdapter,
+    saveVideoUnderstandingCustomAdapter,
+    deleteVideoUnderstandingCustomAdapter,
     saveSettings,
     agentJournalSettings: () => agentJournalSettings(companionConfig("agent-journal")),
     proactiveContactSettings: getProactiveContactSettings,
@@ -1270,6 +1398,12 @@ export function registerCapabilitiesIpc({ ipcMain, capabilitiesService }) {
   ipcMain.handle("capabilities:snapshot", () => capabilitiesService.snapshot());
   ipcMain.handle("capabilities:companion-targets", () => capabilitiesService.companionTargets());
   ipcMain.handle("capabilities:save-settings", (_event, value) => capabilityIpcResult(() => capabilitiesService.saveSettings(value)));
+  ipcMain.handle("capabilities:save-image-generation-custom-adapter", (_event, value) => capabilityIpcResult(() => capabilitiesService.saveImageGenerationCustomAdapter(value)));
+  ipcMain.handle("capabilities:delete-image-generation-custom-adapter", (_event, value) => capabilityIpcResult(() => capabilitiesService.deleteImageGenerationCustomAdapter(value)));
+  ipcMain.handle("capabilities:save-image-vision-custom-adapter", (_event, value) => capabilityIpcResult(() => capabilitiesService.saveImageVisionCustomAdapter(value)));
+  ipcMain.handle("capabilities:delete-image-vision-custom-adapter", (_event, value) => capabilityIpcResult(() => capabilitiesService.deleteImageVisionCustomAdapter(value)));
+  ipcMain.handle("capabilities:save-video-understanding-custom-adapter", (_event, value) => capabilityIpcResult(() => capabilitiesService.saveVideoUnderstandingCustomAdapter(value)));
+  ipcMain.handle("capabilities:delete-video-understanding-custom-adapter", (_event, value) => capabilityIpcResult(() => capabilitiesService.deleteVideoUnderstandingCustomAdapter(value)));
   // Electron 只会向渲染层返回 IPC handler 的消息，因此同时返回稳定错误码。
   ipcMain.handle("capabilities:register", (_event, abilityId) => capabilityIpcResult(() => capabilitiesService.register(abilityId)));
   ipcMain.handle("capabilities:set-active", (_event, value) => capabilityIpcResult(() => capabilitiesService.setActive(value)));

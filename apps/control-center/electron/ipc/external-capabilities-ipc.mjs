@@ -1,4 +1,5 @@
 import { createExternalCapabilitiesService } from "@suzu-lives/external-capabilities";
+import { formatErrorForDisplay } from "@suzu-lives/suzu-agent-runtime/error-detail";
 
 import { resolveSuzuAgentRuntimePaths } from "../services/suzu-agent-runtime.mjs";
 import { createAgentExternalCapabilityRegistration } from "../services/agent-external-capabilities.mjs";
@@ -15,7 +16,7 @@ export async function externalCapabilityIpcResult(action) {
       ok: false,
       error: {
         code: clean(error?.code),
-        message: clean(error?.message) || "无法更新外部能力。",
+        message: formatErrorForDisplay(error, { fallback: "无法更新外部能力。" }),
       },
     };
   }

@@ -4,6 +4,7 @@ import { isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { SuzuAgentRuntimeError } from "./runtime-error.mjs";
+import { formatErrorForDisplay } from "./error-detail.mjs";
 
 import {
   SUZU_AGENT_HOST_IPC_PROTOCOL,
@@ -122,7 +123,11 @@ function startupFailure(error, stderr) {
   const diagnostic = (lines.filter((line) => /(?:cannot find|无法|失败|error|suzu-agent-core:)/iu.test(line)).at(-1) || "").slice(0, 800);
   if (!diagnostic) return error instanceof SuzuAgentRuntimeError
     ? error
-    : new SuzuAgentRuntimeError("AGENT_CORE_START_FAILED", "Suzu Agent Core 启动失败。", { cause: error });
+    : new SuzuAgentRuntimeError(
+      "AGENT_CORE_START_FAILED",
+      `Suzu Agent Core 启动失败：${formatErrorForDisplay(error, { fallback: "未知错误。" })}`,
+      { cause: error },
+    );
   return new SuzuAgentRuntimeError(
     clean(error?.code) || "AGENT_CORE_START_FAILED",
     `${clean(error?.message) || "Suzu Agent Core 启动失败。"} 启动诊断：${diagnostic}`,
@@ -231,7 +236,11 @@ function createAgentCoreApi(record, { requestTimeoutMs = DEFAULT_RPC_TIMEOUT_MS 
       } catch (error) {
         clearTimeout(timer);
         record.pendingRequests.delete(requestId);
-        rejectRequest(new SuzuAgentRuntimeError("AGENT_CORE_IPC_SEND_FAILED", `无法发送 Suzu Agent Core 请求：${method}。`, { cause: error }));
+        rejectRequest(new SuzuAgentRuntimeError(
+          "AGENT_CORE_IPC_SEND_FAILED",
+          `无法发送 Suzu Agent Core 请求：${method}。原因：${formatErrorForDisplay(error, { fallback: "未知错误。" })}`,
+          { cause: error },
+        ));
       }
     });
   };
@@ -459,7 +468,11 @@ export function createSuzuAgentCoreSupervisor({
       ], { cwd: workspace, env: childEnvironment, stdio: ["ignore", "pipe", "pipe", "ipc"], windowsHide: true, shell: false });
     } catch (error) {
       state = "stopped";
-      throw new SuzuAgentRuntimeError("AGENT_CORE_SPAWN_FAILED", "无法启动 Suzu Agent Core 进程。", { cause: error });
+      throw new SuzuAgentRuntimeError(
+        "AGENT_CORE_SPAWN_FAILED",
+        `无法启动 Suzu Agent Core 进程：${formatErrorForDisplay(error, { fallback: "未知错误。" })}`,
+        { cause: error },
+      );
     }
     if (!child || typeof child.once !== "function" || typeof child.kill !== "function") {
       state = "stopped";

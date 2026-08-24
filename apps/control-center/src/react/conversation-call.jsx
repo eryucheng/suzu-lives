@@ -16,6 +16,10 @@ import {
   downsamplePcm16,
   inputEnergy,
 } from "./conversation-call-utils.mjs";
+import {
+  acquireWebRtcMicrophoneCapture,
+  stopWebRtcMicrophoneCapture,
+} from "./conversation-microphone.mjs";
 
 const ConversationCallContext = createContext(null);
 const VOICE_ENERGY_THRESHOLD = 0.025;
@@ -52,6 +56,7 @@ function createAudioState(token) {
     silenceFrames: 0,
     source: null,
     skipped: new Set(),
+    microphone: null,
     stream: null,
     token,
     voiceEnergyThreshold: VOICE_ENERGY_THRESHOLD,
@@ -127,7 +132,7 @@ export function ConversationCallProvider({ active = false, api = null, snapshot 
     try { audio.processor?.disconnect?.(); } catch { /* A disconnected node needs no work. */ }
     try { audio.source?.disconnect?.(); } catch { /* A disconnected node needs no work. */ }
     try { audio.silentGain?.disconnect?.(); } catch { /* A disconnected node needs no work. */ }
-    for (const track of audio.stream?.getTracks?.() || []) track.stop();
+    stopWebRtcMicrophoneCapture(audio.microphone || audio.stream);
     if (audioRef.current === audio) audioRef.current = null;
     try { await audio.audioContext?.close?.(); } catch { /* The renderer may already be shutting down. */ }
   }, [stopPlayback]);
@@ -248,21 +253,15 @@ export function ConversationCallProvider({ active = false, api = null, snapshot 
   }, [interruptFromSpeech]);
 
   const startMicrophone = useCallback(async (token, callId) => {
-    if (!navigator.mediaDevices?.getUserMedia) throw new Error("当前环境无法读取麦克风。 ");
-    const stream = await navigator.mediaDevices.getUserMedia({
-      audio: {
-        autoGainControl: true,
-        channelCount: 1,
-        echoCancellation: true,
-        noiseSuppression: true,
-      },
-    });
+    const microphone = await acquireWebRtcMicrophoneCapture();
+    const { stream } = microphone;
     const audio = audioRef.current;
     const current = callRef.current;
     if (!audio || audio.token !== token || !current || current.token !== token || current.id !== callId) {
-      for (const track of stream.getTracks()) track.stop();
+      stopWebRtcMicrophoneCapture(microphone);
       return;
     }
+    audio.microphone = microphone;
     audio.stream = stream;
     // Windows' capture pipeline can emit a short gain-control transient right
     // after a stream opens.  Do not treat that startup pulse as a sentence.

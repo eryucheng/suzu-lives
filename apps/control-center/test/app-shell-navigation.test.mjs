@@ -79,7 +79,9 @@ test("the top command field opens the fixed Suzu software assistant instead of a
   assert.match(shell, /owner=\{workspace\?\.owner\}/u);
   assert.match(app, /owner: getIdentity\(state\.settings\)\.owner/u);
   assert.match(dialog, /import \{ ConversationMessageList \} from "\.\/conversation-page\.jsx";/u);
-  assert.match(dialog, /import \{ conversationMessageBlocks, mergeConversationMessages, projectedLiveReply \} from "\.\.\/features\/conversation\/index\.mjs";/u);
+  assert.match(dialog, /mergeConversationMessageWindow/u);
+  assert.match(dialog, /mergeConversationMessageWindow\(current, incoming\)\.messages/u);
+  assert.match(dialog, /refreshSequenceRef/u);
   assert.match(dialog, /function conversationRow\(/u);
   assert.match(dialog, /type: "message"/u);
   assert.match(dialog, /const blocks = conversationMessageBlocks\(message\);/u);
@@ -89,6 +91,9 @@ test("the top command field opens the fixed Suzu software assistant instead of a
   assert.match(dialog, /setPendingMessages\(\(current\) => \[\.\.\.current, pending\]\)/u);
   assert.match(dialog, /mergeConversationMessages\(messages, pendingMessages, liveReplies, sessionId\)/u);
   assert.match(dialog, /projectLiveReply\(event, \{ final: true \}\)/u);
+  assert.doesNotMatch(dialog, /if \(!text \|\| phase !== "idle"\) return false;/u);
+  assert.match(dialog, /disabled=\{!sessionId\}/u);
+  assert.match(dialog, /software-assistant-dialog__composer-actions/u);
   assert.match(dialog, /window\.setInterval\(\(\) => \{ void refresh\(\); \}, 2_000\)/u);
   assert.doesNotMatch(dialog, /正在查看软件状态/u);
   assert.doesNotMatch(dialog, /software-assistant-message/u);
@@ -109,6 +114,22 @@ test("the top command field stays centered in the whole desktop shell", () => {
   assert.match(styles, /--shell-command-center-offset:-120px;/u);
   assert.match(styles, /\.shell-command-slot \{[\s\S]*?transform:translateX\(var\(--shell-command-center-offset\)\);/u);
   assert.match(shell, /"--shell-command-center-offset":[\s\S]*?effectiveSidebarWidth/u);
+});
+
+test("an incoming unread-message notice stays wide and compact without overflowing a narrow shell", () => {
+  const styles = readFileSync(resolve(HERE, "..", "src", "react", "app-shell.css"), "utf8");
+  const shell = readFileSync(resolve(HERE, "..", "src", "react", "app-shell.jsx"), "utf8");
+  const notice = styles.slice(styles.indexOf(".incoming-conversation-notice {"), styles.indexOf(".incoming-voice-call {"));
+  const compactRail = styles.slice(styles.indexOf("@media (max-width:1180px)"), styles.indexOf("@media (max-width:820px)"));
+
+  assert.match(notice, /width:min\(480px,calc\(100vw - var\(--shell-sidebar-width\) - 48px\)\);/u);
+  assert.match(notice, /border-radius:14px;/u);
+  assert.match(notice, /padding:9px 12px;/u);
+  assert.match(notice, /width:34px;[\s\S]*?height:34px;/u);
+  assert.match(notice, /-webkit-line-clamp:1;/u);
+  assert.match(compactRail, /width:min\(480px,calc\(100vw - 104px\)\);/u);
+  assert.match(shell, /incoming-conversation-notice__app-name/u);
+  assert.doesNotMatch(shell, /incoming-conversation-notice__sender/u);
 });
 
 test("the application chrome is a compact continuous surface above the rounded workspace", () => {

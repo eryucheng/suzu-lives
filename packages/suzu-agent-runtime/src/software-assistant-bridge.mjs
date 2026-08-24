@@ -26,7 +26,10 @@ function timeoutMilliseconds(value) {
 
 function boundedText(value) {
   const text = String(value ?? "");
-  return text.length > MAX_RESULT_TEXT_LENGTH ? `${text.slice(0, MAX_RESULT_TEXT_LENGTH)}\n[内容已截断]` : text;
+  const suffix = "…";
+  return text.length > MAX_RESULT_TEXT_LENGTH
+    ? `${text.slice(0, MAX_RESULT_TEXT_LENGTH - suffix.length)}${suffix}`
+    : text;
 }
 
 function sessionIdFor(exec) {
@@ -61,7 +64,7 @@ function actionResult(value) {
  * separate from `suzu_capability`: this agent never receives contact-scoped
  * capabilities or a companion's lifecycle. Its fixed preset separately gives
  * it normal local inspection tools, so it can verify product files/configuration
- * when the user-facing manual cannot answer a question.
+ * when a product Skill or current status cannot answer a question.
  */
 export function createSuzuSoftwareAssistantBridge({
   transport = createSuzuAgentLifecycleBridgeTransport(),
@@ -94,49 +97,17 @@ export function createSuzuSoftwareAssistantBridge({
     }));
 
     ctx.tools.register(defineTool({
-      name: "suzu_software_manual",
-      description: "针对用户目标或功能读取当前 Suzu Lives 产品手册。不要猜测页面名称、配置步骤或已支持的软件动作。",
-      parameters: {
-        query: {
-          type: "string",
-          description: "简洁的用户目标或功能名称；只有要列出软件操作索引时才省略。",
-        },
-      },
-      output: {
-        schema: {
-          type: "object",
-          additionalProperties: false,
-          properties: { content: { type: "string", required: true } },
-        },
-        render: (_args, value) => [{ type: "text", text: value.content }],
-      },
-      async execute(args, exec) {
-        const response = await transport.request("SoftwareAssistantManual", requestEnvelope(exec, {
-          query: clean(args?.query),
-        }), { timeoutMs });
-        exec?.signal?.throwIfAborted?.();
-        return { content: responseContent(response, "当前无法读取 Suzu Lives 的软件说明。") };
-      },
-      presentCall: (args) => ({
-        card: "generic",
-        title: "查找软件说明",
-        kind: "read",
-        rawInput: clean(args?.query),
-      }),
-    }));
-
-    ctx.tools.register(defineTool({
       name: "suzu_software_action",
-      description: "执行一项已登记的 Suzu Lives 软件动作。当所需动作或输入尚不明确时，先读取 suzu_software_manual。只有此工具返回 completed 时，才能声称动作已成功。",
+      description: "执行一项已登记的 Suzu Lives 软件动作。需要确认当前页面入口或动作输入时，先读取 suzu_software_status 并加载相关产品 Skill。只有此工具返回 completed 时，才能声称动作已成功。",
       parameters: {
         action: {
           type: "string",
           required: true,
-          description: "准确的已登记动作 ID，例如 navigate 或 set-theme。",
+          description: "准确的已登记动作 ID：navigate、set-theme、create-contact 或 set-contact-avatar。",
         },
         input: {
           type: "json",
-          description: "已登记的动作输入。例如 navigate 使用 { destinationId }，set-theme 使用 { theme: \"light\" | \"dark\" }。",
+          description: "动作所需的 JSON 输入。navigate 使用 { destinationId }，set-theme 使用 { theme: \"light\" | \"dark\" }，create-contact 使用 { name, personaContent? }，set-contact-avatar 使用 { contactId? 或 contactName?, avatarPath }。",
         },
       },
       output: {
@@ -156,7 +127,7 @@ export function createSuzuSoftwareAssistantBridge({
         if (!ACTION_ID.test(action)) {
           return {
             status: "invalid-request",
-            content: "软件动作 ID 无效；请先读取 suzu_software_manual。",
+            content: "软件动作 ID 无效；请先读取当前软件状态并确认已登记动作。",
             data: null,
           };
         }

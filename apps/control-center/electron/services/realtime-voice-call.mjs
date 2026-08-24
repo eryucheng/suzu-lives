@@ -12,6 +12,7 @@ const DEFAULT_ASR_MODEL = DEFAULT_REALTIME_ASR_MODEL;
 const MAX_AUDIO_CHUNK_BYTES = 48 * 1024;
 const MAX_TRANSCRIPT_LENGTH = 4_000;
 const MAX_QUEUED_AUDIO_BYTES = 256 * 1024;
+const CALL_ENDED_TASK_TEXT = "【通话已结束】";
 const CONNECT_TIMEOUT_MS = 15_000;
 const DEFAULT_RECONNECT_DELAYS_MS = Object.freeze([500, 1_200, 2_500]);
 // CosyVoice accepts at most three submissions per second.  Leave a small
@@ -178,7 +179,7 @@ export function createRealtimeVoiceCallService({
   synthesizeVoice = synthesizeDirectVoiceAudio,
   webSocketFactory = (url, options) => new WebSocket(url, options),
 } = {}) {
-  if (!chat?.sendToSession || !chat?.subscribe || !chat?.stop) {
+  if (!chat?.sendToSession || !chat?.sendTaskToSession || !chat?.subscribe || !chat?.stop) {
     throw new RealtimeVoiceCallError("实时通话需要可持续的 Suzu 对话服务。");
   }
   if (!reader?.ensureActiveSession || !reader?.snapshot) {
@@ -192,6 +193,7 @@ export function createRealtimeVoiceCallService({
   }
 
   let activeCall = null;
+  let pendingAgentCall = null;
   let disposed = false;
   const emit = typeof onEvent === "function" ? onEvent : () => {};
   const reconnectDelays = (Array.isArray(reconnectDelaysMs) ? reconnectDelaysMs : DEFAULT_RECONNECT_DELAYS_MS)
@@ -219,9 +221,59 @@ export function createRealtimeVoiceCallService({
     } catch { /* A renderer must not disturb a local call. */ }
   };
 
+  const emitAgentCallRequest = (request, type) => {
+    try {
+      emit({
+        type,
+        requestId: request.id,
+        contactId: request.contactId,
+        sessionId: request.sessionId,
+        projectRoot: request.projectRoot,
+        ...(request.reason ? { reason: request.reason } : {}),
+        timestamp: new Date().toISOString(),
+      });
+    } catch { /* A renderer must not disturb an Agent call request. */ }
+  };
+
   // Audio capture can deliver one final frame after the renderer has hung up.
   // Treat that frame as inactive instead of dereferencing a cleared call.
   const callIsActive = (call) => Boolean(call) && activeCall === call && !call.closed && !disposed;
+
+  const resolveAgentCallScope = async ({ contactId, projectRoot, sessionId } = {}) => {
+    const requestedContactId = clean(contactId);
+    if (!requestedContactId) throw new RealtimeVoiceCallError("Agent 拨打电话需要当前联系人的标识。");
+    if (typeof reader.resolveContactSession !== "function") {
+      throw new RealtimeVoiceCallError("当前版本无法确认 Agent 通话所属的联系人。");
+    }
+    const target = await reader.resolveContactSession(requestedContactId);
+    const resolved = {
+      contactId: clean(target?.contactId),
+      projectRoot: clean(target?.projectRoot),
+      sessionId: clean(target?.id),
+    };
+    if (!resolved.contactId || !resolved.projectRoot || !resolved.sessionId) {
+      throw new RealtimeVoiceCallError("当前联系人没有可用的 Agent 通话会话。");
+    }
+    if (clean(sessionId) && clean(sessionId) !== resolved.sessionId) {
+      throw new RealtimeVoiceCallError("Agent 通话请求的会话与当前联系人不匹配。");
+    }
+    if (clean(projectRoot) && !sameProjectRoot(projectRoot, resolved.projectRoot)) {
+      throw new RealtimeVoiceCallError("Agent 通话请求的工作目录与当前联系人不匹配。");
+    }
+    return resolved;
+  };
+
+  const requestMatchesScope = (request, scope) => (
+    clean(request?.contactId) === clean(scope?.contactId)
+    && clean(request?.sessionId) === clean(scope?.sessionId)
+    && sameProjectRoot(request?.projectRoot, scope?.projectRoot)
+  );
+
+  const callMatchesScope = (call, scope) => (
+    clean(call?.contactId) === clean(scope?.contactId)
+    && clean(call?.session?.id) === clean(scope?.sessionId)
+    && sameProjectRoot(call?.session?.projectRoot, scope?.projectRoot)
+  );
 
   const clearReplyAudio = (call) => {
     call.generation += 1;
@@ -241,6 +293,28 @@ export function createRealtimeVoiceCallService({
       projectRoot: call.session.projectRoot,
       requestId,
     })));
+  };
+
+  const sendCallEndedSignal = async (call) => {
+    const requestId = `suzu-call-ended-${randomUUID()}`;
+    const result = await chat.sendTaskToSession({
+      taskContext: {
+        id: requestId,
+        text: CALL_ENDED_TASK_TEXT,
+      },
+      contactId: call.contactId,
+      sessionId: call.session.id,
+      projectRoot: call.session.projectRoot,
+      hasTranscript: call.session.hasTranscript,
+      kind: "call-ended",
+      deliverToWechat: false,
+      outputPolicy: "external",
+      queued: true,
+      requestId,
+    });
+    if (clean(result?.requestId) !== requestId) {
+      throw new RealtimeVoiceCallError("Suzu 没有建立通话结束后的处理。");
+    }
   };
 
   const interruptResponse = async (call, { announce = false } = {}) => {
@@ -708,6 +782,43 @@ export function createRealtimeVoiceCallService({
     return connecting;
   };
 
+  const dialFromAgent = async ({ contactId, projectRoot, reason = "", sessionId } = {}) => {
+    if (disposed) throw new RealtimeVoiceCallError("实时通话服务已经停止。 ");
+    const scope = await resolveAgentCallScope({ contactId, projectRoot, sessionId });
+    if (callIsActive(activeCall)) {
+      return {
+        status: callMatchesScope(activeCall, scope) ? "already-active" : "busy",
+        ...(callMatchesScope(activeCall, scope) ? { callId: activeCall.id } : {}),
+      };
+    }
+    if (pendingAgentCall) {
+      return {
+        status: requestMatchesScope(pendingAgentCall, scope) ? "ringing" : "busy",
+        ...(requestMatchesScope(pendingAgentCall, scope) ? { requestId: pendingAgentCall.id } : {}),
+      };
+    }
+    const request = {
+      id: `suzu-call-request-${randomUUID()}`,
+      contactId: scope.contactId,
+      projectRoot: scope.projectRoot,
+      reason: bounded(clean(reason), 160),
+      sessionId: scope.sessionId,
+    };
+    pendingAgentCall = request;
+    emitAgentCallRequest(request, "call-request");
+    return {
+      status: "ringing",
+      requestId: request.id,
+    };
+  };
+
+  const dismissAgentCallRequest = ({ requestId } = {}) => {
+    const request = pendingAgentCall;
+    if (!request || clean(requestId) !== request.id) return { accepted: true, dismissed: false };
+    pendingAgentCall = null;
+    return { accepted: true, dismissed: true };
+  };
+
   const start = async ({ senderId = "", initiator = "user" } = {}) => {
     if (disposed) throw new RealtimeVoiceCallError("实时通话服务已经停止。 ");
     if (activeCall && !activeCall.closed) throw new RealtimeVoiceCallError("已有一通语音通话正在进行。 ");
@@ -718,9 +829,17 @@ export function createRealtimeVoiceCallService({
       connectionsService.resolveNamedApiConnection("realtime-asr"),
     ]);
     const contact = snapshot?.activeContact || {};
+    const initiatorKind = callInitiator(initiator);
     const agentId = clean(contact.agentId);
     if (!agentId) throw new RealtimeVoiceCallError("请先新建或选择一位联系人，再开始语音通话。 ");
     if (!session?.id || !session?.projectRoot) throw new RealtimeVoiceCallError("当前联系人还没有可用的 Agent Core 会话。 ");
+    if (initiatorKind === "agent" && pendingAgentCall && requestMatchesScope(pendingAgentCall, {
+      contactId: clean(contact.id),
+      projectRoot: clean(session.projectRoot),
+      sessionId: clean(session.id),
+    })) {
+      pendingAgentCall = null;
+    }
     const settings = settingsService.load() || {};
     const dataRoot = typeof dataRootProvider === "function"
       ? clean(dataRootProvider(settings))
@@ -785,7 +904,7 @@ export function createRealtimeVoiceCallService({
       generation: 0,
       hasBufferedAudio: false,
       id: callId,
-      initiator: callInitiator(initiator),
+      initiator: initiatorKind,
       ledgerPath,
       nextAudioIndex: 0,
       opened: false,
@@ -905,7 +1024,33 @@ export function createRealtimeVoiceCallService({
     call.closed = true;
     if (activeCall === call) activeCall = null;
     emitCall(call, "call-ended", {});
+    try {
+      await sendCallEndedSignal(call);
+    } catch (error) {
+      emitCall(call, "call-error", { message: `无法通知 Suzu 通话已结束：${ttsErrorMessage(error)}` });
+    }
     return { accepted: true, stopped: true };
+  };
+
+  const hangupFromAgent = async ({ contactId, projectRoot, sessionId } = {}) => {
+    if (disposed) throw new RealtimeVoiceCallError("实时通话服务已经停止。 ");
+    const scope = await resolveAgentCallScope({ contactId, projectRoot, sessionId });
+    if (pendingAgentCall && requestMatchesScope(pendingAgentCall, scope)) {
+      const request = pendingAgentCall;
+      pendingAgentCall = null;
+      emitAgentCallRequest(request, "call-request-cancelled");
+      return { status: "request-cancelled", requestId: request.id };
+    }
+    const call = activeCall;
+    if (!callIsActive(call)) return { status: "no-active-call" };
+    if (!callMatchesScope(call, scope)) {
+      throw new RealtimeVoiceCallError("当前联系人没有进行中的语音通话，不能替其他联系人挂断。 ");
+    }
+    const result = await stop({ callId: call.id });
+    return {
+      status: result?.stopped ? "ended" : "no-active-call",
+      ...(result?.stopped ? { callId: call.id } : {}),
+    };
   };
 
   const dispose = () => {
@@ -925,8 +1070,20 @@ export function createRealtimeVoiceCallService({
       call.closed = true;
     }
     activeCall = null;
+    pendingAgentCall = null;
     unsubscribeChat?.();
   };
 
-  return { commitAudio, dispose, interrupt, open, pushAudio, start, stop };
+  return {
+    commitAudio,
+    dialFromAgent,
+    dismissAgentCallRequest,
+    dispose,
+    hangupFromAgent,
+    interrupt,
+    open,
+    pushAudio,
+    start,
+    stop,
+  };
 }

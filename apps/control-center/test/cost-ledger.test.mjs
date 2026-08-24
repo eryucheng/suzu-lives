@@ -4,9 +4,13 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { appendUsageEvent } from "@suzu-lives/cost-ledger";
+import { appendUsageEvent, createUsageEvent } from "@suzu-lives/cost-ledger";
 
-import { scanCostLedger } from "../electron/services/cost-ledger.mjs";
+import {
+  readTodayCostLedger,
+  scanCostLedger,
+  warmTodayCostLedger,
+} from "../electron/services/cost-ledger.mjs";
 
 async function temporaryRoot(label) {
   return fs.mkdtemp(path.join(process.env.SUZU_LIVES_TEST_TEMP || "D:\\Temp", `suzu-agent-core-ledger-${label}-`));
@@ -20,6 +24,17 @@ function contactScope({
   usageLedgerPath = "",
 } = {}) {
   return { contactId, contactName, projectRoot, sessionId, usageLedgerPath };
+}
+
+function usageScope({
+  projectRoot,
+  sessionId = "suzu-software-assistant",
+  subjectId = "suzu-software-assistant",
+  subjectName = "suzu助手",
+  subjectType = "system-assistant",
+  usageLedgerPath = "",
+} = {}) {
+  return { projectRoot, sessionId, subjectId, subjectName, subjectType, usageLedgerPath };
 }
 
 test("an empty Agent Core ledger does not invent external usage", async () => {
@@ -129,4 +144,119 @@ test("Agent Core ledger keeps unified events scoped to their contact", async () 
   assert.equal(result.events.length, 2);
   assert.deepEqual(result.events.map((event) => event.contactName).sort(), ["Suzu", "工作"]);
   assert.equal(result.summary.all.requestCount, 2);
+});
+
+test("cost ledger presents suzu助手 and contacts as named peer billing subjects", async () => {
+  const root = await temporaryRoot("billing-subjects");
+  const contactRoot = path.join(root, "contact-project");
+  const assistantRoot = path.join(root, "software-assistant", "workspace");
+  const contactLedger = path.join(root, "data", "contact.jsonl");
+  const assistantLedger = path.join(root, "data", "assistant.jsonl");
+  await Promise.all([
+    fs.mkdir(contactRoot, { recursive: true }),
+    fs.mkdir(assistantRoot, { recursive: true }),
+    appendUsageEvent(contactLedger, {
+      id: "contact-call",
+      timestamp: "2026-08-20T01:00:00.000Z",
+      model: "deepseek-v4-flash",
+      source: "Suzu 对话",
+      feature: "agent-chat",
+      requestId: "contact-call",
+      usage: { inputTokens: 100, outputTokens: 20 },
+      metadata: { turnId: "contact-turn", turnPrompt: "联系人问题" },
+    }),
+    appendUsageEvent(assistantLedger, {
+      id: "assistant-call",
+      timestamp: "2026-08-20T01:01:00.000Z",
+      model: "deepseek-v4-flash",
+      source: "Suzu 对话",
+      feature: "agent-chat",
+      requestId: "assistant-call",
+      usage: { inputTokens: 80, outputTokens: 10 },
+      metadata: { turnId: "assistant-turn", turnPrompt: "软件设置问题" },
+    }),
+  ]);
+
+  const result = await scanCostLedger({}, {
+    contactScopes: [contactScope({
+      contactId: "contact-friend",
+      contactName: "小林",
+      projectRoot: contactRoot,
+      sessionId: "contact-session",
+      usageLedgerPath: contactLedger,
+    })],
+    usageScopes: [usageScope({ projectRoot: assistantRoot, usageLedgerPath: assistantLedger })],
+  });
+
+  assert.deepEqual(result.events.map((event) => [event.subjectName, event.subjectType]).sort(), [
+    ["suzu助手", "system-assistant"],
+    ["小林", "contact"],
+  ]);
+  assert.deepEqual(result.summary.conversations.map((item) => item.subjectName).sort(), ["suzu助手", "小林"]);
+  assert.deepEqual(result.usageScopes.map((item) => item.subjectName).sort(), ["suzu助手", "小林"]);
+  assert.deepEqual(result.contactScopes, [{ contactId: "contact-friend", contactName: "小林" }]);
+  assert.match(result.sources[0].detail, /2 个计费主体/u);
+});
+
+test("home usage reads the persisted summary without scanning legacy video caches", async () => {
+  const root = await temporaryRoot("home-summary");
+  const projectRoot = path.join(root, "contact-project");
+  const ledgerPath = path.join(root, "software-data", "events.jsonl");
+  const now = new Date();
+  await fs.mkdir(path.join(projectRoot, "scripts", "abilities", "video-understanding", "runtime", "cache"), { recursive: true });
+  await fs.writeFile(path.join(projectRoot, "scripts", "abilities", "video-understanding", "runtime", "cache", "legacy.json"), JSON.stringify({
+    status: "ok",
+    model: "qwen-vl-max",
+    usage: { input_tokens: 1_000_000 },
+  }), "utf8");
+  await appendUsageEvent(ledgerPath, {
+    timestamp: now.toISOString(),
+    model: "text-embedding-v4",
+    source: "首页测试",
+    feature: "summary-test",
+    usage: { prompt_tokens: 1_000_000 },
+  });
+
+  const result = await readTodayCostLedger({}, {
+    contactScopes: [contactScope({ projectRoot, usageLedgerPath: ledgerPath })],
+  });
+  assert.equal(result.status, "ready");
+  assert.equal(result.needsRefresh, false);
+  assert.equal(result.events.length, 1);
+  assert.equal(result.summary.today.requestCount, 1);
+  assert.ok(Math.abs(result.summary.today.amountCny - 0.5) < 0.000001);
+});
+
+test("home usage defers an old ledger rebuild until its explicit warm path", async () => {
+  const root = await temporaryRoot("home-summary-rebuild");
+  const projectRoot = path.join(root, "contact-project");
+  const ledgerPath = path.join(root, "software-data", "events.jsonl");
+  const now = new Date();
+  await fs.mkdir(projectRoot, { recursive: true });
+  await appendUsageEvent(ledgerPath, {
+    id: "summary-first",
+    timestamp: now.toISOString(),
+    model: "text-embedding-v4",
+    source: "首页测试",
+    feature: "summary-test",
+    usage: { prompt_tokens: 1 },
+  });
+  const external = createUsageEvent({
+    id: "summary-external",
+    timestamp: new Date(now.getTime() + 1).toISOString(),
+    model: "text-embedding-v4",
+    source: "首页测试",
+    feature: "summary-test",
+    usage: { prompt_tokens: 1 },
+  });
+  await fs.appendFile(ledgerPath, `${JSON.stringify(external)}\n`, "utf8");
+  const options = { contactScopes: [contactScope({ projectRoot, usageLedgerPath: ledgerPath })] };
+
+  const beforeWarm = await readTodayCostLedger({}, options);
+  assert.equal(beforeWarm.status, "warming");
+  assert.equal(beforeWarm.needsRefresh, true);
+  const repaired = await warmTodayCostLedger({}, options);
+  assert.equal(repaired.status, "ready");
+  assert.equal(repaired.needsRefresh, false);
+  assert.equal(repaired.summary.today.requestCount, 2);
 });

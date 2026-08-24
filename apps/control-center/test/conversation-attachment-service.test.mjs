@@ -123,7 +123,7 @@ test("conversation attachment service keeps media cards while preparing image an
   assert.match(prepared.input[1].text, /已启用的图像理解能力/u);
 });
 
-test("conversation attachment service keeps unsupported images as local files instead of sending invalid DSH image parts", async () => {
+test("conversation attachment service routes a non-native raster image through enabled image understanding", async () => {
   const root = await temporaryRoot();
   const dataRoot = path.join(root, "data");
   const projectRoot = path.join(root, "contact");
@@ -132,13 +132,16 @@ test("conversation attachment service keeps unsupported images as local files in
   await fs.writeFile(source, Buffer.from([0x42, 0x4d, 0x00, 0x00]));
 
   const prepared = await createConversationAttachmentService({ dataRoot }).prepare({
+    includeImageUnderstandingFallback: true,
     media: [{ kind: "image", path: source, mimeType: "image/bmp" }],
     projectRoot,
     sessionId: "contact-session",
   });
 
-  assert.deepEqual(prepared.media.map((item) => item.kind), ["file"]);
+  assert.deepEqual(prepared.media.map((item) => item.kind), ["image"]);
   assert.deepEqual(prepared.input.map((part) => part.type), ["text"]);
+  assert.deepEqual(prepared.understandingMedia.map((item) => item.kind), ["image"]);
+  assert.match(prepared.input[0].text, /已启用的图像理解能力/u);
 });
 
 test("conversation attachment service rejects non-regular attachment sources", async () => {

@@ -50,7 +50,6 @@ const NAMED_CONNECTION_TYPES = new Set(["tts-api", "asr-api", "openai-compatible
 const BINDING_TYPES = {
   "image-workbench": ["openai-compatible", "dashscope", "generic-api"],
   "image-generation": ["openai-compatible", "dashscope", "generic-api"],
-  "phone-camera": ["openai-compatible", "dashscope", "generic-api"],
   "voice-message": ["tts-api", "openai-compatible", "dashscope", "generic-api"],
   "realtime-asr": ["asr-api", "dashscope"],
   "image-vision": ["openai-compatible", "dashscope", "generic-api"],
@@ -58,7 +57,7 @@ const BINDING_TYPES = {
   "memory-embedding": ["openai-compatible", "dashscope"],
 };
 const BINDING_GROUPS = {
-  "image-generation": ["image-workbench", "image-generation", "phone-camera"],
+  "image-generation": ["image-workbench", "image-generation"],
 };
 
 function bindingTargets(feature) {

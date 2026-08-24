@@ -1,6 +1,7 @@
 import { SuzuAgentRuntimeError } from "./runtime-error.mjs";
 import { isSuzuAgentPermissionMode } from "./permission-modes.mjs";
 import { normalizeSuzuAgentTaskOutputPolicy } from "./task-trigger.mjs";
+import { formatErrorForDisplay } from "./error-detail.mjs";
 
 export { SuzuAgentRuntimeError };
 export {
@@ -31,6 +32,13 @@ function identifier(value, label) {
 
 function optionalText(value) {
   return typeof value === "string" ? value : "";
+}
+
+function toolFailureMessage(error, content) {
+  const resultMessage = typeof content === "string" ? clean(content) : "";
+  return formatErrorForDisplay(error, {
+    fallback: resultMessage || "Agent Core 工具执行失败。",
+  });
 }
 
 function deferred() {
@@ -134,6 +142,13 @@ function textFromMessage(message) {
     .join("");
 }
 
+function hasBoundaryNoReply(value) {
+  const text = clean(value);
+  if (!text) return false;
+  return /^NO_REPLY(?=$|[\s,，。.!！?？;；、…（(\[])/iu.test(text)
+    || /NO_REPLY(?:[\s,，。.!！?？;；、…]*NO_REPLY)*[\s,，。.!！?？;；、…]*$/iu.test(text);
+}
+
 function reasonMessage(reason) {
   const value = plainObject(reason);
   if (value.kind === "error") return clean(plainObject(value.error).message) || "Agent Core 模型调用失败。";
@@ -160,6 +175,13 @@ function reportedUsage(value) {
 function streamErrorMessage(error, stream) {
   const suffix = clean(error?.message || error) || "连接意外关闭。";
   return `Agent Core ${stream} 事件流不可用：${suffix}`;
+}
+
+function agentFailureMessage(error) {
+  const message = clean(error?.message || error) || "Agent Core 没有完成这次处理。";
+  return /insufficient\s+balance/iu.test(message)
+    ? `模型服务商余额不足（${message}）。`
+    : message;
 }
 
 /**
@@ -204,8 +226,10 @@ export function createSuzuAgentRuntimeDriver({
     }
   };
 
-  const detachUnavailableTurn = (record) => {
-    const active = record.activeTurn || null;
+  const detachFailedTurn = (record, { coreTurn = null, allowPendingFallback = true } = {}) => {
+    const active = Number.isInteger(coreTurn)
+      ? record.coreTurns.get(coreTurn) || null
+      : record.activeTurn || null;
     if (active) {
       active.state = "failed";
       if (Number.isInteger(active.coreTurn)) record.coreTurns.delete(active.coreTurn);
@@ -215,6 +239,7 @@ export function createSuzuAgentRuntimeDriver({
       }
       return active;
     }
+    if (!allowPendingFallback) return null;
     const pendingIndex = record.pendingTurns.findIndex((turn) => (
       turn.state === "submitting" || turn.state === "accepted"
     ));
@@ -228,7 +253,7 @@ export function createSuzuAgentRuntimeDriver({
     // A host-side failure can occur after `turn/start` but before a durable
     // `turn/end`.  Drop the driver mapping before emitting the terminal event
     // so a later valid Core turn is not blocked by the failed predecessor.
-    const affectedTurn = detachUnavailableTurn(record);
+    const affectedTurn = detachFailedTurn(record);
     emit({
       type: "runtime-unavailable",
       runtimeSessionId: record.runtimeSessionId,
@@ -238,6 +263,31 @@ export function createSuzuAgentRuntimeDriver({
       toolName: "",
       error: streamErrorMessage(error, stream),
       data: { stream },
+    });
+  };
+
+  const emitAgentFailure = (record, error, { coreTurn = null, step = null } = {}) => {
+    // `agent/error` is a terminal failure of a particular Agent turn, not an
+    // event-stream transport failure. Core normally supplies its turn number;
+    // do not fall back to an unrelated queued turn when that number is stale.
+    const affectedTurn = detachFailedTurn(record, {
+      coreTurn,
+      allowPendingFallback: !Number.isInteger(coreTurn),
+    });
+    if (!affectedTurn) return;
+    emit({
+      type: "turn-failed",
+      runtimeSessionId: record.runtimeSessionId,
+      turnId: affectedTurn.turnId,
+      approvalId: "",
+      text: "",
+      toolName: "",
+      error: agentFailureMessage(error),
+      data: {
+        source: "host-agent-error",
+        ...(Number.isInteger(coreTurn) ? { coreTurn } : {}),
+        ...(Number.isInteger(step) ? { step } : {}),
+      },
     });
   };
 
@@ -362,7 +412,10 @@ export function createSuzuAgentRuntimeDriver({
 
     if (type === "assistant/message") {
       const finalText = textFromMessage(data.message);
-      if (finalText) turn.lastAssistantText = finalText;
+      if (finalText) {
+        turn.lastAssistantText = finalText;
+        turn.assistantTextParts.push(finalText);
+      }
       const usage = reportedUsage(data.usage);
       if (usage) {
         const messageSource = plainObject(plainObject(data.message).source);
@@ -423,7 +476,7 @@ export function createSuzuAgentRuntimeDriver({
         approvalId: "",
         text: "",
         toolName: call?.toolName || "tool",
-        error: failed ? clean(plainObject(data.error).code) || "Agent Core 工具执行失败。" : "",
+        error: failed ? toolFailureMessage(data.error, block.content) : "",
         data: coreEventData(source, {
           coreTurn,
           step: Number(data.step),
@@ -438,7 +491,12 @@ export function createSuzuAgentRuntimeDriver({
     if (type !== "turn/end") return;
     const reason = plainObject(data.reason);
     const outcome = clean(reason.kind);
-    const terminalData = coreEventData(source, { coreTurn, reason });
+    const terminalData = coreEventData(source, {
+      coreTurn,
+      reason,
+      assistantMessageCount: turn.assistantTextParts.length || (turn.streamedText ? 1 : 0),
+      ...(hasBoundaryNoReply(turn.assistantTextParts.join("\n")) ? { suppressExternalOutput: true } : {}),
+    });
     if (outcome === "completed") {
       emit({
         type: "assistant-completed",
@@ -540,7 +598,13 @@ export function createSuzuAgentRuntimeDriver({
     const payload = plainObject(plainObject(envelope).payload);
     const record = sessions.get(clean(payload.sessionId));
     if (!record) return;
-    if (payload.type === "host/agent-error") emitUnavailable(record, payload.message, "host");
+    if (payload.type === "host/agent-error") {
+      emitAgentFailure(record, payload.message, {
+        coreTurn: Number.isInteger(payload.coreTurn) ? payload.coreTurn : null,
+        step: Number.isInteger(payload.step) ? payload.step : null,
+      });
+      return;
+    }
     if (payload.type === "host/session-removed") {
       emitUnavailable(record, "Agent Core 会话已被运行时移除。", "host");
     }
@@ -603,7 +667,7 @@ export function createSuzuAgentRuntimeDriver({
         if (error instanceof SuzuAgentRuntimeError) throw error;
         throw new SuzuAgentRuntimeError(
           "AGENT_CORE_EVENT_STREAM_UNAVAILABLE",
-          `无法连接 Agent Core 实时事件流：${errorMessage(error, "未知错误。")}`,
+          `无法连接 Agent Core 实时事件流：${formatErrorForDisplay(error, { fallback: "未知错误。" })}`,
           { cause: error },
         );
       });
@@ -671,6 +735,7 @@ export function createSuzuAgentRuntimeDriver({
         coreTurn: null,
         streamedText: "",
         lastAssistantText: "",
+        assistantTextParts: [],
       };
       record.pendingTurns.push(turn);
       const submit = record.promptTail.then(async () => {
@@ -714,6 +779,7 @@ export function createSuzuAgentRuntimeDriver({
         coreTurn: null,
         streamedText: "",
         lastAssistantText: "",
+        assistantTextParts: [],
       };
       record.pendingTurns.push(turn);
       const submit = record.promptTail.then(async () => {

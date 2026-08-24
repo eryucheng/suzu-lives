@@ -361,10 +361,12 @@ test("contact chat leaves the built-in software assistant lifecycle to its isola
   const projectRoot = path.join(root, "contact");
   await fs.mkdir(projectRoot, { recursive: true });
   const runtime = createFakeRuntime();
+  const usageCalls = [];
   const chat = createConversationChatService({
     settingsService: { load: () => ({}) },
     reader: fakeReader(projectRoot),
     runtime,
+    usageLedger: { record: async (value) => { usageCalls.push(value); } },
   });
 
   runtime.emit({
@@ -373,8 +375,19 @@ test("contact chat leaves the built-in software assistant lifecycle to its isola
     lifecycleEvent: "ContextCollect",
     data: { sessionId: SUZU_SOFTWARE_ASSISTANT_SESSION_ID, coreTurn: 1, step: 1 },
   });
+  runtime.emit({
+    type: "model-usage",
+    sessionId: SUZU_SOFTWARE_ASSISTANT_SESSION_ID,
+    turnId: "software-turn-1",
+    data: {
+      coreSequence: 1,
+      model: "deepseek-v4-flash",
+      usage: { inputTokens: 1, outputTokens: 1 },
+    },
+  });
   await flush();
   assert.deepEqual(runtime.calls.respondLifecycleRequest, []);
+  assert.deepEqual(usageCalls, []);
   chat.dispose();
 });
 
@@ -398,7 +411,7 @@ test("Agent Core chat keeps a scheduled NO_REPLY terminal even after an internal
     projectRoot,
     kind: "schedule",
     requestId: "proactive-silent-turn",
-    scheduleSource: "proactive-chain",
+    scheduleSource: "proactive-contact",
     deliverToWechat: true,
   });
   runtime.emit({ type: "turn-started", sessionId: "contact-session", turnId: accepted.requestId });
@@ -411,7 +424,121 @@ test("Agent Core chat keeps a scheduled NO_REPLY terminal even after an internal
   chat.dispose();
 });
 
-test("internal scheduled work provides its instruction at the opening model step and keeps a silent B phase off every reply transport", async () => {
+test("Agent Core chat does not append the terminal assistant step twice in a multi-step reply", async () => {
+  const root = await temporaryRoot();
+  const projectRoot = path.join(root, "contact");
+  await fs.mkdir(projectRoot, { recursive: true });
+  const runtime = createFakeRuntime();
+  const events = [];
+  const memoryCalls = [];
+  const chat = createConversationChatService({
+    settingsService: { load: () => ({}) },
+    reader: fakeReader(projectRoot),
+    runtime,
+    memoryRuntime: {
+      async prepareTurn() { return { id: "memory-multi-step" }; },
+      async completeTurn(turn, value) { memoryCalls.push({ turn, value }); },
+      async abortTurn() {},
+    },
+    onEvent: (event) => events.push(event),
+  });
+
+  const accepted = await chat.send({ content: "处理这个文件" });
+  runtime.emit({ type: "turn-started", sessionId: "contact-session", turnId: accepted.requestId });
+  runtime.emit({ type: "assistant-delta", sessionId: "contact-session", turnId: accepted.requestId, text: "我先检查。" });
+  runtime.emit({ type: "assistant-delta", sessionId: "contact-session", turnId: accepted.requestId, text: "检查完成。" });
+  runtime.emit({ type: "assistant-delta", sessionId: "contact-session", turnId: accepted.requestId, text: "结果已经保存。" });
+  runtime.emit({
+    type: "assistant-completed",
+    sessionId: "contact-session",
+    turnId: accepted.requestId,
+    text: "结果已经保存。",
+    data: { assistantMessageCount: 3 },
+  });
+  await flush();
+
+  const reply = events.find((event) => event.type === "reply" && event.done === true);
+  assert.equal(reply?.content, "我先检查。检查完成。结果已经保存。");
+  assert.equal(reply?.assistantMessageCount, 3);
+  assert.equal(events.find((event) => event.type === "agent-reply")?.content, "结果已经保存。");
+  assert.equal(memoryCalls[0]?.value?.assistantText, "我先检查。检查完成。结果已经保存。");
+  chat.dispose();
+});
+
+test("a call-ended internal task only exposes its final non-silent reply", async () => {
+  const root = await temporaryRoot();
+  const projectRoot = path.join(root, "contact");
+  await fs.mkdir(projectRoot, { recursive: true });
+  const runtime = createFakeRuntime();
+  const events = [];
+  const chat = createConversationChatService({
+    settingsService: { load: () => ({}) },
+    reader: fakeReader(projectRoot),
+    runtime,
+    onEvent: (event) => events.push(event),
+  });
+
+  const accepted = await chat.sendTaskToSession({
+    taskContext: { id: "call-ended", text: "【通话已结束】" },
+    contactId: "contact-suzu",
+    sessionId: "contact-session",
+    projectRoot,
+    kind: "call-ended",
+    requestId: "call-ended-turn",
+    outputPolicy: "external",
+  });
+  runtime.emit({ type: "turn-started", sessionId: "contact-session", turnId: accepted.requestId });
+  runtime.emit({ type: "assistant-reasoning-delta", sessionId: "contact-session", turnId: accepted.requestId, text: "判断是否需要补一句。" });
+  runtime.emit({ type: "assistant-delta", sessionId: "contact-session", turnId: accepted.requestId, text: "怎么突然挂了？" });
+  runtime.emit({ type: "assistant-completed", sessionId: "contact-session", turnId: accepted.requestId, text: "怎么突然挂了？" });
+  await flush();
+
+  assert.equal(events.some((event) => event.type === "thinking"), false);
+  assert.equal(events.some((event) => event.type === "reply-stream"), false);
+  assert.deepEqual(
+    events.filter((event) => event.type === "reply").map((event) => [event.kind, event.content, event.done]),
+    [["call-ended", "怎么突然挂了？", true]],
+  );
+  assert.deepEqual(
+    events.filter((event) => event.type === "agent-reply").map((event) => [event.kind, event.content]),
+    [["call-ended", "怎么突然挂了？"]],
+  );
+  chat.dispose();
+});
+
+test("a call-ended internal task hides a terminal NO_REPLY", async () => {
+  const root = await temporaryRoot();
+  const projectRoot = path.join(root, "contact");
+  await fs.mkdir(projectRoot, { recursive: true });
+  const runtime = createFakeRuntime();
+  const events = [];
+  const chat = createConversationChatService({
+    settingsService: { load: () => ({}) },
+    reader: fakeReader(projectRoot),
+    runtime,
+    onEvent: (event) => events.push(event),
+  });
+
+  const accepted = await chat.sendTaskToSession({
+    taskContext: { id: "call-ended", text: "【通话已结束】" },
+    contactId: "contact-suzu",
+    sessionId: "contact-session",
+    projectRoot,
+    kind: "call-ended",
+    requestId: "call-ended-no-reply",
+    outputPolicy: "external",
+  });
+  runtime.emit({ type: "turn-started", sessionId: "contact-session", turnId: accepted.requestId });
+  runtime.emit({ type: "assistant-delta", sessionId: "contact-session", turnId: accepted.requestId, text: "NO_" });
+  runtime.emit({ type: "assistant-completed", sessionId: "contact-session", turnId: accepted.requestId, text: "NO_REPLY" });
+  await flush();
+
+  assert.equal(events.some((event) => ["thinking", "reply-stream", "reply", "agent-reply"].includes(event.type)), false);
+  assert.equal(events.find((event) => event.type === "turn-complete")?.requestId, accepted.requestId);
+  chat.dispose();
+});
+
+test("an internal task provides its instruction at the opening model step and stays off every reply transport", async () => {
   const root = await temporaryRoot();
   const projectRoot = path.join(root, "contact");
   await fs.mkdir(projectRoot, { recursive: true });
@@ -443,25 +570,28 @@ test("internal scheduled work provides its instruction at the opening model step
     lifecycle,
     onEvent: (event) => events.push(event),
   });
+  const internalEvents = [];
+  const unsubscribe = chat.subscribe((event) => internalEvents.push(event));
 
   const accepted = await chat.sendTaskToSession({
     contactId: "contact-suzu",
     sessionId: "contact-session",
     projectRoot,
-    requestId: "proactive-b",
-    scheduleSource: "proactive-chain-planning",
+    requestId: "internal-task",
+    scheduleSource: "internal-task",
     outputPolicy: "silent",
-    taskContext: { id: "schedule-b", text: "安排下一次主动关心。" },
+    resultChannel: "internal",
+    taskContext: { id: "internal-task", text: "整理本轮内部检查。" },
   });
   assert.equal(runtime.calls.sendTurn.length, 0);
   assert.deepEqual(runtime.calls.sendTask, [{
     sessionId: "contact-session",
-    turnId: "proactive-b",
-    task: { id: "schedule-b", outputPolicy: "silent" },
+    turnId: "internal-task",
+    task: { id: "internal-task", outputPolicy: "silent" },
     placement: "queue",
   }]);
   assert.equal(lifecycleEvents.some(([name]) => name === "UserPromptSubmit"), false);
-  assert.equal(lifecycleEvents.find(([name]) => name === "TurnQueued")?.[1].taskContext?.text, "安排下一次主动关心。");
+  assert.equal(lifecycleEvents.find(([name]) => name === "TurnQueued")?.[1].taskContext?.text, "整理本轮内部检查。");
 
   runtime.emit({ type: "turn-started", sessionId: "contact-session", turnId: accepted.requestId });
   runtime.emit({
@@ -472,7 +602,7 @@ test("internal scheduled work provides its instruction at the opening model step
   });
   await flush();
   assert.deepEqual(runtime.calls.respondLifecycleRequest.at(-1).result.blocks.map((block) => [block.kind, block.text]), [
-    ["automation-task", "安排下一次主动关心。"],
+    ["automation-task", "整理本轮内部检查。"],
     ["time-awareness", "当前内部步骤 1"],
   ]);
   runtime.emit({
@@ -486,13 +616,15 @@ test("internal scheduled work provides its instruction at the opening model step
     ["time-awareness", "当前内部步骤 2"],
   ]);
   assert.equal(lifecycleEvents.filter(([name]) => name === "DynamicContextCollect").at(-1)?.[1].taskContext, undefined);
-  runtime.emit({ type: "tool-started", sessionId: "contact-session", turnId: accepted.requestId, toolName: "schedule" });
   runtime.emit({ type: "assistant-delta", sessionId: "contact-session", turnId: accepted.requestId, text: "内部安排完成。" });
   runtime.emit({ type: "assistant-completed", sessionId: "contact-session", turnId: accepted.requestId, text: "完成" });
   await flush();
 
   assert.equal(events.some((event) => ["reply", "reply-stream", "agent-reply", "tool"].includes(event.type)), false);
+  assert.equal(events.some((event) => event.type === "internal-result"), false);
+  assert.equal(internalEvents.find((event) => event.type === "internal-result")?.content, "完成");
   assert.equal(events.find((event) => event.type === "turn-complete")?.requestId, accepted.requestId);
+  unsubscribe();
   chat.dispose();
   lifecycle.close();
 });
@@ -515,7 +647,7 @@ test("a failed internal task releases its conversation queue for the next messag
     sessionId: "contact-session",
     projectRoot,
     requestId: "stuck-internal-task",
-    scheduleSource: "proactive-chain",
+    scheduleSource: "proactive-contact",
     outputPolicy: "silent",
     taskContext: { id: "stuck-task", text: "内部任务" },
   });
@@ -527,15 +659,51 @@ test("a failed internal task releases its conversation queue for the next messag
   assert.equal(runtime.calls.sendTurn.length, 0);
 
   runtime.emit({
-    type: "runtime-unavailable",
+    type: "turn-failed",
     sessionId: "contact-session",
     turnId: task.requestId,
-    error: "Agent Core host 事件流不可用：session persistence failed",
+    error: "session persistence failed",
   });
   await waitFor(() => runtime.calls.sendTurn.length === 1);
 
-  assert.equal(events.find((event) => event.type === "error" && event.requestId === task.requestId)?.message, "Agent Core host 事件流不可用：session persistence failed");
+  assert.equal(events.find((event) => event.type === "error" && event.requestId === task.requestId)?.message, "session persistence failed");
   assert.equal(runtime.calls.sendTurn[0].input, "请继续正常聊天");
+  chat.dispose();
+});
+
+test("Agent Core capability calls without an active conversation turn return a concrete reason", async () => {
+  const root = await temporaryRoot();
+  const projectRoot = path.join(root, "contact");
+  await fs.mkdir(projectRoot, { recursive: true });
+  const runtime = createFakeRuntime();
+  const chat = createConversationChatService({
+    settingsService: { load: () => ({}) },
+    reader: fakeReader(projectRoot),
+    runtime,
+  });
+
+  runtime.emit({
+    type: "lifecycle-request",
+    requestId: "capability-without-turn",
+    lifecycleEvent: "CapabilityExecute",
+    data: {
+      sessionId: "missing-session",
+      capabilityId: "web-browser",
+      action: "open",
+    },
+  });
+  await flush();
+
+  assert.deepEqual(runtime.calls.respondLifecycleRequest, [{
+    requestId: "capability-without-turn",
+    result: {
+      status: "turn-unavailable",
+      error: {
+        code: "CAPABILITY_TURN_UNAVAILABLE",
+        message: "当前能力请求没有对应的活动对话轮次，未执行。",
+      },
+    },
+  }]);
   chat.dispose();
 });
 
@@ -635,6 +803,257 @@ test("Agent Core chat answers capability catalog and action bridge requests thro
   chat.dispose();
 });
 
+test("Agent Core exposes enabled product abilities as concise Skills and loads one action contract on demand", async () => {
+  const root = await temporaryRoot();
+  const projectRoot = path.join(root, "contact");
+  await fs.mkdir(projectRoot, { recursive: true });
+  const runtime = createFakeRuntime();
+  const calls = [];
+  const capabilityRuntime = {
+    availableActions(context) {
+      calls.push(context);
+      return [{
+        capabilityId: "image-generation",
+        capabilityName: "图像生成",
+        capabilityDescription: "生成、编辑图片，并可结合视觉参考。",
+        action: "generate",
+        actionName: "生成图片",
+        actionDescription: "input 必须包含图片提示词，成功后会投放到当前聊天。",
+      }];
+    },
+  };
+  const chat = createConversationChatService({
+    settingsService: { load: () => ({}) },
+    reader: fakeReader(projectRoot),
+    runtime,
+    capabilityRuntime,
+  });
+
+  const accepted = await chat.send({ content: "帮我画一张图" });
+  runtime.emit({ type: "turn-started", sessionId: "contact-session", turnId: accepted.requestId });
+  runtime.emit({
+    type: "lifecycle-request",
+    requestId: "capability-skill-catalog",
+    lifecycleEvent: "CapabilitySkillCatalog",
+    data: { sessionId: "contact-session", coreTurn: 4, step: 1 },
+  });
+  await flush();
+  assert.deepEqual(runtime.calls.respondLifecycleRequest.at(-1), {
+    requestId: "capability-skill-catalog",
+    result: {
+      skills: [{
+        name: "suzu-image-generation",
+        description: "图像生成：生成、编辑图片，并可结合视觉参考。",
+      }],
+    },
+  });
+
+  runtime.emit({
+    type: "lifecycle-request",
+    requestId: "capability-skill-read",
+    lifecycleEvent: "CapabilitySkillRead",
+    data: {
+      sessionId: "contact-session",
+      coreTurn: 4,
+      step: 1,
+      name: "suzu-image-generation",
+    },
+  });
+  await flush();
+  const loaded = runtime.calls.respondLifecycleRequest.at(-1);
+  assert.equal(loaded.requestId, "capability-skill-read");
+  assert.equal(loaded.result.skill.name, "suzu-image-generation");
+  assert.match(loaded.result.skill.content, /capabilityId：`image-generation`/u);
+  assert.match(loaded.result.skill.content, /input 必须包含图片提示词/u);
+  assert.equal(runtime.calls.respondLifecycleRequest[0].result.skills[0].description.includes("input"), false);
+  assert.deepEqual(calls, [
+    {
+      contactId: "contact-suzu",
+      coreTurn: 4,
+      projectRoot,
+      sessionId: "contact-session",
+      step: 1,
+      turnId: accepted.requestId,
+    },
+    {
+      contactId: "contact-suzu",
+      coreTurn: 4,
+      projectRoot,
+      sessionId: "contact-session",
+      step: 1,
+      turnId: accepted.requestId,
+    },
+  ]);
+  chat.dispose();
+});
+
+test("Agent Core keeps host-managed proactive decisions out of the capability and tool bridges", async () => {
+  const root = await temporaryRoot();
+  const projectRoot = path.join(root, "contact");
+  await fs.mkdir(projectRoot, { recursive: true });
+  const runtime = createFakeRuntime();
+  const calls = [];
+  const capabilityRuntime = {
+    availableActions(context) {
+      calls.push({ type: "catalog", context });
+      return [{ capabilityId: "conversation-attachment", action: "deliver" }];
+    },
+    async invoke(context) {
+      calls.push({ type: "invoke", context });
+      return { status: "completed" };
+    },
+  };
+  const chat = createConversationChatService({
+    settingsService: { load: () => ({}) },
+    reader: fakeReader(projectRoot),
+    runtime,
+    capabilityRuntime,
+  });
+
+  const accepted = await chat.sendTaskToSession({
+    taskContext: { id: "proactive-timing", text: "【主动关心 B】\n只输出 JSON。" },
+    contactId: "contact-suzu",
+    sessionId: "contact-session",
+    projectRoot,
+    requestId: "proactive-timing-turn",
+    scheduleSource: "proactive-contact-timing",
+    outputPolicy: "silent",
+    resultChannel: "internal",
+  });
+  runtime.emit({ type: "turn-started", sessionId: "contact-session", turnId: accepted.requestId });
+
+  runtime.emit({
+    type: "lifecycle-request",
+    requestId: "proactive-capability-catalog",
+    lifecycleEvent: "CapabilityCatalog",
+    data: { sessionId: "contact-session", coreTurn: 2, step: 1 },
+  });
+  await flush();
+  assert.deepEqual(runtime.calls.respondLifecycleRequest.at(-1), {
+    requestId: "proactive-capability-catalog",
+    result: { actions: [] },
+  });
+
+  runtime.emit({
+    type: "lifecycle-request",
+    requestId: "proactive-capability-execute",
+    lifecycleEvent: "CapabilityExecute",
+    data: {
+      sessionId: "contact-session",
+      coreTurn: 2,
+      step: 1,
+      capabilityId: "conversation-attachment",
+      action: "deliver",
+      input: { items: [] },
+    },
+  });
+  await flush();
+  assert.deepEqual(runtime.calls.respondLifecycleRequest.at(-1), {
+    requestId: "proactive-capability-execute",
+    result: {
+      status: "not-available",
+      error: {
+        code: "PROACTIVE_CONTACT_CAPABILITIES_UNAVAILABLE",
+        message: "请返回本轮主动关心任务的结果；软件会处理下一次检查。",
+      },
+    },
+  });
+
+  runtime.emit({
+    type: "lifecycle-request",
+    requestId: "proactive-tool-use",
+    lifecycleEvent: "PreToolUse",
+    data: {
+      sessionId: "contact-session",
+      coreTurn: 2,
+      step: 1,
+      toolName: "suzu_capability",
+    },
+  });
+  await flush();
+  assert.deepEqual(runtime.calls.respondLifecycleRequest.at(-1), {
+    requestId: "proactive-tool-use",
+    result: {
+      decision: {
+        kind: "deny",
+        reason: "请返回本轮主动关心任务的结果。",
+      },
+    },
+  });
+  assert.deepEqual(calls, []);
+  chat.dispose();
+});
+
+test("Agent Core hides image understanding from a visual model while retaining other actions", async () => {
+  const root = await temporaryRoot();
+  const projectRoot = path.join(root, "contact");
+  await fs.mkdir(projectRoot, { recursive: true });
+  const runtime = createFakeRuntime();
+  runtime.currentModelCapabilities = async () => ({
+    inputModalities: ["text", "image"],
+    supportsImageInput: true,
+  });
+  const capabilityRuntime = {
+    availableActions() {
+      return [
+        { capabilityId: "image-vision", action: "analyze" },
+        { capabilityId: "video-understanding", action: "analyze" },
+        { capabilityId: "daily-note", action: "create" },
+      ];
+    },
+  };
+  const chat = createConversationChatService({
+    settingsService: { load: () => ({}) },
+    reader: fakeReader(projectRoot),
+    runtime,
+    capabilityRuntime,
+  });
+
+  const accepted = await chat.send({ content: "看看这个附件" });
+  runtime.emit({ type: "turn-started", sessionId: "contact-session", turnId: accepted.requestId });
+  runtime.emit({
+    type: "lifecycle-request",
+    requestId: "visual-capability-catalog",
+    lifecycleEvent: "CapabilityCatalog",
+    data: { sessionId: "contact-session", coreTurn: 3, step: 1 },
+  });
+  await flush();
+
+  assert.deepEqual(runtime.calls.respondLifecycleRequest.at(-1), {
+    requestId: "visual-capability-catalog",
+    result: {
+      actions: [
+        { capabilityId: "video-understanding", action: "analyze" },
+        { capabilityId: "daily-note", action: "create" },
+      ],
+    },
+  });
+
+  runtime.currentModelCapabilities = async () => ({
+    inputModalities: ["text"],
+    supportsImageInput: false,
+  });
+  runtime.emit({
+    type: "lifecycle-request",
+    requestId: "text-capability-catalog",
+    lifecycleEvent: "CapabilityCatalog",
+    data: { sessionId: "contact-session", coreTurn: 3, step: 2 },
+  });
+  await flush();
+
+  assert.deepEqual(runtime.calls.respondLifecycleRequest.at(-1), {
+    requestId: "text-capability-catalog",
+    result: {
+      actions: [
+        { capabilityId: "image-vision", action: "analyze" },
+        { capabilityId: "video-understanding", action: "analyze" },
+        { capabilityId: "daily-note", action: "create" },
+      ],
+    },
+  });
+  chat.dispose();
+});
+
 test("Agent Core capability bridge gives Agent-created files the durable chat-attachment receipt", async () => {
   const root = await temporaryRoot();
   const dataRoot = path.join(root, "data");
@@ -681,7 +1100,7 @@ test("Agent Core capability bridge gives Agent-created files the durable chat-at
         resourceKind: "runtime",
         driver: "conversation-attachment",
         action: "deliver",
-        actionDescription: "将已有且已确认的本机绝对路径作为附件交付到当前聊天。图片生成、手机拍照式图片和语音消息成功时由软件自动投放；本动作用于其他已有文件。input 必须是 { items: [{ path: \"绝对路径\", kind: \"image\" | \"audio\" | \"file\" }] }；图片支持 AVIF/BMP/GIF/HEIC/ICO/JPG/PNG/SVG/TIFF/WebP，音频仅支持 MP3。动作成功后，附件会出现在当前聊天；已绑定微信的会话会自动转发同一附件。",
+        actionDescription: "将已有且已确认的本机绝对路径作为附件交付到当前聊天。图像生成和语音消息成功时由软件自动投放；本动作用于其他已有文件。input 必须是 { items: [{ path: \"绝对路径\", kind: \"image\" | \"audio\" | \"file\" }] }；图片支持 AVIF/BMP/GIF/HEIC/ICO/JPG/PNG/SVG/TIFF/WebP，音频仅支持 MP3。动作成功后，附件会出现在当前聊天；已绑定微信的会话会自动转发同一附件。",
         actionName: "发送聊天附件",
       }],
     },
@@ -917,7 +1336,7 @@ test("Agent Core chat records public model usage into the contact's unified ledg
     },
   });
   runtime.emit({ type: "assistant-completed", sessionId: "contact-session", turnId: accepted.requestId, text: "你好呀。" });
-  await flush();
+  await waitFor(() => usageCalls.length === 1);
 
   runtime.emit({
     type: "model-usage",
@@ -933,7 +1352,7 @@ test("Agent Core chat records public model usage into the contact's unified ledg
       coreTurn: 1,
     },
   });
-  await flush();
+  await waitFor(() => usageCalls.length === 2);
 
   assert.equal(usageCalls.length, 2);
   assert.equal(usageCalls[0].capabilityId, "conversation-model");
@@ -1037,6 +1456,12 @@ test("Agent Core chat bridges tool approvals and sends image attachments through
   await fs.mkdir(projectRoot, { recursive: true });
   await fs.writeFile(image, Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl+jh0AAAAASUVORK5CYII=", "base64"));
   const runtime = createFakeRuntime();
+  runtime.currentModelCapabilities = async () => ({
+    provider: "deepseek-official",
+    model: "deepseek-v4-flash-vision-exp",
+    inputModalities: ["text", "image"],
+    supportsImageInput: true,
+  });
   const events = [];
   const lifecycleEvents = [];
   const lifecycle = createSuzuAgentLifecycle();
@@ -1172,8 +1597,12 @@ test("Agent Core chat sends images natively to a visual main model and retains t
     supportsImageInput: true,
   });
   const invocations = [];
+  const availabilityChecks = [];
   const capabilityRuntime = {
-    availableActions: ({ capabilityId }) => [{ capabilityId, action: "analyze" }],
+    availableActions: ({ capabilityId }) => {
+      availabilityChecks.push(capabilityId);
+      return [{ capabilityId, action: "analyze" }];
+    },
     async invoke(value) {
       invocations.push(value);
       return { status: "completed", value: { summary: "视频里有人向镜头挥手。" } };
@@ -1203,6 +1632,124 @@ test("Agent Core chat sends images natively to a visual main model and retains t
   assert.deepEqual(invocations.map((item) => [item.capabilityId, item.action]), [
     ["video-understanding", "analyze"],
   ]);
+  assert.deepEqual(availabilityChecks, ["image-vision", "video-understanding"]);
+  chat.dispose();
+});
+
+test("Agent Core chat falls back only for images the visual main model cannot accept natively", async () => {
+  const root = await temporaryRoot();
+  const dataRoot = path.join(root, "data");
+  const projectRoot = path.join(root, "contact");
+  const nativeImage = path.join(root, "native.png");
+  const oversizedImage = path.join(root, "oversized.png");
+  await fs.mkdir(projectRoot, { recursive: true });
+  await fs.writeFile(nativeImage, Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl+jh0AAAAASUVORK5CYII=", "base64"));
+  await fs.writeFile(oversizedImage, Buffer.alloc((5 * 1024 * 1024) + 1, 0));
+  const runtime = createFakeRuntime();
+  runtime.currentModelCapabilities = async () => ({
+    provider: "deepseek-official",
+    model: "deepseek-v4-flash-vision-exp",
+    inputModalities: ["text", "image"],
+    supportsImageInput: true,
+  });
+  const invocations = [];
+  const chat = createConversationChatService({
+    attachmentService: createConversationAttachmentService({ dataRoot }),
+    capabilityRuntime: {
+      availableActions: ({ capabilityId }) => [{ capabilityId, action: "analyze" }],
+      async invoke(value) {
+        invocations.push(value);
+        return { status: "completed", value: { answer: "这张较大的图片已由图像理解能力读出内容。" } };
+      },
+    },
+    settingsService: { load: () => ({}) },
+    reader: fakeReader(projectRoot),
+    runtime,
+  });
+
+  await chat.send({
+    content: "比较这两张图",
+    media: [
+      { kind: "image", path: nativeImage },
+      { kind: "image", path: oversizedImage },
+    ],
+  });
+
+  const input = runtime.calls.sendTurn[0].input;
+  assert.deepEqual(input.map((part) => part.type), ["text", "text", "image", "text"]);
+  assert.equal(input[2].name, "native.png");
+  assert.match(input[1].text, /1 张已作为原生视觉输入传入/u);
+  assert.match(input[1].text, /1 张会通过已启用的图像理解能力提供识图结果/u);
+  assert.match(input[3].text, /较大的图片已由图像理解能力读出内容/u);
+  assert.deepEqual(invocations.map((item) => [item.capabilityId, item.action]), [
+    ["image-vision", "analyze"],
+  ]);
+  assert.match(invocations[0].input.path, /[\\/]attachments[\\/]/u);
+  chat.dispose();
+});
+
+test("Agent Core chat sends images natively when the main model supports them even without the optional fallback", async () => {
+  const root = await temporaryRoot();
+  const dataRoot = path.join(root, "data");
+  const projectRoot = path.join(root, "contact");
+  const image = path.join(root, "reference.png");
+  await fs.mkdir(projectRoot, { recursive: true });
+  await fs.writeFile(image, Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl+jh0AAAAASUVORK5CYII=", "base64"));
+  const runtime = createFakeRuntime();
+  runtime.currentModelCapabilities = async () => ({
+    provider: "deepseek-official",
+    model: "deepseek-v4-flash-vision-exp",
+    inputModalities: ["text", "image"],
+    supportsImageInput: true,
+  });
+  const invocations = [];
+  const chat = createConversationChatService({
+    attachmentService: createConversationAttachmentService({ dataRoot }),
+    capabilityRuntime: {
+      availableActions: () => [],
+      async invoke(value) { invocations.push(value); return { status: "completed", value: {} }; },
+    },
+    settingsService: { load: () => ({}) },
+    reader: fakeReader(projectRoot),
+    runtime,
+  });
+
+  await chat.send({ content: "看看这张图", media: [{ kind: "image", path: image }] });
+
+  const input = runtime.calls.sendTurn[0].input;
+  assert.deepEqual(input.map((part) => part.type), ["text", "text", "image"]);
+  assert.match(input[1].text, /原生视觉输入/u);
+  assert.deepEqual(invocations, []);
+  chat.dispose();
+});
+
+test("Agent Core chat keeps an image local when neither the main model nor the fallback can understand it", async () => {
+  const root = await temporaryRoot();
+  const dataRoot = path.join(root, "data");
+  const projectRoot = path.join(root, "contact");
+  const image = path.join(root, "reference.png");
+  await fs.mkdir(projectRoot, { recursive: true });
+  await fs.writeFile(image, Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl+jh0AAAAASUVORK5CYII=", "base64"));
+  const runtime = createFakeRuntime();
+  runtime.currentModelCapabilities = async () => ({
+    provider: "text-only-provider",
+    model: "text-only-model",
+    inputModalities: ["text"],
+    supportsImageInput: false,
+  });
+  const chat = createConversationChatService({
+    attachmentService: createConversationAttachmentService({ dataRoot }),
+    capabilityRuntime: { availableActions: () => [], async invoke() { throw new Error("不应调用图片理解。"); } },
+    settingsService: { load: () => ({}) },
+    reader: fakeReader(projectRoot),
+    runtime,
+  });
+
+  await chat.send({ content: "看看这张图", media: [{ kind: "image", path: image }] });
+
+  const input = runtime.calls.sendTurn[0].input;
+  assert.deepEqual(input.map((part) => part.type), ["text", "text"]);
+  assert.match(input[1].text, /未启用图像理解能力/u);
   chat.dispose();
 });
 
@@ -1232,6 +1779,25 @@ test("Agent Core chat does not submit the main-model turn when enabled media und
   );
   assert.equal(runtime.calls.sendTurn.length, 0);
   chat.dispose();
+});
+
+test("Agent Core reader marks abbreviated thinking with an ellipsis", () => {
+  const thinking = "思".repeat(20_001);
+  const messages = conversationDisplayMessages([{
+    event: {
+      type: "assistant/message",
+      seq: 1,
+      time: 1_000,
+      surfaceOp: "append",
+      data: { message: { id: "assistant-thinking", content: [{ type: "reasoning", text: thinking }] } },
+    },
+  }]);
+
+  const block = messages[0]?.blocks[0];
+  assert.equal(block?.kind, "thinking");
+  assert.equal(block?.text.length, 20_000);
+  assert.equal(block?.text.endsWith("…"), true);
+  assert.doesNotMatch(block?.text || "", /内容已截断/u);
 });
 
 test("Agent Core reader renders the full append-only human transcript after model-surface replacement, searches, and focuses", async () => {
@@ -1294,26 +1860,77 @@ test("Agent Core reader renders the full append-only human transcript after mode
     sessionId: "contact-session",
     contactId: "contact-suzu",
     cwd: projectRoot,
-    maxMessages: 600,
+    maxMessages: 360,
   });
   await reader.removeContact({ id: "contact-suzu", confirmed: true });
   assert.deepEqual(removals, [{ id: "contact-suzu", confirmed: true }]);
 });
 
-test("Agent Core reader hides internal scheduled task turns without hiding proactive replies", async () => {
+test("Agent Core reader reads the current page first and accepts an older-history cursor", async () => {
+  const projectRoot = "D:\\Contacts\\paged";
+  const contact = {
+    id: "contact-paged",
+    name: "分页联系人",
+    projectRoot,
+    sessionId: "paged-session",
+  };
+  const events = Array.from({ length: 800 }, (_value, index) => ({
+    type: "user/message",
+    seq: index + 1,
+    time: (index + 1) * 1_000,
+    surfaceOp: "append",
+    data: {
+      id: `message-${index + 1}`,
+      source: { kind: "user" },
+      content: [{ type: "text", text: `消息 ${index + 1}` }],
+    },
+  }));
+  const calls = [];
+  const reader = createConversationReader({
+    runtime: {
+      async history({ beforeSeq, maxMessages, ...scope }) {
+        calls.push({ beforeSeq, maxMessages, ...scope });
+        const eligible = Number.isSafeInteger(beforeSeq)
+          ? events.filter((event) => event.seq < beforeSeq)
+          : events;
+        const start = Math.max(eligible.length - maxMessages, 0);
+        return { events: eligible.slice(start), hasMore: start > 0 };
+      },
+    },
+    settingsService: { load: () => ({ projectRoot }) },
+    contactProjectsService: {
+      async snapshot() {
+        return {
+          status: "ready",
+          contactsRoot: "D:\\Contacts",
+          contacts: [contact],
+          activeContact: contact,
+          preferredContact: contact,
+        };
+      },
+    },
+  });
+
+  const latest = await reader.snapshot();
+  assert.equal(calls[0].maxMessages, 360);
+  assert.equal(calls[0].beforeSeq, undefined);
+  assert.equal(latest.historyPage.oldestEventSeq, 441);
+  assert.equal(latest.historyPage.hasMore, true);
+  assert.deepEqual(latest.messages.slice(0, 2).map((message) => message.id), ["message-441", "message-442"]);
+
+  const older = await reader.snapshot({ beforeSeq: latest.historyPage.oldestEventSeq });
+  assert.equal(calls[1].maxMessages, 360);
+  assert.equal(calls[1].beforeSeq, 441);
+  assert.equal(older.historyPage.oldestEventSeq, 81);
+  assert.equal(older.historyPage.hasMore, true);
+  assert.deepEqual(older.messages.slice(-2).map((message) => message.id), ["message-439", "message-440"]);
+});
+
+test("Agent Core reader hides internal contact checks without hiding proactive replies", async () => {
   const projectRoot = "D:\\Contacts\\scheduled-turns";
-  const planningTask = [
+  const contactTask = [
     "<suzu-schedule-task>",
-    "任务说明：安排下次主动关心",
-    "这是 Suzu 自动任务触发，不是用户发来的新消息。",
-    "<!-- suzu-lives:display-system -->",
-    "",
-    "这是链式主动关心的内部安排阶段。",
-    "</suzu-schedule-task>",
-  ].join("\\n");
-  const checkTask = [
-    "<suzu-schedule-task>",
-    "任务说明：判断是否主动关心",
+    "任务说明：主动关心",
     "这是 Suzu 自动任务触发，不是用户发来的新消息。",
     "</suzu-schedule-task>",
   ].join("\\n");
@@ -1325,30 +1942,21 @@ test("Agent Core reader hides internal scheduled task turns without hiding proac
       message: { id: "assistant-before", content: [{ type: "text", text: "挺好的，谢谢你。" }] },
     } },
     { type: "user/message", seq: 3, time: 3_000, surfaceOp: "append", data: {
-      id: "planning-input", source: { kind: "user" }, content: [{ type: "text", text: planningTask }],
+      id: "contact-input", source: { kind: "user" }, content: [{ type: "text", text: contactTask }],
     } },
-    { type: "tool/result", seq: 4, time: 4_000, surfaceOp: "append", data: {
-      message: { content: [{ type: "text", text: "已建立下一次链式主动关心任务。" }] },
-    } },
-    { type: "assistant/message", seq: 5, time: 5_000, surfaceOp: "append", data: {
-      message: { id: "planning-reply", content: [{ type: "text", text: "NO_REPLY" }] },
-    } },
-    { type: "user/message", seq: 6, time: 6_000, surfaceOp: "append", data: {
-      id: "check-input", source: { kind: "user" }, content: [{ type: "text", text: checkTask }],
-    } },
-    { type: "assistant/message", seq: 7, time: 7_000, surfaceOp: "append", data: {
+    { type: "assistant/message", seq: 4, time: 4_000, surfaceOp: "append", data: {
       message: { id: "proactive-reply", content: [{ type: "text", text: "晚上好，记得吃饭呀。" }] },
     } },
-    { type: "user/message", seq: 8, time: 8_000, surfaceOp: "append", data: {
-      id: "silent-check-input", source: { kind: "user" }, content: [{ type: "text", text: checkTask }],
+    { type: "user/message", seq: 5, time: 5_000, surfaceOp: "append", data: {
+      id: "silent-contact-input", source: { kind: "user" }, content: [{ type: "text", text: contactTask }],
     } },
-    { type: "assistant/message", seq: 9, time: 9_000, surfaceOp: "append", data: {
-      message: { id: "silent-check-reply", content: [{ type: "text", text: "NO_REPLY" }] },
+    { type: "assistant/message", seq: 6, time: 6_000, surfaceOp: "append", data: {
+      message: { id: "silent-contact-reply", content: [{ type: "text", text: "NO_REPLY" }] },
     } },
-    { type: "user/message", seq: 10, time: 10_000, surfaceOp: "append", data: {
+    { type: "user/message", seq: 7, time: 7_000, surfaceOp: "append", data: {
       id: "user-after", source: { kind: "user" }, content: [{ type: "text", text: "我回来啦。" }],
     } },
-    { type: "assistant/message", seq: 11, time: 11_000, surfaceOp: "append", data: {
+    { type: "assistant/message", seq: 8, time: 8_000, surfaceOp: "append", data: {
       message: { id: "assistant-after", content: [{ type: "text", text: "欢迎回来。" }] },
     } },
   ];
@@ -1390,15 +1998,15 @@ test("Agent Core reader hides internal scheduled task turns without hiding proac
     "user-after",
     "assistant-after",
   ]);
-  assert.equal((await reader.search("链式主动关心")).matches.length, 0);
+  assert.equal((await reader.search("主动关心")).matches.length, 0);
   assert.equal((await reader.search("NO_REPLY")).matches.length, 0);
   assert.equal((await reader.search("晚上好")).matches.length, 1);
 });
 
-test("Agent Core reader hides an entire silent proactive turn with intermediate tools", () => {
+test("Agent Core reader hides an entire silent automatic turn with intermediate tools", () => {
   const checkTask = [
     "<suzu-schedule-task>",
-    "任务说明：链式主动关心",
+    "任务说明：主动关心",
     "这是 Suzu 自动任务触发，不是用户发来的新消息。",
     "</suzu-schedule-task>",
   ].join("\n");
@@ -1644,6 +2252,37 @@ test("DSH reader renders an Agent attachment receipt as Suzu's image, audio, and
   assert.ok(messages[0].blocks.every((block) => block.fileUrl.startsWith("file:")));
 });
 
+test("reader renders a direct voice result from any local path without an attachment receipt", () => {
+  const voicePath = "D:\\voice-output\\voice-from-tts.mp3";
+  const result = {
+    status: "ok",
+    type: "suzu-voice-audio",
+    mediaKind: "audio",
+    fileName: "voice-from-tts.mp3",
+    savedPath: voicePath,
+  };
+  const messages = conversationDisplayMessages([{
+    event: {
+      type: "tool/result",
+      seq: 5,
+      time: 5_000,
+      surfaceOp: "append",
+      data: { message: { content: [{ type: "text", text: JSON.stringify(result) }] } },
+    },
+  }], 500, { dataRoot: "D:\\Suzu Lives\\data" });
+
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].kind, "assistant");
+  assert.deepEqual(messages[0].blocks, [{
+    kind: "media",
+    mediaKind: "audio",
+    fileName: "voice-from-tts.mp3",
+    filePath: voicePath,
+    fileUrl: "file:///D:/voice-output/voice-from-tts.mp3",
+    size: 0,
+  }]);
+});
+
 test("DSH reader keeps plugin context queryable according to each block's display fields", async () => {
   const projectRoot = "D:\\Contacts\\context-trace";
   const entries = [
@@ -1762,6 +2401,47 @@ test("DSH reader keeps plugin context queryable according to each block's displa
   const trace = await reader.contextTrace({ category: "memory", query: "烤肉" });
   assert.equal(trace.matchedRecords, 1);
   assert.deepEqual(trace.records[0]?.blocks.map((block) => block.id), ["memory-7"]);
+});
+
+test("Agent Core reader shows recorded dynamic diagnostics when the display switch is enabled", () => {
+  const entries = [
+    { event: { type: "user/message", seq: 1, time: 1_000, surfaceOp: "append", data: {
+      id: "dynamic-delivery-rule",
+      source: {
+        kind: "plugin",
+        plugin: "suzu-lifecycle-bridge",
+        form: "snapshot",
+        sections: [{
+          id: "attachment-delivery",
+          kind: "delivery",
+          source: "conversation-attachment",
+          text: "生成文件后使用附件交付动作。",
+          display: { category: "delivery", context: true, label: "聊天附件交付", transcript: false },
+        }],
+      },
+      content: [{ type: "text", text: "动态上下文" }],
+    } } },
+    { event: { type: "user/message", seq: 2, time: 2_000, surfaceOp: "append", data: {
+      id: "person-message",
+      source: { kind: "user" },
+      content: [{ type: "text", text: "帮我看看这个文件。" }],
+    } } },
+    { event: { type: "assistant/message", seq: 3, time: 3_000, surfaceOp: "append", data: {
+      message: { id: "agent-reply", content: [{ type: "text", text: "我来看看。" }] },
+    } } },
+    { event: { type: "assistant/message", seq: 4, time: 4_000, surfaceOp: { op: "replace", start: 1, end: 1 }, sourceEventSeqs: [1], data: {
+      message: { content: [] },
+    } } },
+  ];
+
+  assert.deepEqual(
+    conversationDisplayMessages(entries, 500, { includeDynamicContext: true }).map((message) => [message.kind, message.id, message.blocks[0]?.text]),
+    [
+      ["dynamic-context", "dynamic-delivery-rule:dynamic-context", "【聊天附件交付】\n生成文件后使用附件交付动作。"],
+      ["user", "person-message", "帮我看看这个文件。"],
+      ["assistant", "agent-reply", "我来看看。"],
+    ],
+  );
 });
 
 test("DSH reader ignores a stale active contact and does not start DSH for an empty catalog", async () => {

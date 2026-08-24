@@ -266,16 +266,20 @@ test("Suzu Agent Runtime owns one shared process and routes public session/histo
   assert.match(preset, /@suzu-lives\/suzu-agent-runtime\/core\/skill-filesystem/u);
   assert.match(preset, /@suzu-lives\/suzu-agent-runtime\/core\/skill-tool/u);
   assert.match(preset, /@suzu-lives\/suzu-agent-runtime\/capability-bridge/u);
+  assert.match(preset, /@suzu-lives\/suzu-agent-runtime\/capability-skills/u);
   assert.match(preset, /@suzu-lives\/suzu-agent-runtime\/structured-generator/u);
   assert.match(preset, /@suzu-lives\/suzu-agent-runtime\/companion-compaction/u);
   assert.match(preset, /@suzu-lives\/suzu-agent-runtime\/core\/command-compact/u);
   assert.match(preset, /以自然的人类对话方式回应：理解语境，表达有分寸，使用具体且贴合当下的语言/u);
+  assert.match(preset, /默认不用 Unicode emoji/u);
   const softwareAssistantPreset = await fs.readFile(path.join(dataRoot, "agent-runtime", "core", ".agent-presets", SUZU_SOFTWARE_ASSISTANT_AGENT_PRESET, "agent.cordis.yml"), "utf8");
-  assert.match(softwareAssistantPreset, /你是 Suzu Lives 的软件使用助手/u);
-  assert.match(softwareAssistantPreset, /围绕用户的目标组织步骤/u);
-  assert.match(softwareAssistantPreset, /当前软件状态中的“软件数据目录”是定位起点/u);
-  assert.match(softwareAssistantPreset, /settings\.json 的 contactsRoot/u);
-  assert.match(softwareAssistantPreset, /\.suzu-lives\/contact\.json，其中 name 是显示名/u);
+  assert.match(softwareAssistantPreset, /你是 Suzu，Suzu Lives 的软件使用助手/u);
+  assert.match(softwareAssistantPreset, /先理解用户要达成的结果/u);
+  assert.match(softwareAssistantPreset, /读取与该目标对应的产品使用 Skill/u);
+  assert.match(softwareAssistantPreset, /suzu_software_action 调用已登记的软件操作/u);
+  assert.match(softwareAssistantPreset, /遇到同名联系人时/u);
+  assert.doesNotMatch(softwareAssistantPreset, /settings\.json 的 contactsRoot/u);
+  assert.doesNotMatch(softwareAssistantPreset, /\.suzu-lives\/contact\.json/u);
   assert.match(softwareAssistantPreset, /software-assistant-bridge/u);
   assert.match(softwareAssistantPreset, /suzu-software-assistant-compaction/u);
   assert.doesNotMatch(softwareAssistantPreset, /agent-instructions/u);
@@ -388,6 +392,40 @@ test("Agent Core runtime falls back from the default D temp directory when a san
   await runtime.close();
 });
 
+test("Suzu Agent Runtime reads a transcript page without reopening the contact Agent", async () => {
+  const root = await temporaryRoot();
+  const dataRoot = path.join(root, "data");
+  const workspaceDirectory = path.join(root, "workspace");
+  const temporaryDirectory = path.join(root, "scratch");
+  await fs.mkdir(workspaceDirectory, { recursive: true });
+  const fake = createFakeRuntimeParts();
+  const runtime = createSuzuAgentRuntime({
+    dataRoot,
+    temporaryDirectory,
+    workspaceDirectory,
+    createDriver: fake.createDriver,
+    createRuntimeFacade: fake.createRuntimeFacade,
+    createSupervisor: fake.createSupervisor,
+  });
+
+  const history = await runtime.history({
+    sessionId: "contact-history-only",
+    contactId: "contact-1",
+    cwd: workspaceDirectory,
+    maxMessages: 240,
+    beforeSeq: 501,
+  });
+
+  assert.deepEqual(fake.calls.createSession, []);
+  assert.equal(fake.calls.start, 2, "the shared Core starts once and exposes its read-only history endpoint");
+  assert.deepEqual(history.events, [{ event: { seq: 1, type: "user/message" } }]);
+  assert.deepEqual(history.requested, {
+    sessionId: "contact-history-only",
+    maxMessages: 240,
+    beforeSeq: 501,
+  });
+});
+
 test("Suzu Agent Runtime stops its owned child before erasing one persisted contact session", async () => {
   const root = await temporaryRoot();
   const dataRoot = path.join(root, "data");
@@ -430,47 +468,13 @@ test("Suzu Agent Runtime stops its owned child before erasing one persisted cont
   await runtime.close();
 });
 
-test("Suzu Agent Runtime reports native image input from the selected Core model", async () => {
+test("Suzu Agent Runtime serves the saved model capability snapshot without querying Core", async () => {
   const root = await temporaryRoot();
   const dataRoot = path.join(root, "data");
   const workspaceDirectory = path.join(root, "workspace");
   const temporaryDirectory = path.join(root, "scratch");
   await fs.mkdir(workspaceDirectory, { recursive: true });
   const fake = createFakeRuntimeParts();
-  fake.api.settings = {
-    async describe() {
-      return {
-        result: {
-          ok: true,
-          value: {
-            namespaces: [{
-              ns: "agent-default-model",
-              value: { provider: "deepseek-official", model: "deepseek-v4-flash-vision-exp" },
-            }],
-          },
-        },
-      };
-    },
-  };
-  fake.api.llm = {
-    async models() {
-      return {
-        result: {
-          ok: true,
-          value: {
-            groups: [{
-              id: "deepseek-official",
-              name: "DeepSeek",
-              models: [{
-                id: "deepseek-v4-flash-vision-exp",
-                inputModalities: ["text", "image"],
-              }],
-            }],
-          },
-        },
-      };
-    },
-  };
   const runtime = createSuzuAgentRuntime({
     dataRoot,
     temporaryDirectory,
@@ -478,6 +482,22 @@ test("Suzu Agent Runtime reports native image input from the selected Core model
     createDriver: fake.createDriver,
     createRuntimeFacade: fake.createRuntimeFacade,
     createSupervisor: fake.createSupervisor,
+  });
+
+  assert.deepEqual(await runtime.currentModelCapabilities(), {
+    provider: "",
+    model: "",
+    known: false,
+    inputModalities: [],
+    supportsImageInput: false,
+  });
+  assert.equal(fake.calls.start, 0, "reading a saved model capability must not start Agent Core");
+
+  runtime.setCurrentModelCapabilities({
+    provider: "deepseek-official",
+    model: "deepseek-v4-flash-vision-exp",
+    known: true,
+    inputModalities: ["text", "image"],
   });
 
   const capabilities = await runtime.currentModelCapabilities();
@@ -489,6 +509,7 @@ test("Suzu Agent Runtime reports native image input from the selected Core model
     inputModalities: ["text", "image"],
     supportsImageInput: true,
   });
+  assert.equal(fake.calls.start, 0, "chat routing only reads the in-process capability snapshot");
   await runtime.close();
 });
 
@@ -583,6 +604,7 @@ test("Suzu companion preset refreshes its product-owned composition while keepin
   assert.equal(second.updated, true);
   const refreshedPreset = await fs.readFile(target, "utf8");
   assert.match(refreshedPreset, /以自然的人类对话方式回应：理解语境，表达有分寸，使用具体且贴合当下的语言/u);
+  assert.match(refreshedPreset, /默认不用 Unicode emoji/u);
 });
 
 test("Suzu software assistant preset is refreshed as a fixed product composition", async () => {
@@ -593,14 +615,54 @@ test("Suzu software assistant preset is refreshed as a fixed product composition
   assert.equal(first.created, true);
   const target = path.join(first.directory, "agent.cordis.yml");
   await fs.writeFile(target, "name: stale software helper\n", "utf8");
+  const legacySkillDirectory = path.join(first.skillsDirectory, "plans-and-management");
+  await fs.mkdir(legacySkillDirectory, { recursive: true });
+  await fs.writeFile(path.join(legacySkillDirectory, "SKILL.md"), "name: stale plans skill\n", "utf8");
 
   const refreshed = await ensureSuzuSoftwareAssistantAgentPreset({ runtimeHome });
   assert.equal(refreshed.created, false);
   assert.equal(refreshed.updated, true);
   const preset = await fs.readFile(target, "utf8");
   assert.match(preset, /software-assistant-bridge/u);
+  assert.match(preset, /software-assistant-skill-filesystem/u);
+  assert.match(preset, /includeDefaultRoots: false/u);
+  assert.match(preset, /suzuAgentHomePath\('software-assistant-skills'\)/u);
+  assert.match(preset, /software-assistant-tool-skill/u);
   assert.match(preset, /core\/filesystem-search/u);
-  assert.match(preset, /当前软件状态中的“软件数据目录”是定位起点/u);
-  assert.match(preset, /settings\.json 的 contactsRoot/u);
+  assert.match(preset, /读取与该目标对应的产品使用 Skill/u);
+  assert.match(preset, /suzu_software_status 只重新读取这份概览和页面入口/u);
+  assert.match(preset, /不能代替具体配置核验/u);
+  assert.doesNotMatch(preset, /settings\.json 的 contactsRoot/u);
   assert.doesNotMatch(preset, /agent-instructions/u);
+  assert.equal(refreshed.skillsDirectory, path.join(runtimeHome, "software-assistant-skills"));
+  const navigationSkill = await fs.readFile(path.join(refreshed.skillsDirectory, "software-navigation", "SKILL.md"), "utf8");
+  const capabilitySkill = await fs.readFile(path.join(refreshed.skillsDirectory, "capability-setup", "SKILL.md"), "utf8");
+  const diagnosticsSkill = await fs.readFile(path.join(refreshed.skillsDirectory, "software-diagnostics", "SKILL.md"), "utf8");
+  const modelSkill = await fs.readFile(path.join(refreshed.skillsDirectory, "model-and-api-setup", "SKILL.md"), "utf8");
+  const contactCreationSkill = await fs.readFile(path.join(refreshed.skillsDirectory, "contact-creation", "SKILL.md"), "utf8");
+  const contactSkill = await fs.readFile(path.join(refreshed.skillsDirectory, "contact-and-relationship", "SKILL.md"), "utf8");
+  const contextSkill = await fs.readFile(path.join(refreshed.skillsDirectory, "chat-and-context", "SKILL.md"), "utf8");
+  const todaySkill = await fs.readFile(path.join(refreshed.skillsDirectory, "today-and-schedules", "SKILL.md"), "utf8");
+  const managementSkill = await fs.readFile(path.join(refreshed.skillsDirectory, "app-management", "SKILL.md"), "utf8");
+  assert.match(navigationSkill, /^---\r?\nname: software-navigation\r?\n/u);
+  assert.match(navigationSkill, /suzu_software_status/u);
+  assert.match(capabilitySkill, /^---\r?\nname: capability-setup\r?\n/u);
+  assert.match(capabilitySkill, /微信连接在当前联系人的对话设置中配置/u);
+  assert.match(capabilitySkill, /全局 Agent Core，供所有联系人共享/u);
+  assert.doesNotMatch(capabilitySkill, /出现在相应联系人的可用能力中/u);
+  assert.match(diagnosticsSkill, /这只是基础摘要，不表示具体模型连接或能力启用状态已经核验/u);
+  assert.match(modelSkill, /软件状态摘要不包含当前服务商、模型标识或连接详情/u);
+  assert.match(contactCreationSkill, /^---\r?\nname: contact-creation\r?\n/u);
+  assert.match(contactCreationSkill, /action.*create-contact/u);
+  assert.match(contactCreationSkill, /personaContent/u);
+  assert.match(contactCreationSkill, /contactId.*set-contact-avatar/u);
+  assert.match(contactSkill, /persona\.md.*Agent 自己的人格/u);
+  assert.match(contactSkill, /user\.md.*用户本人的资料/u);
+  assert.match(contactSkill, /action.*set-contact-avatar/u);
+  assert.match(contactSkill, /avatarPath/u);
+  assert.match(contactSkill, /needs-confirmation.*contactId/u);
+  assert.match(contextSkill, /能力 → 行动 → 写日记/u);
+  assert.match(todaySkill, /联系人计划会在指定时间向该联系人的会话投递提示/u);
+  assert.match(managementSkill, /管理 → 用量与成本/u);
+  await assert.rejects(fs.access(path.join(refreshed.skillsDirectory, "plans-and-management", "SKILL.md")), { code: "ENOENT" });
 });

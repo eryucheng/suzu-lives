@@ -7,10 +7,13 @@ import {
 } from "react";
 
 import { downsamplePcm16, inputEnergy } from "./conversation-call-utils.mjs";
+import {
+  acquireWebRtcMicrophoneCapture,
+  stopWebRtcMicrophoneCapture,
+} from "./conversation-microphone.mjs";
 
 const VOICE_CAPTURE_WARMUP_SECONDS = 0.6;
 const VOICE_ENERGY_THRESHOLD = 0.025;
-const VOICE_SILENCE_FRAME_COUNT = 9;
 
 function clean(value) {
   return String(value ?? "").trim();
@@ -24,14 +27,12 @@ function createAudioState(token) {
     captureReadyAt: 0,
     hasSpoken: false,
     processor: null,
-    sendingUtterance: false,
     silentGain: null,
-    silenceFrames: 0,
     source: null,
+    microphone: null,
     stream: null,
     token,
     voiceEnergyThreshold: VOICE_ENERGY_THRESHOLD,
-    voiceSilenceFrames: VOICE_SILENCE_FRAME_COUNT,
   };
 }
 
@@ -98,7 +99,7 @@ export function useConversationVoiceInput({
     try { audio.processor?.disconnect?.(); } catch { /* A disconnected node needs no work. */ }
     try { audio.source?.disconnect?.(); } catch { /* A disconnected node needs no work. */ }
     try { audio.silentGain?.disconnect?.(); } catch { /* A disconnected node needs no work. */ }
-    for (const track of audio.stream?.getTracks?.() || []) track.stop();
+    stopWebRtcMicrophoneCapture(audio.microphone || audio.stream);
     if (audioRef.current === audio) audioRef.current = null;
     try { await audio.audioContext?.close?.(); } catch { /* The renderer may already be shutting down. */ }
     return audio;
@@ -163,21 +164,15 @@ export function useConversationVoiceInput({
   }, [cancelCurrentInput, disposeAudio, isCurrentInput, patchInput, replaceInput, reportError, stopRemote]);
 
   const startMicrophone = useCallback(async (token, inputId) => {
-    if (!navigator.mediaDevices?.getUserMedia) throw new Error("当前环境无法读取麦克风。 ");
-    const stream = await navigator.mediaDevices.getUserMedia({
-      audio: {
-        autoGainControl: true,
-        channelCount: 1,
-        echoCancellation: true,
-        noiseSuppression: true,
-      },
-    });
+    const microphone = await acquireWebRtcMicrophoneCapture();
+    const { stream } = microphone;
     const audio = audioRef.current;
     const current = inputRef.current;
     if (!audio || audio.token !== token || !current || current.token !== token || current.id !== inputId) {
-      for (const track of stream.getTracks()) track.stop();
+      stopWebRtcMicrophoneCapture(microphone);
       return;
     }
+    audio.microphone = microphone;
     audio.stream = stream;
     // Desktop gain control can briefly spike when a stream opens.  Ignore that
     // warm-up pulse rather than treating it as the user's sentence.
@@ -197,22 +192,14 @@ export function useConversationVoiceInput({
       const energy = inputEnergy(samples);
       if (energy >= audio.voiceEnergyThreshold) {
         audio.hasSpoken = true;
-        audio.sendingUtterance = true;
-        audio.silenceFrames = 0;
         const pcm = downsamplePcm16(samples, audio.audioContext.sampleRate, 16_000);
         if (pcm.length) {
           const payload = pcm.buffer.slice(pcm.byteOffset, pcm.byteOffset + pcm.byteLength);
           apiRef.current?.conversation?.voiceInput?.audio?.({ inputId, audio: payload });
         }
-        return;
       }
-      if (!audio.sendingUtterance) return;
-      audio.silenceFrames += 1;
-      if (audio.silenceFrames < audio.voiceSilenceFrames) return;
-      audio.sendingUtterance = false;
-      void finishRecording({ commit: true });
     };
-  }, [finishRecording]);
+  }, []);
 
   const start = useCallback(async () => {
     if (!active) return false;
@@ -245,9 +232,7 @@ export function useConversationVoiceInput({
       const inputId = clean(result?.inputId);
       if (!inputId) throw new Error("语音输入服务没有返回识别标识。 ");
       const threshold = Number(result?.voiceEnergyThreshold);
-      const frames = Number(result?.voiceSilenceFrames);
       if (Number.isFinite(threshold) && threshold >= 0.001 && threshold <= 1) audio.voiceEnergyThreshold = threshold;
-      if (Number.isFinite(frames) && frames >= 1 && frames <= 120) audio.voiceSilenceFrames = Math.round(frames);
       patchInput((previous) => ({ ...previous, id: inputId, phase: "starting" }));
       await startMicrophone(token, inputId);
       if (!isCurrentInput(token)) return false;
@@ -309,7 +294,7 @@ export function useConversationVoiceInput({
   return {
     active: Boolean(input),
     available: typeof api?.conversation?.voiceInput?.start === "function",
-    label: phase === "recording" ? "正在聆听，点击结束" : phase === "transcribing" ? "正在识别，点击取消" : "语音输入",
+    label: phase === "recording" ? "正在录音，点击结束并识别" : phase === "transcribing" ? "正在识别，点击取消" : "语音输入",
     toggle: start,
   };
 }

@@ -3,13 +3,19 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 import { createSuzuAgentLifecycle } from "@suzu-lives/agent-lifecycle";
-import { hasTerminalNoReply } from "../../shared/agent-reply-markers.mjs";
+import { formatErrorForDisplay } from "@suzu-lives/suzu-agent-runtime/error-detail";
+import { hasBoundaryNoReply } from "../../shared/agent-reply-markers.mjs";
 import { completedConversationReplyPrefix } from "../../shared/conversation-reply-segmentation.mjs";
 import {
   conversationAttachmentReceipt,
   conversationMediaUnderstandingContext,
 } from "./conversation-attachment-service.mjs";
+import {
+  capabilitySkillCatalog,
+  capabilitySkillForName,
+} from "./agent-capability-skills.mjs";
 import { createAgentUsageLedger } from "./agent-usage-ledger.mjs";
+import { isProactiveContactTurnSource } from "./proactive-contact-maintenance.mjs";
 import { SUZU_SOFTWARE_ASSISTANT_SESSION_ID } from "./software-assistant-service.mjs";
 
 const MAX_AGENT_MEDIA_BYTES = 50 * 1024 * 1024;
@@ -22,6 +28,17 @@ const AGENT_AUTOMATIC_ATTACHMENT_KINDS = new Set(["image", "audio", "file"]);
 const AUTOMATION_TASK_CONTEXT_KIND = "automation-task";
 const MAX_MEDIA_UNDERSTANDING_CONTEXT_CHARACTERS = 32_000;
 const MAX_MEDIA_UNDERSTANDING_RESULT_CHARACTERS = 4_000;
+const PROACTIVE_CONTACT_TOOL_DECISION = Object.freeze({
+  kind: "deny",
+  reason: "请返回本轮主动关心任务的结果。",
+});
+const PROACTIVE_CONTACT_CAPABILITY_RESULT = Object.freeze({
+  status: "not-available",
+  error: Object.freeze({
+    code: "PROACTIVE_CONTACT_CAPABILITIES_UNAVAILABLE",
+    message: "请返回本轮主动关心任务的结果；软件会处理下一次检查。",
+  }),
+});
 const MEDIA_UNDERSTANDING_ACTIONS = Object.freeze({
   image: Object.freeze({
     action: "analyze",
@@ -50,6 +67,10 @@ function clean(value) {
 
 function plainObject(value) {
   return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+}
+
+function isProactiveContactTurn(turn) {
+  return isProactiveContactTurnSource(turn?.scheduleSource);
 }
 
 function parsedObject(value) {
@@ -112,11 +133,12 @@ function agentMediaReceipt(value) {
 
 function bounded(value, limit = MAX_EVENT_TEXT_LENGTH) {
   const text = String(value ?? "");
-  return text.length > limit ? `${text.slice(0, limit)}\n[内容已截断]` : text;
+  const suffix = "…";
+  return text.length > limit ? `${text.slice(0, Math.max(0, limit - suffix.length))}${suffix}` : text;
 }
 
 function errorMessage(error, fallback) {
-  return clean(error?.message || error) || fallback;
+  return formatErrorForDisplay(error, { fallback });
 }
 
 /**
@@ -207,11 +229,33 @@ function mergeFullText(previous, next) {
   if (!candidate) return current;
   if (!current || candidate.startsWith(current)) return candidate;
   if (current.startsWith(candidate)) return current;
+  // A multi-step Agent turn streams every visible assistant message into
+  // `current`, while its terminal event carries only the final assistant
+  // message. That final message is already the suffix of the stream.
+  if (current.endsWith(candidate)) return current;
   return bounded(`${current}${candidate}`);
 }
 
-function noReply(value) {
-  return hasTerminalNoReply(value);
+function completedAssistantMessageCount(event) {
+  const value = Number(event?.data?.assistantMessageCount);
+  return Number.isSafeInteger(value) && value > 0 ? value : 1;
+}
+
+function isInternalTaskTurn(turn) {
+  return clean(turn?.kind) === "schedule" || Boolean(clean(turn?.taskContext?.text));
+}
+
+function deliversFinalReplyToLocalChat(turn) {
+  // The hangup task keeps its instruction out of the human transcript, but
+  // its final answer is the first reply after the call has ended. Deliver that
+  // answer through the ordinary local-chat event path instead of leaving it
+  // only on the former call transport.
+  return !isInternalTaskTurn(turn) || clean(turn?.kind) === "call-ended";
+}
+
+function suppressInternalTaskOutput(turn, content) {
+  return isInternalTaskTurn(turn)
+    && (turn?.suppressExternalOutput === true || hasBoundaryNoReply(content));
 }
 
 function inputForAgent({ kind, text, callDirection }) {
@@ -231,10 +275,11 @@ function inputForAgent({ kind, text, callDirection }) {
   return text;
 }
 
-function mediaUnderstandingActions(capabilityRuntime, context = {}) {
+function mediaUnderstandingActions(capabilityRuntime, context = {}, { includeImage = true } = {}) {
   const available = new Map();
   if (typeof capabilityRuntime?.availableActions !== "function" || typeof capabilityRuntime?.invoke !== "function") return available;
   for (const [kind, expected] of Object.entries(MEDIA_UNDERSTANDING_ACTIONS)) {
+    if (kind === "image" && !includeImage) continue;
     try {
       const actions = capabilityRuntime.availableActions({
         capabilityId: expected.capabilityId,
@@ -293,7 +338,7 @@ function mediaUnderstandingContext(results) {
     if (remaining <= 0) break;
     const answer = clean(result.answer);
     const maximum = Math.min(MAX_MEDIA_UNDERSTANDING_RESULT_CHARACTERS, remaining);
-    const truncationNotice = "\n[媒体理解结果已截断]";
+    const truncationNotice = "…";
     const text = answer.length > maximum
       ? maximum > truncationNotice.length
         ? `${answer.slice(0, maximum - truncationNotice.length)}${truncationNotice}`
@@ -498,6 +543,25 @@ export function createConversationChatService({
     return matching.length === 1 ? matching[0] : null;
   };
 
+  const availableCapabilityActionsForTurn = async (turn, { coreTurn = null, step = null } = {}) => {
+    if (!turn || isProactiveContactTurn(turn) || typeof capabilityRuntime?.availableActions !== "function") return [];
+    const actions = await capabilityRuntime.availableActions({
+      contactId: turn.contactId,
+      coreTurn,
+      projectRoot: turn.projectRoot,
+      sessionId: turn.sessionId,
+      step,
+      turnId: turn.requestId,
+    });
+    // Native visual models receive compatible image attachments in the turn
+    // input itself. Keep the fallback image-understanding Skill out of their
+    // catalog; the attachment pipeline retains it for unsupported files.
+    const nativeImageInput = await runtimeAcceptsNativeImages(runtime);
+    return nativeImageInput
+      ? actions.filter((action) => clean(action?.capabilityId) !== "image-vision")
+      : actions;
+  };
+
   const lifecyclePayloadForRuntimeSession = (sessionId, { turnId = "", ...extra } = {}) => {
     const turn = turnForRuntimeSession(sessionId, turnId);
     if (turn) return lifecycleTurnPayload(turn, extra);
@@ -512,6 +576,26 @@ export function createConversationChatService({
     try { eventSink(payload); } catch { /* A UI listener cannot interrupt Agent Core. */ }
     for (const listener of eventSubscribers) {
       try { listener(payload); } catch { /* Secondary transports are isolated. */ }
+    }
+  };
+
+  const emitInternalResult = (turn) => {
+    if (turn?.resultChannel !== "internal") return;
+    const content = clean(turn.finalText) || clean(turn.text);
+    if (!content) return;
+    const payload = {
+      type: "internal-result",
+      requestId: turn.requestId,
+      sessionId: turn.sessionId,
+      projectRoot: turn.projectRoot,
+      kind: turn.kind,
+      content,
+      ...(clean(turn.contactId) ? { contactId: turn.contactId } : {}),
+      ...eventPresentation(turn),
+      timestamp: new Date().toISOString(),
+    };
+    for (const listener of eventSubscribers) {
+      try { listener(payload); } catch { /* An internal consumer cannot interrupt Agent Core. */ }
     }
   };
 
@@ -573,7 +657,7 @@ export function createConversationChatService({
   const emitReply = (turn, type, done = false) => {
     if (turn.outputPolicy === "silent") return;
     const content = done ? turn.text : completedConversationReplyPrefix(turn.text);
-    if (!content || (turn.kind === "schedule" && noReply(content))) return;
+    if (!content || suppressInternalTaskOutput(turn, content)) return;
     // Agent Core reports deltas at token granularity. The local chat, call
     // synthesizer, and any other reply-stream consumer should only receive a
     // cumulative, completed-sentence prefix. This keeps the raw token buffer
@@ -588,6 +672,7 @@ export function createConversationChatService({
       kind: turn.kind,
       content,
       done,
+      ...(done ? { assistantMessageCount: turn.assistantMessageCount || 1 } : {}),
       ...eventPresentation(turn),
       timestamp: new Date().toISOString(),
     });
@@ -600,7 +685,7 @@ export function createConversationChatService({
     // streamed steps that may have been tool-planning text. Only the terminal
     // assistant step is allowed to cross into another transport.
     const content = clean(turn.finalText) || turn.text;
-    if (!content || (turn.kind === "schedule" && noReply(content))) return;
+    if (!content || suppressInternalTaskOutput(turn, content)) return;
     emit({
       type: "agent-reply",
       requestId: turn.requestId,
@@ -784,18 +869,9 @@ export function createConversationChatService({
       }
       if (lifecycleEvent === "CapabilityCatalog") {
         let result = { actions: [] };
-        if (turn && typeof capabilityRuntime?.availableActions === "function") {
+        if (turn) {
           try {
-            result = {
-              actions: await capabilityRuntime.availableActions({
-                contactId: turn.contactId,
-                coreTurn,
-                projectRoot: turn.projectRoot,
-                sessionId: turn.sessionId,
-                step,
-                turnId: turn.requestId,
-              }),
-            };
+            result = { actions: await availableCapabilityActionsForTurn(turn, { coreTurn, step }) };
           } catch {
             // The model can still continue without an optional product action.
           }
@@ -803,9 +879,48 @@ export function createConversationChatService({
         await respondLifecycleRequest(requestId, result);
         return;
       }
+      if (lifecycleEvent === "CapabilitySkillCatalog") {
+        let result = { skills: [] };
+        if (turn) {
+          try {
+            result = { skills: capabilitySkillCatalog(await availableCapabilityActionsForTurn(turn, { coreTurn, step })) };
+          } catch {
+            // A product Skill is optional. A normal reply must remain available
+            // if an adapter's local configuration cannot be read.
+          }
+        }
+        await respondLifecycleRequest(requestId, result);
+        return;
+      }
+      if (lifecycleEvent === "CapabilitySkillRead") {
+        let result = { skill: null };
+        if (turn) {
+          try {
+            result = {
+              skill: capabilitySkillForName(
+                await availableCapabilityActionsForTurn(turn, { coreTurn, step }),
+                clean(data.name),
+              ),
+            };
+          } catch {
+            // The native skill tool will report an unavailable Skill only to
+            // the current model action; it must not break the whole turn.
+          }
+        }
+        await respondLifecycleRequest(requestId, result);
+        return;
+      }
       if (lifecycleEvent === "CapabilityExecute") {
-        let result = { status: "turn-unavailable" };
-        if (turn && typeof capabilityRuntime?.invoke === "function") {
+        let result = {
+          status: "turn-unavailable",
+          error: {
+            code: "CAPABILITY_TURN_UNAVAILABLE",
+            message: "当前能力请求没有对应的活动对话轮次，未执行。",
+          },
+        };
+        if (turn && isProactiveContactTurn(turn)) {
+          result = PROACTIVE_CONTACT_CAPABILITY_RESULT;
+        } else if (turn && typeof capabilityRuntime?.invoke === "function") {
           try {
             result = await capabilityRuntime.invoke({
               action: clean(data.action),
@@ -876,7 +991,9 @@ export function createConversationChatService({
       }
       if (lifecycleEvent === "PreToolUse") {
         let decision = { kind: "allow" };
-        if (turn) {
+        if (turn && isProactiveContactTurn(turn)) {
+          decision = PROACTIVE_CONTACT_TOOL_DECISION;
+        } else if (turn) {
           try {
             const outcome = await agentLifecycle.decide("PreToolUse", lifecycleTurnPayload(turn, {
               arguments: source.data?.arguments,
@@ -973,6 +1090,7 @@ export function createConversationChatService({
       return;
     }
     if (type === "model-usage") {
+      if (clean(source.sessionId || source.runtimeSessionId) === SUZU_SOFTWARE_ASSISTANT_SESSION_ID) return;
       const usageTurn = turnsById.get(clean(source.turnId)) || null;
       const task = Promise.resolve(agentUsageLedger.record({ event: source, turn: usageTurn }))
         .catch(() => undefined);
@@ -993,7 +1111,7 @@ export function createConversationChatService({
       // Agent Core keeps reasoning separate from visible answer text. The renderer
       // only needs the phase transition (for its WeChat-style title), never
       // the reasoning content itself.
-      if (turn.kind !== "schedule" && turn.outputPhase !== "thinking") {
+      if (!isInternalTaskTurn(turn) && turn.outputPhase !== "thinking") {
         turn.outputPhase = "thinking";
         emit({
           type: "thinking",
@@ -1013,19 +1131,22 @@ export function createConversationChatService({
       dispatchLifecycle("AssistantDelta", lifecycleTurnPayload(turn, {
         delta: bounded(String(source.text || "")),
       }));
-      if (turn.kind !== "schedule") emitReply(turn, "reply-stream");
+      if (!isInternalTaskTurn(turn)) emitReply(turn, "reply-stream");
       return;
     }
     if (type === "assistant-completed") {
+      if (source.data?.suppressExternalOutput === true) turn.suppressExternalOutput = true;
+      turn.assistantMessageCount = completedAssistantMessageCount(source);
       turn.finalText = clean(source.text);
-      // Scheduled turns never render their intermediate stream in the local
-      // chat. Keeping only the terminal text here also prevents a prior tool
-      // step from turning NO_REPLY into a fake outside-chat reply.
-      turn.text = turn.kind === "schedule"
+      // Internal task turns never render their intermediate stream in the
+      // local chat. Keeping only the terminal text here also prevents a prior
+      // tool step from turning NO_REPLY into a fake outside-chat reply.
+      turn.text = isInternalTaskTurn(turn)
         ? bounded(turn.finalText)
         : mergeFullText(turn.text, source.text);
-      if (turn.text && turn.kind !== "schedule") emitReply(turn, "reply", true);
+      if (turn.text && deliversFinalReplyToLocalChat(turn)) emitReply(turn, "reply", true);
       emitAgentReply(turn);
+      emitInternalResult(turn);
       void finishTurn(turn);
       return;
     }
@@ -1173,6 +1294,7 @@ export function createConversationChatService({
     }
     const turn = {
       agentMediaReceipts: new Set(),
+      assistantMessageCount: 0,
       cancelRequested: false,
       cancelTask: null,
       contactId: clean(request.contactId),
@@ -1185,9 +1307,11 @@ export function createConversationChatService({
       requestId: request.requestId,
       scheduleSource: clean(request.scheduleSource),
       sessionId: request.sessionId,
+      suppressExternalOutput: false,
       displayAsSystem: request.displayAsSystem === true,
       deliverToWechat: request.deliverToWechat === true,
       outputPolicy: request.outputPolicy,
+      resultChannel: request.resultChannel,
       taskContext: request.taskContext,
       taskContextInjected: false,
       finalText: "",
@@ -1302,6 +1426,7 @@ export function createConversationChatService({
     displayAsSystem = false,
     deliverToWechat = false,
     outputPolicy = "external",
+    resultChannel = "",
     requestQueue = false,
     session: requestedSession = null,
   } = {}) => {
@@ -1310,6 +1435,9 @@ export function createConversationChatService({
     const suppliedTask = plainObject(taskContext);
     const taskText = clean(suppliedTask.text);
     const normalizedOutputPolicy = clean(outputPolicy) === "silent" ? "silent" : "external";
+    const normalizedResultChannel = normalizedOutputPolicy === "silent" && clean(resultChannel) === "internal"
+      ? "internal"
+      : "";
     const voiceCallOpening = kind === "call-open";
     const text = clean(content);
     if (!text && !taskText && !voiceCallOpening && !suppliedMedia.length) throw new ConversationChatError("消息不能为空。", { code: "EMPTY_MESSAGE" });
@@ -1334,22 +1462,30 @@ export function createConversationChatService({
       if (typeof attachmentService?.prepare !== "function") {
         throw new ConversationChatError("图片和文件附件服务尚未就绪。", { code: "ATTACHMENT_SERVICE_REQUIRED" });
       }
+      // The main model gets first claim on each image. The image-understanding
+      // capability stays available as a per-file fallback for images that the
+      // selected model cannot accept natively because of size, format, or its
+      // native image-count limit.
+      const nativeImageInput = await runtimeAcceptsNativeImages(runtime);
+      // Video continues through its dedicated understanding capability. A
+      // visual main model only owns native image blocks, never the video route.
       const understandingActions = mediaUnderstandingActions(capabilityRuntime, {
         contactId: resolvedContactId,
         projectRoot: session.projectRoot,
         sessionId: session.id,
       });
-      const nativeImageInput = understandingActions.has("image")
-        && await runtimeAcceptsNativeImages(runtime);
-      // Video continues through its dedicated understanding capability. A
-      // visual main model only owns native image blocks, never the video route.
-      const effectiveUnderstandingActions = new Map(understandingActions);
-      if (nativeImageInput) effectiveUnderstandingActions.delete("image");
+      const imageHandling = nativeImageInput
+        ? "native"
+        : understandingActions.has("image")
+          ? "understanding"
+          : "local";
       let understandingMedia = [];
       try {
         const prepared = await attachmentService.prepare({
           content: preparedInput,
-          includeNativeImages: !effectiveUnderstandingActions.has("image"),
+          imageHandling,
+          includeImageUnderstandingFallback: understandingActions.has("image"),
+          includeNativeImages: nativeImageInput,
           media: suppliedMedia,
           mediaSource,
           projectRoot: session.projectRoot,
@@ -1366,7 +1502,7 @@ export function createConversationChatService({
         });
       }
       const understandingResults = await understandPreparedMedia({
-        actions: effectiveUnderstandingActions,
+        actions: understandingActions,
         capabilityRuntime,
         contactId: resolvedContactId,
         media: understandingMedia,
@@ -1390,6 +1526,7 @@ export function createConversationChatService({
       memoryOccurredAt: new Date().toISOString(),
       memoryText: clean(memoryText) || preparedMemoryText || text,
       outputPolicy: normalizedOutputPolicy,
+      resultChannel: normalizedResultChannel,
       projectRoot: session.projectRoot,
       requestId: clean(requestId) || `suzu-${randomUUID()}`,
       scheduleSource: clean(scheduleSource),
@@ -1458,7 +1595,7 @@ export function createConversationChatService({
   const sendToSession = ({ content, contactId = "", sessionId, projectRoot, hasTranscript = false, kind = "message", callDirection = "", media = [], mediaSource = "", memoryText = "", requestId = "", scheduleSource = "", displayAsSystem = false, deliverToWechat = false, queued = false } = {}) => (
     enqueue({ content, contactId, kind, callDirection, media, mediaSource, memoryText, requestId, scheduleSource, displayAsSystem, deliverToWechat, requestQueue: queued, session: { sessionId, projectRoot, hasTranscript } })
   );
-  const sendTaskToSession = ({ taskContext, contactId = "", sessionId, projectRoot, hasTranscript = false, kind = "schedule", requestId = "", scheduleSource = "", deliverToWechat = false, outputPolicy = "external", queued = false } = {}) => (
+  const sendTaskToSession = ({ taskContext, contactId = "", sessionId, projectRoot, hasTranscript = false, kind = "schedule", requestId = "", scheduleSource = "", deliverToWechat = false, outputPolicy = "external", resultChannel = "", queued = false } = {}) => (
     enqueue({
       content: "",
       taskContext,
@@ -1468,6 +1605,7 @@ export function createConversationChatService({
       scheduleSource,
       deliverToWechat,
       outputPolicy,
+      resultChannel,
       requestQueue: queued,
       session: { sessionId, projectRoot, hasTranscript },
     })

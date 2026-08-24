@@ -17,7 +17,10 @@ test("Agent journal stores one locally scoped entry per contact and calendar day
   let current = new Date(2026, 7, 18, 0, 2);
   const service = createAgentJournalService({
     contactProjectsService: {
-      snapshot: async () => ({ contacts: [{ id: contactA, name: "Suzu" }, { id: contactB, name: "小助理" }] }),
+      snapshot: async () => ({ contacts: [
+        { agentId: "agent-journal-a", id: contactA, name: "Suzu" },
+        { agentId: "agent-journal-b", id: contactB, name: "小助理" },
+      ] }),
     },
     now: () => current,
     settingsService: {
@@ -32,6 +35,8 @@ test("Agent journal stores one locally scoped entry per contact and calendar day
   await service.record({ contactId: contactB, content: "另一位联系人自己的日记。", date: "2026-08-18", sessionId: "session-b" });
 
   const first = await service.snapshot({ contactId: contactA });
+  assert.equal(first.selectedContact?.agentId, "agent-journal-a");
+  assert.equal(first.contacts[1]?.agentId, "agent-journal-b");
   assert.equal(first.selectedContact?.name, "Suzu");
   assert.equal(first.entries.length, 1);
   assert.equal(first.entries[0].content, "今天一起把日记功能真正做出来了。");

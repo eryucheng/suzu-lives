@@ -15,17 +15,19 @@ The shared, software-owned configuration is constrained to
 settings, `ffmpegPath`, and the default timeout. The public shared example is
 in `resources/voice-message.config.example.json`.
 
-Each contact selects its own voice at
+Each contact selects a saved voice profile at
 `<dataRoot>/agents/<agentId>/voice-message/config.json`:
 
 ```json
-{ "schemaVersion": 1, "voiceId": "contact-voice-id" }
+{ "schemaVersion": 5, "voiceProfileId": "voice-profile-id" }
 ```
 
-The selected ID must exist in that contact's
-`voice-design/candidates.jsonl` candidate library. A `voiceId` left in the
-shared file is ignored: a contact without its own selection receives a
-`tts_voice_missing` error that directs the user to configure a contact voice.
+Voice services and profiles are stored under `<dataRoot>/voice-message/`.
+The profile resolves the request protocol, saved API connection, model, and
+voice ID. Contact-owned or shared custom voices are validated against their
+saved custom-voice records. A `voiceId` left in the shared file is ignored: a
+contact without its own selection receives a `tts_voice_missing` error that
+directs the user to configure a contact voice.
 
 Text synthesis uses the selected Suzu sound connection and writes usage to the
 caller-provided Suzu Lives ledger. Both synthesized and supplied audio are

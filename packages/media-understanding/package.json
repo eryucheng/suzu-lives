@@ -5,8 +5,12 @@
   "type": "module",
   "exports": {
     ".": "./src/index.mjs",
+    "./custom-video-adapters": "./src/custom-video-adapters.mjs",
+    "./custom-vision-adapters": "./src/custom-vision-adapters.mjs",
     "./direct-image-vision": "./src/direct-image-vision.mjs",
-    "./direct-video-understanding": "./src/direct-video-understanding.mjs"
+    "./direct-video-understanding": "./src/direct-video-understanding.mjs",
+    "./video-adapters": "./src/video-adapters.mjs",
+    "./vision-adapters": "./src/vision-adapters.mjs"
   },
   "scripts": {
     "test": "node --test test/*.test.mjs"

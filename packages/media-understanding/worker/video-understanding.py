@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Software-owned OpenAI-compatible video-understanding worker.
+"""Software-owned video-understanding worker.
 
 Suzu's host-neutral capability CLI starts this worker.
 Configuration, temporary clips, cache entries, retained clips, and usage
@@ -15,6 +15,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -39,6 +40,22 @@ SYSTEM_PROMPT = """你负责理解一段视频中的画面、人物动作、语�
 DEFAULT_QUESTION = """请概括这个片段实际发生了什么。
 先说清主要内容和过程，再保留理解它所需的关键话语、字幕、转折、结果或悬念。
 如果某项信息看不清或听不清，明确说不确定；不要写空泛的镜头语言分析。"""
+
+DEFAULT_ADAPTER = "dashscope-openai-video"
+CUSTOM_ADAPTER = "custom-http-video"
+ADAPTER_ALIASES = {
+    "dashscope": "dashscope-openai-video",
+    "openai": "dashscope-openai-video",
+    "openai-chat-completions": "dashscope-openai-video",
+    "openai-compatible": "dashscope-openai-video",
+}
+SUPPORTED_ADAPTERS = {
+    "dashscope-openai-video",
+    "gemini-generate-content-video",
+    CUSTOM_ADAPTER,
+}
+CUSTOM_TEMPLATE = re.compile(r"\{\{(apiKey|fps|maxOutputTokens|model|question|systemPrompt|temperature|videoBase64|videoDataUrl|videoMimeType)\}\}")
+JSON_PATH = re.compile(r"^[A-Za-z_$][\w$]*(?:\[\d+\]|\.[A-Za-z_$][\w$]*)*$")
 
 
 class VideoError(RuntimeError):
@@ -131,22 +148,118 @@ def as_bool(value: Any, default: bool) -> bool:
     return default
 
 
-def load_settings(path: Path, require_api_key: bool) -> dict[str, Any]:
+def clean(value: Any) -> str:
+    return str(value or "").strip()
+
+
+def normalized_adapter(value: Any) -> str:
+    candidate = clean(value).lower()
+    if candidate in SUPPORTED_ADAPTERS:
+        return candidate
+    return ADAPTER_ALIASES.get(candidate, DEFAULT_ADAPTER)
+
+
+def required_http_url(value: Any, label: str) -> str:
+    source = clean(value).rstrip("/")
+    parsed = urllib.parse.urlparse(source)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise VideoError("config_invalid", f"{label}必须是 HTTP(S) 地址")
+    return source
+
+
+def append_endpoint(base_url: str, endpoint: str, accepted: tuple[str, ...] = ()) -> str:
+    base = required_http_url(base_url, "视频模型地址")
+    pathname = urllib.parse.urlparse(base).path.rstrip("/")
+    if any(pathname.endswith(suffix) for suffix in accepted):
+        return base
+    return base + endpoint
+
+
+def compatible_openai_base_url(base_url: str) -> str:
+    base = required_http_url(base_url, "视频模型地址")
+    parsed = urllib.parse.urlparse(base)
+    if parsed.hostname and parsed.hostname.lower() == "dashscope.aliyuncs.com" and parsed.path.rstrip("/") == "/api/v1":
+        return f"{parsed.scheme}://{parsed.netloc}/compatible-mode/v1"
+    return base
+
+
+def gemini_endpoint(base_url: str, model: str) -> str:
+    base = required_http_url(base_url, "Gemini 模型地址")
+    selected_model = clean(model)
+    if not selected_model:
+        raise VideoError("model_missing", "Gemini 模型不能为空")
+    parsed = urllib.parse.urlparse(base)
+    pathname = parsed.path.rstrip("/")
+    if re.search(r":[^/]*generateContent$", pathname):
+        return base
+    quoted_model = urllib.parse.quote(selected_model, safe="")
+    if pathname.endswith("/v1beta") or pathname.endswith("/v1"):
+        return f"{base}/models/{quoted_model}:generateContent"
+    return f"{base}/v1beta/models/{quoted_model}:generateContent"
+
+
+def custom_adapter_path(data_root: Path) -> Path:
+    return data_root / "capabilities" / "video-understanding" / "custom-video-adapters.json"
+
+
+def custom_adapter_for(data_root: Path, adapter_id: Any) -> dict[str, Any]:
+    identity = clean(adapter_id).lower()
+    if not identity:
+        raise VideoError("config_invalid", "请先选择已保存的自定义视频协议")
+    path = custom_adapter_path(data_root)
+    if path.is_symlink() or not path.is_file():
+        raise VideoError("config_invalid", "所选自定义视频协议不可用")
+    try:
+        document = json.loads(path.read_text(encoding="utf-8-sig"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise VideoError("config_invalid", "无法读取自定义视频协议") from exc
+    adapters = document.get("adapters") if isinstance(document, dict) else []
+    for item in adapters if isinstance(adapters, list) else []:
+        if isinstance(item, dict) and clean(item.get("id")).lower() == identity:
+            base_url = required_http_url(item.get("baseUrl"), "自定义视频协议服务地址")
+            endpoint_path = clean(item.get("endpointPath"))
+            response_path = clean(item.get("responseTextPath"))
+            headers = item.get("requestHeaders")
+            body = item.get("requestBody")
+            if not endpoint_path.startswith("/") or endpoint_path.startswith("//") or "://" in endpoint_path:
+                raise VideoError("config_invalid", "自定义视频协议的请求路径无效")
+            if not JSON_PATH.fullmatch(response_path):
+                raise VideoError("config_invalid", "自定义视频协议的文字返回位置无效")
+            if not isinstance(headers, dict) or not isinstance(body, dict) or not body:
+                raise VideoError("config_invalid", "自定义视频协议的请求配置无效")
+            for name, header_value in headers.items():
+                if not isinstance(name, str) or not name.strip() or "\r" in str(header_value) or "\n" in str(header_value):
+                    raise VideoError("config_invalid", "自定义视频协议的请求 Headers 无效")
+            return {
+                "id": identity,
+                "name": clean(item.get("name")) or "自定义视频服务",
+                "base_url": base_url,
+                "endpoint_path": endpoint_path,
+                "request_headers": headers,
+                "request_body": body,
+                "response_text_path": response_path,
+            }
+    raise VideoError("config_invalid", "所选自定义视频协议不可用")
+
+
+def load_settings(path: Path, data_root: Path, require_api_key: bool) -> dict[str, Any]:
     raw = read_json(path)
     video = raw.get("video") if isinstance(raw.get("video"), dict) else {}
 
     api_key = os.environ.get("VIDEO_UNDERSTANDING_API_KEY", "")
     base_url = os.environ.get("VIDEO_UNDERSTANDING_BASE_URL", "")
     model = os.environ.get("VIDEO_UNDERSTANDING_MODEL", "")
+    adapter = normalized_adapter(video.get("adapter"))
+    custom_adapter = custom_adapter_for(data_root, video.get("custom_adapter_id")) if adapter == CUSTOM_ADAPTER else None
 
     if require_api_key and not api_key:
         raise VideoError(
             "api_key_missing",
             "没有 API Key；请在 设置 → API 为“理解视频”选择并配置 API",
         )
-    if require_api_key and not base_url:
+    if require_api_key and adapter != CUSTOM_ADAPTER and not base_url:
         raise VideoError("base_url_missing", "没有 API 地址；请在 设置 → API 编辑“理解视频”所选连接")
-    if require_api_key and not model:
+    if require_api_key and adapter != CUSTOM_ADAPTER and not model:
         raise VideoError("model_missing", "没有模型；请在 设置 → API 编辑“理解视频”所选连接")
 
     fps = as_float(video.get("fps"), 1.0, 0.1)
@@ -157,6 +270,8 @@ def load_settings(path: Path, require_api_key: bool) -> dict[str, Any]:
         "api_key": str(api_key),
         "base_url": str(base_url),
         "model": str(model),
+        "adapter": adapter,
+        "custom_adapter": custom_adapter,
         "fps": fps,
         "timeout_seconds": as_int(video.get("timeout_seconds"), 240),
         "max_output_tokens": as_int(video.get("max_output_tokens"), 350),
@@ -167,15 +282,6 @@ def load_settings(path: Path, require_api_key: bool) -> dict[str, Any]:
         "cache_enabled": as_bool(video.get("cache_enabled"), True),
         "cache_dir": str(video.get("cache_dir") or "runtime/cache"),
     }
-
-
-def endpoint_from_base_url(base_url: str) -> str:
-    url = base_url.rstrip("/")
-    if url.endswith("/chat/completions"):
-        return url
-    if url.endswith("/v1"):
-        return url + "/chat/completions"
-    return url + "/v1/chat/completions"
 
 
 def is_url(value: str) -> bool:
@@ -344,6 +450,8 @@ def make_cache_digest(clip_sha256: str, question: str, cache_key: str, settings:
         "clipSha256": clip_sha256,
         "question": question,
         "upstreamKey": cache_key,
+        "adapter": settings["adapter"],
+        "customAdapterId": settings.get("custom_adapter", {}).get("id", "") if isinstance(settings.get("custom_adapter"), dict) else "",
         "model": settings["model"],
         "fps": settings["fps"],
         "maxOutputTokens": settings["max_output_tokens"],
@@ -416,6 +524,40 @@ def content_piece(value: Any) -> str:
     return "".join(pieces)
 
 
+def text_from_value(value: Any) -> str:
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, list):
+        return "\n".join(text_from_value(item) for item in value if text_from_value(item)).strip()
+    if isinstance(value, dict):
+        for key in ("text", "content"):
+            if isinstance(value.get(key), str):
+                return value[key].strip()
+    return ""
+
+
+def value_at_path(value: Any, raw_path: str) -> Any:
+    if not JSON_PATH.fullmatch(raw_path):
+        return None
+    tokens = re.findall(r"[A-Za-z_$][\w$]*|\d+", raw_path)
+    current = value
+    for token in tokens:
+        if token in {"__proto__", "prototype", "constructor"}:
+            return None
+        if isinstance(current, list):
+            try:
+                current = current[int(token)]
+            except (ValueError, IndexError):
+                return None
+        elif isinstance(current, dict):
+            if token not in current:
+                return None
+            current = current[token]
+        else:
+            return None
+    return current
+
+
 def parse_stream_line(line: str, text_parts: list[str], state: dict[str, Any]) -> bool:
     stripped = line.strip()
     if not stripped or stripped.startswith(":"):
@@ -452,78 +594,147 @@ def parse_stream_line(line: str, text_parts: list[str], state: dict[str, Any]) -
     return False
 
 
-def parse_non_stream_response(raw: str, state: dict[str, Any]) -> str:
-    try:
-        parsed = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        raise VideoError("api_response_invalid", f"API 返回的不是有效 JSON 或 SSE：{exc}") from exc
+def update_response_state(parsed: dict[str, Any], state: dict[str, Any], adapter: str) -> None:
     if not isinstance(parsed, dict):
-        raise VideoError("api_response_invalid", "API 返回的 JSON 顶层不是对象")
+        return
     if isinstance(parsed.get("usage"), dict):
         state["usage"] = parsed["usage"]
-    state["requestId"] = parsed.get("id", "")
-    state["responseModel"] = parsed.get("model", "")
-    try:
-        return content_piece(parsed["choices"][0]["message"]["content"]).strip()
-    except (KeyError, IndexError, TypeError) as exc:
-        raise VideoError("api_response_invalid", "API 返回中缺少回复内容") from exc
+    elif adapter == "gemini-generate-content-video" and isinstance(parsed.get("usageMetadata"), dict):
+        usage = parsed["usageMetadata"]
+        state["usage"] = {
+            "prompt_tokens": usage.get("promptTokenCount", 0),
+            "completion_tokens": usage.get("candidatesTokenCount", 0),
+            "total_tokens": usage.get("totalTokenCount", 0),
+        }
+    state["requestId"] = str(parsed.get("request_id") or parsed.get("id") or parsed.get("responseId") or "")
+    state["responseModel"] = str(parsed.get("model") or parsed.get("modelVersion") or "")
+
+
+def extract_response_text(parsed: dict[str, Any], settings: dict[str, Any]) -> str:
+    adapter = settings["adapter"]
+    value: Any = None
+    if adapter == "dashscope-openai-video":
+        value = value_at_path(parsed, "choices[0].message.content")
+    elif adapter == "gemini-generate-content-video":
+        value = value_at_path(parsed, "candidates[0].content.parts")
+    elif adapter == CUSTOM_ADAPTER:
+        custom = settings.get("custom_adapter") if isinstance(settings.get("custom_adapter"), dict) else {}
+        value = value_at_path(parsed, str(custom.get("response_text_path") or ""))
+    text = text_from_value(value)
+    if not text:
+        raise VideoError("api_response_empty", "视频理解 API 返回了空文本")
+    return text
+
+
+def interpolate_template(value: Any, variables: dict[str, str]) -> Any:
+    if isinstance(value, list):
+        return [interpolate_template(item, variables) for item in value]
+    if isinstance(value, dict):
+        return {str(key): interpolate_template(item, variables) for key, item in value.items()}
+    if not isinstance(value, str):
+        return value
+    return CUSTOM_TEMPLATE.sub(lambda match: variables.get(match.group(1), ""), value)
+
+
+def request_configuration(settings: dict[str, Any], clip: Path, prompt: str) -> tuple[str, dict[str, Any], dict[str, str], bool]:
+    encoded = base64.b64encode(clip.read_bytes()).decode("ascii")
+    adapter = settings["adapter"]
+    video_mime = "video/mp4"
+    video_data_url = f"data:{video_mime};base64,{encoded}"
+    headers = {"Content-Type": "application/json", "User-Agent": "suzu-lives-video-understanding/1.0"}
+
+    if adapter == "dashscope-openai-video":
+        if len(encoded) >= 10_000_000:
+            raise VideoError(
+                "clip_too_large",
+                f"Base64 编码后有 {len(encoded)} 字节，超过百炼 10 MB 限制",
+            )
+        headers.update({"Authorization": f"Bearer {settings['api_key']}", "Accept": "text/event-stream"})
+        return (
+            append_endpoint(compatible_openai_base_url(settings["base_url"]), "/chat/completions", ("/chat/completions",)),
+            {
+                "model": settings["model"],
+                "messages": [
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "video_url", "video_url": {"url": video_data_url}, "fps": settings["fps"]},
+                            {"type": "text", "text": prompt},
+                        ],
+                    },
+                ],
+                "modalities": ["text"],
+                "stream": True,
+                "stream_options": {"include_usage": True},
+                "temperature": settings["temperature"],
+                "max_tokens": settings["max_output_tokens"],
+            },
+            headers,
+            True,
+        )
+
+    if adapter == "gemini-generate-content-video":
+        headers["x-goog-api-key"] = settings["api_key"]
+        return (
+            gemini_endpoint(settings["base_url"], settings["model"]),
+            {
+                "system_instruction": {"parts": [{"text": SYSTEM_PROMPT}]},
+                "contents": [{"role": "user", "parts": [
+                    {"text": prompt},
+                    {"inline_data": {"mime_type": video_mime, "data": encoded}},
+                ]}],
+                "generationConfig": {
+                    "maxOutputTokens": settings["max_output_tokens"],
+                    "temperature": settings["temperature"],
+                },
+            },
+            headers,
+            False,
+        )
+
+    custom = settings.get("custom_adapter") if isinstance(settings.get("custom_adapter"), dict) else {}
+    variables = {
+        "apiKey": settings["api_key"],
+        "fps": str(settings["fps"]),
+        "maxOutputTokens": str(settings["max_output_tokens"]),
+        "model": settings["model"],
+        "question": prompt,
+        "systemPrompt": SYSTEM_PROMPT,
+        "temperature": str(settings["temperature"]),
+        "videoBase64": encoded,
+        "videoDataUrl": video_data_url,
+        "videoMimeType": video_mime,
+    }
+    custom_headers = interpolate_template(custom.get("request_headers"), variables)
+    if not isinstance(custom_headers, dict):
+        raise VideoError("config_invalid", "自定义视频协议 Headers 无效")
+    for name, value in custom_headers.items():
+        header_name = str(name).strip()
+        header_value = str(value)
+        if not header_name or "\r" in header_value or "\n" in header_value:
+            raise VideoError("config_invalid", "自定义视频协议 Headers 无效")
+        headers[header_name] = header_value
+    base_url = required_http_url(custom.get("base_url"), "自定义视频协议服务地址")
+    endpoint_path = str(custom.get("endpoint_path") or "")
+    return base_url + endpoint_path, interpolate_template(custom.get("request_body"), variables), headers, False
 
 
 def call_video_api(settings: dict[str, Any], clip: Path, prompt: str) -> tuple[str, dict[str, Any]]:
-    encoded = base64.b64encode(clip.read_bytes()).decode("ascii")
-    if len(encoded) >= 10_000_000:
-        raise VideoError(
-            "clip_too_large",
-            f"Base64 编码后有 {len(encoded)} 字节，超过百炼 10 MB 限制",
-        )
-
-    payload = {
-        "model": settings["model"],
-        "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "video_url",
-                        "video_url": {"url": f"data:video/mp4;base64,{encoded}"},
-                        "fps": settings["fps"],
-                    },
-                    {"type": "text", "text": prompt},
-                ],
-            },
-        ],
-        "modalities": ["text"],
-        "stream": True,
-        "stream_options": {"include_usage": True},
-        "temperature": settings["temperature"],
-        "max_tokens": settings["max_output_tokens"],
-    }
+    endpoint, payload, headers, streaming = request_configuration(settings, clip, prompt)
 
     request = urllib.request.Request(
-        endpoint_from_base_url(settings["base_url"]),
+        endpoint,
         data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-        headers={
-            "Authorization": f"Bearer {settings['api_key']}",
-            "Content-Type": "application/json",
-            "Accept": "text/event-stream",
-            "User-Agent": "suzu-lives-video-understanding/1.0",
-        },
+        headers=headers,
         method="POST",
     )
 
     text_parts: list[str] = []
     state: dict[str, Any] = {"requestId": "", "responseModel": "", "usage": {}}
-    fallback_lines: list[str] = []
     try:
         with urllib.request.urlopen(request, timeout=settings["timeout_seconds"]) as response:
-            for raw_line in response:
-                line = raw_line.decode("utf-8", errors="replace")
-                if line.lstrip().startswith("data:"):
-                    if parse_stream_line(line, text_parts, state):
-                        break
-                elif line.strip():
-                    fallback_lines.append(line)
+            raw = response.read().decode("utf-8", errors="replace")
     except urllib.error.HTTPError as exc:
         raw = exc.read().decode("utf-8", errors="replace")
         try:
@@ -537,11 +748,29 @@ def call_video_api(settings: dict[str, Any], clip: Path, prompt: str) -> tuple[s
     except TimeoutError as exc:
         raise VideoError("api_timeout", "视频理解 API 请求超时") from exc
 
-    summary = "".join(text_parts).strip()
-    if not summary and fallback_lines:
-        summary = parse_non_stream_response("".join(fallback_lines), state)
-    if not summary:
-        raise VideoError("api_response_empty", "视频理解 API 返回了空文本")
+    if streaming:
+        for line in raw.splitlines():
+            if parse_stream_line(line, text_parts, state):
+                break
+        summary = "".join(text_parts).strip()
+        if not summary:
+            try:
+                parsed = json.loads(raw)
+            except json.JSONDecodeError as exc:
+                raise VideoError("api_response_invalid", f"API 返回的不是有效 JSON 或 SSE：{exc}") from exc
+            if not isinstance(parsed, dict):
+                raise VideoError("api_response_invalid", "API 返回的 JSON 顶层不是对象")
+            update_response_state(parsed, state, settings["adapter"])
+            summary = extract_response_text(parsed, settings)
+    else:
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise VideoError("api_response_invalid", f"API 返回的不是有效 JSON：{exc}") from exc
+        if not isinstance(parsed, dict):
+            raise VideoError("api_response_invalid", "API 返回的 JSON 顶层不是对象")
+        update_response_state(parsed, state, settings["adapter"])
+        summary = extract_response_text(parsed, settings)
     return summary, state
 
 
@@ -552,8 +781,14 @@ def usage_event(
     duration: float,
     clip_bytes: int,
 ) -> dict[str, Any]:
+    adapter = settings["adapter"]
+    providers = {
+        "dashscope-openai-video": "阿里云百炼",
+        "gemini-generate-content-video": "Google Gemini",
+    }
+    custom = settings.get("custom_adapter") if isinstance(settings.get("custom_adapter"), dict) else {}
     return {
-        "provider": "阿里云百炼" if "aliyuncs.com" in settings["base_url"] else "OpenAI Compatible",
+        "provider": custom.get("name") if adapter == CUSTOM_ADAPTER and custom.get("name") else providers.get(adapter, "视频模型"),
         "model": response_model,
         "source": "视频理解",
         "feature": "video-understanding",
@@ -563,6 +798,7 @@ def usage_event(
             "durationSeconds": round(duration, 3),
             "fps": settings["fps"],
             "preparedVideoBytes": clip_bytes,
+            "adapter": adapter,
         },
     }
 
@@ -587,7 +823,7 @@ def main() -> int:
     try:
         data_root = Path(args.data_root).expanduser().resolve()
         config_path = resolve_config_path(data_root, args.config)
-        settings = load_settings(config_path, require_api_key=not args.dry_run)
+        settings = load_settings(config_path, data_root, require_api_key=not args.dry_run)
         ensure_command(settings["ffmpeg_path"], "ffmpeg")
         ensure_command(settings["ffprobe_path"], "ffprobe")
 

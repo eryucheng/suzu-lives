@@ -9,6 +9,7 @@ const CONNECTION_TYPE_OPTIONS = Object.freeze([
   { label: "TTS API", value: "tts-api" },
   { label: "ASR API", value: "asr-api" },
   { label: "OpenAI 兼容", value: "openai-compatible" },
+  { label: "DashScope", value: "dashscope" },
   { label: "其他 API", value: "generic-api" },
 ]);
 
@@ -20,6 +21,7 @@ const ENDPOINT_PRESETS = Object.freeze([
   { type: "openai-compatible", value: "zhipu", label: "智谱 GLM", baseUrl: "https://open.bigmodel.cn/api/paas/v4" },
   { type: "openai-compatible", value: "tongyi", label: "通义（兼容模式）", baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1" },
   { type: "openai-compatible", value: "ollama", label: "本地 Ollama", baseUrl: "http://127.0.0.1:11434/v1" },
+  { type: "dashscope", value: "dashscope", label: "DashScope", baseUrl: DEFAULT_DASHSCOPE_BASE_URL },
 ]);
 const PRESET_CUSTOM = "custom";
 const PRESET_BASE_URLS = new Set(ENDPOINT_PRESETS.map((item) => item.baseUrl).filter(Boolean));
@@ -206,10 +208,7 @@ function ApiConnectionEditor({ connection, connections, onClose, onSave }) {
             <Input disabled={pending} maxLength="80" onChange={(event) => change("name", event.target.value)} required value={draft.name} />
           </Field>
           <Field label="服务类型">
-            <Select disabled={pending} fullWidth onChange={changeType} options={[
-              ...CONNECTION_TYPE_OPTIONS,
-              ...(draft.type === "dashscope" ? [{ label: "DashScope 原生协议（已有连接）", value: "dashscope" }] : []),
-            ]} value={draft.type} />
+            <Select disabled={pending} fullWidth onChange={changeType} options={CONNECTION_TYPE_OPTIONS} value={draft.type} />
           </Field>
           <Field label="API Key">
             <Input autoComplete="new-password" disabled={pending} maxLength="1000" onChange={(event) => change("apiKey", event.target.value)} placeholder={editing ? "留空则保留当前密钥" : "新建时必填"} required={!editing} type="password" value={draft.apiKey} />
@@ -219,7 +218,7 @@ function ApiConnectionEditor({ connection, connections, onClose, onSave }) {
               <Select disabled={pending} fullWidth onChange={changePreset} options={presetOptions()} value={currentPreset()} />
             </Field>
           ) : null}
-          {usesServiceAddress ? <Field className="api-connection-field--wide" hint={draft.type === "dashscope" ? "默认是官方地址；也可以填写兼容网关。" : draft.type === "generic-api" ? "服务商没有固定地址时可以留空。" : draft.type === "asr-api" ? "填写语音识别服务的完整地址，可以是官方接口或自建中转。" : "填写服务商提供的完整 Base URL。"} label={draft.type === "generic-api" ? "服务地址（可选）" : "服务地址"}>
+          {usesServiceAddress ? <Field className="api-connection-field--wide" hint={draft.type === "dashscope" ? "默认是 DashScope 官方原生地址；通义兼容模式请改选“OpenAI 兼容”。" : draft.type === "generic-api" ? "服务商没有固定地址时可以留空。" : draft.type === "asr-api" ? "填写语音识别服务的完整地址，可以是官方接口或自建中转。" : "填写服务商提供的完整 Base URL。"} label={draft.type === "generic-api" ? "服务地址（可选）" : "服务地址"}>
             <Input disabled={pending} maxLength="500" onChange={(event) => change("baseUrl", event.target.value)} required={openAiCompatible || draft.type === "asr-api"} value={draft.baseUrl} />
           </Field> : null}
           {draft.type !== "tts-api" ? <Field className="api-connection-field--wide" hint={openAiCompatible || draft.type === "asr-api" ? "这个连接的默认模型；能力可以在自己的设置里覆盖。" : "可选；能力有自己的模型设置时会优先使用能力设置。"} label={openAiCompatible || draft.type === "asr-api" ? "默认模型" : "默认模型（可选）"}>

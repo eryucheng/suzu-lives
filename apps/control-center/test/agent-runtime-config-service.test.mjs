@@ -103,7 +103,17 @@ function fakeControlPlane({ credential = { configured: false, writable: true } }
       },
     },
   };
-  return { api, calls, runtime: { controlPlane: async () => api }, state };
+  const capabilitySnapshots = [];
+  return {
+    api,
+    calls,
+    capabilitySnapshots,
+    runtime: {
+      controlPlane: async () => api,
+      setCurrentModelCapabilities(value) { capabilitySnapshots.push(cloned(value)); },
+    },
+    state,
+  };
 }
 
 test("Agent Core config service uses the native DeepSeek setting, credential, and default-model planes", async () => {
@@ -117,7 +127,14 @@ test("Agent Core config service uses the native DeepSeek setting, credential, an
   assert.equal(before.hasApiKey, false);
   assert.equal(before.baseUrl, "https://api.deepseek.com");
   assert.deepEqual(before.models, ["deepseek-v4-flash", "deepseek-v4-pro"]);
-  assert.deepEqual(before.providerChoices.map((item) => item.id), ["deepseek", "minimax", "bailian-coding", "bailian-payg", "kimi", "custom"]);
+  assert.deepEqual(before.providerChoices.map((item) => item.id), ["deepseek", "minimax", "bailian-coding", "bailian-payg", "kimi", "kimi-api", "custom"]);
+  assert.deepEqual(fixture.capabilitySnapshots, [{
+    provider: "deepseek-official",
+    model: "deepseek-v4-flash",
+    known: true,
+    inputModalities: ["text"],
+    supportsImageInput: false,
+  }]);
 
   const saved = await service.saveModelConfiguration({
     apiKey: "local-test-key",
@@ -129,6 +146,13 @@ test("Agent Core config service uses the native DeepSeek setting, credential, an
   assert.equal(saved.apiKeySource, "file");
   assert.equal(saved.baseUrl, "https://gateway.example.test/v1");
   assert.equal(saved.model, "deepseek-v4-pro");
+  assert.deepEqual(fixture.capabilitySnapshots.at(-1), {
+    provider: "deepseek-official",
+    model: "deepseek-v4-pro",
+    known: true,
+    inputModalities: ["text"],
+    supportsImageInput: false,
+  });
   assert.deepEqual(fixture.calls, [
     {
       type: "settings.mutate",
@@ -179,6 +203,29 @@ test("Agent Core config service uses the native DeepSeek setting, credential, an
   });
 });
 
+test("Agent Core config service records image input capability when saving a visual model", async () => {
+  const fixture = fakeControlPlane();
+  fixture.state.namespaces["llm-deepseek"].value.models.push({
+    id: "deepseek-v4-flash-vision-exp",
+    inputModalities: ["text", "image"],
+  });
+  const service = createAgentRuntimeConfigService({ runtime: fixture.runtime });
+
+  await service.saveModelConfiguration({
+    apiKey: "local-test-key",
+    model: "deepseek-v4-flash-vision-exp",
+    provider: "deepseek",
+  });
+
+  assert.deepEqual(fixture.capabilitySnapshots.at(-1), {
+    provider: "deepseek-official",
+    model: "deepseek-v4-flash-vision-exp",
+    known: true,
+    inputModalities: ["text", "image"],
+    supportsImageInput: true,
+  });
+});
+
 test("Agent Core config service writes a custom compatible provider through Suzu's compatible endpoint layer", async () => {
   const fixture = fakeControlPlane();
   const service = createAgentRuntimeConfigService({ runtime: fixture.runtime });
@@ -189,6 +236,7 @@ test("Agent Core config service writes a custom compatible provider through Suzu
     model: "gateway-chat",
     protocol: "openai-completions",
     provider: "custom",
+    supportsImageInput: true,
   });
   assert.equal(saved.status, "ready");
   assert.equal(saved.providerId, "custom");
@@ -214,12 +262,15 @@ test("Agent Core config service writes a custom compatible provider through Suzu
           name: "gateway-chat",
           contextWindow: 262144,
           maxTokens: 32768,
+          input: ["text", "image"],
         }],
       },
     }],
   });
   assert.ok(fixture.calls.some((call) => call.type === "credentials.set" && call.value.ref === "SUZU_AGENT_SUZU_CUSTOM_API_KEY"));
   assert.ok(fixture.calls.some((call) => call.type === "settings.mutate" && call.value.ns === "agent-default-model" && call.value.ops[0].value === "suzu-custom"));
+  assert.equal(saved.supportsImageInput, true);
+  assert.deepEqual(saved.inputModalities, ["text", "image"]);
 
   const discovered = await service.fetchModels({
     apiKey: "gateway-secret",
@@ -230,6 +281,32 @@ test("Agent Core config service writes a custom compatible provider through Suzu
   });
   assert.deepEqual(discovered.models, ["gateway-chat", "gateway-reasoner"]);
   assert.ok(fixture.calls.some((call) => call.type === "llm.discoverModels" && call.value.provider === "suzu-custom"));
+});
+
+test("Agent Core config service applies the shared visual-model catalog before the first chat attachment", async () => {
+  const fixture = fakeControlPlane();
+  const service = createAgentRuntimeConfigService({ runtime: fixture.runtime });
+
+  const saved = await service.saveModelConfiguration({
+    apiKey: "bailian-secret",
+    model: "qwen3.8-max",
+    provider: "bailian-payg",
+  });
+
+  assert.equal(saved.providerId, "bailian-payg");
+  assert.equal(saved.providerRoute, "suzu-bailian-payg");
+  assert.deepEqual(saved.inputModalities, ["text", "image"]);
+  assert.equal(saved.supportsImageInput, true);
+  assert.deepEqual(fixture.capabilitySnapshots.at(-1), {
+    provider: "suzu-bailian-payg",
+    model: "qwen3.8-max",
+    known: true,
+    inputModalities: ["text", "image"],
+    supportsImageInput: true,
+  });
+
+  const profileMutation = fixture.calls.find((call) => call.type === "settings.mutate" && call.value.ns === "llm-suzu-compatible");
+  assert.deepEqual(profileMutation?.value.ops[0].value.models[0].input, ["text", "image"]);
 });
 
 test("Agent Core config service refuses a first save without a credential and forwards model-fetch input through IPC", async () => {

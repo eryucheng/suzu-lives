@@ -22,7 +22,6 @@ test("removing a contact clears it from every contact-scoped capability config",
   const removedId = "contact-delete-me";
   const retainedId = "contact-keep-me";
   const paths = [
-    ["capabilities", "time-awareness", "config.json"],
     ["automation", "proactive-contact", "config.json"],
     ["automation", "mail-bridge", "config.json"],
     ["capabilities", "image-vision", "config.json"],
@@ -50,7 +49,6 @@ test("removing a contact clears it from every contact-scoped capability config",
   const result = await service.removeContact({ contactId: removedId });
   assert.equal(result.updated, paths.length);
   assert.deepEqual(new Set(synchronizedCapabilityIds), new Set([
-    "time-awareness",
     "image-vision",
     "mail-bridge",
     "proactive-contact",
@@ -143,6 +141,63 @@ test("proactive-contact default migration preserves an explicitly saved contact 
   assert.deepEqual(settings.enabledContactIds, []);
 });
 
+test("proactive-contact settings keep the contact prompt and remove the obsolete follow-up prompt", async () => {
+  const root = await temporaryDirectory("suzu-capability-proactive-prompt-");
+  const dataRoot = path.join(root, "software-data");
+  const configPath = ["automation", "proactive-contact", "config.json"];
+  await writeConfig(dataRoot, configPath, {
+    chainPrompt: "旧的联系原则。",
+    followUpPrompt: "旧的回访原则。",
+    autoMaintain: true,
+    enabledContactIds: ["contact-prompt"],
+  });
+  const service = createCapabilitiesService({
+    settingsService: {
+      load: () => ({ dataRoot }),
+      response: () => ({ dataRoot }),
+    },
+  });
+
+  assert.equal(service.proactiveContactSettings().contactPrompt, "旧的联系原则。");
+  await service.saveSettings({
+    id: "proactive-contact",
+    value: {
+      contactPrompt: "当前的联系原则。",
+    },
+  });
+
+  const saved = JSON.parse(await fs.readFile(path.join(dataRoot, ...configPath), "utf8"));
+  assert.equal(saved.contactPrompt, "当前的联系原则。");
+  assert.equal(Object.hasOwn(saved, "followUpPrompt"), false);
+  assert.equal(Object.hasOwn(saved, "chainPrompt"), false);
+});
+
+test("proactive-contact startup cleanup removes the obsolete follow-up prompt without changing saved contacts", async () => {
+  const root = await temporaryDirectory("suzu-capability-proactive-follow-up-cleanup-");
+  const dataRoot = path.join(root, "software-data");
+  const configPath = ["automation", "proactive-contact", "config.json"];
+  await writeConfig(dataRoot, configPath, {
+    contactPrompt: "保持自然。",
+    followUpPrompt: "旧的回访原则。",
+    autoMaintain: false,
+    enabledContactIds: ["contact-existing"],
+  });
+  const service = createCapabilitiesService({
+    settingsService: {
+      load: () => ({ dataRoot }),
+      response: () => ({ dataRoot }),
+    },
+  });
+
+  const refreshed = await service.refreshManagedRegistrations();
+  assert.equal(refreshed.refreshed, true);
+  const saved = JSON.parse(await fs.readFile(path.join(dataRoot, ...configPath), "utf8"));
+  assert.equal(Object.hasOwn(saved, "followUpPrompt"), false);
+  assert.equal(saved.contactPrompt, "保持自然。");
+  assert.equal(saved.autoMaintain, false);
+  assert.deepEqual(saved.enabledContactIds, ["contact-existing"]);
+});
+
 test("an Agent Core bridge capability keeps its installed contacts in the existing product config", async () => {
   const root = await temporaryDirectory("suzu-capability-agent-core-contact-");
   const dataRoot = path.join(root, "software-data");
@@ -182,41 +237,14 @@ test("an Agent Core bridge capability keeps its installed contacts in the existi
   ]);
 });
 
-test("Agent Core time awareness enables a contact through its lifecycle Hook", async () => {
-  const root = await temporaryDirectory("suzu-capability-time-hook-refresh-");
-  const dataRoot = path.join(root, "software-data");
-  const contactProject = path.join(root, "time-contact");
-  const contactId = "contact-time";
-  await Promise.all([fs.mkdir(dataRoot, { recursive: true }), fs.mkdir(contactProject)]);
-  await writeConfig(dataRoot, ["capabilities", "time-awareness", "config.json"], {
-    enabledContactIds: [],
-  });
-  await writeConfig(dataRoot, ["automation", "proactive-contact", "config.json"], {
-    enabledContactIds: [],
-  });
-  const installedProjects = [];
+test("Agent Core time awareness stays outside the contact capability catalog", async () => {
+  const dataRoot = await temporaryDirectory("suzu-capability-time-hook-refresh-");
   const service = createCapabilitiesService({
-    contactProjectsService: {
-      snapshot: async () => ({ contacts: [{ id: contactId, projectRoot: contactProject }] }),
-    },
-    projectHooksService: {
-      installTimeAwareness: async ({ projectRoot }) => { installedProjects.push(projectRoot); },
-      uninstallTimeAwareness: async () => undefined,
-    },
     settingsService: {
-      load: () => ({ dataRoot, projectRoot: contactProject }),
+      load: () => ({ dataRoot }),
       response: () => ({ dataRoot }),
     },
   });
 
-  const refreshed = await service.refreshManagedRegistrations();
-  assert.equal(refreshed.refreshed, false);
-  assert.equal(refreshed.errors.length, 0);
-  assert.deepEqual(installedProjects, []);
-  const snapshot = await service.saveSettings({ id: "time-awareness", value: { contactId, contactEnabled: true } });
-  const timeAwareness = snapshot.capabilities.find((capability) => capability.id === "time-awareness");
-  assert.equal(timeAwareness?.runtimeStatus, "agent-core-context-hook");
-  assert.equal(timeAwareness?.enabled, true);
-  assert.deepEqual(JSON.parse(await fs.readFile(path.join(dataRoot, "capabilities", "time-awareness", "config.json"), "utf8")).enabledContactIds, [contactId]);
-  assert.deepEqual(installedProjects, []);
+  assert.equal(service.snapshot().capabilities.some((capability) => capability.id === "time-awareness"), false);
 });

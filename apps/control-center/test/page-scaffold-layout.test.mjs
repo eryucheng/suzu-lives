@@ -109,7 +109,7 @@ test("创造页静止卡片不向 PageCanvas 的卡片间隙投射外扩阴影",
 
   assert.match(scaffoldStyles, /--page-static-card-shadow:inset 0 1px rgba\(255,255,255,\.035\);/u);
   assert.match(createStyles, /\.create-space-card\s*\{[\s\S]*?box-shadow:var\(--page-static-card-shadow\);/u);
-  assert.match(createStyles, /\.drawing-compose-panel,[\s\S]*?\.voice-history\s*\{[\s\S]*?box-shadow:var\(--page-static-card-shadow\);/u);
+  assert.match(createStyles, /\.drawing-compose-panel,[\s\S]*?\.reference-groups\s*\{[\s\S]*?box-shadow:var\(--page-static-card-shadow\);/u);
   assert.match(createStyles, /\.create-space-card:hover\s*\{[\s\S]*?box-shadow:\s*0 21px 50px/u);
 });
 
@@ -162,8 +162,8 @@ test("相处设定、压缩器和日记共用联系人工作台规格与收缩�
 
   const compactor = source("src", "react", "conversation-compactor-page.jsx");
   const journal = source("src", "react", "agent-journal-page.jsx");
-  assert.match(compactor, /<Roster[\s\S]*?avatar=\{<Avatar name=\{name\} size="md" \/>\}[\s\S]*?subtitle=\{selected \? "当前联系人" : "切换到此联系人"\}/u);
+  assert.match(compactor, /<Roster[\s\S]*?avatar=\{<Avatar name=\{name\} size="md" src=\{contactAvatarSource\(contact, settings\)\} \/>\}[\s\S]*?subtitle=\{selected \? "当前联系人" : "切换到此联系人"\}/u);
   assert.match(journal, /canvasClassName="page-canvas--fill"[\s\S]*?className="agent-journal-react-page"/u);
   assert.match(journal, /<div className="agent-journal-page-body">/u);
-  assert.match(journal, /<Roster[\s\S]*?avatar=\{<Avatar name=\{name\} size="md" \/>\}[\s\S]*?subtitle=\{selected \? "当前联系人" : "切换到此联系人"\}/u);
+  assert.match(journal, /<Roster[\s\S]*?avatar=\{<Avatar name=\{name\} size="md" src=\{contactAvatarSource\(contact, settings\)\} \/>\}[\s\S]*?subtitle=\{selected \? "当前联系人" : "切换到此联系人"\}/u);
 });

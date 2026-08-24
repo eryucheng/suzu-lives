@@ -40,13 +40,18 @@ const viewState = {
   lastVersion: null,
   liveReplies: new Map(),
   liveTools: [],
+  historyLoadingOlder: false,
+  historyLoadEpoch: 0,
+  historyWindowDetached: false,
   listScrollTop: 0,
   loading: false,
+  loadTask: null,
   menuOpen: false,
   mode: "snapshot",
   mediaPreview: null,
   notice: "",
   pending: [],
+  pendingLoad: null,
   permissions: new Map(),
   search: null,
   searchCategory: "messages",
@@ -86,6 +91,11 @@ const CLIPBOARD_IMAGE_EXTENSION_BY_MIME = Object.freeze({
 // unless the user explicitly hides them.
 const defaults = { attachments: false, dynamicContext: false, tools: true, thinking: false, system: false, tokens: false, timeDisplay: "center" };
 const CENTER_TIME_GAP_MS = 5 * 60 * 1_000;
+// Keep a bounded data window even though the durable Agent Core transcript can
+// grow indefinitely.  Rendering is virtualized separately; this limit prevents
+// the client state and row projection from growing without bound as a person
+// repeatedly loads older pages.
+export const CONVERSATION_MESSAGE_WINDOW_MAX = 720;
 
 function preferences(settings) {
   return { ...defaults, ...(settings?.conversationPreferences || {}) };
@@ -593,8 +603,20 @@ function liveReplyTimestamp(previous, event) {
 }
 
 export function projectedLiveReply(previous, event, { final = false } = {}) {
-  const content = mergeLiveReplyContent(previous?.content, event?.content);
-  const delivery = splitCompanionReplyBuffer(content, { final });
+  // The terminal reply for a multi-step turn is an aggregate transport value.
+  // Every assistant step is already persisted and shown as its own chat row,
+  // so replacing the live sentence projection with that aggregate would add a
+  // second, oversized copy at completion.
+  const retainStreamProjection = final && Number(event?.assistantMessageCount) > 1;
+  const content = retainStreamProjection
+    ? String(previous?.content ?? "")
+    : mergeLiveReplyContent(previous?.content, event?.content);
+  const delivery = retainStreamProjection
+    ? {
+      remainder: String(previous?.remainder ?? ""),
+      sentences: Array.isArray(previous?.sentences) ? previous.sentences : [],
+    }
+    : splitCompanionReplyBuffer(content, { final });
   const previousCount = Array.isArray(previous?.sentences) ? previous.sentences.length : 0;
   const deliveredNewSentence = delivery.sentences.length > previousCount;
   return {
@@ -630,6 +652,7 @@ export function liveReplyPresentationChanged(previous, next) {
 
 function finishedLiveReply(reply) {
   if (!reply) return null;
+  if (reply.done === true) return reply;
   const delivery = splitCompanionReplyBuffer(reply.content, { final: true });
   return {
     ...reply,
@@ -822,14 +845,15 @@ export function conversationMessageRows(items, context, searched = false) {
   for (const item of filterConversationItems(items, prefs).flatMap(splitAssistantMessageOnBlankLines)) {
     const next = messageRow(item, context, style === "bubble");
     if (!next) continue;
+    const dividerAnchorId = next.anchorId || next.sourceMessageId || (next.lineNumber ? `line-${next.lineNumber}` : "");
     if (style === "center") {
       if (shouldShowCenteredTimeDivider(previousTimestamp, item.timestamp)) {
-        rows.push({ label: wechatTimeLabel(item.timestamp), type: "time" });
+        rows.push({ anchorId: `time-${dividerAnchorId}`, label: wechatTimeLabel(item.timestamp), type: "time" });
       }
       if (dateFromTimestamp(item.timestamp)) previousTimestamp = item.timestamp;
     } else {
       const day = conversationDay(item.timestamp);
-      if (day && day !== previousDay) rows.push({ label: day, type: "day" });
+      if (day && day !== previousDay) rows.push({ anchorId: `day-${dividerAnchorId}`, label: day, type: "day" });
       previousDay = day || previousDay;
     }
     rows.push(next);
@@ -841,6 +865,13 @@ export function conversationMessageRows(items, context, searched = false) {
 
 function scheduleScrollToLatest() {
   if (!viewState.shouldStickToLatest) return;
+  // An older-window view no longer contains the live tail. Keep its reading
+  // position intact and expose the existing return-to-latest affordance
+  // instead of treating the bottom of that historical window as "latest".
+  if (isHistoryWindowDetached()) {
+    viewState.unread = true;
+    return;
+  }
   viewState.scrollToLatestRequest += 1;
   viewState.unread = false;
 }
@@ -1023,27 +1054,24 @@ function sessionSettingsSnapshot(context, selected, prefs) {
   const contactName = clean(contact?.name) || clean(selected?.title) || "未命名联系人";
   const agent = getAgentProfile(context.state.settings);
   const wechat = viewState.wechatSnapshot;
-  const connection = wechat?.session || null;
+  // The WeChat connector is scoped by contact ID. Its snapshot deliberately
+  // exposes the selected contact link as `contact`, not the Agent session.
+  const connection = wechat?.contact || null;
   const pendingQr = wechat?.pendingQr || null;
-  const masterEnabled = wechat?.enabled === true;
   const connectionLabel = !wechat
     ? "正在读取微信连接状态"
-    : !masterEnabled
-      ? "全局连接已关闭"
-      : connection
-        ? (connection.enabled ? (connection.status === "connected" ? "已连接" : "已保存，正在恢复") : "这位联系人的微信连接已暂停")
-        : pendingQr
+    : connection
+      ? (connection.enabled ? (connection.status === "connected" ? "已连接" : "已保存，正在恢复") : "这位联系人的微信连接已暂停")
+      : pendingQr
         ? (pendingQr.status === "scanned" ? "手机已扫码，请在微信确认" : "等待微信扫码")
-          : "尚未连接";
+        : "尚未连接";
   const wechatControl = !wechat
     ? null
-    : !masterEnabled
-      ? { type: "open-capability" }
-      : connection
-        ? { enabled: Boolean(connection.enabled), type: "connection" }
-        : pendingQr
-          ? { type: "pending-qr" }
-          : { type: "begin" };
+    : connection
+      ? { enabled: Boolean(connection.enabled), type: "connection" }
+      : pendingQr
+        ? { type: "pending-qr" }
+        : { type: "begin" };
   return {
     contactAvatar: contact ? avatarPayload(agent, contactName) : null,
     contactId,
@@ -1162,9 +1190,9 @@ export function conversationReactSnapshot(context) {
   const ready = (snapshot.status || payload?.status) === "ready" && historyAvailable;
   const agent = getAgentProfile(context.state.settings);
   const identity = getIdentity(context.state.settings);
-  const selected = activeSession(snapshot);
   const contacts = snapshot.contacts || [];
-  const activeContact = snapshot.activeContact || null;
+  const activeContact = snapshot.activeContact?.hidden === true ? null : snapshot.activeContact || null;
+  const selected = activeContact ? activeSession(snapshot) : null;
   const hasContactsRoot = Boolean(clean(snapshot.contactsRoot || context.state.settings?.contactsRoot));
   const contactPeer = clean(activeContact?.name) || "未选择联系人";
   const peer = companionPeerLabel(contactPeer, clean(snapshot.activeSessionId), viewState.liveReplies);
@@ -1213,7 +1241,18 @@ export function conversationReactSnapshot(context) {
       y: Number(fileContextMenuState?.y) || 12,
     }
     : null;
-  const messageRows = conversationMessageRows(entries, context, viewState.mode === "focus");
+  const messageRows = activeContact
+    ? conversationMessageRows(entries, context, viewState.mode === "focus")
+    : [{
+      text: contactRows.length
+        ? "请选择左侧联系人开始对话。"
+        : contacts.length
+          ? "联系人已隐藏。可在“设置 > 隐私”中恢复。"
+          : hasContactsRoot
+            ? "新建联系人后即可开始对话。"
+            : "软件数据目录尚未准备好，请稍后重试。",
+      type: "empty",
+    }];
   const messageContextMenuState = viewState.messageContextMenu;
   const messageContextMenuRow = messageRows.find((row) => (
     row?.type === "message"
@@ -1240,42 +1279,47 @@ export function conversationReactSnapshot(context) {
       },
     },
     composer: {
-      attachments: viewState.attachments,
-      attachmentPicking: viewState.attachmentPicking,
-      busy: viewState.busySessions.has(clean(snapshot.activeSessionId)),
-      draft: viewState.draft,
-      emojiOpen: viewState.emojiOpen,
+      attachments: activeContact ? viewState.attachments : [],
+      attachmentPicking: Boolean(activeContact) && viewState.attachmentPicking,
+      busy: Boolean(activeContact) && viewState.busySessions.has(clean(snapshot.activeSessionId)),
+      draft: activeContact ? viewState.draft : "",
+      emojiOpen: Boolean(activeContact) && viewState.emojiOpen,
       sending: viewState.sending,
-      unavailable: !ready || viewState.sending,
+      unavailable: !ready || !activeContact,
     },
     contactContextMenu,
-    fileContextMenu,
+    fileContextMenu: activeContact ? fileContextMenu : null,
     contacts: contactRows,
     error: viewState.error ? conversationInfo(payload) : clean(snapshot.error || payload?.error),
-    focus: viewState.mode === "focus",
+    focus: Boolean(activeContact) && viewState.mode === "focus",
     hasContactsRoot,
+    history: {
+      detached: Boolean(activeContact) && snapshot.historyWindow?.detached === true,
+      hasMore: Boolean(activeContact) && viewState.mode === "snapshot" && snapshot.historyPage?.hasMore === true,
+      loadingOlder: Boolean(activeContact) && viewState.historyLoadingOlder,
+    },
     listLabel: `${agent.displayName || "Suzu"} 的聊天记录`,
-    menuOpen: viewState.menuOpen,
+    menuOpen: Boolean(activeContact) && viewState.menuOpen,
     messageContextMenu,
     messageRows,
     notice: viewState.notice,
     overlays: {
-      avatarCrop: avatarCropSnapshot(),
+      avatarCrop: activeContact ? avatarCropSnapshot() : null,
       contactCreate: viewState.contactCreateOpen,
-      contactRename: contactRenameSnapshot(),
-      mediaPreview: mediaPreviewSnapshot(),
+      contactRename: activeContact ? contactRenameSnapshot() : null,
+      mediaPreview: activeContact ? mediaPreviewSnapshot() : null,
       wechatQr: wechatQrSnapshot(activeContact),
     },
     peer,
-    permissions: permissionPromptSnapshot(clean(snapshot.activeSessionId)),
+    permissions: activeContact ? permissionPromptSnapshot(clean(snapshot.activeSessionId)) : [],
     rosterEmpty: hasContactsRoot
       ? contacts.length ? "所有联系人都已隐藏。可在“设置 > 隐私”中恢复。" : "还没有联系人。点击“＋”创建。"
       : "软件数据目录尚未准备好，请稍后重试。",
     composerHeight: context.state.settings?.conversationComposerHeight,
     rosterWidth: context.state.settings?.conversationRosterWidth,
-    search: conversationSearchSnapshot(),
-    searchOpen: viewState.searchOpen,
-    sessionSettings: sessionSettingsSnapshot(context, selected, prefs),
+    search: activeContact ? conversationSearchSnapshot() : null,
+    searchOpen: Boolean(activeContact) && viewState.searchOpen,
+    sessionSettings: activeContact ? sessionSettingsSnapshot(context, selected, prefs) : null,
     ui: {
       composerFocusRequest: viewState.composerFocusRequest,
       listScrollTop: viewState.listScrollTop,
@@ -1283,7 +1327,7 @@ export function conversationReactSnapshot(context) {
       scrollToLatestRequest: viewState.scrollToLatestRequest,
       searchFocusRequest: viewState.searchFocusRequest,
     },
-    unread: viewState.unread,
+    unread: Boolean(activeContact) && viewState.unread,
   };
 }
 
@@ -1321,37 +1365,251 @@ async function refreshCurrentSessionSettings(context) {
   }
 }
 
-async function load(context, force = false) {
-  if (viewState.loading || viewState.mode === "focus") return;
-  viewState.loading = true;
+function conversationHistoryScope(snapshot) {
+  const source = snapshot && typeof snapshot === "object" ? snapshot : {};
+  return [
+    clean(source.activeContact?.id),
+    clean(source.activeSessionId),
+    clean(source.projectRoot),
+  ].join("\u0000");
+}
+
+function historyPageOldestEventSeq(snapshot) {
+  const sequence = Number(snapshot?.historyPage?.oldestEventSeq);
+  return Number.isSafeInteger(sequence) && sequence > 0 ? sequence : null;
+}
+
+function historyMessageKey(message, index) {
+  const lineNumber = messageLineNumber(message);
+  const id = messageSourceId(message);
+  const kind = clean(message?.kind) || "message";
+  return lineNumber
+    ? `${lineNumber}:${kind}:${id || "event"}`
+    : `${kind}:${id || `index:${index}`}`;
+}
+
+function mergePagedConversationMessages(previous, next) {
+  const records = new Map();
+  let order = 0;
+  for (const message of [...(Array.isArray(previous) ? previous : []), ...(Array.isArray(next) ? next : [])]) {
+    const key = historyMessageKey(message, order);
+    const existing = records.get(key);
+    records.set(key, { message, order: existing?.order ?? order });
+    order += 1;
+  }
+  return [...records.values()]
+    .sort((left, right) => {
+      const leftLine = messageLineNumber(left.message);
+      const rightLine = messageLineNumber(right.message);
+      if (leftLine && rightLine && leftLine !== rightLine) return leftLine - rightLine;
+      if (leftLine && !rightLine) return -1;
+      if (!leftLine && rightLine) return 1;
+      return left.order - right.order;
+    })
+    .map((entry) => entry.message);
+}
+
+function messageWindowLimit(value) {
+  const limit = Number(value);
+  return Number.isSafeInteger(limit) && limit > 0
+    ? limit
+    : CONVERSATION_MESSAGE_WINDOW_MAX;
+}
+
+/**
+ * Combines two durable history pages while keeping a bounded local window.
+ *
+ * A normal Core refresh is newest-first from the user's point of view, so it
+ * retains the newest end of the window. Loading an older page is the inverse:
+ * it keeps the newly reached older end and drops distant newest rows only once
+ * the window is full. That is the same sliding-window rule used by mature chat
+ * timelines instead of retaining every page ever visited.
+ */
+export function mergeConversationMessageWindow(previous, next, {
+  direction = "latest",
+  limit = CONVERSATION_MESSAGE_WINDOW_MAX,
+} = {}) {
+  const maximum = messageWindowLimit(limit);
+  const prior = Array.isArray(previous) ? previous : [];
+  if (direction === "retain") {
+    return {
+      droppedNewest: false,
+      messages: prior.length > maximum ? prior.slice(0, maximum) : prior,
+    };
+  }
+  const merged = mergePagedConversationMessages(prior, next);
+  if (merged.length <= maximum) return { droppedNewest: false, messages: merged };
+  if (direction === "older") {
+    return { droppedNewest: true, messages: merged.slice(0, maximum) };
+  }
+  return { droppedNewest: false, messages: merged.slice(-maximum) };
+}
+
+function mergedDeletedEventSequences(previous, next) {
+  return [...new Set([
+    ...(Array.isArray(previous) ? previous : []),
+    ...(Array.isArray(next) ? next : []),
+  ].map((value) => Number(value)).filter((value) => Number.isSafeInteger(value) && value > 0))]
+    .sort((left, right) => left - right);
+}
+
+function earlierHistoryPage(previous, next) {
+  const previousOldest = historyPageOldestEventSeq(previous);
+  const nextOldest = historyPageOldestEventSeq(next);
+  if (previousOldest !== null && (nextOldest === null || previousOldest <= nextOldest)) {
+    return previous?.historyPage || null;
+  }
+  return next?.historyPage || previous?.historyPage || null;
+}
+
+function mergeConversationSnapshot(previous, next, { direction = "latest" } = {}) {
+  if (!previous || !next || conversationHistoryScope(previous) !== conversationHistoryScope(next)) return next;
+  const historyPage = earlierHistoryPage(previous, next);
+  const historyWindow = mergeConversationMessageWindow(previous.messages, next.messages, { direction });
+  return {
+    ...next,
+    historyWindow: {
+      detached: direction === "retain"
+        ? previous?.historyWindow?.detached === true
+        : previous?.historyWindow?.detached === true || historyWindow.droppedNewest,
+    },
+    messages: historyWindow.messages,
+    deletedEventSequences: mergedDeletedEventSequences(previous.deletedEventSequences, next.deletedEventSequences),
+    ...(historyPage ? { historyPage } : {}),
+  };
+}
+
+function isHistoryWindowDetached(snapshot = viewState.snapshot) {
+  return snapshot?.historyWindow?.detached === true || viewState.historyWindowDetached === true;
+}
+
+function reconnectConversationHistoryWindow() {
+  viewState.historyWindowDetached = false;
+  if (viewState.snapshot) {
+    viewState.snapshot = {
+      ...viewState.snapshot,
+      historyWindow: { detached: false },
+    };
+  }
+}
+
+function applyConversationSnapshot(next, { direction, preserveHistory = true } = {}) {
+  const previous = viewState.snapshot;
+  const sameScope = conversationHistoryScope(previous) === conversationHistoryScope(next);
+  const resolvedDirection = direction || (isHistoryWindowDetached(previous) ? "retain" : "latest");
+  viewState.snapshot = preserveHistory && sameScope
+    ? mergeConversationSnapshot(previous, next, { direction: resolvedDirection })
+    : { ...next, historyWindow: { detached: false } };
+  viewState.historyWindowDetached = viewState.snapshot?.historyWindow?.detached === true;
+  return viewState.snapshot;
+}
+
+async function loadOlderMessages(context) {
+  if (viewState.loading || viewState.historyLoadingOlder || viewState.mode === "focus") return;
+  const beforeSeq = historyPageOldestEventSeq(viewState.snapshot);
+  if (!beforeSeq || viewState.snapshot?.historyPage?.hasMore !== true) return;
+  const historyEpoch = viewState.historyLoadEpoch;
+  viewState.historyLoadingOlder = true;
+  context.render();
   try {
-    const snapshot = await context.api.conversation.snapshot();
-    if (force || snapshot.version !== viewState.lastVersion || !viewState.snapshot) {
-      const priorContactId = clean(viewState.snapshot?.activeContact?.id);
-      viewState.snapshot = snapshot;
-      viewState.lastVersion = snapshot.version;
-      if (priorContactId !== clean(snapshot.activeContact?.id)) {
-        resetSessionSettings();
-        if (viewState.settingsOpen) void refreshCurrentSessionSettings(context);
-      }
-      scheduleScrollToLatest();
-      context.render();
-    }
+    const snapshot = await context.api.conversation.snapshot({ beforeSeq });
+    // A contact can be switched while this page is in flight. Do not append
+    // the old contact's history to the newly selected conversation.
+    if (historyEpoch !== viewState.historyLoadEpoch
+      || conversationHistoryScope(viewState.snapshot) !== conversationHistoryScope(snapshot)) return;
+    const applied = applyConversationSnapshot(snapshot, { direction: "older" });
+    if (applied.historyWindow?.detached === true) viewState.unread = true;
+    viewState.error = "";
+    context.render();
   } catch (error) {
-    viewState.error = `读取联系人聊天记录失败：${error?.message || error}`;
+    viewState.error = `无法读取更早聊天记录：${error?.message || error}`;
     context.render();
   } finally {
-    viewState.loading = false;
+    if (historyEpoch === viewState.historyLoadEpoch) viewState.historyLoadingOlder = false;
+    // A request can fail or become stale after the contact changes. In both
+    // cases remove the loading row immediately instead of leaving it visible
+    // until a later conversation event happens to trigger another render.
+    context.render();
+  }
+}
+
+function mergeConversationLoadRequest(previous, next) {
+  if (!previous) return next;
+  return {
+    force: previous.force || next.force,
+    resetWindow: previous.resetWindow || next.resetWindow,
+  };
+}
+
+function invalidateConversationLoads() {
+  viewState.historyLoadEpoch += 1;
+  viewState.loading = false;
+  viewState.loadTask = null;
+  viewState.pendingLoad = null;
+}
+
+async function load(context, force = false, { resetWindow = false } = {}) {
+  if (viewState.mode === "focus") return;
+  const request = { force: force === true, resetWindow: resetWindow === true };
+  if (viewState.loading) {
+    viewState.pendingLoad = mergeConversationLoadRequest(viewState.pendingLoad, request);
+    return viewState.loadTask || undefined;
+  }
+  const historyEpoch = viewState.historyLoadEpoch;
+  viewState.loading = true;
+  const task = (async () => {
+    let loaded = false;
+    try {
+      const snapshot = await context.api.conversation.snapshot();
+      if (historyEpoch === viewState.historyLoadEpoch && viewState.mode !== "focus") {
+        if (request.force || snapshot.version !== viewState.lastVersion || !viewState.snapshot) {
+          const priorContactId = clean(viewState.snapshot?.activeContact?.id);
+          const applied = applyConversationSnapshot(snapshot, { preserveHistory: !request.resetWindow });
+          viewState.lastVersion = snapshot.version;
+          if (priorContactId !== clean(applied.activeContact?.id)) {
+            resetSessionSettings();
+            if (viewState.settingsOpen) void refreshCurrentSessionSettings(context);
+          }
+          scheduleScrollToLatest();
+          context.render();
+        }
+        loaded = true;
+      }
+    } catch (error) {
+      if (historyEpoch === viewState.historyLoadEpoch) {
+        viewState.error = `读取联系人聊天记录失败：${error?.message || error}`;
+        context.render();
+      }
+    } finally {
+      if (historyEpoch === viewState.historyLoadEpoch) {
+        viewState.loading = false;
+        const queued = viewState.pendingLoad;
+        viewState.pendingLoad = null;
+        if (queued && viewState.mode !== "focus") {
+          loaded = await load(context, queued.force, { resetWindow: queued.resetWindow }) === true;
+        }
+      }
+    }
+    return loaded;
+  })();
+  viewState.loadTask = task;
+  try {
+    return await task;
+  } finally {
+    if (viewState.loadTask === task) viewState.loadTask = null;
   }
 }
 
 async function markOpenedContactRead(context) {
+  const historyEpoch = viewState.historyLoadEpoch;
+  const scope = conversationHistoryScope(viewState.snapshot);
   const contact = viewState.snapshot?.activeContact || null;
   const id = clean(contact?.id);
   if (!id || unreadCount(contact) < 1 || !context.api.conversation.updateContactPresentation) return;
   try {
-    viewState.snapshot = await context.api.conversation.updateContactPresentation({ id, unreadCount: 0 });
-    viewState.lastVersion = viewState.snapshot.version;
+    const snapshot = await context.api.conversation.updateContactPresentation({ id, unreadCount: 0 });
+    if (historyEpoch !== viewState.historyLoadEpoch || scope !== conversationHistoryScope(viewState.snapshot)) return;
+    viewState.lastVersion = applyConversationSnapshot(snapshot).version;
     context.render();
   } catch {
     // Reading a conversation should remain available if its local badge cannot be saved.
@@ -1537,10 +1795,16 @@ function handleConversationEvent(context, event) {
     const reply = finishedLiveReply(viewState.liveReplies.get(requestId));
     if (reply) viewState.liveReplies.set(requestId, reply);
     context.render();
-    void load(context, true).finally(() => {
-      viewState.liveTools = viewState.liveTools.filter((item) => item.requestId !== requestId);
-      context.render();
-    });
+    void load(context, true)
+      .then((loaded) => {
+        // Completed assistant steps now live in the durable transcript. Retire
+        // the temporary stream only after that transcript was read successfully.
+        if (loaded === true) viewState.liveReplies.delete(requestId);
+      })
+      .finally(() => {
+        viewState.liveTools = viewState.liveTools.filter((item) => item.requestId !== requestId);
+        context.render();
+      });
     void context.refreshUsageLedger?.();
     return;
   }
@@ -1566,8 +1830,10 @@ export function startConversationPolling(context) {
   stopConversationPolling();
   viewState.transientSystemMessages.length = 0;
   viewState.liveTools = [];
+  viewState.historyLoadingOlder = false;
+  viewState.historyWindowDetached = false;
   viewState.shouldStickToLatest = true;
-  void load(context, true).then(() => markOpenedContactRead(context));
+  void load(context, true, { resetWindow: true }).then(() => markOpenedContactRead(context));
   if (typeof context.api.conversation.onEvent === "function") {
     viewState.unsubscribe = context.api.conversation.onEvent((event) => handleConversationEvent(context, event));
   }
@@ -1579,12 +1845,14 @@ export function startConversationPolling(context) {
       }
     });
   }
-  viewState.timer = window.setInterval(() => load(context), 2000);
 }
 
 export function stopConversationPolling() {
+  invalidateConversationLoads();
   if (viewState.timer) window.clearInterval(viewState.timer);
   viewState.timer = null;
+  viewState.historyLoadingOlder = false;
+  viewState.historyWindowDetached = false;
   viewState.unsubscribe?.();
   viewState.unsubscribe = null;
   viewState.wechatUnsubscribe?.();
@@ -1682,10 +1950,15 @@ async function sendMessage(context) {
   viewState.searchOpen = false;
   viewState.sending = true;
   viewState.emojiOpen = false;
+  // Sending is a live-tail action. If the person was browsing a detached
+  // historical window, the following forced snapshot replaces that window
+  // with the current tail so pending and durable copies can reconcile.
+  reconnectConversationHistoryWindow();
   viewState.shouldStickToLatest = true;
   viewState.unread = false;
   viewState.pending.push(pending);
   scheduleScrollToLatest();
+  focusComposer();
   context.render();
   try {
     const result = command.action === "steer"
@@ -1712,7 +1985,9 @@ async function sendMessage(context) {
     load(context, true);
   } catch (error) {
     viewState.pending = viewState.pending.filter((item) => item !== pending);
-    viewState.draft = raw;
+    // A person can prepare the next message while the previous submission is
+    // being accepted. Restore the failed text only when no newer draft exists.
+    if (!viewState.draft) viewState.draft = raw;
     viewState.error = `没有发出去：${error?.message || error}`;
     viewState.sending = false;
     focusComposer();
@@ -1888,6 +2163,7 @@ async function openConversationMediaPreviewForItem(context, value = {}) {
 }
 
 function resetConversationForContactChange() {
+  invalidateConversationLoads();
   resetSessionSettings();
   releaseComposerAttachmentPreviews(viewState.attachments);
   viewState.attachments = [];
@@ -1907,6 +2183,8 @@ function resetConversationForContactChange() {
   viewState.searchOpen = false;
   viewState.searchQuery = "";
   viewState.shouldStickToLatest = true;
+  viewState.historyLoadingOlder = false;
+  viewState.historyWindowDetached = false;
   viewState.listScrollTop = 0;
   viewState.scrollTarget = null;
 }
@@ -1986,8 +2264,9 @@ export function createConversationReactActions(context) {
       context.render();
       try {
         await endActiveConversationCall();
-        viewState.snapshot = await context.api.conversation.createContact({ name: value });
-        viewState.lastVersion = viewState.snapshot.version;
+        viewState.lastVersion = applyConversationSnapshot(
+          await context.api.conversation.createContact({ name: value }),
+        ).version;
         if (context.api.settings?.get) context.state.settings = await context.api.settings.get();
         try {
           await context.onContactCreated?.(viewState.snapshot?.activeContact || null);
@@ -2016,9 +2295,10 @@ export function createConversationReactActions(context) {
     },
     jumpToLatest: () => {
       viewState.shouldStickToLatest = true;
-      scheduleScrollToLatest();
       context.render();
+      void load(context, true, { resetWindow: true });
     },
+    loadOlderMessages: () => void loadOlderMessages(context),
     moveAvatarCrop: moveConversationAvatarCrop,
     nextMediaPreview: () => {
       const preview = viewState.mediaPreview;
@@ -2148,10 +2428,6 @@ export function createConversationReactActions(context) {
       context.render();
       await refreshCurrentSessionSettings(context);
     },
-    openWechatCapability: () => {
-      context.setView?.("capabilities");
-      context.setCapabilityPage?.("detail", "companion", "wechat-connection");
-    },
     previousMediaPreview: () => {
       const preview = viewState.mediaPreview;
       const items = Array.isArray(preview?.items) ? preview.items : [];
@@ -2177,12 +2453,11 @@ export function createConversationReactActions(context) {
       viewState.sending = true;
       context.render();
       try {
-        viewState.snapshot = await context.api.conversation.deleteMessage({
+        viewState.lastVersion = applyConversationSnapshot(await context.api.conversation.deleteMessage({
           confirmed: true,
           lineNumber,
           messageId: kind === "dynamic-context" ? "" : clean(message?.messageId),
-        });
-        viewState.lastVersion = viewState.snapshot?.version ?? null;
+        }), { preserveHistory: false }).version ?? null;
         resetConversationFocus();
         viewState.error = "";
         viewState.notice = "已从聊天记录中隐藏这条消息。";
@@ -2229,8 +2504,9 @@ export function createConversationReactActions(context) {
       context.render();
       try {
         if (activeContactRemoved) await endActiveConversationCall();
-        viewState.snapshot = await context.api.conversation.removeContact({ id, confirmed: true });
-        viewState.lastVersion = viewState.snapshot.version;
+        viewState.lastVersion = applyConversationSnapshot(
+          await context.api.conversation.removeContact({ id, confirmed: true }),
+        ).version;
         if (activeContactRemoved) resetConversationForContactChange();
         if (context.api.settings?.get) context.state.settings = await context.api.settings.get();
         viewState.error = "";
@@ -2249,8 +2525,9 @@ export function createConversationReactActions(context) {
       viewState.sending = true;
       context.render();
       try {
-        viewState.snapshot = await context.api.conversation.renameContact({ id, name: value });
-        viewState.lastVersion = viewState.snapshot.version;
+        viewState.lastVersion = applyConversationSnapshot(
+          await context.api.conversation.renameContact({ id, name: value }),
+        ).version;
         viewState.contactRenameOpen = false;
         viewState.error = "";
         viewState.notice = "联系人备注已更新。";
@@ -2314,8 +2591,9 @@ export function createConversationReactActions(context) {
         .find((item) => clean(item?.id) === id) || null;
       viewState.contactContextMenu = null;
       try {
-        viewState.snapshot = await context.api.conversation.setPreferredContact({ id });
-        viewState.lastVersion = viewState.snapshot.version;
+        viewState.lastVersion = applyConversationSnapshot(
+          await context.api.conversation.setPreferredContact({ id }),
+        ).version;
         if (context.api.settings?.get) context.state.settings = await context.api.settings.get();
         viewState.error = "";
         viewState.notice = `已将“${clean(contact?.name) || "这位联系人"}”设为首选联系人。`;
@@ -2340,8 +2618,20 @@ export function createConversationReactActions(context) {
       viewState.sending = true;
       context.render();
       try {
-        viewState.snapshot = await context.api.conversation.updateContactPresentation({ id, ...patch });
-        viewState.lastVersion = viewState.snapshot.version;
+        const previousActiveContactId = clean(viewState.snapshot?.activeContact?.id);
+        const nextSnapshot = await context.api.conversation.updateContactPresentation({ id, ...patch });
+        const nextActiveContactId = clean(nextSnapshot?.activeContact?.id);
+        const activeContactChanged = previousActiveContactId !== nextActiveContactId;
+        if (activeContactChanged) await endActiveConversationCall();
+        viewState.lastVersion = applyConversationSnapshot(nextSnapshot).version;
+        if (activeContactChanged) {
+          resetConversationForContactChange();
+          viewState.draft = "";
+          scheduleScrollToLatest();
+          if (context.api.settings?.get) {
+            context.state.settings = await context.api.settings.get().catch(() => context.state.settings);
+          }
+        }
         viewState.error = "";
         if (Object.hasOwn(patch, "pinned")) {
           viewState.notice = patch.pinned ? `已将“${name}”置顶。` : `已取消“${name}”置顶。`;
@@ -2350,7 +2640,7 @@ export function createConversationReactActions(context) {
         } else if (Object.hasOwn(patch, "muted")) {
           viewState.notice = patch.muted ? `已开启“${name}”的消息免打扰。` : `已关闭“${name}”的消息免打扰。`;
         } else if (Object.hasOwn(patch, "hidden")) {
-          viewState.notice = patch.hidden ? `已隐藏“${name}”。可在“设置 > 隐私”中恢复。` : `已恢复“${name}”到联系人列表。`;
+          viewState.notice = patch.hidden ? "联系人已隐藏。可在“设置 > 隐私”中恢复。" : `已恢复“${name}”到联系人列表。`;
         }
       } catch (error) {
         viewState.error = `无法更新联系人显示状态：${error?.message || error}`;
@@ -2364,8 +2654,9 @@ export function createConversationReactActions(context) {
       if (!id || viewState.sending || !context.api.conversation.selectContact) return;
       try {
         await endActiveConversationCall();
-        viewState.snapshot = await context.api.conversation.selectContact({ id });
-        viewState.lastVersion = viewState.snapshot.version;
+        viewState.lastVersion = applyConversationSnapshot(
+          await context.api.conversation.selectContact({ id }),
+        ).version;
         if (context.api.settings?.get) context.state.settings = await context.api.settings.get();
         resetConversationForContactChange();
         scheduleScrollToLatest();
@@ -2478,8 +2769,9 @@ export function createConversationReactActions(context) {
       viewState.sending = true;
       context.render();
       try {
-        viewState.snapshot = await context.api.conversation.updateContactPermissionMode({ id: contactId, permissionMode: nextPermissionMode });
-        viewState.lastVersion = viewState.snapshot.version;
+        viewState.lastVersion = applyConversationSnapshot(
+          await context.api.conversation.updateContactPermissionMode({ id: contactId, permissionMode: nextPermissionMode }),
+        ).version;
         viewState.error = "";
         viewState.notice = "已更新这位联系人的审批模式。";
       } catch (error) {
@@ -2495,8 +2787,9 @@ export function createConversationReactActions(context) {
       viewState.sending = true;
       context.render();
       try {
-        viewState.snapshot = await context.api.conversation.updateContactLongTermMemoryEnabled({ id: contactId, enabled: Boolean(enabled) });
-        viewState.lastVersion = viewState.snapshot.version;
+        viewState.lastVersion = applyConversationSnapshot(
+          await context.api.conversation.updateContactLongTermMemoryEnabled({ id: contactId, enabled: Boolean(enabled) }),
+        ).version;
         viewState.error = "";
       } catch (error) {
         viewState.error = `无法更新联系人长期记忆：${error?.message || error}`;
@@ -2533,7 +2826,16 @@ export function createConversationReactActions(context) {
       try {
         const next = { ...preferences(context.state.settings), [preference]: Boolean(checked) };
         context.state.settings = await context.api.settings.update({ conversationPreferences: next });
-        if (preference === "dynamicContext") await load(context, true);
+        if (preference === "dynamicContext") {
+          // Dynamic context is projected by the reader, so a cached older page
+          // may have been built with the opposite preference. Reopen from the
+          // newest page instead of mixing two projections.
+          invalidateConversationLoads();
+          viewState.snapshot = null;
+          viewState.historyWindowDetached = false;
+          viewState.lastVersion = null;
+          await load(context, true);
+        }
       } catch (error) {
         viewState.error = `无法更新聊天显示：${error?.message || error}`;
       }
@@ -2551,7 +2853,7 @@ export function createConversationReactActions(context) {
       if (!Number.isFinite(top) || !Number.isFinite(height) || !Number.isFinite(viewport)) return;
       viewState.listScrollTop = top;
       const shouldStick = height - top - viewport < 48;
-      const unread = shouldStick ? false : viewState.unread;
+      const unread = shouldStick && !isHistoryWindowDetached() ? false : viewState.unread;
       const changed = viewState.shouldStickToLatest !== shouldStick || viewState.unread !== unread;
       viewState.shouldStickToLatest = shouldStick;
       viewState.unread = unread;
@@ -2647,9 +2949,8 @@ export function createConversationReactActions(context) {
       viewState.searchOpen = false;
       viewState.searchQuery = "";
       viewState.shouldStickToLatest = true;
-      scheduleScrollToLatest();
       context.render();
-      void load(context, true);
+      void load(context, true, { resetWindow: true });
     },
     viewWechatQr: () => {
       viewState.wechatQrOpen = true;
@@ -2695,6 +2996,7 @@ export function createConversationReactActions(context) {
       viewState.emojiOpen = false;
       viewState.error = "";
       viewState.notice = "";
+      reconnectConversationHistoryWindow();
       viewState.shouldStickToLatest = true;
       scheduleScrollToLatest();
       focusComposer();

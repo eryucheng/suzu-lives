@@ -220,6 +220,11 @@ function firstCreatedContact(contacts) {
     || clean(left?.id).localeCompare(clean(right?.id)))[0] || null;
 }
 
+function visibleFallbackContact(contacts, preferredContactId = "") {
+  const visible = (Array.isArray(contacts) ? contacts : []).filter((contact) => contact?.hidden !== true);
+  return visible.find((contact) => contact.id === clean(preferredContactId)) || visible[0] || null;
+}
+
 async function writeTextAtomic(fsOps, target, value) {
   await fsOps.mkdir(path.dirname(target), { recursive: true });
   const temporary = `${target}.suzu-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}.tmp`;
@@ -437,11 +442,20 @@ export function createContactProjectsService({
     const currentSettings = clean(settings.contactsRoot) ? settings : settingsService.load();
     const contacts = await list(root);
     const selectedRoot = clean(currentSettings.projectRoot);
-    const activeContact = selectedRoot
+    let activeContact = selectedRoot
       ? contacts.find((contact) => samePath(contact.projectRoot, selectedRoot)) || null
       : null;
     const preferredContact = contacts.find((contact) => contact.id === clean(currentSettings.preferredContactId))
       || firstCreatedContact(contacts);
+    if (activeContact?.hidden === true) {
+      // Hidden contacts stay in the catalog for their data and background
+      // capabilities, but they must not remain the workspace shown by the UI.
+      activeContact = visibleFallbackContact(contacts, preferredContact?.id);
+      settingsService.save({
+        ...currentSettings,
+        projectRoot: clean(activeContact?.projectRoot),
+      });
+    }
     return { status: "ready", contactsRoot: root, contacts, activeContact, preferredContact };
   };
 
@@ -449,6 +463,7 @@ export function createContactProjectsService({
     const root = await contactsRoot();
     const contact = await contactAt(fsOps, root, id);
     if (!contact) throw new ContactProjectsError("所选联系人不存在或不是由 Suzu 创建的联系人工作区。 ");
+    if (contact.hidden) throw new ContactProjectsError("请先在“设置 > 隐私”中恢复这位联系人。 ");
     await ensureProjectSettings(contact.projectRoot);
     const settings = settingsService.load();
     settingsService.save({ ...settings, projectRoot: contact.projectRoot });

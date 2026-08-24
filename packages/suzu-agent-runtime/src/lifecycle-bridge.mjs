@@ -62,9 +62,11 @@ function automationTaskOutputPolicy(blocks) {
   return found ? "external" : "";
 }
 
-function hasTerminalNoReply(value) {
+function hasBoundaryNoReply(value) {
   const text = clean(value);
-  return Boolean(text) && /NO_REPLY(?:[\s,，。.!！?？;；、…]*NO_REPLY)*[\s,，。.!！?？;；、…]*$/iu.test(text);
+  if (!text) return false;
+  return /^NO_REPLY(?=$|[\s,，。.!！?？;；、…（(\[])/iu.test(text)
+    || /NO_REPLY(?:[\s,，。.!！?？;；、…]*NO_REPLY)*[\s,，。.!！?？;；、…]*$/iu.test(text);
 }
 
 function timeoutMilliseconds(value) {
@@ -345,6 +347,26 @@ function interruptedBlocks(record) {
   });
 }
 
+function streamedReasoningBlocks(record) {
+  if (!record) return [];
+  return record.order.flatMap((index) => {
+    const partial = record.blocks.get(index);
+    if (!partial) return [];
+    const completed = plainObject(partial.block);
+    const type = clean(completed.type) || clean(partial.blockType);
+    if (type !== "reasoning") return [];
+    const text = typeof completed.text === "string" ? completed.text : partial.text;
+    return clean(text) ? [{ type: "reasoning", text }] : [];
+  });
+}
+
+function messageHasUnreplayableToolCall(message) {
+  const content = Array.isArray(plainObject(message).content) ? message.content.map(plainObject) : [];
+  const hasToolCall = content.some((block) => block.type === "tool-call");
+  const hasReasoning = content.some((block) => block.type === "reasoning" && clean(block.text));
+  return hasToolCall && !hasReasoning;
+}
+
 function messageHasReplayState(message) {
   const source = plainObject(message?.source);
   return source.kind === "model" && source.replayState !== undefined;
@@ -376,7 +398,11 @@ export function createSuzuAgentLifecycleBridgeTransport({
   const send = (message) => {
     if (disposed || !processRef?.connected || typeof processRef?.send !== "function") return false;
     try {
-      return processRef.send(message) !== false;
+      // Node returns false when the IPC channel is under back-pressure even
+      // though it has accepted and queued the message. The response remains
+      // authoritative, so only a synchronous throw means this send failed.
+      processRef.send(message);
+      return true;
     } catch {
       return false;
     }
@@ -653,19 +679,21 @@ export function createSuzuAgentLifecycleBridge({
     return replaceSurfaceRangeWithCleanup(session, nodes[startIndex], nodes.at(-1));
   };
 
-  const taskEndedWithNoReply = (record) => {
+  const taskHasBoundaryNoReply = (record) => {
     const session = record?.session;
     const startIndex = Number(record?.startSurfaceIndex);
     const nodes = Array.isArray(session?.surface?.nodes) ? session.surface.nodes : [];
     const events = Array.isArray(session?.events) ? session.events : [];
     if (!Number.isSafeInteger(startIndex) || startIndex < 0 || nodes.length <= startIndex) return false;
     const bySequence = new Map(events.map((event) => [event?.seq, event]));
-    for (let index = nodes.length - 1; index >= startIndex; index -= 1) {
+    const texts = [];
+    for (let index = startIndex; index < nodes.length; index += 1) {
       const event = bySequence.get(nodes[index]);
       if (clean(event?.type) !== "assistant/message") continue;
-      return hasTerminalNoReply(messageText(plainObject(event?.data).message));
+      const text = messageText(plainObject(event?.data).message);
+      if (text) texts.push(text);
     }
-    return false;
+    return hasBoundaryNoReply(texts.join("\n"));
   };
 
   const repairPersistedAutomationTask = (session) => {
@@ -705,14 +733,14 @@ export function createSuzuAgentLifecycleBridge({
         endIndex += 1;
       }
       if (turnBySequence.get(nodes[endIndex]) !== candidate.turn) continue;
-      let terminalNoReply = false;
-      for (let index = endIndex; index >= startIndex; index -= 1) {
+      const texts = [];
+      for (let index = startIndex; index <= endIndex; index += 1) {
         const event = bySequence.get(nodes[index]);
         if (clean(event?.type) !== "assistant/message") continue;
-        terminalNoReply = hasTerminalNoReply(messageText(plainObject(event?.data).message));
-        break;
+        const text = messageText(plainObject(event?.data).message);
+        if (text) texts.push(text);
       }
-      if (candidate.outputPolicy === "silent" || terminalNoReply) {
+      if (candidate.outputPolicy === "silent" || hasBoundaryNoReply(texts.join("\n"))) {
         return replaceSurfaceRangeWithCleanup(session, nodes[startIndex], nodes[endIndex]);
       }
     }
@@ -750,6 +778,31 @@ export function createSuzuAgentLifecycleBridge({
     const content = Array.isArray(message.content) ? message.content : [];
     const replacement = createResponseMessage({
       content,
+      source: messageProvenance(message, session),
+    });
+    session.append("assistant/message", {
+      turn: data.turn,
+      step: data.step,
+      message: replacement,
+    }, {
+      surfaceOp: { op: "replace", start: event.seq, end: event.seq },
+      sourceEventSeqs: [event.seq],
+    });
+    return true;
+  };
+
+  const repairMissingToolCallReasoning = (session, event, record) => {
+    if (!surfaceIncludes(session, event?.seq)) return false;
+    const data = plainObject(event?.data);
+    const message = plainObject(data.message);
+    if (!messageHasUnreplayableToolCall(message)) return false;
+    const reasoning = streamedReasoningBlocks(record);
+    if (!reasoning.length) return false;
+    const content = Array.isArray(message.content)
+      ? message.content.map(plainObject).filter((block) => block.type !== "reasoning" || clean(block.text))
+      : [];
+    const replacement = createResponseMessage({
+      content: [...reasoning, ...content],
       source: messageProvenance(message, session),
     });
     session.append("assistant/message", {
@@ -896,13 +949,16 @@ export function createSuzuAgentLifecycleBridge({
         if (record?.finishKind === "max-tokens" && record.sawToolCall && messageHasReplayState(data.message)) {
           scheduleSessionRepair(session, () => repairMaxTokenReplay(session, event));
         }
+        if (record && messageHasUnreplayableToolCall(data.message)) {
+          scheduleSessionRepair(session, () => repairMissingToolCallReasoning(session, event, record));
+        }
         return;
       }
 
       if (event?.type === "turn/end") {
         const turn = Number(data.turn);
         const task = takeTask(session, turn);
-        if (task && (task.outputPolicy === "silent" || taskEndedWithNoReply(task))) {
+        if (task && (task.outputPolicy === "silent" || taskHasBoundaryNoReply(task))) {
           // B is operational work, and an A decision with NO_REPLY is also
           // not a conversation message. Remove its entire completed surface
           // before another turn can derive model history from it.
@@ -1068,6 +1124,11 @@ export function createSuzuAgentLifecycleBridge({
     }, { global: true });
 
     ctx.on("tools/pre-execute", async (execution, next) => {
+      // Complete any queued stream repair before processing a tool continuation.
+      // Thinking-mode tool continuations include the preserved reasoning content.
+      const activeSession = rememberSession(execution?.agent?.session)
+        || knownSessionsById.get(sessionId(execution?.agent));
+      await waitForSessionRepair(activeSession);
       const provider = await next();
       if (provider?.kind === "deny") return provider;
       const reply = await transport.request("PreToolUse", {

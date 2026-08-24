@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { Avatar, Banner, Button, Dialog, Drawer, Empty, GlassPanel, Input, PageHeader, Select, Status, Tabs } from "suzu-design-system";
+import { Avatar, Banner, Button, Dialog, Drawer, Empty, GlassPanel, Input, PageHeader, Select, Status, Switch, Tabs } from "suzu-design-system";
 
 import {
   AVATAR_CROP_MAX_ZOOM,
@@ -16,11 +16,14 @@ import {
 import { SUZU_ADMIN_TABS } from "../core/chat-first.mjs";
 import { dateTime, localDateTimeInput, money, startOfTodayInput } from "../core/formatters.mjs";
 import { getIdentity, profileInitial } from "../core/identity.mjs";
+import { releasePointerCapture } from "../core/pointer-capture.mjs";
 import { TEXT_MODEL_PROVIDERS } from "../features/agent/runtime.mjs";
+import { modelCatalogEntry } from "@suzu-lives/suzu-agent-runtime/model-capability-catalog";
 import { usageAmountLabel, usageCostLabel } from "../features/usage/usage-display.mjs";
 import { usageHistoryRows } from "../features/usage/usage-history.mjs";
 
 import { PageScaffold } from "./page-scaffold.jsx";
+import { usePointerCaptureRecovery } from "./pointer-capture-recovery.mjs";
 import "./admin-page.css";
 
 const ADMIN_TAB_LABELS = Object.freeze({
@@ -222,6 +225,15 @@ function AvatarCropDialog({ crop, onClose, onSave }) {
     };
   }, [crop?.source]);
 
+  const finishDrag = (event) => {
+    const drag = dragRef.current;
+    if (!drag || (event && drag.pointerId !== event.pointerId)) return;
+    dragRef.current = null;
+    releasePointerCapture(stageRef.current, drag.pointerId);
+  };
+
+  usePointerCaptureRecovery(() => finishDrag());
+
   if (!crop || !draft) return null;
   const layout = avatarCropLayout(draft);
 
@@ -241,17 +253,6 @@ function AvatarCropDialog({ crop, onClose, onSave }) {
     if (!drag || drag.pointerId !== event.pointerId || pending) return;
     setDraft((current) => moveAvatarCrop(current, event.clientX - drag.clientX, event.clientY - drag.clientY));
     dragRef.current = { clientX: event.clientX, clientY: event.clientY, pointerId: event.pointerId };
-  };
-
-  const finishDrag = (event) => {
-    const drag = dragRef.current;
-    if (!drag || drag.pointerId !== event.pointerId) return;
-    try {
-      event.currentTarget.releasePointerCapture(event.pointerId);
-    } catch {
-      // The pointer may already have been released by the platform.
-    }
-    dragRef.current = null;
   };
 
   const save = async () => {
@@ -279,6 +280,7 @@ function AvatarCropDialog({ crop, onClose, onSave }) {
         <p className="admin-dialog-copy">拖动图片调整位置；方框内的正方形区域会作为头像保存。</p>
         <div
           className="admin-avatar-crop-stage"
+          onLostPointerCapture={finishDrag}
           onPointerCancel={finishDrag}
           onPointerDown={beginDrag}
           onPointerMove={moveDrag}
@@ -421,6 +423,7 @@ function modelConnectionDraft(config = {}) {
     model: clean(config.model) || provider.model || "",
     provider: providerId,
     protocol: clean(config.protocol) || provider.protocol || "anthropic-messages",
+    supportsImageInput: config?.supportsImageInput === true,
   };
 }
 
@@ -502,6 +505,7 @@ export function AgentModelSettings({ actions, config, initialModels = [], initia
       baseUrl: next.baseUrl || "",
       model: next.model || "",
       protocol: next.protocol || "anthropic-messages",
+      supportsImageInput: false,
     }));
     setModels([]);
     setModelPickerOpen(false);
@@ -544,11 +548,15 @@ export function AgentModelSettings({ actions, config, initialModels = [], initia
 
   const stateReady = config?.status === "ready";
   const status = <Status label={stateReady ? "已配置" : "等待填写"} tone={stateReady ? "success" : "muted"} />;
+  const catalogModel = modelCatalogEntry(draft.provider, draft.model);
+  const directImageInput = catalogModel
+    ? catalogModel.input.includes("image")
+    : draft.provider === "custom" && draft.supportsImageInput;
 
   return (
     <AdminPanel className="admin-agent-model-panel">
       <PanelHeading
-        description="配置 Suzu Agent 使用的文本模型。密钥由本机凭据存储管理，不会写入其他工具的配置文件。"
+        description="配置 Suzu Agent 使用的文本模型。密钥由本机凭据存储管理。"
         eyebrow="MAIN MODEL"
         status={status}
         title="主模型连接"
@@ -557,7 +565,7 @@ export function AgentModelSettings({ actions, config, initialModels = [], initia
         <section className="admin-form-section">
           <div className="admin-form-section__heading">
             <h3>使用哪个服务</h3>
-            <p>DeepSeek 走原生适配器；其他服务走多提供商适配器。切换服务只更新当前选用的服务配置。</p>
+            <p>选择主模型服务并填写连接信息。</p>
           </div>
           <div className="admin-form-grid">
             <Field label="服务">
@@ -580,7 +588,7 @@ export function AgentModelSettings({ actions, config, initialModels = [], initia
         <section className="admin-form-section">
           <div className="admin-form-section__heading">
             <h3>使用的模型</h3>
-            <p>保存后会成为 Suzu Agent 的默认文本模型。支持目录读取的服务可拉取候选；其余服务直接按文档填写即可。</p>
+            <p>保存后会成为 Suzu Agent 的默认文本模型。选择列表中的模型，或直接填写模型标识。</p>
           </div>
           <div className="admin-form-grid">
             <Field className="admin-field--wide" label="主模型">
@@ -593,6 +601,14 @@ export function AgentModelSettings({ actions, config, initialModels = [], initia
                 pickerOpen={modelPickerOpen}
                 value={draft.model}
               />
+            </Field>
+            <Field className="admin-field--wide" label="图片输入">
+              {draft.provider === "custom" ? (
+                <div className="admin-model-input-capability">
+                  <Switch checked={draft.supportsImageInput} disabled={Boolean(pending)} onChange={(event) => change("supportsImageInput", event.target.checked)} />
+                  <span>{draft.supportsImageInput ? "将聊天图片直接发送给这个模型" : "聊天图片交由已启用的图像理解能力处理"}</span>
+                </div>
+              ) : <p className="admin-model-input-capability__status">{directImageInput ? "当前模型可直接接收聊天图片。" : "聊天图片会通过已启用的图像理解能力处理。"}</p>}
             </Field>
           </div>
           <div className="admin-form-inline-actions">

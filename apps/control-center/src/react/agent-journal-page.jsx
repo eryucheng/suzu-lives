@@ -1,5 +1,6 @@
 import { Avatar, Banner, Button, Empty, GlassPanel, PageHeader, Roster, Status } from "suzu-design-system";
 
+import { contactAvatarSource } from "../core/contact-avatar.mjs";
 import { PageScaffold } from "./page-scaffold.jsx";
 import "./agent-journal-page.css";
 
@@ -29,7 +30,7 @@ function timeLabel(value) {
   }).format(date);
 }
 
-function ContactRail({ contacts, loading, onSelect, selectedContactId }) {
+function ContactRail({ contacts, loading, onSelect, selectedContactId, settings }) {
   return (
     <GlassPanel as="aside" className="agent-journal-contact-rail" intensity="soft">
       <div className="agent-journal-contact-rail__heading">
@@ -41,7 +42,7 @@ function ContactRail({ contacts, loading, onSelect, selectedContactId }) {
           const selected = contact.id === selectedContactId;
           const name = clean(contact.name) || "未命名联系人";
           return <Roster
-            avatar={<Avatar name={name} size="md" />}
+            avatar={<Avatar name={name} size="md" src={contactAvatarSource(contact, settings)} />}
             className="agent-journal-contact"
             key={contact.id}
             name={name}
@@ -67,7 +68,7 @@ function JournalEntry({ entry }) {
   );
 }
 
-export function AgentJournalPage({ actions = {}, error = "", loading = false, snapshot = null }) {
+export function AgentJournalPage({ actions = {}, error = "", loading = false, settings = {}, snapshot = null }) {
   const contacts = Array.isArray(snapshot?.contacts) ? snapshot.contacts : [];
   const entries = Array.isArray(snapshot?.entries) ? snapshot.entries : [];
   const selected = snapshot?.selectedContact || null;
@@ -94,7 +95,7 @@ export function AgentJournalPage({ actions = {}, error = "", loading = false, sn
           <GlassPanel as="section" className="agent-journal-loading" intensity="soft"><Empty description="先创建联系人，再到能力 → 行动中为其开启“写日记”。" title="还没有联系人" /></GlassPanel>
         ) : (
           <section aria-label="Agent 日记" className="agent-journal-workspace">
-            <ContactRail contacts={contacts} loading={loading} onSelect={actions.selectContact} selectedContactId={snapshot?.selectedContactId} />
+            <ContactRail contacts={contacts} loading={loading} onSelect={actions.selectContact} selectedContactId={snapshot?.selectedContactId} settings={settings} />
             <GlassPanel as="section" className="agent-journal-main" intensity="soft">
               <header className="agent-journal-main__header">
                 <div><span>JOURNAL OF</span><h2>{selected?.name || "未命名联系人"}</h2><p>这里只显示这位 Agent 已经写下的日记，不会改动聊天记录或长期记忆。</p></div>

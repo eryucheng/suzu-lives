@@ -391,6 +391,29 @@
   line-height:1.55;
 }
 
+.image-vision-protocol-field__controls,
+.video-understanding-protocol-field__controls,
+.voice-service-protocol-field__controls {
+  display:grid;
+  grid-template-columns:minmax(0,1fr) auto;
+  align-items:center;
+  gap:10px;
+  min-width:0;
+}
+
+.image-vision-protocol-field__controls > *,
+.video-understanding-protocol-field__controls > *,
+.voice-service-protocol-field__controls > * { min-width:0; }
+
+@media (max-width:700px) {
+  .image-vision-protocol-field__controls,
+  .video-understanding-protocol-field__controls,
+  .voice-service-protocol-field__controls {
+    grid-template-columns:1fr;
+    justify-items:start;
+  }
+}
+
 .capability-checkbox-field {
   display:flex;
   min-height:42px;

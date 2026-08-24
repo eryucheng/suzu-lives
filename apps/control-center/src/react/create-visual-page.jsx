@@ -6,7 +6,7 @@ import { PageScaffold } from "./page-scaffold.jsx";
 
 const ROLES = Object.freeze({ identity: "人物", location: "地点", object: "物品", style: "风格" });
 const ROLE_OPTIONS = Object.freeze(Object.entries(ROLES).map(([value, label]) => ({ label, value })));
-const EMPTY_DRAWING_CONFIG = Object.freeze({ backend: "api", count: "1", seed: "", size: "1024x1024", workflow: "" });
+const EMPTY_DRAWING_CONFIG = Object.freeze({ count: "1", size: "1024x1024" });
 
 function lines(value) {
   return String(value || "").split(/\r?\n/u).map((item) => item.trim()).filter(Boolean);
@@ -248,7 +248,6 @@ export function CreateVisualPage({ actions = {}, api }) {
   const selectedReferenceValues = useMemo(() => (references?.assets || []).filter((asset) => selectedReferences.has(asset.referenceId)).map((asset) => asset.reference), [references, selectedReferences]);
   const selectedAssetSets = useMemo(() => selectedAsset ? (references?.sets || []).filter((item) => item.scope === selectedAsset.scope) : [], [references, selectedAsset]);
   const importSets = useMemo(() => (references?.sets || []).filter((item) => item.scope === importScope), [importScope, references]);
-  const workflows = drawing?.comfyui?.workflows || [];
   const ready = drawing?.status === "ready";
 
   useEffect(() => {
@@ -278,15 +277,11 @@ export function CreateVisualPage({ actions = {}, api }) {
     if (!prompt || creating) return;
     setCreating(true);
     try {
-      const rawSeed = String(config.seed || "").trim();
       setDrawing(await api.imageWorkbench.generate({
-        backend: config.backend,
         count: Number(config.count),
         prompt,
         referenceIds: selectedReferenceValues,
-        seed: rawSeed ? Number(rawSeed) : null,
         size: config.size,
-        workflow: config.workflow,
       }));
       setFeedback("候选已保存，方便继续比较和挑选。");
     } catch (error) {
@@ -392,7 +387,7 @@ export function CreateVisualPage({ actions = {}, api }) {
           <form className="voice-form drawing-generate-form" onSubmit={generate}>
             <label className="wide drawing-prompt-field">绘画提示词<textarea disabled={creating} maxLength="4000" name="prompt" placeholder="描述你想看见的画面、氛围与主体。" required /><small>最多 4000 字</small></label>
             <div className="drawing-reference-summary"><div><span className="reference-kicker">本次参考</span><strong>{selectedReferences.size ? `已选 ${selectedReferences.size} 张参考图` : "还没有选择参考图"}</strong><p>共享资料和当前联系人的专属资料都可选；只会带入本次真正需要的图片。</p></div>{selectedReferences.size ? <button className="quiet-link" onClick={() => setSelectedReferences(new Set())} type="button">清空选择</button> : null}</div>
-            <div className="voice-form-actions wide drawing-create-actions"><span className="drawing-engine-state">{workflows.some((item) => item.enabled) ? "可使用本机出图" : "可使用已保存的图像服务"}</span><button className="primary-button" disabled={!ready || creating}>{creating ? "正在生成…" : "生成图片"}</button></div>
+            <div className="voice-form-actions wide drawing-create-actions"><span className="drawing-engine-state">使用已保存的图像服务</span><button className="primary-button" disabled={!ready || creating}>{creating ? "正在生成…" : "生成图片"}</button></div>
           </form>
         </section>
         <VisualRuns onOpenCandidate={openCandidate} runs={drawing?.runs || []} />
@@ -413,14 +408,11 @@ export function CreateVisualPage({ actions = {}, api }) {
         </section>
       </PageScaffold>
       <CreateStudioDialog ariaLabel="绘画设置" onClose={() => setSettingsOpen(false)} open={settingsOpen}>
-        <header className="create-settings-dialog__header"><div><span className="reference-kicker">绘画设置</span><h2>尺寸、出图方式与本机工作流</h2></div><button aria-label="关闭绘画设置" className="create-settings-close suzu-close-button" onClick={() => setSettingsOpen(false)} type="button"><span aria-hidden="true">×</span></button></header>
+        <header className="create-settings-dialog__header"><div><span className="reference-kicker">绘画设置</span><h2>候选数量与图片尺寸</h2></div><button aria-label="关闭绘画设置" className="create-settings-close suzu-close-button" onClick={() => setSettingsOpen(false)} type="button"><span aria-hidden="true">×</span></button></header>
         <div className="drawing-settings-body">
-          <label>出图方式<Select className="create-select-react" fullWidth onChange={(backend) => setConfig((previous) => ({ ...previous, backend }))} options={[{ label: "云端图像 API", value: "api" }, { label: "本机 ComfyUI", value: "comfyui" }]} value={config.backend} /></label>
           <label>候选数<input max="20" min="1" onChange={(event) => setConfig((previous) => ({ ...previous, count: event.target.value }))} type="number" value={config.count} /></label>
           <label>尺寸<input onChange={(event) => setConfig((previous) => ({ ...previous, size: event.target.value }))} pattern="\d{2,5}x\d{2,5}" value={config.size} /></label>
-          <label>Seed（可选）<input max="9007199254740991" min="0" onChange={(event) => setConfig((previous) => ({ ...previous, seed: event.target.value }))} placeholder="留空则随机生成" type="number" value={config.seed} /></label>
-          <label className="drawing-workflow-field">使用哪个 ComfyUI 工作流<Select className="create-select-react" fullWidth onChange={(workflow) => setConfig((previous) => ({ ...previous, workflow }))} options={workflows.filter((item) => item.enabled).map((item) => ({ label: item.description || item.id, value: item.id }))} placeholder="选择可用工作流" value={config.workflow} /></label>
-          <p className="drawing-settings-note">本机可用的 ComfyUI 工作流会显示在这里；云端图像 API 可在设置 → API 中调整。</p>
+          <p className="drawing-settings-note">请求协议和 API 可在能力 → 创作 → 图像生成中调整。</p>
         </div>
       </CreateStudioDialog>
     </>

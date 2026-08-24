@@ -11,14 +11,53 @@ import {
   isScheduledAgentReply,
   liveReplyPresentationChanged,
   filterDeletedConversationMessages,
+  mergeConversationMessageWindow,
   mergeConversationMessages,
   parseSuzuConversationCommand,
+  projectedLiveReply,
+  createConversationReactActions,
   conversationReactSnapshot,
+  startConversationPolling,
+  stopConversationPolling,
   shouldSubmitConversationOnEnter,
   shouldShowCenteredTimeDivider,
   splitAssistantMessageOnBlankLines,
   splitCompanionReplyBuffer,
 } from "../src/features/conversation/index.mjs";
+
+function flush() {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+test("conversation history keeps a bounded window as older pages are reached", () => {
+  const record = (lineNumber) => ({
+    id: `message-${lineNumber}`,
+    kind: "assistant",
+    lineNumber,
+    blocks: [{ kind: "text", text: `第 ${lineNumber} 条` }],
+  });
+  const current = [record(4), record(5), record(6)];
+  const older = [record(1), record(2), record(3)];
+
+  const latest = mergeConversationMessageWindow(current, older, { limit: 4 });
+  assert.deepEqual(latest.messages.map((message) => message.lineNumber), [3, 4, 5, 6]);
+  assert.equal(latest.droppedNewest, false);
+
+  const historical = mergeConversationMessageWindow(current, older, { direction: "older", limit: 4 });
+  assert.deepEqual(historical.messages.map((message) => message.lineNumber), [1, 2, 3, 4]);
+  assert.equal(historical.droppedNewest, true);
+
+  const retained = mergeConversationMessageWindow(historical.messages, [record(7)], { direction: "retain", limit: 4 });
+  assert.deepEqual(retained.messages.map((message) => message.lineNumber), [1, 2, 3, 4]);
+
+  const partialSnapshot = mergeConversationMessageWindow(current, [{
+    id: "dynamic-7",
+    kind: "dynamic-context",
+    lineNumber: 7,
+    blocks: [{ kind: "text", text: "本轮上下文" }],
+  }], { limit: 4 });
+  assert.deepEqual(partialSnapshot.messages.map((message) => message.lineNumber), [4, 5, 6, 7]);
+});
 
 test("renderer keeps a deleted historical dynamic context out of the visible projection", () => {
   const visible = filterDeletedConversationMessages([
@@ -341,6 +380,30 @@ test("companion reply projection hides unfinished token text and only adds compl
   assert.deepEqual(unfinished.map((item) => item.blocks[0]?.text), ["继续"]);
 });
 
+test("multi-step completion keeps the streamed bubbles instead of projecting one aggregate duplicate", () => {
+  const first = projectedLiveReply(null, {
+    content: "我先检查。",
+    requestId: "turn-multi-step",
+    sessionId: "session-1",
+  });
+  const second = projectedLiveReply(first, {
+    content: "我先检查。检查完成。",
+    requestId: "turn-multi-step",
+    sessionId: "session-1",
+  });
+  const completed = projectedLiveReply(second, {
+    assistantMessageCount: 3,
+    content: "我先检查。检查完成。\n\n结果如下：\n\n- 文件已保存",
+    requestId: "turn-multi-step",
+    sessionId: "session-1",
+  }, { final: true });
+
+  assert.equal(completed.content, second.content);
+  assert.deepEqual(completed.sentences, second.sentences);
+  assert.equal(completed.done, true);
+  assert.equal(completed.phase, "idle");
+});
+
 test("live replies only refresh the conversation when their visible presentation changes", () => {
   const thinking = {
     content: "",
@@ -474,4 +537,276 @@ test("center time mode groups nearby messages and renders a centered divider", (
   assert.equal(rows.filter((row) => row.type === "message" && row.kind === "assistant").length, 2);
   assert.equal(rows.filter((row) => row.type === "time").length, 1);
   assert.equal(rows.filter((row) => row.type === "message").every((row) => !row.timestamp), true);
+});
+
+test("conversation queues a follow-up snapshot instead of dropping it while the first read is running", async () => {
+  const priorWindow = globalThis.window;
+  const resolvers = [];
+  let calls = 0;
+  const contact = { agentId: "agent-suzu", id: "contact-suzu", name: "Suzu" };
+  const snapshot = (version, messages) => ({
+    activeContact: contact,
+    activeSessionId: "session-suzu",
+    contacts: [contact],
+    contactsRoot: "D:/suzu-data/contacts",
+    historyPage: { hasMore: false, oldestEventSeq: 1 },
+    messages,
+    projectRoot: "D:/suzu-data/contacts/suzu",
+    sessions: [{ id: "session-suzu", title: "Suzu" }],
+    status: "ready",
+    version,
+  });
+  globalThis.window = {
+    clearInterval: () => {},
+    setInterval: () => 1,
+  };
+  const context = {
+    api: {
+      conversation: {
+        snapshot: () => {
+          calls += 1;
+          return new Promise((resolve) => resolvers.push(resolve));
+        },
+      },
+    },
+    render: () => {},
+    state: { settings: { conversationPreferences: {} } },
+  };
+
+  try {
+    startConversationPolling(context);
+    await flush();
+    assert.equal(calls, 1);
+
+    createConversationReactActions(context).refresh();
+    assert.equal(calls, 1);
+
+    resolvers.shift()(snapshot("snapshot-one", [{
+      blocks: [{ kind: "text", text: "第一条" }],
+      id: "message-one",
+      kind: "user",
+      lineNumber: 1,
+      timestamp: "2026-08-24T10:00:00.000Z",
+    }]));
+    await flush();
+    await flush();
+    assert.equal(calls, 2);
+
+    resolvers.shift()(snapshot("snapshot-two", [{
+      blocks: [{ kind: "text", text: "第二条" }],
+      id: "message-two",
+      kind: "assistant",
+      lineNumber: 2,
+      timestamp: "2026-08-24T10:00:01.000Z",
+    }]));
+    await flush();
+    await flush();
+
+    assert.deepEqual(
+      conversationReactSnapshot(context).messageRows
+        .filter((row) => row.type === "message")
+        .map((row) => row.blocks[0]?.text),
+      ["第一条", "第二条"],
+    );
+  } finally {
+    stopConversationPolling();
+    if (priorWindow === undefined) delete globalThis.window;
+    else globalThis.window = priorWindow;
+  }
+});
+
+test("completed multi-step replies retire their live projection after durable history catches up", async () => {
+  const priorWindow = globalThis.window;
+  const contact = { agentId: "agent-suzu", id: "contact-suzu", name: "Suzu" };
+  let eventListener = () => {};
+  let version = "before-completion";
+  let messages = [{
+    blocks: [{ kind: "text", text: "处理这个文件" }],
+    id: "user-request",
+    kind: "user",
+    lineNumber: 1,
+    timestamp: "2026-08-24T10:00:00.000Z",
+  }];
+  const snapshot = () => ({
+    activeContact: contact,
+    activeSessionId: "session-suzu",
+    contacts: [contact],
+    contactsRoot: "D:/suzu-data/contacts",
+    historyPage: { hasMore: false, oldestEventSeq: 1 },
+    messages,
+    projectRoot: "D:/suzu-data/contacts/suzu",
+    sessions: [{ id: "session-suzu", title: "Suzu" }],
+    status: "ready",
+    version,
+  });
+  globalThis.window = {
+    clearInterval: () => {},
+    setInterval: () => 1,
+  };
+  const context = {
+    api: {
+      conversation: {
+        onEvent(listener) {
+          eventListener = listener;
+          return () => { eventListener = () => {}; };
+        },
+        snapshot: async () => snapshot(),
+      },
+    },
+    render: () => {},
+    state: { settings: { conversationPreferences: {} } },
+  };
+  const eventBase = {
+    requestId: "turn-multi-step",
+    sessionId: "session-suzu",
+    projectRoot: "D:/suzu-data/contacts/suzu",
+    timestamp: "2026-08-24T10:00:01.000Z",
+  };
+
+  try {
+    startConversationPolling(context);
+    await flush();
+    eventListener({ ...eventBase, type: "reply-stream", content: "我先检查。" });
+    eventListener({ ...eventBase, type: "reply-stream", content: "我先检查。检查完成。" });
+    eventListener({
+      ...eventBase,
+      type: "reply",
+      done: true,
+      assistantMessageCount: 3,
+      content: "我先检查。检查完成。\n\n结果如下：\n\n- 文件已保存",
+    });
+    assert.deepEqual(
+      conversationReactSnapshot(context).messageRows
+        .filter((row) => row.type === "message")
+        .map((row) => row.blocks[0]?.text),
+      ["处理这个文件", "我先检查。", "检查完成。"],
+    );
+
+    version = "after-completion";
+    messages = [
+      messages[0],
+      { blocks: [{ kind: "text", text: "我先检查。" }], id: "step-1", kind: "assistant", lineNumber: 2, timestamp: "2026-08-24T10:00:01.000Z" },
+      { blocks: [{ kind: "text", text: "检查完成。" }], id: "step-2", kind: "assistant", lineNumber: 3, timestamp: "2026-08-24T10:00:02.000Z" },
+      { blocks: [{ kind: "text", text: "结果如下：\n\n- 文件已保存" }], id: "step-3", kind: "assistant", lineNumber: 4, timestamp: "2026-08-24T10:00:03.000Z" },
+    ];
+    eventListener({ ...eventBase, type: "turn-complete" });
+    await flush();
+    await flush();
+
+    assert.deepEqual(
+      conversationReactSnapshot(context).messageRows
+        .filter((row) => row.type === "message")
+        .map((row) => row.blocks[0]?.text),
+      ["处理这个文件", "我先检查。", "检查完成。", "结果如下：\n\n- 文件已保存"],
+    );
+  } finally {
+    stopConversationPolling();
+    if (priorWindow === undefined) delete globalThis.window;
+    else globalThis.window = priorWindow;
+  }
+});
+
+test("renderer withholds every active-conversation surface from a stale hidden selection", async () => {
+  const priorWindow = globalThis.window;
+  const hiddenContact = { agentId: "agent-hidden", hidden: true, id: "contact-hidden", name: "不应显示的联系人" };
+  globalThis.window = {
+    clearInterval: () => {},
+    setInterval: () => 1,
+  };
+  const context = {
+    api: {
+      conversation: {
+        snapshot: async () => ({
+          activeContact: hiddenContact,
+          activeSessionId: "session-hidden",
+          contacts: [hiddenContact],
+          contactsRoot: "D:/suzu-data/contacts",
+          messages: [{ kind: "assistant", blocks: [{ kind: "text", text: "不应显示的聊天内容" }] }],
+          projectRoot: "D:/suzu-data/contacts/hidden",
+          sessions: [{ id: "session-hidden", title: "不应显示的联系人" }],
+          status: "ready",
+          version: "hidden-selection",
+        }),
+      },
+    },
+    render: () => {},
+    state: { settings: { contactsRoot: "D:/suzu-data/contacts", conversationPreferences: {} } },
+  };
+
+  try {
+    startConversationPolling(context);
+    await flush();
+    await flush();
+    const view = conversationReactSnapshot(context);
+    assert.equal(view.peer, "未选择联系人");
+    assert.equal(view.contacts.length, 0);
+    assert.equal(view.call.available, false);
+    assert.equal(view.composer.unavailable, true);
+    assert.equal(view.sessionSettings, null);
+    assert.deepEqual(view.permissions, []);
+    assert.match(view.messageRows[0]?.text || "", /设置 > 隐私/u);
+    assert.doesNotMatch(JSON.stringify(view), /不应显示的聊天内容|不应显示的联系人/u);
+  } finally {
+    stopConversationPolling();
+    if (priorWindow === undefined) delete globalThis.window;
+    else globalThis.window = priorWindow;
+  }
+});
+
+test("hiding the open contact clears its local draft and applies the replacement selection", async () => {
+  const priorWindow = globalThis.window;
+  const contact = { agentId: "agent-open", id: "contact-open", name: "当前联系人" };
+  globalThis.window = {
+    clearInterval: () => {},
+    setInterval: () => 1,
+  };
+  const context = {
+    api: {
+      conversation: {
+        snapshot: async () => ({
+          activeContact: contact,
+          activeSessionId: "session-open",
+          contacts: [contact],
+          contactsRoot: "D:/suzu-data/contacts",
+          messages: [{ kind: "assistant", blocks: [{ kind: "text", text: "原会话内容" }] }],
+          projectRoot: "D:/suzu-data/contacts/open",
+          sessions: [{ id: "session-open", title: "当前联系人" }],
+          status: "ready",
+          version: "open-selection",
+        }),
+        updateContactPresentation: async () => ({
+          activeContact: null,
+          activeSessionId: "",
+          contacts: [{ ...contact, hidden: true }],
+          contactsRoot: "D:/suzu-data/contacts",
+          messages: [],
+          projectRoot: "",
+          sessions: [],
+          status: "missing",
+          version: "hidden-selection",
+        }),
+      },
+      settings: { get: async () => ({ contactsRoot: "D:/suzu-data/contacts", conversationPreferences: {} }) },
+    },
+    render: () => {},
+    state: { settings: { contactsRoot: "D:/suzu-data/contacts", conversationPreferences: {} } },
+  };
+
+  try {
+    startConversationPolling(context);
+    await flush();
+    await flush();
+    const actions = createConversationReactActions(context);
+    actions.setDraft("未发送的私密草稿");
+    await actions.updateContactPresentation(contact.id, { hidden: true });
+    const view = conversationReactSnapshot(context);
+    assert.equal(view.peer, "未选择联系人");
+    assert.equal(view.composer.draft, "");
+    assert.equal(view.notice, "联系人已隐藏。可在“设置 > 隐私”中恢复。");
+    assert.doesNotMatch(JSON.stringify(view), /当前联系人|原会话内容|未发送的私密草稿/u);
+  } finally {
+    stopConversationPolling();
+    if (priorWindow === undefined) delete globalThis.window;
+    else globalThis.window = priorWindow;
+  }
 });

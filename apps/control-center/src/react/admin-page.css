@@ -163,6 +163,22 @@
   line-height:1.5;
 }
 
+.admin-model-input-capability {
+  display:flex;
+  align-items:center;
+  gap:var(--space-sm);
+  min-height:25px;
+  color:var(--text-secondary);
+  font-size:var(--font-size-sm);
+}
+
+.admin-model-input-capability__status {
+  margin:0;
+  color:var(--text-secondary);
+  font-size:var(--font-size-sm);
+  line-height:1.5;
+}
+
 .admin-model-picker__drawer {
   display:grid;
   gap:var(--space-lg);
@@ -517,28 +533,6 @@
   color:var(--text-muted);
   font-size:var(--font-size-xs);
   line-height:1.55;
-}
-
-.admin-comfy-summary {
-  display:flex;
-  align-items:flex-start;
-  justify-content:space-between;
-  gap:var(--space-lg);
-  cursor:pointer;
-  list-style:none;
-}
-
-.admin-comfy-summary::-webkit-details-marker {
-  display:none;
-}
-
-.admin-comfy-summary h2 {
-  margin-top:5px;
-}
-
-.admin-comfy-form {
-  padding-top:var(--space-lg);
-  border-top:1px solid color-mix(in srgb,var(--glass-border) 72%,transparent);
 }
 
 .admin-dialog-copy,
@@ -1184,7 +1178,6 @@ body:has(.admin-api-editor) [role="dialog"] [role="listbox"] {
 
 @container (max-width:680px) {
   .admin-panel-heading,
-  .admin-comfy-summary,
   .admin-price-card__footer,
   .admin-usage-toolbar {
     align-items:flex-start;

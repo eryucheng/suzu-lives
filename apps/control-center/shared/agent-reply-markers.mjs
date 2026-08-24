@@ -12,10 +12,12 @@ export function isExactNoReply(value) {
   return markerText(value).trim().toUpperCase() === "NO_REPLY";
 }
 
-// A scheduled turn reserves NO_REPLY as its terminal delivery marker. Some
-// providers concatenate an earlier step or duplicate the marker, so do not
-// require the whole completion to be exactly that one token.
-export function hasTerminalNoReply(value) {
+// Automatic tasks reserve NO_REPLY as a delivery-control marker. Providers
+// sometimes put a parenthetical internal note after it, or before a trailing
+// marker, so recognize it at either edge of the completed task text.
+export function hasBoundaryNoReply(value) {
   const source = markerText(value).trim();
-  return Boolean(source) && /NO_REPLY(?:[\s,，。.!！?？;；、…]*NO_REPLY)*[\s,，。.!！?？;；、…]*$/iu.test(source);
+  if (!source) return false;
+  return /^NO_REPLY(?=$|[\s,，。.!！?？;；、…（(\[])/iu.test(source)
+    || /NO_REPLY(?:[\s,，。.!！?？;；、…]*NO_REPLY)*[\s,，。.!！?？;；、…]*$/iu.test(source);
 }

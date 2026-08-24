@@ -3,8 +3,9 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 
 import { resolveAgentDataRoot } from "@suzu-lives/agent-registry";
+import { resolveImageGenerationApiConnection } from "@suzu-lives/agent-image-generation";
 import { appendUsageEvent } from "@suzu-lives/cost-ledger";
-import { createCandidates, readCandidate, readRuns, validateComfyRegistry } from "@suzu-lives/image-workbench";
+import { createCandidates, readCandidate, readRuns } from "@suzu-lives/image-workbench";
 import {
   createVisualReferenceLibrary,
   resolveAgentVisualReferenceLibraryRoot,
@@ -29,9 +30,7 @@ function valuesFor(settingsService) {
     dataRoot,
   };
 }
-async function readJson(filePath, fallback) { try { return JSON.parse(await fsp.readFile(filePath, "utf8")); } catch { return fallback; } }
-async function comfySettings(dataRoot) { const value = await readJson(path.join(dataRoot, "connections", "comfyui.json"), {}); let registry = { version: 1, workflows: {} }; try { registry = validateComfyRegistry(value.registry || registry); } catch {} return { baseUrl: String(value.baseUrl || "http://127.0.0.1:8188").trim().replace(/\/+$/u, ""), timeoutMs: Number(value.timeoutMs) || 600000, pollIntervalMs: Number(value.pollIntervalMs) || 1000, registry }; }
-async function snapshot(settingsService, connectionsService) { const settings = settingsService.load(); const api = await connectionsService.imageApiSnapshot(); const dataRoot = settingsService.response(settings).dataRoot; const comfyui = await comfySettings(dataRoot); if (!settings.agentId || !settings.projectRoot || !existsDirectory(settings.projectRoot)) return { status: "needs-project", api, comfyui: { baseUrl: comfyui.baseUrl, workflows: Object.values(comfyui.registry.workflows).map(({ id, enabled, description }) => ({ id, enabled, description })) }, runs: [] }; const values = valuesFor(settingsService); return { status: "ready", api, comfyui: { baseUrl: comfyui.baseUrl, workflows: Object.values(comfyui.registry.workflows).map(({ id, enabled, description }) => ({ id, enabled, description })) }, runs: await readRuns(values.root) }; }
+async function snapshot(settingsService, connectionsService) { const settings = settingsService.load(); const api = await connectionsService.imageApiSnapshot(); if (!settings.agentId || !settings.projectRoot || !existsDirectory(settings.projectRoot)) return { status: "needs-project", api, runs: [] }; const values = valuesFor(settingsService); return { status: "ready", api, runs: await readRuns(values.root) }; }
 function selectedReference(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("参考图必须明确包含资料归属和 ID。 ");
   const scope = String(value.scope || "").trim();
@@ -61,7 +60,11 @@ async function selectedReferences(libraries, values) {
   }
   return output;
 }
-export function imageUsageEvent(values, api, item) { return { agentId: values.settings.agentId, provider: item.input.backend === "comfyui" ? "本地 ComfyUI" : (api.provider || "OpenAI Compatible"), model: item.result.model, source: "图片生成", feature: item.input.backend === "comfyui" ? "image-workflow" : "image-" + item.result.mode, requestId: item.result.requestId, usage: item.result.usage, units: { imageRequests: 1, generatedImages: 1 }, metadata: { costSource: item.input.backend === "comfyui" ? "local-unpriced" : "provider-reported", size: item.input.size, referenceCount: item.referenceCount, backend: item.input.backend, workflow: item.result.workflow || "" } }; }
+export function imageUsageEvent(values, api, item) { return { agentId: values.settings.agentId, provider: api.provider || "OpenAI Compatible", model: item.result.model, source: "图片生成", feature: "image-" + item.result.mode, requestId: item.result.requestId, usage: item.result.usage, units: { imageRequests: 1, generatedImages: 1 }, metadata: { costSource: "provider-reported", size: item.input.size, referenceCount: item.referenceCount, backend: "api" } }; }
+
+export async function configuredImageWorkbenchConnection({ connection, dataRoot }) {
+  return resolveImageGenerationApiConnection({ connection, dataRoot });
+}
 
 export function registerImageWorkbenchIpc({
   ipcMain,
@@ -72,12 +75,11 @@ export function registerImageWorkbenchIpc({
 }) {
   ipcMain.handle("image-workbench:snapshot", () => snapshot(settingsService, connectionsService));
   ipcMain.handle("image-workbench:generate", async (_event, input) => {
-    const values = valuesFor(settingsService); const api = await connectionsService.resolveImageApi(); const comfyui = await comfySettings(values.dataRoot); const references = await selectedReferences(values.libraries, input?.referenceIds || []);
+    const values = valuesFor(settingsService); const api = await configuredImageWorkbenchConnection({ connection: await connectionsService.resolveImageApi(), dataRoot: values.dataRoot }); const references = await selectedReferences(values.libraries, input?.referenceIds || []);
     await createCandidates({
       root: values.root,
-      connection: input?.backend === "api" ? api : comfyui,
-      registry: comfyui.registry,
-      input,
+      connection: api,
+      input: { ...input, backend: "api" },
       references,
       onSuccess: async (item) => {
         const event = imageUsageEvent(values, api, item);

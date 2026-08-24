@@ -1,18 +1,22 @@
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
-import { hasTerminalNoReply, isExactNoReply } from "../../shared/agent-reply-markers.mjs";
+import { hasBoundaryNoReply, isExactNoReply } from "../../shared/agent-reply-markers.mjs";
 import {
   conversationAttachmentReceipt,
   conversationMediaManifest,
   conversationMediaUnderstandingContext,
 } from "./conversation-attachment-service.mjs";
 import { createConversationMessageDeletionStore } from "./conversation-message-deletion-store.mjs";
+import { PROACTIVE_CONTACT_TURN_SOURCE } from "./proactive-contact-maintenance.mjs";
 
 const MAX_MESSAGES = 500;
 const HISTORY_PAGE_SIZE = 600;
+// This is an event page rather than a rendered-bubble count. Internal Core
+// events can occupy a sizeable part of a page, so keep enough headroom for a
+// useful first transcript while retaining bounded client-side history.
+const CHAT_HISTORY_PAGE_SIZE = 360;
 const SESSION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
-const MAX_CONVERSATION_ATTACHMENT_BYTES = 50 * 1024 * 1024;
 const MAX_CONVERSATION_ATTACHMENT_ITEMS = 24;
 const VOICE_CALL_TURN_OPEN = "<suzu-voice-call-turn>";
 const VOICE_CALL_TURN_CLOSE = "</suzu-voice-call-turn>";
@@ -71,6 +75,30 @@ function dynamicAutomationTaskOutputPolicy(source) {
   return found ? "external" : "";
 }
 
+function dynamicAutomationTaskScheduleSource(source) {
+  const snapshot = plainObject(source);
+  if (!isDynamicContextSnapshot(snapshot)) return "";
+  const sections = Array.isArray(snapshot.sections) ? snapshot.sections : [];
+  for (const section of sections) {
+    const candidate = plainObject(section);
+    if (clean(candidate.kind) !== AUTOMATION_TASK_CONTEXT_KIND) continue;
+    return clean(plainObject(candidate.metadata).scheduleSource);
+  }
+  return "";
+}
+
+function dynamicAutomationTaskTurnKind(source) {
+  const snapshot = plainObject(source);
+  if (!isDynamicContextSnapshot(snapshot)) return "";
+  const sections = Array.isArray(snapshot.sections) ? snapshot.sections : [];
+  for (const section of sections) {
+    const candidate = plainObject(section);
+    if (clean(candidate.kind) !== AUTOMATION_TASK_CONTEXT_KIND) continue;
+    return clean(plainObject(candidate.metadata).turnKind);
+  }
+  return "";
+}
+
 function automationTaskContextKey(block) {
   const source = plainObject(block);
   if (clean(source.kind) !== AUTOMATION_TASK_CONTEXT_KIND) return "";
@@ -84,6 +112,24 @@ function dynamicAutomationTaskContextKey(message, source) {
     .find(Boolean) || "";
 }
 
+function silentTaskCleanupSequences(entries) {
+  const sequences = new Set();
+  for (const entry of Array.isArray(entries) ? entries : []) {
+    const event = historyEvent(entry);
+    if (clean(event.type) !== "user/message") continue;
+    const message = userMessageFromEvent(event);
+    const source = plainObject(message.source);
+    if (clean(source.kind) !== "plugin"
+      || clean(source.plugin) !== SUZU_LIFECYCLE_BRIDGE_PLUGIN
+      || clean(source.form) !== "task-cleanup") continue;
+    for (const sequence of Array.isArray(event.sourceEventSeqs) ? event.sourceEventSeqs : []) {
+      const value = Number(sequence);
+      if (Number.isSafeInteger(value) && value >= 0) sequences.add(value);
+    }
+  }
+  return sequences;
+}
+
 function scopedAutomationTaskContextKey(taskKey, position) {
   const turn = Number(position?.turn);
   const scope = Number.isInteger(turn) ? `turn:${turn}` : "";
@@ -92,7 +138,39 @@ function scopedAutomationTaskContextKey(taskKey, position) {
 }
 
 function isSilentAgentReply(content, { terminal = false } = {}) {
-  return terminal ? hasTerminalNoReply(content) : isExactNoReply(content);
+  return terminal ? hasBoundaryNoReply(content) : isExactNoReply(content);
+}
+
+function scheduledTurnAssistantText(events) {
+  return (Array.isArray(events) ? events : [])
+    .filter((event) => clean(event?.type) === "assistant/message")
+    .map((event) => markerSource(plainObject(plainObject(event).data).message?.content))
+    .filter((value) => value.trim())
+    .join("\n");
+}
+
+function scheduledTurnHasBoundaryNoReply(events) {
+  const text = scheduledTurnAssistantText(events);
+  return hasBoundaryNoReply(text);
+}
+
+function proactiveNoReplySystemMessage(turn) {
+  if (clean(turn?.scheduleSource) !== PROACTIVE_CONTACT_TURN_SOURCE) return null;
+  const text = scheduledTurnAssistantText(turn?.events);
+  if (!hasBoundaryNoReply(text)) return null;
+  const finalEvent = (Array.isArray(turn?.events) ? turn.events : [])
+    .findLast((event) => clean(event?.type) === "assistant/message");
+  if (!finalEvent) return null;
+  const message = plainObject(plainObject(finalEvent.data).message);
+  return {
+    id: `${clean(message.id) || `agent-core:${finalEvent.seq}`}:system`,
+    kind: "system",
+    label: "主动关心",
+    timestamp: isoTime(finalEvent.time),
+    blocks: [{ kind: "text", text: bounded(text) }],
+    usage: null,
+    lineNumber: Number(finalEvent.seq) || 0,
+  };
 }
 
 function markerJson(content, open, close) {
@@ -173,6 +251,38 @@ function historyEvent(entry) {
   return Object.keys(wrapped).length ? wrapped : source;
 }
 
+function historyEventSequence(entry) {
+  const sequence = Number(historyEvent(entry).seq);
+  return Number.isSafeInteger(sequence) && sequence >= 0 ? sequence : null;
+}
+
+function historyPageMetadata(events, history, { limit = CHAT_HISTORY_PAGE_SIZE } = {}) {
+  const sequences = (Array.isArray(events) ? events : [])
+    .map(historyEventSequence)
+    .filter((sequence) => sequence !== null);
+  const oldestEventSeq = sequences.length ? Math.min(...sequences) : null;
+  return Object.freeze({
+    eventCount: Array.isArray(events) ? events.length : 0,
+    hasMore: history?.hasMore === true && oldestEventSeq !== null,
+    limit,
+    oldestEventSeq,
+  });
+}
+
+function emptyHistoryPage({ limit = CHAT_HISTORY_PAGE_SIZE } = {}) {
+  return historyPageMetadata([], null, { limit });
+}
+
+function historyPageValue(value = {}) {
+  const source = plainObject(value);
+  if (!Object.hasOwn(source, "beforeSeq")) return { beforeSeq: undefined };
+  const beforeSeq = Number(source.beforeSeq);
+  if (!Number.isSafeInteger(beforeSeq) || beforeSeq < 0) {
+    throw new ConversationReaderError("会话历史分页游标无效。", { code: "HISTORY_CURSOR_INVALID" });
+  }
+  return { beforeSeq };
+}
+
 function isSessionId(value) {
   return SESSION_ID_PATTERN.test(clean(value));
 }
@@ -196,7 +306,8 @@ function isoTime(value) {
 
 function bounded(value, limit = 20_000) {
   const text = String(value ?? "");
-  return text.length > limit ? `${text.slice(0, limit)}\n[内容已截断]` : text;
+  const suffix = "…";
+  return text.length > limit ? `${text.slice(0, Math.max(0, limit - suffix.length))}${suffix}` : text;
 }
 
 function contentText(content) {
@@ -243,23 +354,22 @@ function jsonDetail(value) {
   catch { return "[无法展示内容]"; }
 }
 
-function containedPath(root, candidate) {
-  const base = clean(root);
-  const source = clean(candidate);
-  if (!base || !source || !path.isAbsolute(base) || !path.isAbsolute(source)) return "";
-  const normalizedBase = path.resolve(base, "agents");
-  const normalizedCandidate = path.resolve(source);
-  const relative = path.relative(normalizedBase, normalizedCandidate);
-  if (!relative || relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) return "";
-  return normalizedCandidate;
+function localMediaPath(value) {
+  const source = clean(value);
+  return source ? path.resolve(source) : "";
 }
 
-function mediaBlockFromManifest(value, { dataRoot, source = "" } = {}) {
+function normalizedMediaSize(value) {
+  const size = Number(value);
+  return Number.isSafeInteger(size) && size >= 0 ? size : 0;
+}
+
+function mediaBlockFromManifest(value, { source = "" } = {}) {
   const item = plainObject(value);
   const kind = clean(item.kind).toLowerCase();
-  const size = Number(item.size);
-  const filePath = containedPath(dataRoot, item.path);
-  if (!new Set(["image", "audio", "file"]).has(kind) || !filePath || !Number.isSafeInteger(size) || size <= 0 || size > MAX_CONVERSATION_ATTACHMENT_BYTES) {
+  const size = normalizedMediaSize(item.size);
+  const filePath = localMediaPath(item.path || item.filePath || item.savedPath);
+  if (!new Set(["image", "audio", "file"]).has(kind) || !filePath) {
     return null;
   }
   const normalizedSource = new Set(["mail", "sticker", "wechat"]).has(clean(source).toLowerCase())
@@ -314,6 +424,38 @@ function attachmentReceiptBlocks(value, options = {}) {
     .slice(0, MAX_CONVERSATION_ATTACHMENT_ITEMS)
     .map((item) => mediaBlockFromManifest(item, options))
     .filter(Boolean);
+}
+
+function directMediaKind(value) {
+  const item = plainObject(value);
+  const explicit = clean(item.mediaKind || item.kind).toLowerCase();
+  if (new Set(["image", "audio", "file"]).has(explicit)) return explicit;
+  const sourcePath = clean(item.savedPath || item.path || item.filePath);
+  return clean(item.type) === "suzu-voice-audio" || path.extname(sourcePath).toLowerCase() === ".mp3"
+    ? "audio"
+    : "";
+}
+
+function directMediaBlocks(value, options = {}, depth = 0) {
+  if (depth > 6 || value === null || value === undefined) return [];
+  if (Array.isArray(value)) return value.flatMap((item) => directMediaBlocks(item, options, depth + 1));
+
+  const item = plainObject(parsedObject(value));
+  if (!Object.keys(item).length) return [];
+  const kind = directMediaKind(item);
+  const sourcePath = clean(item.savedPath || item.path || item.filePath);
+  if (kind && sourcePath) {
+    const block = mediaBlockFromManifest({
+      kind,
+      fileName: clean(item.fileName),
+      path: sourcePath,
+      size: item.size,
+    }, options);
+    return block ? [block] : [];
+  }
+
+  return [item.text, item.content, item.value, item.result, item.data]
+    .flatMap((candidate) => directMediaBlocks(candidate, options, depth + 1));
 }
 
 function isInternalMediaUnderstandingContext(raw) {
@@ -433,6 +575,8 @@ function blocksFromAgentCoreContent(value, options = {}) {
     if (type === "tool-result") {
       const attachments = attachmentReceiptBlocks(block.content, options);
       if (attachments.length) return attachments;
+      const directMedia = directMediaBlocks(block.content, options);
+      if (directMedia.length) return directMedia;
       const resultBlocks = blocksFromAgentCoreContent(block.content, options);
       const resultText = resultBlocks
         .map((entry) => clean(entry?.text || entry?.detail || entry?.summary))
@@ -767,12 +911,13 @@ function surfaceMessage(event, options = {}) {
   if (type === "tool/result") {
     const message = plainObject(data.message);
     const attachments = attachmentReceiptBlocks(message.content, options);
-    if (attachments.length) return {
+    const directMedia = attachments.length ? attachments : directMediaBlocks(message.content, options);
+    if (directMedia.length) return {
       id: `agent-core:${source.seq}`,
       kind: "assistant",
       label: "",
       timestamp,
-      blocks: attachments,
+      blocks: directMedia,
       usage: null,
       lineNumber: Number(source.seq) || 0,
     };
@@ -793,6 +938,7 @@ function surfaceMessage(event, options = {}) {
 export function conversationDisplayMessages(entries, maxMessages = MAX_MESSAGES, options = {}) {
   const sourceEntries = Array.isArray(entries) ? entries : [];
   const deletedSequences = deletedMessageSequences(sourceEntries, options?.deletedEventSequences);
+  const hiddenTaskSequences = silentTaskCleanupSequences(sourceEntries);
   const transcript = [];
   const includeDynamicContext = options?.includeDynamicContext === true;
   const displayedAutomationTaskContexts = new Set();
@@ -801,14 +947,20 @@ export function conversationDisplayMessages(entries, maxMessages = MAX_MESSAGES,
   // reply both render as centered system messages, like the v1 reader.
   let inVoiceCall = false;
   // Agent Core persists a whole scheduled turn (including intermediate model
-  // steps and tool results). Buffer it until its terminal event: a NO_REPLY
-  // must hide the entire turn, and a visible proactive reply must not expose
-  // the scheduling mechanics that led to it.
+  // steps and tool results). Buffer it until its terminal event: proactive
+  // NO_REPLY output becomes a system diagnostic, while a visible proactive
+  // reply must not expose the scheduling mechanics that led to it.
   let scheduledTurn = null;
   const flushScheduledTurn = () => {
     const pending = scheduledTurn;
     scheduledTurn = null;
-    if (!pending || pending.localOnly) return;
+    if (!pending) return;
+    const noReplySystemMessage = proactiveNoReplySystemMessage(pending);
+    if (noReplySystemMessage) {
+      transcript.push(noReplySystemMessage);
+      return;
+    }
+    if (pending.localOnly || scheduledTurnHasBoundaryNoReply(pending.events)) return;
     const finalAssistantEvent = pending.events.findLast((event) => clean(event.type) === "assistant/message");
     if (!finalAssistantEvent) return;
     const message = surfaceMessage(finalAssistantEvent, { ...options, inVoiceCall, scheduled: true });
@@ -817,7 +969,9 @@ export function conversationDisplayMessages(entries, maxMessages = MAX_MESSAGES,
   for (const entry of sourceEntries) {
     const event = historyEvent(entry);
     const sequence = optionalEventSequence(event);
-    if (sequence >= 0 && (deletedSequences.has(sequence) || legacyDeletionTargetSequence(event) >= 0)) continue;
+    const hiddenTaskSequence = sequence >= 0 && hiddenTaskSequences.has(sequence);
+    if (sequence >= 0 && (deletedSequences.has(sequence)
+      || legacyDeletionTargetSequence(event) >= 0)) continue;
     const type = clean(event.type);
     if (type === "step/start") {
       currentPosition = stepPosition(event.data) || currentPosition;
@@ -841,6 +995,8 @@ export function conversationDisplayMessages(entries, maxMessages = MAX_MESSAGES,
       const content = userMessage.content;
       const messageSource = plainObject(userMessage.source);
       const dynamicTaskPolicy = dynamicAutomationTaskOutputPolicy(messageSource);
+      const dynamicTaskScheduleSource = dynamicAutomationTaskScheduleSource(messageSource);
+      const dynamicTaskTurnKind = dynamicAutomationTaskTurnKind(messageSource);
       const automationTaskContext = dynamicAutomationTaskContextKey(userMessage, messageSource);
       const scheduledAutomationTaskContext = scopedAutomationTaskContextKey(
         automationTaskContext,
@@ -862,6 +1018,10 @@ export function conversationDisplayMessages(entries, maxMessages = MAX_MESSAGES,
         // A legacy fixture may not contain turn/end; a following schedule
         // request still establishes a safe boundary for the prior one.
         if (!continuesScheduledTurn) flushScheduledTurn();
+        // The task itself is invisible control input, but it marks a durable
+        // transport boundary. Its reply must render as ordinary chat rather
+        // than inherit the preceding voice-call presentation.
+        if (dynamicTaskTurnKind === "call-ended") inVoiceCall = false;
         const diagnostic = includeDynamicContext
           ? dynamicContextDiagnosticMessage(event, { omittedAutomationTaskContexts })
           : null;
@@ -872,6 +1032,7 @@ export function conversationDisplayMessages(entries, maxMessages = MAX_MESSAGES,
         if (!continuesScheduledTurn) {
           scheduledTurn = {
             automationTaskContext: scheduledAutomationTaskContext,
+            scheduleSource: dynamicTaskScheduleSource,
             localOnly: isInternalSuzuScheduleTask(content)
               ? isLocalOnlySuzuScheduleTask(content)
               : dynamicTaskPolicy === "silent",
@@ -880,6 +1041,7 @@ export function conversationDisplayMessages(entries, maxMessages = MAX_MESSAGES,
         }
         continue;
       }
+      if (hiddenTaskSequence) continue;
       const diagnostic = includeDynamicContext
         ? dynamicContextDiagnosticMessage(event, { omittedAutomationTaskContexts })
         : null;
@@ -894,6 +1056,7 @@ export function conversationDisplayMessages(entries, maxMessages = MAX_MESSAGES,
         inVoiceCall = false;
       }
     }
+    if (hiddenTaskSequence && !scheduledTurn) continue;
     if (scheduledTurn && (type === "assistant/message" || type === "tool/result")) {
       scheduledTurn.events.push(event);
       continue;
@@ -1002,6 +1165,7 @@ export function createConversationReader({
 
   let selectionVersion = 0;
   const reconciledUsageHistoryBySession = new Map();
+  const usageReconciliationTasksBySession = new Map();
 
   const contactsSnapshot = async () => contactProjectsService.snapshot();
 
@@ -1013,7 +1177,10 @@ export function createConversationReader({
     // The selected entry must still belong to the current catalog. A stale
     // selection can otherwise wake the local Agent Core process even while the UI
     // correctly says that there are no contacts.
-    const active = sourceContacts.find((contact) => clean(plainObject(contact).id) === requestedActiveId) || null;
+    const active = sourceContacts.find((contact) => {
+      const source = plainObject(contact);
+      return clean(source.id) === requestedActiveId && source.hidden !== true;
+    }) || null;
     const projectRoot = clean(active?.projectRoot);
     const sessionId = clean(active?.sessionId);
     return {
@@ -1028,14 +1195,18 @@ export function createConversationReader({
     };
   };
 
-  const activeHistory = async (catalog) => {
+  const activeHistory = async (catalog, { limit = HISTORY_PAGE_SIZE, beforeSeq = undefined } = {}) => {
     if (!catalog.projectRoot || !isSessionId(catalog.sessionId)) return { events: [], hasMore: false };
+    const safeLimit = Number.isSafeInteger(limit) && limit > 0
+      ? Math.min(limit, 2_000)
+      : HISTORY_PAGE_SIZE;
     try {
       return await runtime.history({
         sessionId: catalog.sessionId,
         contactId: clean(catalog.activeContact?.id),
         cwd: catalog.projectRoot,
-        maxMessages: HISTORY_PAGE_SIZE,
+        maxMessages: safeLimit,
+        ...(Number.isSafeInteger(beforeSeq) && beforeSeq >= 0 ? { beforeSeq } : {}),
       });
     } catch (error) {
       throw new ConversationReaderError(`无法读取 Suzu Agent 会话历史：${clean(error?.message) || "未知错误。"}`, {
@@ -1075,8 +1246,23 @@ export function createConversationReader({
       || !catalog.activeContact?.agentId
       || !catalog.projectRoot
       || !catalog.sessionId) return;
+    const sequences = (Array.isArray(events) ? events : [])
+      .map(historyEventSequence)
+      .filter((sequence) => sequence !== null);
+    const lowestSequence = sequences.length ? Math.min(...sequences) : highestSequence;
     const previous = reconciledUsageHistoryBySession.get(catalog.sessionId);
-    if (Number.isSafeInteger(previous) && previous >= highestSequence) return;
+    const previousHighestSequence = Number(previous?.highestSequence);
+    const previousLowestSequence = Number(previous?.lowestSequence);
+    // A light chat page can cover the newest events while the background
+    // repair still needs to inspect an older range. Track both ends of the
+    // already reconciled window so the recent-page fast path never suppresses
+    // that repair.
+    if (
+      Number.isSafeInteger(previousHighestSequence)
+      && Number.isSafeInteger(previousLowestSequence)
+      && previousHighestSequence >= highestSequence
+      && previousLowestSequence <= lowestSequence
+    ) return;
     try {
       const result = await onAgentUsageEvents({
         contact: {
@@ -1088,7 +1274,12 @@ export function createConversationReader({
         events,
       });
       if (result?.completed === false) return;
-      reconciledUsageHistoryBySession.set(catalog.sessionId, highestSequence);
+      reconciledUsageHistoryBySession.set(catalog.sessionId, {
+        highestSequence: Math.max(previousHighestSequence || 0, highestSequence),
+        lowestSequence: Number.isSafeInteger(previousLowestSequence)
+          ? Math.min(previousLowestSequence, lowestSequence)
+          : lowestSequence,
+      });
       // A person can create many contacts over time. Keep only a small cache:
       // deduplication itself is durable in the unified usage ledger.
       if (reconciledUsageHistoryBySession.size > 160) reconciledUsageHistoryBySession.clear();
@@ -1096,6 +1287,22 @@ export function createConversationReader({
       // History must stay readable even if a local cost-ledger repair fails.
       // A later snapshot will retry because this sequence was not recorded.
     }
+  };
+
+  const reconcileRecentUsageHistory = (catalog) => {
+    if (typeof onAgentUsageEvents !== "function" || !catalog.sessionId) return;
+    if (usageReconciliationTasksBySession.has(catalog.sessionId)) return;
+    const task = (async () => {
+      const history = await activeHistory(catalog, { limit: HISTORY_PAGE_SIZE });
+      const events = Array.isArray(history?.events) ? history.events : [];
+      const highestSequence = events.reduce((maximum, entry) => (
+        Math.max(maximum, Number(historyEvent(entry).seq) || 0)
+      ), 0);
+      await reconcileUsageHistory(catalog, events, highestSequence);
+    })()
+      .catch(() => undefined)
+      .finally(() => usageReconciliationTasksBySession.delete(catalog.sessionId));
+    usageReconciliationTasksBySession.set(catalog.sessionId, task);
   };
 
   const unavailableHistory = (error) => {
@@ -1108,7 +1315,7 @@ export function createConversationReader({
     };
   };
 
-  const unavailableContext = (catalog, contactsVersion, error) => {
+  const unavailableContext = (catalog, contactsVersion, error, { historyLimit = CHAT_HISTORY_PAGE_SIZE } = {}) => {
     const unavailable = unavailableHistory(error);
     const session = {
       id: catalog.sessionId,
@@ -1127,12 +1334,16 @@ export function createConversationReader({
       messages: [],
       contextRecords: [],
       deletedEventSequences: Object.freeze([]),
+      historyPage: emptyHistoryPage({ limit: historyLimit }),
       version: `${selectionVersion}:${catalog.sessionId}:history-unavailable:${unavailable.code}:${contactsVersion}`,
       updatedAt: "",
     };
   };
 
-  const context = async () => {
+  const context = async ({ historyLimit = HISTORY_PAGE_SIZE, beforeSeq = undefined, reconcileUsage = true } = {}) => {
+    const safeHistoryLimit = Number.isSafeInteger(historyLimit) && historyLimit > 0
+      ? Math.min(historyLimit, 2_000)
+      : HISTORY_PAGE_SIZE;
     const catalog = await activeCatalog();
     const contactsVersion = JSON.stringify(catalog.contacts.map((contact) => [
       contact.id,
@@ -1159,22 +1370,23 @@ export function createConversationReader({
         messages: [],
         contextRecords: [],
         deletedEventSequences: Object.freeze([]),
+        historyPage: emptyHistoryPage({ limit: safeHistoryLimit }),
         version: `${selectionVersion}:missing:${contactsVersion}`,
         updatedAt: "",
       };
     }
     let history;
     try {
-      history = await activeHistory(catalog);
+      history = await activeHistory(catalog, { limit: safeHistoryLimit, beforeSeq });
     } catch (error) {
-      return unavailableContext(catalog, contactsVersion, error);
+      return unavailableContext(catalog, contactsVersion, error, { historyLimit: safeHistoryLimit });
     }
     const events = Array.isArray(history.events) ? history.events : [];
     let deletions;
     try {
       deletions = await activeMessageDeletions(catalog);
     } catch (error) {
-      return unavailableContext(catalog, contactsVersion, error);
+      return unavailableContext(catalog, contactsVersion, error, { historyLimit: safeHistoryLimit });
     }
     const messages = conversationDisplayMessages(events, MAX_MESSAGES, {
       dataRoot,
@@ -1194,7 +1406,19 @@ export function createConversationReader({
       draft: events.length === 0,
     };
     const highestSequence = events.reduce((maximum, entry) => Math.max(maximum, Number(historyEvent(entry).seq) || 0), 0);
-    await reconcileUsageHistory(catalog, events, highestSequence);
+    const historyPage = historyPageMetadata(events, history, { limit: safeHistoryLimit });
+    if (reconcileUsage && beforeSeq === undefined) {
+      if (safeHistoryLimit >= HISTORY_PAGE_SIZE) {
+        await reconcileUsageHistory(catalog, events, highestSequence);
+      } else {
+        // Record the visible newest page immediately so a completed chat turn
+        // appears in the cost view without waiting for the optional repair.
+        // Rebuilding older ledger records still runs in the background and
+        // may inspect a wider local history.
+        await reconcileUsageHistory(catalog, events, highestSequence);
+        reconcileRecentUsageHistory(catalog);
+      }
+    }
     return {
       status: "ready",
       ...catalog,
@@ -1208,13 +1432,18 @@ export function createConversationReader({
       messages,
       contextRecords,
       deletedEventSequences: deletions.eventSequences,
-      version: `${selectionVersion}:${catalog.sessionId}:${highestSequence}:${events.length}:${deletions.revision}:${contactsVersion}`,
+      historyPage,
+      version: `${selectionVersion}:${catalog.sessionId}:${highestSequence}:${events.length}:${historyPage.oldestEventSeq ?? "empty"}:${historyPage.hasMore ? "more" : "end"}:${deletions.revision}:${contactsVersion}`,
       updatedAt: session.updatedAt,
     };
   };
 
-  const snapshot = async () => {
-    const current = await context();
+  const snapshot = async (value = {}) => {
+    const request = historyPageValue(value);
+    const current = await context({
+      beforeSeq: request.beforeSeq,
+      historyLimit: CHAT_HISTORY_PAGE_SIZE,
+    });
     return {
       status: current.status,
       historyBackend: "agent-core",
@@ -1232,6 +1461,7 @@ export function createConversationReader({
       fileName: current.session ? "Agent Core 会话历史" : "",
       version: current.version,
       history: current.history,
+      historyPage: current.historyPage,
       error: current.history?.status === "unavailable" ? current.history.message : "",
       messages: current.messages,
       // Keep the product-owned deletion state in the snapshot as well as
@@ -1244,7 +1474,7 @@ export function createConversationReader({
       }),
       scannedRecords: current.events.length,
       malformedLines: 0,
-      pollIntervalMs: 2_000,
+      pollIntervalMs: 0,
       updatedAt: current.updatedAt,
     };
   };
@@ -1260,7 +1490,11 @@ export function createConversationReader({
       await Promise.resolve(onContactCreated(created.createdContact)).catch(() => undefined);
     }
     selectionVersion += 1;
-    return snapshot();
+    const current = await snapshot();
+    const createdContactId = clean(created?.createdContact?.id);
+    return createdContactId
+      ? { ...current, createdContact: { id: createdContactId } }
+      : current;
   };
 
   const selectContact = async ({ id } = {}) => {

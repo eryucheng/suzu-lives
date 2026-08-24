@@ -13,6 +13,9 @@ contextBridge.exposeInMainWorld("suzuConsole", {
       return () => ipcRenderer.removeListener("window-chrome:state", listener);
     },
   },
+  appLifecycle: {
+    rendererReady: () => ipcRenderer.invoke("app-lifecycle:renderer-ready"),
+  },
   settings: {
     get: () => ipcRenderer.invoke("settings:get"),
     releaseAnnouncementStatus: () => ipcRenderer.invoke("settings:release-announcement-status"),
@@ -30,6 +33,8 @@ contextBridge.exposeInMainWorld("suzuConsole", {
   },
   ledger: {
     scan: () => ipcRenderer.invoke("ledger:scan"),
+    todaySummary: () => ipcRenderer.invoke("ledger:today-summary"),
+    warmTodaySummary: () => ipcRenderer.invoke("ledger:warm-today-summary"),
   },
   todayCalendar: {
     snapshot: (value) => ipcRenderer.invoke("today-calendar:snapshot", value),
@@ -42,6 +47,12 @@ contextBridge.exposeInMainWorld("suzuConsole", {
     register: (id) => ipcRenderer.invoke("capabilities:register", id),
     setActive: (id, enabled) => ipcRenderer.invoke("capabilities:set-active", { id, enabled }),
     saveSettings: (id, value) => ipcRenderer.invoke("capabilities:save-settings", { id, value }),
+    saveImageGenerationCustomAdapter: (value) => ipcRenderer.invoke("capabilities:save-image-generation-custom-adapter", value),
+    deleteImageGenerationCustomAdapter: (value) => ipcRenderer.invoke("capabilities:delete-image-generation-custom-adapter", value),
+    saveImageVisionCustomAdapter: (value) => ipcRenderer.invoke("capabilities:save-image-vision-custom-adapter", value),
+    deleteImageVisionCustomAdapter: (value) => ipcRenderer.invoke("capabilities:delete-image-vision-custom-adapter", value),
+    saveVideoUnderstandingCustomAdapter: (value) => ipcRenderer.invoke("capabilities:save-video-understanding-custom-adapter", value),
+    deleteVideoUnderstandingCustomAdapter: (value) => ipcRenderer.invoke("capabilities:delete-video-understanding-custom-adapter", value),
   },
   externalCapabilities: {
     snapshot: () => ipcRenderer.invoke("external-capabilities:snapshot"),
@@ -55,7 +66,8 @@ contextBridge.exposeInMainWorld("suzuConsole", {
     fetchModels: (value = {}) => ipcRenderer.invoke("agent-runtime:fetch-models", value),
   },
   conversation: {
-    snapshot: () => ipcRenderer.invoke("conversation:snapshot"),
+    registerEventRecipient: () => ipcRenderer.invoke("conversation:register-event-recipient"),
+    snapshot: (value = {}) => ipcRenderer.invoke("conversation:snapshot", value),
     search: (query) => ipcRenderer.invoke("conversation:search", query),
     contextTrace: (value) => ipcRenderer.invoke("conversation:context-trace", value),
     focus: (value) => ipcRenderer.invoke("conversation:focus", value),
@@ -88,6 +100,7 @@ contextBridge.exposeInMainWorld("suzuConsole", {
     steer: (value) => ipcRenderer.invoke("conversation:steer", value),
     call: {
       start: (value) => ipcRenderer.invoke("conversation:call-start", value),
+      dismissRequest: (value) => ipcRenderer.invoke("conversation:call-dismiss-request", value),
       open: (value) => ipcRenderer.invoke("conversation:call-open", value),
       audio: (value) => ipcRenderer.send("conversation:call-audio", value),
       commit: (value) => ipcRenderer.invoke("conversation:call-commit", value),
@@ -154,8 +167,6 @@ contextBridge.exposeInMainWorld("suzuConsole", {
     create: (value) => ipcRenderer.invoke("relationship-files:create", value),
   },
   connections: {
-    comfyuiSnapshot: () => ipcRenderer.invoke("connections:comfyui-snapshot"),
-    saveComfyui: (value) => ipcRenderer.invoke("connections:save-comfyui", value),
     apiServicesSnapshot: () => ipcRenderer.invoke("connections:api-services-snapshot"),
     saveNamedApiConnection: (value) => ipcRenderer.invoke("connections:save-named-api", value),
     removeNamedApiConnection: (id) => ipcRenderer.invoke("connections:remove-named-api", id),

@@ -1,15 +1,17 @@
 ---
 name: image-generation
-description: 通过 Suzu Lives 的图像引擎生成普通图片或明确指定的 ComfyUI 工作流图片。
+description: 通过 Suzu Lives 的图像引擎生成图片。
 ---
 
 # Image Generation
 
-这不是 `phone-camera`：普通生成图片和明确指定的本地 ComfyUI 工作流使用此能力。执行稳定入口：
+执行稳定入口：
 
 `suzu-lives image-generation --prompt "画面中实际需要生成的内容"`
 
-可选 `--backend api|comfyui`、`--workflow <id>`、`--size WIDTHxHEIGHT`、`--seed <整数>`，以及重复的 `--ref [identity|location|object|style=]PATH`。默认后端来自 Suzu Lives 的统一软件配置；API 或 ComfyUI 出错时不能切换到另一后端。`--list-workflows` 与 `--validate-workflows` 只检查软件数据目录中的 ComfyUI registry，不会连接 ComfyUI。
+手机拍照式画面与普通图片共用图像生成能力。Agent action 使用 `stylePreset: "phone-camera"`，并提供 `shot`（`rear`、`selfie` 或 `mirror`）与 `scene`；该路径读取图像生成设置中的画面预设。
+
+可选 `--size WIDTHxHEIGHT`，以及重复的 `--ref [identity|location|object|style=]PATH`。请求协议和 API 由 Suzu Lives 的统一软件配置决定。
 
 `--out` 必须位于当前 Agent 的 Suzu Lives 数据目录；`--config` 必须位于软件统一的 `capabilities/image-generation` 配置目录。图片 API 使用“设置 → API”里为“生图”选定的连接，不读取外部配置或凭据；模型与请求协议由该连接决定。成功 JSON 的 `status: "ok"` 才代表图片已保存。
 

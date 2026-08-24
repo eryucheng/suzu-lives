@@ -1,86 +1,25 @@
 import path from "node:path";
+import {
+  DEFAULT_DEEPSEEK_BASE_URL,
+  DEFAULT_DEEPSEEK_MODEL,
+  modelCatalogEntries,
+  modelCatalogEntry,
+  modelInputModalities,
+  TEXT_MODEL_PROVIDERS,
+  textModelProviderForRoute,
+  textModelProviderId,
+} from "@suzu-lives/suzu-agent-runtime/model-capability-catalog";
+import { selectedAgentModelCapabilities } from "./agent-model-capabilities.mjs";
+
+export { TEXT_MODEL_PROVIDERS } from "@suzu-lives/suzu-agent-runtime/model-capability-catalog";
 
 const DEEPSEEK_SETTINGS_NAMESPACE = "llm-deepseek";
 const COMPATIBLE_MODEL_SETTINGS_NAMESPACE = "llm-suzu-compatible";
 const AGENT_DEFAULT_MODEL_SETTINGS_NAMESPACE = "agent-default-model";
 const DEEPSEEK_API_KEY_REFERENCE = "DEEPSEEK_API_KEY";
-const DEFAULT_DEEPSEEK_BASE_URL = "https://api.deepseek.com";
-const DEFAULT_DEEPSEEK_MODEL = "deepseek-v4-flash";
-const DEEPSEEK_MODEL_CATALOG = Object.freeze([
-  Object.freeze({
-    id: "deepseek-v4-flash",
-    name: "DeepSeek-V4-Flash",
-    contextWindow: 1_000_000,
-  }),
-  Object.freeze({
-    id: "deepseek-v4-pro",
-    name: "DeepSeek-V4-Pro",
-    contextWindow: 1_000_000,
-  }),
-  Object.freeze({
-    id: "deepseek-v4-flash-vision-exp",
-    name: "DeepSeek-V4-Flash-Vision-Exp",
-    contextWindow: 1_000_000,
-    maxTokens: 384_000,
-  }),
-]);
 const CREDENTIAL_REFERENCE = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/u;
 const PROVIDER_ROUTE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/u;
 const SUPPORTED_PI_PROTOCOLS = new Set(["openai-completions", "openai-responses", "anthropic-messages"]);
-
-// These are editable provider starting points. Suzu's configurable endpoint
-// layer owns the supported wire protocols; Suzu supplies a transparent
-// provider profile and makes its default model selection through its private
-// Agent Core control plane.
-export const TEXT_MODEL_PROVIDERS = Object.freeze({
-  deepseek: Object.freeze({
-    label: "DeepSeek",
-    native: true,
-    route: "deepseek-official",
-    baseUrl: DEFAULT_DEEPSEEK_BASE_URL,
-    model: DEFAULT_DEEPSEEK_MODEL,
-    protocol: "openai-completions",
-  }),
-  minimax: Object.freeze({
-    label: "MiniMax（中国区）",
-    route: "suzu-minimax",
-    baseUrl: "https://api.minimaxi.com/anthropic",
-    model: "MiniMax-M2.7",
-    protocol: "anthropic-messages",
-    staticModels: Object.freeze(["MiniMax-M2.7"]),
-  }),
-  "bailian-coding": Object.freeze({
-    label: "阿里百炼（Coding Plan）",
-    route: "suzu-bailian-coding",
-    baseUrl: "https://coding.dashscope.aliyuncs.com/apps/anthropic",
-    model: "qwen3.8-max-preview",
-    protocol: "anthropic-messages",
-    staticModels: Object.freeze(["qwen3.8-max-preview", "qwen3.7-max", "qwen3.6-flash"]),
-  }),
-  "bailian-payg": Object.freeze({
-    label: "阿里百炼（按量）",
-    route: "suzu-bailian-payg",
-    baseUrl: "https://dashscope.aliyuncs.com/apps/anthropic",
-    model: "qwen3.8-max-preview",
-    protocol: "anthropic-messages",
-    staticModels: Object.freeze(["qwen3.8-max-preview", "qwen3.7-max", "qwen3.6-flash"]),
-  }),
-  kimi: Object.freeze({
-    label: "Kimi Code",
-    route: "suzu-kimi",
-    baseUrl: "https://api.kimi.com/coding",
-    model: "kimi-for-coding",
-    protocol: "anthropic-messages",
-    staticModels: Object.freeze(["k3", "k3-256k", "kimi-for-coding", "kimi-for-coding-highspeed"]),
-  }),
-  custom: Object.freeze({
-    label: "自定义兼容服务",
-    route: "suzu-custom",
-    baseUrl: "",
-    model: "",
-    protocol: "anthropic-messages",
-  }),
-});
 
 export class AgentRuntimeConfigError extends Error {
   constructor(message, { cause, code = "AGENT_RUNTIME_CONFIG_ERROR" } = {}) {
@@ -158,14 +97,12 @@ function namedNamespace(snapshot, namespace) {
 }
 
 function providerDefinition(value) {
-  const id = clean(value).toLowerCase();
-  return TEXT_MODEL_PROVIDERS[id] || TEXT_MODEL_PROVIDERS.custom;
+  return TEXT_MODEL_PROVIDERS[providerId(value)];
 }
 
 function providerId(value) {
-  const id = clean(value).toLowerCase();
-  if (!id) return "deepseek";
-  return Object.hasOwn(TEXT_MODEL_PROVIDERS, id) ? id : "custom";
+  const id = clean(value);
+  return id ? textModelProviderId(id) : "deepseek";
 }
 
 function profileRoute({ providerId: id, route = "" } = {}) {
@@ -200,6 +137,12 @@ function modelId(value) {
   return model;
 }
 
+function inputModalities(value) {
+  return Object.freeze([...new Set((Array.isArray(value) ? value : [])
+    .map((modality) => clean(modality).toLowerCase())
+    .filter((modality) => modality === "text" || modality === "image"))]);
+}
+
 function modelEntries(catalog, route = "") {
   const target = clean(route);
   const group = (Array.isArray(catalog?.groups) ? catalog.groups : [])
@@ -211,6 +154,7 @@ function modelEntries(catalog, route = "") {
       name: clean(entry?.name) || clean(entry?.id),
       contextWindow: Number(entry?.contextWindow) || 0,
       maxTokens: Number(entry?.maxTokens) || 0,
+      input: inputModalities(entry?.inputModalities || entry?.input),
     }))
     .filter((entry) => entry.id && !seen.has(entry.id) && (seen.add(entry.id) || true));
 }
@@ -223,6 +167,7 @@ function profileModels(profile) {
       name: clean(entry?.name) || clean(entry?.id),
       contextWindow: Number(entry?.contextWindow) || 0,
       maxTokens: Number(entry?.maxTokens) || 0,
+      input: inputModalities(entry?.input),
     }))
     .filter((entry) => entry.id && !seen.has(entry.id) && (seen.add(entry.id) || true));
 }
@@ -241,19 +186,54 @@ function mergeModelCatalogEntries(...collections) {
       const description = clean(value?.description);
       const contextWindow = Number(value?.contextWindow);
       const maxTokens = Number(value?.maxTokens);
+      const input = inputModalities(value?.inputModalities || value?.input);
       if (description) entry.description = description;
       if (Number.isSafeInteger(contextWindow) && contextWindow > 0) entry.contextWindow = contextWindow;
       if (Number.isSafeInteger(maxTokens) && maxTokens > 0) entry.maxTokens = maxTokens;
+      if (input.length) entry.input = input;
       return entry;
     })
     .filter(Boolean);
 }
 
+function nativeModelSettings(entries) {
+  return (Array.isArray(entries) ? entries : []).map((entry) => {
+    const { input, inputModalities: _inputModalities, ...model } = plainObject(entry);
+    return model;
+  });
+}
+
 function providerModels(id) {
-  const seen = new Set();
-  return (Array.isArray(providerDefinition(id).staticModels) ? providerDefinition(id).staticModels : [])
-    .map((value) => clean(value))
-    .filter((value) => value && !seen.has(value) && (seen.add(value) || true));
+  return modelCatalogEntries(id).map((entry) => entry.id);
+}
+
+function matchingModel(entries, target) {
+  const id = clean(target).toLowerCase();
+  if (!id) return null;
+  return (Array.isArray(entries) ? entries : [])
+    .find((entry) => clean(entry?.id).toLowerCase() === id) || null;
+}
+
+function modelInputFor({ id, model, entries = [] } = {}) {
+  const known = modelCatalogEntry(id, model);
+  if (known) return known.input;
+  const configured = matchingModel(entries, model);
+  if (configured?.input?.length) return configured.input;
+  return modelInputModalities(id, model);
+}
+
+function configuredModelInput({ id, model, value, profile }) {
+  const known = modelCatalogEntry(id, model);
+  if (known) return known.input;
+  if (id === "custom" && typeof value?.supportsImageInput === "boolean") {
+    return value.supportsImageInput ? Object.freeze(["text", "image"]) : Object.freeze(["text"]);
+  }
+  return modelInputFor({ id, model, entries: profileModels(profile) });
+}
+
+function modelLimit(value, fallback) {
+  const number = Number(value);
+  return Number.isSafeInteger(number) && number > 0 ? number : fallback;
 }
 
 function defaultSelection(settings) {
@@ -275,10 +255,8 @@ function compatibleProfiles(settings) {
 }
 
 function configuredProviderId(selection, profiles) {
-  if (selection.provider === TEXT_MODEL_PROVIDERS.deepseek.route) return "deepseek";
-  for (const [id, definition] of Object.entries(TEXT_MODEL_PROVIDERS)) {
-    if (id !== "custom" && definition.route === selection.provider) return id;
-  }
+  const known = textModelProviderForRoute(selection.provider);
+  if (known !== "custom") return known;
   return Object.hasOwn(profiles, selection.provider) ? "custom" : "custom";
 }
 
@@ -293,12 +271,22 @@ function publicProviderChoices() {
   }));
 }
 
+function runtimeFrom(value) {
+  return typeof value === "function" ? value() : value;
+}
+
 function controlPlaneFrom(value) {
-  const runtime = typeof value === "function" ? value() : value;
+  const runtime = runtimeFrom(value);
   if (!runtime || typeof runtime.controlPlane !== "function") {
     throw new AgentRuntimeConfigError("Suzu Agent Core 尚未准备好。", { code: "AGENT_RUNTIME_UNAVAILABLE" });
   }
   return runtime.controlPlane();
+}
+
+function publishModelCapabilities(runtime, current) {
+  const target = runtimeFrom(runtime);
+  if (typeof target?.setCurrentModelCapabilities !== "function") return;
+  target.setCurrentModelCapabilities(selectedAgentModelCapabilities(current.settings, current.catalog));
 }
 
 async function readConfiguration(api) {
@@ -332,6 +320,7 @@ function presentConfiguration(current) {
   const configuredEntries = profileModels(profile);
   const models = catalogEntries.length ? catalogEntries : configuredEntries;
   const selectedModel = selection.model || models[0]?.id || definition.model || DEFAULT_DEEPSEEK_MODEL;
+  const selectedInput = modelInputFor({ id, model: selectedModel, entries: [...catalogEntries, ...configuredEntries] });
   const hasApiKey = credential.configured === true;
   const selectedNamespace = id === "deepseek"
     ? namedNamespace(settings, DEEPSEEK_SETTINGS_NAMESPACE)
@@ -355,7 +344,12 @@ function presentConfiguration(current) {
     baseUrl,
     model: selectedModel,
     models: models.map((entry) => entry.id),
-    modelEntries: models,
+    modelEntries: models.map((entry) => Object.freeze({
+      ...entry,
+      inputModalities: modelInputFor({ id, model: entry.id, entries: [entry] }),
+    })),
+    inputModalities: selectedInput,
+    supportsImageInput: selectedInput.includes("image"),
     message: hasApiKey
       ? "Suzu Agent Core 的当前文本模型连接已就绪。"
       : `请为 ${clean(profile.displayName) || definition.label} 填写 API Key。`,
@@ -369,6 +363,8 @@ function selectedProfileValue({ id, value, current }) {
   const selectedRoute = clean(current.selection.provider);
   const existingSelectedModel = selectedRoute === route ? current.selection.model : "";
   const model = modelId(value.model || existingSelectedModel || definition.model);
+  const knownModel = modelCatalogEntry(id, model);
+  const existingModel = matchingModel(profileModels(existing), model);
   const baseUrl = endpointUrl(value.baseUrl || existing.baseURL || definition.baseUrl, { allowBlank: false });
   const selectedProtocol = protocol(value.protocol || existing.api, definition.protocol);
   const credentialRef = credentialReferenceFor({ providerId: id, route, profile: existing });
@@ -383,8 +379,9 @@ function selectedProfileValue({ id, value, current }) {
       models: [{
         id: model,
         name: boundedText(value.modelLabel || model, "模型显示名", 200) || model,
-        contextWindow: Number.isSafeInteger(Number(value.contextWindow)) && Number(value.contextWindow) > 0 ? Number(value.contextWindow) : 262_144,
-        maxTokens: Number.isSafeInteger(Number(value.maxTokens)) && Number(value.maxTokens) > 0 ? Number(value.maxTokens) : 32_768,
+        contextWindow: modelLimit(value.contextWindow, knownModel?.contextWindow || existingModel?.contextWindow || 262_144),
+        maxTokens: modelLimit(value.maxTokens, knownModel?.maxTokens || existingModel?.maxTokens || 32_768),
+        input: configuredModelInput({ id, model, value, profile: existing }),
       }],
     },
     model,
@@ -419,7 +416,9 @@ export function createAgentRuntimeConfigService({
 
   const runtimeSnapshot = async () => {
     const api = await controlPlane();
-    return presentConfiguration(await readConfiguration(api));
+    const current = await readConfiguration(api);
+    publishModelCapabilities(runtime, current);
+    return presentConfiguration(current);
   };
 
   const saveModelConfiguration = async (value = {}) => {
@@ -493,9 +492,10 @@ export function createAgentRuntimeConfigService({
     if (id === "deepseek") {
       const namespace = namedNamespace(current.settings, DEEPSEEK_SETTINGS_NAMESPACE);
       const catalogEntries = modelEntries(current.catalog, TEXT_MODEL_PROVIDERS.deepseek.route);
-      const knownModels = mergeModelCatalogEntries(catalogEntries, DEEPSEEK_MODEL_CATALOG);
+      const productModels = modelCatalogEntries("deepseek");
+      const knownModels = mergeModelCatalogEntries(catalogEntries, productModels);
       const knownIds = new Set(catalogEntries.map((entry) => entry.id));
-      const requiresCatalogUpdate = DEEPSEEK_MODEL_CATALOG.some((entry) => !knownIds.has(entry.id));
+      const requiresCatalogUpdate = productModels.some((entry) => !knownIds.has(entry.id));
 
       if (requiresCatalogUpdate) {
         if (!namespace || !api.settings?.mutate) {
@@ -508,14 +508,14 @@ export function createAgentRuntimeConfigService({
         unwrapRpc(await api.settings.mutate({
           ns: DEEPSEEK_SETTINGS_NAMESPACE,
           expectedRevision: Number(namespace.revision),
-          ops: [{ op: "set", path: ["models"], value: knownModels }],
+          ops: [{ op: "set", path: ["models"], value: nativeModelSettings(knownModels) }],
         }), "更新 DeepSeek 模型目录");
         current = await readConfiguration(api);
       }
 
       const models = mergeModelCatalogEntries(
         modelEntries(current.catalog, TEXT_MODEL_PROVIDERS.deepseek.route),
-        DEEPSEEK_MODEL_CATALOG,
+        productModels,
       ).map((entry) => entry.id);
       return Object.freeze({
         status: "ready",
@@ -540,7 +540,11 @@ export function createAgentRuntimeConfigService({
           .filter(Boolean);
         return Object.freeze({ status: "ready", models, message: models.length ? "已从服务端读取可选模型；选择后保存即可。" : "服务端没有返回模型标识，请手动填写。" });
       } catch (error) {
-        return Object.freeze({ status: "manual", models: profileModels(selected.profile).map((entry) => entry.id), message: `此服务无法自动读取模型列表：${clean(error?.message) || "请手动填写模型标识。"}` });
+        const models = [...new Set([
+          ...profileModels(selected.profile).map((entry) => entry.id),
+          ...providerModels(id),
+        ])];
+        return Object.freeze({ status: "manual", models, message: `此服务无法自动读取模型列表：${clean(error?.message) || "请手动填写模型标识。"}` });
       }
     }
     const models = [...new Set([...profileModels(selected.profile).map((entry) => entry.id), ...providerModels(id)])];

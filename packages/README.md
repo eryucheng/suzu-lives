@@ -8,12 +8,9 @@
 
 当前能力迁移的基础模块：
 
-- `capability-registry`：Agent 可调用能力的中立 `capability` CLI 输入/输出合约；
 - `capability-runtime`：所有执行器共用的“已启用 + 已配置 + 依赖可用”调用门禁；
 - `media-understanding`：图像与视频理解的受控模型/FFmpeg 执行器；
-- `device-bridge`：电脑摄像头 worker；
 - `web-browser`：专用浏览器启动与通用网页读写、上传下载执行器；
 - `voice-message`：生成 MP3 并通过当前会话附件链交付的受控 TTS 执行器。
-- `proactive-contact`：由 Suzu 调度器创建一次性任务、在指定会话中主动联系的软件拥有 Skill。
 
-这些模块不会自行触发模型、设备、浏览器或站点。每项能力只通过当前软件拥有的稳定入口执行：Agent 可调用的媒体能力使用 `suzu-lives capability …`，浏览器、邮箱通道和自动化能力使用各自的专用命令；桌面端统一管理配置、联系人范围和实际可用状态。
+这些模块不会自行触发模型、设备、浏览器或站点。Agent Core 从桌面端注册表取得当前联系人可用的产品 Skill，按需加载动作说明后通过 `suzu_capability` 回到同一套产品适配器执行；桌面端统一管理配置、联系人范围和实际可用状态。

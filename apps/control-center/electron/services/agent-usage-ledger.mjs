@@ -20,11 +20,11 @@ function validDate(value, fallback) {
   return Number.isFinite(date.getTime()) ? date.toISOString() : fallback().toISOString();
 }
 
-function agentEventScope(event, turn) {
+function agentEventScope(event, turn, subject = null) {
   const source = plainObject(event);
   return {
-    sessionId: clean(source.sessionId || source.runtimeSessionId || turn?.sessionId),
-    projectRoot: clean(source.projectRoot || turn?.projectRoot),
+    sessionId: clean(source.sessionId || source.runtimeSessionId || turn?.sessionId || subject?.sessionId),
+    projectRoot: clean(source.projectRoot || turn?.projectRoot || subject?.projectRoot),
   };
 }
 
@@ -98,7 +98,7 @@ function historicalUsageEvent(entry, scope) {
 function trustedContactScope(contact = {}) {
   const source = plainObject(contact);
   return {
-    contactId: clean(source.contactId || source.id),
+    contactId: clean(source.contactId || source.subjectId || source.id),
     agentId: clean(source.agentId),
     projectRoot: clean(source.projectRoot),
     sessionId: clean(source.sessionId || source.runtimeSessionId),
@@ -271,14 +271,15 @@ export function createAgentUsageLedger({
     return null;
   };
 
-  const record = async ({ event, turn = null } = {}) => {
+  const record = async ({ event, subject = null, turn = null } = {}) => {
     if (typeof capabilityRuntime?.recordUsage !== "function"
       || typeof settingsService?.load !== "function"
       || typeof settingsService?.usageLedgerPath !== "function") {
       return Object.freeze({ status: "ledger-unavailable" });
     }
-    const scope = agentEventScope(event, turn);
-    const contact = await scopeFor({ event, turn });
+    const trustedSubject = subject ? trustedContactScope(subject) : null;
+    const scope = agentEventScope(event, turn, trustedSubject);
+    const contact = trustedSubject || await scopeFor({ event, turn });
     return recordResolvedUsage({ event, scope, contact, turn });
   };
 
@@ -290,13 +291,13 @@ export function createAgentUsageLedger({
    * own ledger.  Event ids use the immutable Core sequence and are checked
    * against the persisted ledger before appending.
    */
-  const reconcile = async ({ contact, events = [] } = {}) => {
+  const reconcile = async ({ contact = null, events = [], subject = null } = {}) => {
     if (typeof capabilityRuntime?.recordUsage !== "function"
       || typeof settingsService?.load !== "function"
       || typeof settingsService?.usageLedgerPath !== "function") {
       return Object.freeze({ completed: false, status: "ledger-unavailable", scanned: 0, recorded: 0, duplicates: 0 });
     }
-    const trusted = trustedContactScope(contact);
+    const trusted = trustedContactScope(subject || contact);
     if (!trusted.agentId || !trusted.projectRoot || !trusted.sessionId) {
       return Object.freeze({ completed: false, status: "contact-unavailable", scanned: 0, recorded: 0, duplicates: 0 });
     }

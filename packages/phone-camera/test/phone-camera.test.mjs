@@ -7,7 +7,6 @@ import test from "node:test";
 import { createVisualReferenceLibrary } from "@suzu-lives/visual-reference-library";
 
 import { buildPhonePrompt, expandReferences, PhoneCameraError, takePhonePhoto } from "../src/index.mjs";
-import { parsePhoneCameraArgs, runPhoneCameraCli } from "../src/cli.mjs";
 
 const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl+jh0AAAAASUVORK5CYII=", "base64");
 async function temporary() { return fs.mkdtemp(path.join(os.tmpdir(), "suzu-phone-camera-")); }
@@ -27,7 +26,7 @@ test("dry run keeps ordered asset metadata and does not create output", async ()
   const result = await takePhonePhoto({ agentRoot, dataRoot, options: { shot: "rear", scene: "雨后街道", dryRun: true, refs: [{ scope: "contact", id: "person.main" }] } });
   assert.equal(result.status, "dry-run"); assert.equal(result.backend, "api"); assert.equal(result.size, "1536x1024"); assert.match(result.prompt, /Visible scene/u);
   assert.deepEqual(result.references, [{ index: 1, id: "contact:person.main", role: "identity", path: "visual-references/characters/person/main.png" }]);
-  await assert.rejects(() => fs.stat(path.join(agentRoot, "phone-camera")), /ENOENT/u);
+  await assert.rejects(() => fs.stat(path.join(agentRoot, "image-generation", "phone-camera")), /ENOENT/u);
 });
 
 test("references expand requested asset and set order, then use the software-owned image engine", async () => {
@@ -41,7 +40,7 @@ test("references expand requested asset and set order, then use the software-own
 
 test("phone camera keeps the 16-reference limit without changing the shared drawing default", async () => {
   const agentRoot = await temporary(); const dataRoot = await temporary(); const source = path.join(agentRoot, "fixture.png"); await fs.writeFile(source, png);
-  const configRoot = path.join(dataRoot, "capabilities", "phone-camera"); await fs.mkdir(configRoot, { recursive: true }); await fs.writeFile(path.join(configRoot, "config.json"), JSON.stringify({ references: { max_images: 16 } }));
+  const configRoot = path.join(dataRoot, "capabilities", "image-generation"); await fs.mkdir(configRoot, { recursive: true }); await fs.writeFile(path.join(configRoot, "config.json"), JSON.stringify({ phone_camera: { references: { max_images: 16 } } }));
   const library = createVisualReferenceLibrary({ libraryRoot: path.join(agentRoot, "visual-references") }); await library.upsertSet({ id: "full-scene", description: "完整场景" });
   for (let index = 1; index <= 16; index += 1) await library.add({ source, id: "identity." + String(index).padStart(2, "0"), role: "identity", description: "人物 " + index, sets: ["full-scene"] });
   let request;
@@ -49,7 +48,7 @@ test("phone camera keeps the 16-reference limit without changing the shared draw
   assert.equal(result.status, "ok"); assert.equal(result.references.length, 16); assert.equal(request.getAll("image[]").length, 16);
 });
 
-test("phone camera keeps its generated image local and rejects retired external send", async () => {
+test("phone camera keeps its generated image local", async () => {
   const agentRoot = await temporary(); const dataRoot = await temporary();
   const result = await takePhonePhoto({
     agentRoot, dataRoot,
@@ -59,29 +58,4 @@ test("phone camera keeps its generated image local and rejects retired external 
   });
   assert.equal(result.sent, false);
   assert.equal(await fs.stat(result.path).then((value) => value.isFile()), true);
-  assert.throws(() => parsePhoneCameraArgs(["--shot", "rear", "--scene", "街道", "--send"]), /不再支持 --send/u);
-  assert.deepEqual(parsePhoneCameraArgs(["--shot", "rear", "--scene", "街道", "--ref", "contact:a", "--ref", "shared:b", "--dry-run", "--seed", "12"]), { shot: "rear", scene: "街道", refs: ["contact:a", "shared:b"], dryRun: true, seed: 12 });
-});
-
-test("phone camera CLI asks its caller for the selected image connection", async () => {
-  const dataRoot = await temporary();
-  let resolverInput;
-  const result = await runPhoneCameraCli(["--data-root", dataRoot, "--agent-id", "fixture", "--shot", "rear", "--scene", "窗边", "--dry-run"], {
-    environment: {},
-    connectionResolver: async (input) => {
-      resolverInput = input;
-      return { baseUrl: "https://images.example.test/v1", model: "selected", apiKey: "selected-key" };
-    },
-  });
-  assert.equal(result.status, "dry-run");
-  assert.equal(resolverInput.kind, "phone-camera");
-  assert.equal(resolverInput.dataRoot, dataRoot);
-});
-
-test("phone camera CLI requires the software-selected image connection for a real API request", async () => {
-  const dataRoot = await temporary();
-  await assert.rejects(
-    () => runPhoneCameraCli(["--data-root", dataRoot, "--agent-id", "fixture", "--shot", "rear", "--scene", "窗边"], { environment: {} }),
-    /设置 → API/u,
-  );
 });

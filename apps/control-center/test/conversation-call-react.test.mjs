@@ -45,6 +45,7 @@ test("legacy contact changes can request the React call provider to end safely",
 test("voice call UI and lifecycle live in React rather than conversation DOM bindings", () => {
   const appShell = readFileSync(resolve(HERE, "..", "src", "react", "app-shell.jsx"), "utf8");
   const callProvider = readFileSync(resolve(HERE, "..", "src", "react", "conversation-call.jsx"), "utf8");
+  const microphone = readFileSync(resolve(HERE, "..", "src", "react", "conversation-microphone.mjs"), "utf8");
   const page = readFileSync(resolve(HERE, "..", "src", "react", "conversation-page.jsx"), "utf8");
   const legacyConversation = readFileSync(resolve(HERE, "..", "src", "features", "conversation", "index.mjs"), "utf8");
   const legacyStyles = readFileSync(resolve(HERE, "..", "src", "styles", "conversation.css"), "utf8");
@@ -54,7 +55,10 @@ test("voice call UI and lifecycle live in React rather than conversation DOM bin
   assert.match(appShell, /正在呼叫你/u);
   assert.match(appShell, /正在接听来电/u);
   assert.match(appShell, /call\.phase === "answering"/u);
-  assert.match(callProvider, /navigator\.mediaDevices/u);
+  assert.match(callProvider, /acquireWebRtcMicrophoneCapture/u);
+  assert.match(microphone, /navigator\?\.mediaDevices/u);
+  assert.match(microphone, /noiseSuppression: true/u);
+  assert.match(microphone, /echoCancellation: true/u);
   assert.match(callProvider, /callApi\.open\?\./u);
   assert.match(callProvider, /conversation\?\.call\?\.audio/u);
   assert.match(page, /useConversationCall/u);

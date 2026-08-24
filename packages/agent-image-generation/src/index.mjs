@@ -3,13 +3,18 @@ import path from "node:path";
 
 import { resolveAgentDataRoot, resolveSuzuLivesDataRoot } from "@suzu-lives/agent-registry";
 import { appendUsageEvent } from "@suzu-lives/cost-ledger";
-import { createCandidates, ImageWorkbenchError, validateComfyRegistry } from "@suzu-lives/image-workbench";
+import {
+  createCandidates,
+  findCustomImageGenerationAdapter,
+  ImageWorkbenchError,
+  normalizeImageGenerationAdapter,
+} from "@suzu-lives/image-workbench";
 import { inspectImage } from "@suzu-lives/visual-reference-library";
 
 export class AgentImageGenerationError extends Error {}
 
 export const REFERENCE_ROLES = Object.freeze(["identity", "location", "object", "style"]);
-const DEFAULT_CONFIG = Object.freeze({ defaultBackend: "api", outputDirectory: "image-generation", comfyui: { baseUrl: "http://127.0.0.1:8188", timeoutMs: 600000, pollIntervalMs: 1000, registry: "workflows/registry.json", defaultWorkflow: "" } });
+const DEFAULT_CONFIG = Object.freeze({ adapter: "auto", customAdapterId: "", outputDirectory: "image-generation" });
 
 function clean(value) { return String(value ?? "").trim(); }
 function plainObject(value) { return value && typeof value === "object" && !Array.isArray(value) ? value : {}; }
@@ -40,26 +45,22 @@ export async function loadReferences(values = []) {
 }
 
 export function parseImageGenerationArgs(values = []) {
-  const result = { refs: [] }; const flags = new Set(["list-workflows", "validate-workflows"]); const options = new Set(["prompt", "backend", "workflow", "size", "seed", "ref", "out", "config", "data-root", "agent-id", "project-root"]);
+  const result = { refs: [] }; const options = new Set(["prompt", "size", "ref", "out", "config", "data-root", "agent-id", "project-root"]);
   for (let index = 0; index < values.length; index += 1) {
     const token = values[index]; if (!token.startsWith("--")) throw new AgentImageGenerationError(`未知位置参数：${token}`); const key = token.slice(2); if (key === "send") throw new AgentImageGenerationError("图片生成不再支持 --send；生成完成后请使用当前 Suzu 会话提供的附件交付命令。 ");
-    if (flags.has(key)) { result[key.replace(/-([a-z])/gu, (_, letter) => letter.toUpperCase())] = true; continue; }
     if (!options.has(key)) throw new AgentImageGenerationError(`未知选项：${token}`); const value = values[index + 1]; if (value === undefined || value.startsWith("--")) throw new AgentImageGenerationError(`${token} 缺少值。`); index += 1;
     if (key === "ref") { parseReference(value, result.refs.length + 1); result.refs.push(value); }
-    else if (key === "seed") { const seed = Number(value); if (!Number.isInteger(seed)) throw new AgentImageGenerationError("--seed 必须是整数。 "); result.seed = seed; }
     else result[key.replace(/-([a-z])/gu, (_, letter) => letter.toUpperCase())] = value;
   }
-  if (!result.listWorkflows && !result.validateWorkflows && !clean(result.prompt)) throw new AgentImageGenerationError("生成图片时必须填写 --prompt。 ");
+  if (!clean(result.prompt)) throw new AgentImageGenerationError("生成图片时必须填写 --prompt。 ");
   return result;
 }
 
 export function normalizeAgentImageConfig(value = {}) {
-  const source = plainObject(value); const comfy = plainObject(source.comfyui); const selected = clean(source.default_backend ?? source.defaultBackend) || DEFAULT_CONFIG.defaultBackend;
-  if (!["api", "comfyui"].includes(selected)) throw new AgentImageGenerationError(`未知图像生成后端：${selected}`);
-  const timeoutSeconds = Number(comfy.timeout_seconds ?? comfy.timeoutSeconds ?? DEFAULT_CONFIG.comfyui.timeoutMs / 1000); const pollSeconds = Number(comfy.poll_interval_seconds ?? comfy.pollIntervalSeconds ?? DEFAULT_CONFIG.comfyui.pollIntervalMs / 1000);
-  if (!Number.isFinite(timeoutSeconds) || timeoutSeconds < 1) throw new AgentImageGenerationError("comfyui.timeout_seconds 必须大于 0。 ");
-  if (!Number.isFinite(pollSeconds) || pollSeconds < 0.1 || pollSeconds > 30) throw new AgentImageGenerationError("comfyui.poll_interval_seconds 必须在 0.1 到 30 之间。 ");
-  const output = plainObject(source.output); return { defaultBackend: selected, outputDirectory: clean(output.directory ?? source.outputDirectory) || DEFAULT_CONFIG.outputDirectory, comfyui: { baseUrl: clean(comfy.base_url ?? comfy.baseUrl) || DEFAULT_CONFIG.comfyui.baseUrl, timeoutMs: Math.round(timeoutSeconds * 1000), pollIntervalMs: Math.round(pollSeconds * 1000), registry: clean(comfy.registry) || DEFAULT_CONFIG.comfyui.registry, defaultWorkflow: clean(comfy.default_workflow ?? comfy.defaultWorkflow) } };
+  const source = plainObject(value);
+  const adapter = normalizeImageGenerationAdapter(source.adapter, { fallback: DEFAULT_CONFIG.adapter });
+  const customAdapterId = adapter === "custom-http-image" ? clean(source.custom_adapter_id ?? source.customAdapterId).toLowerCase() : "";
+  const output = plainObject(source.output); return { adapter, customAdapterId, outputDirectory: clean(output.directory ?? source.outputDirectory) || DEFAULT_CONFIG.outputDirectory };
 }
 
 export async function loadAgentImageConfig({ dataRoot, configPath = "" } = {}) {
@@ -68,34 +69,8 @@ export async function loadAgentImageConfig({ dataRoot, configPath = "" } = {}) {
   catch (error) { if (error instanceof AgentImageGenerationError && error.message === "找不到图像生成配置。") return { config: normalizeAgentImageConfig(), path: target, source: "default" }; throw error; }
 }
 
-async function loadComfyRegistry({ dataRoot, configPath, registryPath }) {
-  const root = capabilityConfigRoot(dataRoot); const registryFile = safeChild(root, path.resolve(path.dirname(configPath), registryPath), "ComfyUI registry", "", "Suzu Lives 软件图像生成配置目录"); const registry = await readJson(registryFile, "ComfyUI registry");
-  if (registry.version !== 1 || !plainObject(registry.workflows)) throw new AgentImageGenerationError("ComfyUI registry 必须包含 version: 1 和 workflows 对象。 ");
-  const workflows = {};
-  for (const [id, raw] of Object.entries(registry.workflows)) {
-    const entry = plainObject(raw); const file = clean(entry.file); if (!file) throw new AgentImageGenerationError(`工作流 ${id}.file 不能为空。`);
-    const workflowPath = safeChild(root, path.resolve(path.dirname(registryFile), file), `工作流 ${id}.file`, "", "Suzu Lives 软件图像生成配置目录"); const workflow = await readJson(workflowPath, `工作流 ${id}`);
-    if (Array.isArray(workflow.nodes)) throw new AgentImageGenerationError(`${path.basename(workflowPath)} 是 ComfyUI 界面工作流，不是 API Format。`);
-    workflows[id] = { enabled: entry.enabled === true, description: clean(entry.description), workflow, bindings: plainObject(entry.bindings), defaults: plainObject(entry.defaults), reference_slots: Array.isArray(entry.reference_slots) ? entry.reference_slots : [], output_nodes: Array.isArray(entry.output_nodes) ? entry.output_nodes : [] };
-  }
-  const workbenchRegistry = { version: 1, workflows };
-  try { return { registryFile, registry: workbenchRegistry, validatedRegistry: validateComfyRegistry(workbenchRegistry) }; } catch (error) { throw new AgentImageGenerationError(error.message); }
-}
-
-export async function listComfyWorkflows({ dataRoot, configPath = "" } = {}) {
-  const root = capabilityConfigRoot(dataRoot); const loaded = await loadAgentImageConfig({ dataRoot, configPath }); const registryFile = safeChild(root, path.resolve(path.dirname(loaded.path), loaded.config.comfyui.registry), "ComfyUI registry", "", "Suzu Lives 软件图像生成配置目录"); const raw = await readJson(registryFile, "ComfyUI registry");
-  if (raw.version !== 1 || !plainObject(raw.workflows)) throw new AgentImageGenerationError("ComfyUI registry 必须包含 version: 1 和 workflows 对象。 ");
-  return { status: "ok", registry: path.relative(path.resolve(dataRoot), registryFile).split(path.sep).join("/"), workflows: Object.entries(raw.workflows).map(([id, entry]) => ({ id, enabled: entry?.enabled === true, description: clean(entry?.description), file: clean(entry?.file) })) };
-}
-
-export async function validateComfyWorkflows({ dataRoot, configPath = "" } = {}) {
-  const loaded = await loadAgentImageConfig({ dataRoot, configPath }); const { registryFile, validatedRegistry } = await loadComfyRegistry({ dataRoot, configPath: loaded.path, registryPath: loaded.config.comfyui.registry });
-  return { status: "valid", registry: path.relative(path.resolve(dataRoot), registryFile).split(path.sep).join("/"), workflows: Object.values(validatedRegistry.workflows).map(({ id, enabled }) => ({ id, enabled })) };
-}
-
 function usageEvent({ agentId, connection, item }) {
-  const local = item.input.backend === "comfyui";
-  return { agentId, provider: local ? "本地 ComfyUI" : (connection.provider || "OpenAI Compatible"), model: item.result.model, source: "图片生成", feature: local ? "image-workflow" : "image-" + item.result.mode, requestId: item.result.requestId, usage: item.result.usage, units: { imageRequests: 1, generatedImages: 1 }, metadata: { costSource: local ? "local-unpriced" : "provider-reported", size: item.input.size, referenceCount: item.referenceCount, backend: item.input.backend, workflow: item.result.workflow || "", agentInvocation: true } };
+  return { agentId, provider: connection.provider || "OpenAI Compatible", model: item.result.model, source: "图片生成", feature: "image-" + item.result.mode, requestId: item.result.requestId, usage: item.result.usage, units: { imageRequests: 1, generatedImages: 1 }, metadata: { costSource: "provider-reported", size: item.input.size, referenceCount: item.referenceCount, backend: item.input.backend, protocol: clean(connection.imageGenerationAdapter), agentInvocation: true } };
 }
 
 async function selectedImageConnection(connectionResolver, context) {
@@ -110,6 +85,27 @@ async function selectedImageConnection(connectionResolver, context) {
   return { ...plainObject(selected), apiKey, key: apiKey };
 }
 
+function configuredImageConnection({ connection, config, dataRoot }) {
+  const selected = plainObject(connection);
+  const adapter = config?.adapter || DEFAULT_CONFIG.adapter;
+  const customImageGenerationAdapter = adapter === "custom-http-image"
+    ? findCustomImageGenerationAdapter(dataRoot, config?.customAdapterId)
+    : null;
+  if (adapter === "custom-http-image" && !customImageGenerationAdapter) {
+    throw new AgentImageGenerationError("请选择已保存的自定义图像协议。 ");
+  }
+  return {
+    ...selected,
+    imageGenerationAdapter: adapter,
+    ...(customImageGenerationAdapter ? { customImageGenerationAdapter } : {}),
+  };
+}
+
+export async function resolveImageGenerationApiConnection({ connection, dataRoot, configPath = "" } = {}) {
+  const loaded = await loadAgentImageConfig({ dataRoot, configPath });
+  return configuredImageConnection({ connection, config: loaded.config, dataRoot });
+}
+
 export async function runAgentImageGeneration({
   agentRoot,
   agentId = "",
@@ -121,21 +117,18 @@ export async function runAgentImageGeneration({
   connectionResolver,
   appendLedger = appendUsageEvent,
 } = {}) {
-  const root = requiredRoot(agentRoot, "当前 Agent 数据目录"); const prompt = bounded(options.prompt, "--prompt", 4000); const loaded = await loadAgentImageConfig({ dataRoot, configPath: options.config }); const backend = clean(options.backend) || loaded.config.defaultBackend;
-  if (!["api", "comfyui"].includes(backend)) throw new AgentImageGenerationError("--backend 必须是 api 或 comfyui。 ");
-  const references = await loadReferences(options.refs || []); const outputRoot = safeChild(root, options.out || loaded.config.outputDirectory, "--out"); let connection; let registry = { version: 1, workflows: {} }; let workflow = clean(options.workflow);
-  if (backend === "api") {
-    connection = await selectedImageConnection(connectionResolver, { dataRoot, environment });
-  } else {
-    const loadedRegistry = await loadComfyRegistry({ dataRoot, configPath: loaded.path, registryPath: loaded.config.comfyui.registry }); registry = loadedRegistry.registry; connection = { baseUrl: loaded.config.comfyui.baseUrl, timeoutMs: loaded.config.comfyui.timeoutMs, pollIntervalMs: loaded.config.comfyui.pollIntervalMs }; workflow ||= loaded.config.comfyui.defaultWorkflow;
-  }
-  const ledgerPath = path.join(root, "cost-ledger", "events.jsonl"); const run = await createCandidates({ root: outputRoot, connection, registry, input: { prompt, backend, workflow, count: 1, size: clean(options.size) || "1024x1024", seed: Number.isInteger(options.seed) ? options.seed : null }, references, maxReferences: 16, fetchImpl, imageDownloader, onSuccess: async (item) => { if (backend === "api") await appendLedger(ledgerPath, usageEvent({ agentId, connection, item })); } });
+  const root = requiredRoot(agentRoot, "当前 Agent 数据目录"); const prompt = bounded(options.prompt, "--prompt", 4000); const loaded = await loadAgentImageConfig({ dataRoot, configPath: options.config }); const backend = "api";
+  const references = await loadReferences(options.refs || []); const outputRoot = safeChild(root, options.out || loaded.config.outputDirectory, "--out"); const connection = configuredImageConnection({
+    connection: await selectedImageConnection(connectionResolver, { dataRoot, environment }),
+    config: loaded.config,
+    dataRoot,
+  });
+  const ledgerPath = path.join(root, "cost-ledger", "events.jsonl"); const run = await createCandidates({ root: outputRoot, connection, input: { prompt, backend, count: 1, size: clean(options.size) || "1024x1024" }, references, maxReferences: 16, fetchImpl, imageDownloader, onSuccess: async (item) => appendLedger(ledgerPath, usageEvent({ agentId, connection, item })) });
   const candidate = run.candidates[0]; const outputPath = path.join(outputRoot, candidate.file);
-  return { status: "ok", backend, path: outputPath, sent: false, model: candidate.model, requestId: candidate.requestId || "", seed: candidate.seed, workflow: candidate.workflow || "", references: references.map(({ id, role }) => ({ id, role })), configSource: loaded.source };
+  return { status: "ok", backend, path: outputPath, sent: false, model: candidate.model, requestId: candidate.requestId || "", references: references.map(({ id, role }) => ({ id, role })), configSource: loaded.source };
 }
 
 export async function runAgentImageGenerationCli(values, dependencies = {}) {
   const options = parseImageGenerationArgs(values); const environment = dependencies.environment || process.env; const dataRoot = resolveSuzuLivesDataRoot({ configuredRoot: options.dataRoot || environment.SUZU_LIVES_DATA_ROOT, localAppData: environment.LOCALAPPDATA, appData: environment.APPDATA, fallbackBase: "", fallbackToLocatorWhenMissing: true }); const agentRoot = resolveAgentDataRoot({ dataRoot, agentId: options.agentId || environment.SUZU_LIVES_AGENT_ID, projectRoot: options.projectRoot || environment.SUZU_LIVES_PROJECT_ROOT });
-  if (options.listWorkflows) return listComfyWorkflows({ dataRoot, configPath: options.config }); if (options.validateWorkflows) return validateComfyWorkflows({ dataRoot, configPath: options.config });
   try { return await runAgentImageGeneration({ ...dependencies, agentRoot, agentId: options.agentId || environment.SUZU_LIVES_AGENT_ID, dataRoot, options, environment }); } catch (error) { if (error instanceof AgentImageGenerationError || error instanceof ImageWorkbenchError) throw new AgentImageGenerationError(error.message); throw error; }
 }

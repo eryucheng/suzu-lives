@@ -264,9 +264,7 @@
 .reference-collection,
 .reference-detail,
 .reference-import-panel,
-.reference-groups,
-.voice-design-panel,
-.voice-history {
+.reference-groups {
   border: 1px solid var(--line);
   border-radius: 19px;
   background: linear-gradient(145deg, color-mix(in srgb, var(--panel) 96%, #1b2132), var(--panel));
@@ -280,27 +278,6 @@
     radial-gradient(circle at 96% 4%, rgba(139, 130, 255, .18), transparent 34%),
     radial-gradient(circle at 8% 100%, rgba(69, 212, 191, .065), transparent 34%),
     linear-gradient(145deg, color-mix(in srgb, var(--panel) 96%, #202046), var(--panel));
-}
-
-.voice-section-head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 15px;
-  margin-bottom: 16px;
-}
-
-.voice-section-head h2 {
-  margin: 5px 0 0;
-  font-size: 16px;
-}
-
-.voice-section-head p {
-  max-width: 390px;
-  margin: 5px 0 0;
-  color: var(--muted);
-  font-size: 11px;
-  line-height: 1.6;
 }
 
 .drawing-head,
@@ -437,13 +414,11 @@
 }
 
 .drawing-compose-panel .voice-form,
-.voice-workspace .voice-form,
 .create-settings-dialog .voice-form {
   gap: 11px;
 }
 
 .drawing-compose-panel .voice-form label,
-.voice-workspace .voice-form label,
 .create-settings-dialog .voice-form label {
   gap: 6px;
 }
@@ -451,9 +426,6 @@
 .drawing-compose-panel .voice-form input,
 .drawing-compose-panel .voice-form select,
 .drawing-compose-panel .voice-form textarea,
-.voice-workspace .voice-form input,
-.voice-workspace .voice-form select,
-.voice-workspace .voice-form textarea,
 .create-settings-dialog .voice-form input,
 .create-settings-dialog .voice-form select,
 .create-settings-dialog .voice-form textarea {
@@ -466,25 +438,11 @@
 .drawing-compose-panel .voice-form input:focus,
 .drawing-compose-panel .voice-form select:focus,
 .drawing-compose-panel .voice-form textarea:focus,
-.voice-workspace .voice-form input:focus,
-.voice-workspace .voice-form select:focus,
-.voice-workspace .voice-form textarea:focus,
 .create-settings-dialog .voice-form input:focus,
 .create-settings-dialog .voice-form select:focus,
 .create-settings-dialog .voice-form textarea:focus {
   border-color: color-mix(in srgb, var(--accent) 62%, var(--line));
   box-shadow: 0 0 0 3px rgba(139, 130, 255, .12);
-}
-
-.voice-workspace .voice-section-head h2 {
-  font-size: 17px;
-  letter-spacing: -.2px;
-}
-
-.voice-workspace .voice-section-head p {
-  max-width: 470px;
-  margin-top: 6px;
-  line-height: 1.65;
 }
 
 .drawing-prompt-field textarea {
@@ -739,8 +697,7 @@
   justify-content: flex-end;
 }
 
-.drawing-compose-panel .voice-form-actions,
-.voice-workspace .voice-form-actions {
+.drawing-compose-panel .voice-form-actions {
   gap: 9px;
 }
 
@@ -758,8 +715,7 @@
   font-size: 10px;
 }
 
-.drawing-note,
-.voice-note {
+.drawing-note {
   margin: 14px 0 0;
   border-top: 1px solid var(--line);
   padding-top: 12px;
@@ -1345,42 +1301,6 @@
   font-size: 10px;
 }
 
-.voice-workspace {
-  display: grid;
-  grid-template-columns: minmax(0, 1.1fr) minmax(340px, .9fr);
-  align-items: start;
-  gap: 16px;
-  max-width: 1200px;
-}
-
-.voice-design-panel {
-  padding: 22px;
-  background:
-    radial-gradient(circle at 94% 5%, rgba(139, 130, 255, .18), transparent 33%),
-    linear-gradient(145deg, color-mix(in srgb, var(--panel) 96%, #241f45), var(--panel));
-}
-
-.voice-design-form textarea {
-  min-height: 108px;
-}
-
-.voice-history {
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
-  gap: 16px;
-  min-width: 0;
-  box-sizing: border-box;
-  block-size: min(480px, calc(100dvh - 300px));
-  max-block-size: min(480px, calc(100dvh - 300px));
-  overflow: hidden;
-  padding: 22px;
-  position: sticky;
-  top: 18px;
-  background:
-    radial-gradient(circle at 95% 5%, rgba(69, 212, 191, .1), transparent 29%),
-    linear-gradient(145deg, color-mix(in srgb, var(--panel) 97%, #18292c), var(--panel));
-}
-
 .voice-candidate-list {
   min-height: 0;
   align-content: start;
@@ -1414,11 +1334,6 @@
   min-width: 0;
 }
 
-.voice-candidate.retained {
-  border-color: color-mix(in srgb, var(--accent2) 34%, var(--line));
-  background: rgba(69, 212, 191, .05);
-}
-
 .voice-candidate-actions {
   display: flex;
   flex-wrap: wrap;
@@ -1428,34 +1343,6 @@
 
 .voice-candidate-actions button {
   white-space: nowrap;
-}
-
-.voice-settings-body {
-  display: grid;
-  gap: 16px;
-  padding: 16px 18px 18px;
-}
-
-.voice-connection-panel {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
-  border-bottom: 1px solid var(--line);
-  padding-bottom: 14px;
-}
-
-.voice-connection-panel .voice-section-head {
-  flex: 1;
-  margin: 0;
-}
-
-.voice-connection-actions {
-  display: flex;
-  align-items: center;
-  flex: 0 0 auto;
-  flex-wrap: wrap;
-  gap: 9px;
 }
 
 .voice-settings-copy {
@@ -1554,8 +1441,7 @@
   font-size: 10px;
 }
 
-.voice-contact-config-form,
-.voice-rename-form {
+.voice-contact-config-form {
   padding: 0 18px 18px;
 }
 
@@ -1644,7 +1530,6 @@
   }
 
   .reference-import-panel-content,
-  .voice-connection-panel,
   .drawing-section-heading,
   .drawing-reference-summary {
     align-items: stretch;
@@ -1667,9 +1552,7 @@
 
 @media (max-width: 560px) {
   .drawing-compose-panel,
-  .drawing-runs,
-  .voice-design-panel,
-  .voice-history {
+  .drawing-runs {
     padding: 17px;
   }
 
@@ -1732,8 +1615,7 @@
 
 /* The create pages are desktop workspaces: keep the compose/result relationship
    stable under application zoom instead of turning it into a different vertical page. */
-.visual-workbench,
-.voice-workspace {
+.visual-workbench {
   grid-template-columns: minmax(520px, 1.16fr) minmax(320px, .84fr);
   align-items: start;
   gap: var(--page-card-gap);
@@ -1759,19 +1641,15 @@
 }
 
 .drawing-compose-panel,
-.drawing-runs,
-.voice-design-panel,
-.voice-history {
+.drawing-runs {
   border-radius: 20px;
 }
 
-.drawing-compose-panel,
-.voice-design-panel {
+.drawing-compose-panel {
   padding: 24px;
 }
 
-.drawing-runs,
-.voice-history {
+.drawing-runs {
   position: sticky;
   top: 18px;
   min-height: 360px;
@@ -1812,19 +1690,6 @@
   padding: 6px 2px 0;
 }
 
-.voice-workspace {
-  grid-template-columns: minmax(520px, 1.12fr) minmax(340px, .88fr);
-}
-
-.voice-history {
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
-  gap: 16px;
-  block-size: min(540px, calc(100dvh - 190px));
-  max-block-size: min(540px, calc(100dvh - 190px));
-  padding: 24px;
-}
-
 .voice-candidate-list {
   gap: 10px;
   padding: 1px 3px 3px 1px;
@@ -1841,33 +1706,10 @@
   gap: 7px;
 }
 
-.voice-candidate-actions__main,
-.voice-candidate-actions__manage {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  gap: 6px;
-}
-
-.voice-candidate-actions__manage .secondary-button {
-  color: var(--muted);
-}
-
-.voice-design-form textarea {
-  min-height: 104px;
-}
-
 @media (max-width: 920px) {
-  .visual-workbench,
-  .voice-workspace {
+  .visual-workbench {
     grid-template-columns: minmax(520px, 1.16fr) minmax(320px, .84fr);
     min-width: 920px;
-  }
-
-  .voice-history {
-    position: sticky;
-    block-size: min(540px, calc(100dvh - 190px));
-    max-block-size: min(540px, calc(100dvh - 190px));
   }
 
   .voice-candidate-list {

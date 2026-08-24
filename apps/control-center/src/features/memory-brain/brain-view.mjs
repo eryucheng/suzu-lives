@@ -1,3 +1,5 @@
+import { releasePointerCapture, subscribePointerCaptureRecovery } from "../../core/pointer-capture.mjs";
+
 const TAU = Math.PI * 2;
 const AMBIENT_GROUP_IDLE_MIN_DURATION = 520;
 const AMBIENT_GROUP_IDLE_MAX_DURATION = 1_900;
@@ -1068,9 +1070,10 @@ export function createMemoryBrainView(canvas, graph, {
   }
 
   function onPointerUp(event) {
-    if (!pointerDown || pointerDown.pointerId !== event.pointerId) return;
+    const activePointer = pointerDown;
+    if (!activePointer || activePointer.pointerId !== event.pointerId) return;
     const point = pointerPosition(event);
-    if (!pointerDown.moved) {
+    if (!activePointer.moved) {
       const target = hitTest(point.x, point.y);
       if (target?.kind === "evidence") {
         selectedEvidenceId = target.id;
@@ -1079,9 +1082,19 @@ export function createMemoryBrainView(canvas, graph, {
         focusNode(target.id);
       }
     }
+    finishPointerInteraction(activePointer.pointerId);
+  }
+
+  function finishPointerInteraction(pointerId = pointerDown?.pointerId) {
+    const activePointer = pointerDown;
+    if (!activePointer || activePointer.pointerId !== pointerId) return;
     pointerDown = null;
-    canvas.releasePointerCapture(event.pointerId);
+    releasePointerCapture(canvas, activePointer.pointerId);
     canvas.style.cursor = "grab";
+  }
+
+  function onPointerCaptureEnd(event) {
+    finishPointerInteraction(event?.pointerId);
   }
 
   function onWheel(event) {
@@ -1090,10 +1103,12 @@ export function createMemoryBrainView(canvas, graph, {
     lastInteractionAt = performance.now();
   }
 
+  const unsubscribePointerCaptureRecovery = subscribePointerCaptureRecovery(() => finishPointerInteraction());
   canvas.addEventListener("pointerdown", onPointerDown);
   canvas.addEventListener("pointermove", onPointerMove);
   canvas.addEventListener("pointerup", onPointerUp);
-  canvas.addEventListener("pointercancel", onPointerUp);
+  canvas.addEventListener("pointercancel", onPointerCaptureEnd);
+  canvas.addEventListener("lostpointercapture", onPointerCaptureEnd);
   canvas.addEventListener("wheel", onWheel, { passive: false });
   canvas.addEventListener("dblclick", reset);
 
@@ -1125,10 +1140,13 @@ export function createMemoryBrainView(canvas, graph, {
     destroyed = true;
     cancelAnimationFrame(frame);
     observer.disconnect();
+    unsubscribePointerCaptureRecovery();
+    finishPointerInteraction();
     canvas.removeEventListener("pointerdown", onPointerDown);
     canvas.removeEventListener("pointermove", onPointerMove);
     canvas.removeEventListener("pointerup", onPointerUp);
-    canvas.removeEventListener("pointercancel", onPointerUp);
+    canvas.removeEventListener("pointercancel", onPointerCaptureEnd);
+    canvas.removeEventListener("lostpointercapture", onPointerCaptureEnd);
     canvas.removeEventListener("wheel", onWheel);
     canvas.removeEventListener("dblclick", reset);
   }

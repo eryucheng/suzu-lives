@@ -29,7 +29,8 @@ test("联系人主动关心在长期记忆之前，并复用能力配置开关",
   assert.match(conversationFeature, /proactiveContactEnabled: proactiveContactEnabled\(contactId\)/u);
   assert.match(conversationFeature, /api\.capabilities\.snapshot/u);
   assert.match(conversationFeature, /api\.capabilities\.saveSettings\("proactive-contact"/u);
-  assert.match(conversationFeature, /setCapabilityPage\?\.\("detail", "companion", "wechat-connection"\)/u);
+  assert.match(conversationFeature, /type: "begin"/u);
+  assert.doesNotMatch(conversationFeature, /masterEnabled|openWechatCapability|open-capability/u);
 });
 
 test("联系人设置直接保存主动关心的现有按联系人能力配置", async () => {
@@ -87,6 +88,62 @@ test("联系人设置直接保存主动关心的现有按联系人能力配置",
     }]);
     assert.equal(conversationReactSnapshot(context).sessionSettings?.proactiveContactEnabled, true);
     assert.equal(context.state.capabilitySnapshot?.capabilities[0]?.id, "proactive-contact");
+    actions.closeSessionSettings();
+  } finally {
+    stopConversationPolling();
+    if (priorWindow === undefined) delete globalThis.window;
+    else globalThis.window = priorWindow;
+  }
+});
+
+test("联系人设置读取微信连接服务返回的 contact 连接状态", async () => {
+  const priorWindow = globalThis.window;
+  globalThis.window = {
+    clearInterval: () => {},
+    setInterval: () => 1,
+  };
+  const context = {
+    api: {
+      capabilities: {
+        snapshot: async () => ({ capabilities: [] }),
+      },
+      conversation: {
+        onEvent: () => () => {},
+        snapshot: async () => ({
+          activeContact: { agentId: "agent-suzu", id: "contact-suzu", name: "Suzu" },
+          activeSessionId: "session-suzu",
+          contacts: [{ agentId: "agent-suzu", id: "contact-suzu", name: "Suzu" }],
+          contactsRoot: "D:/suzu-data/contacts",
+          messages: [],
+          projectRoot: "D:/suzu-data/contacts/suzu",
+          sessions: [{ id: "session-suzu", title: "Suzu" }],
+          status: "ready",
+          version: "wechat-contact-status-test",
+        }),
+      },
+      wechat: {
+        snapshot: async ({ contactId }) => ({
+          contact: {
+            contactId,
+            enabled: true,
+            status: "connected",
+          },
+          pendingQr: null,
+        }),
+      },
+    },
+    render: () => {},
+    state: { settings: {} },
+  };
+
+  try {
+    startConversationPolling(context);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const actions = createConversationReactActions(context);
+    await actions.openSessionSettings();
+    const settings = conversationReactSnapshot(context).sessionSettings;
+    assert.equal(settings?.wechat?.status, "已连接");
+    assert.deepEqual(settings?.wechat?.control, { enabled: true, type: "connection" });
     actions.closeSessionSettings();
   } finally {
     stopConversationPolling();

@@ -1,5 +1,5 @@
 import { state } from "./core/state.mjs";
-import { TEXT_MODEL_PROVIDERS, loadAgentRuntimeConfig, loadApiServices, loadCapabilities } from "./features/agent/runtime.mjs";
+import { TEXT_MODEL_PROVIDERS, ensureAgentRuntimeConfig, loadAgentRuntimeConfig, loadApiServices, loadCapabilities } from "./features/agent/runtime.mjs";
 import { hasPersonaContent, mainModelIsReady, resolveOnboardingStep, shouldShowOnboarding } from "./features/onboarding/index.mjs";
 import { conversationReactSnapshot, createConversationReactActions, isScheduledAgentReply, startConversationPolling, stopConversationPolling } from "./features/conversation/index.mjs";
 import {
@@ -24,10 +24,8 @@ const shellViews = new Set(["today", "relationships", "plans", "create", "capabi
 const CAPABILITY_SETTINGS_LABELS = Object.freeze({
   "image-generation": "图片生成设置",
   "image-vision": "图片理解设置",
-  "phone-camera": "手机拍照设置",
   "proactive-contact": "主动关心设置",
   "web-browser": "网页自动化设置",
-  "time-awareness": "时间感知设置",
   "video-understanding": "视频理解设置",
   "voice-message": "语音设置",
 });
@@ -107,7 +105,7 @@ function setView(view) {
   }
   render();
   if (nextView === "today") void refreshTodayCalendar();
-  if (nextView === "today") void loadUsageLedger();
+  if (nextView === "today") void loadTodayUsageSummary();
   if (nextView === "plans") void loadSchedules();
   if (nextView === "capabilities") void loadCapabilities(context);
   if (nextView === "settings" && state.settingsTab === "api") void loadApiServices(context);
@@ -265,14 +263,14 @@ function observeSoftwareAssistantActions() {
       openSuzuSearchItem(event.destinationId);
       return;
     }
-    if (event?.type !== "theme-changed") return;
+    if (event?.type !== "theme-changed" && event?.type !== "contact-avatar-changed") return;
     void api.settings.get()
       .then((settings) => {
         state.settings = settings;
-        applyTheme();
+        if (event?.type === "theme-changed") applyTheme();
         render();
       })
-      .catch((error) => setNotice(`主题已保存，但界面未能立即刷新：${error?.message || error}`));
+      .catch((error) => setNotice(`设置已保存，但界面未能立即刷新：${error?.message || error}`));
   });
 }
 
@@ -310,6 +308,9 @@ async function prepareOnboarding({ open = false, allowCompleted = false } = {}) 
 }
 
 async function openOnboarding() {
+  // A completed installation does not need to wake Agent Core merely to draw
+  // the first window. Load the model state only when the setup flow is opened.
+  if (!state.agentRuntime) await loadAgentRuntimeConfig(context);
   await prepareOnboarding({ open: true, allowCompleted: true });
   render();
 }
@@ -342,7 +343,7 @@ function continueOnboarding(step) {
   setOnboardingStep(step);
 }
 
-async function saveOnboardingMainModel({ apiKey = "", baseUrl = "", model = "", protocol = "", provider = "" } = {}) {
+async function saveOnboardingMainModel({ apiKey = "", baseUrl = "", model = "", protocol = "", provider = "", supportsImageInput = false } = {}) {
   try {
     state.agentRuntime = await api.agentRuntime.saveModelConfiguration({
       apiKey,
@@ -350,6 +351,7 @@ async function saveOnboardingMainModel({ apiKey = "", baseUrl = "", model = "", 
       model,
       protocol,
       provider,
+      supportsImageInput,
     });
     if (!mainModelIsReady(state.agentRuntime)) throw new Error("主模型还没有可用的 API Key。请填写后再保存。");
     state.onboardingStep = "contact";
@@ -432,6 +434,7 @@ function onboardingWorkspace() {
         })),
         protocol: String(configuration.protocol || provider.protocol || "anthropic-messages"),
         ready,
+        supportsImageInput: configuration.supportsImageInput === true,
       },
     },
   };
@@ -734,6 +737,108 @@ async function saveCapabilitySettings(abilityId, value) {
   }
 }
 
+async function saveImageGenerationCustomAdapter(value) {
+  try {
+    const response = await api.capabilities.saveImageGenerationCustomAdapter(value);
+    if (response?.ok) {
+      state.capabilitySnapshot = response.value;
+      setNotice("自定义图像协议已保存。");
+      render();
+      return response.value;
+    }
+    throw new Error(response?.error?.message || "无法保存自定义图像协议。");
+  } catch (error) {
+    setNotice(error?.message || "无法保存自定义图像协议。");
+    render();
+    throw error;
+  }
+}
+
+async function deleteImageGenerationCustomAdapter(value) {
+  try {
+    const response = await api.capabilities.deleteImageGenerationCustomAdapter(value);
+    if (response?.ok) {
+      state.capabilitySnapshot = response.value;
+      setNotice("自定义图像协议已删除。");
+      render();
+      return response.value;
+    }
+    throw new Error(response?.error?.message || "无法删除自定义图像协议。");
+  } catch (error) {
+    setNotice(error?.message || "无法删除自定义图像协议。");
+    render();
+    throw error;
+  }
+}
+
+async function saveImageVisionCustomAdapter(value) {
+  try {
+    const response = await api.capabilities.saveImageVisionCustomAdapter(value);
+    if (response?.ok) {
+      state.capabilitySnapshot = response.value;
+      setNotice("自定义视觉协议已保存。");
+      render();
+      return response.value;
+    }
+    throw new Error(response?.error?.message || "无法保存自定义视觉协议。");
+  } catch (error) {
+    setNotice(error?.message || "无法保存自定义视觉协议。");
+    render();
+    throw error;
+  }
+}
+
+async function deleteImageVisionCustomAdapter(value) {
+  try {
+    const response = await api.capabilities.deleteImageVisionCustomAdapter(value);
+    if (response?.ok) {
+      state.capabilitySnapshot = response.value;
+      setNotice("自定义视觉协议已删除。");
+      render();
+      return response.value;
+    }
+    throw new Error(response?.error?.message || "无法删除自定义视觉协议。");
+  } catch (error) {
+    setNotice(error?.message || "无法删除自定义视觉协议。");
+    render();
+    throw error;
+  }
+}
+
+async function saveVideoUnderstandingCustomAdapter(value) {
+  try {
+    const response = await api.capabilities.saveVideoUnderstandingCustomAdapter(value);
+    if (response?.ok) {
+      state.capabilitySnapshot = response.value;
+      setNotice("自定义视频协议已保存。");
+      render();
+      return response.value;
+    }
+    throw new Error(response?.error?.message || "无法保存自定义视频协议。");
+  } catch (error) {
+    setNotice(error?.message || "无法保存自定义视频协议。");
+    render();
+    throw error;
+  }
+}
+
+async function deleteVideoUnderstandingCustomAdapter(value) {
+  try {
+    const response = await api.capabilities.deleteVideoUnderstandingCustomAdapter(value);
+    if (response?.ok) {
+      state.capabilitySnapshot = response.value;
+      setNotice("自定义视频协议已删除。");
+      render();
+      return response.value;
+    }
+    throw new Error(response?.error?.message || "无法删除自定义视频协议。");
+  } catch (error) {
+    setNotice(error?.message || "无法删除自定义视频协议。");
+    render();
+    throw error;
+  }
+}
+
 async function setCapabilityContactEnabled(abilityId, contactId, contactEnabled) {
   try {
     const response = await api.capabilities.saveSettings(abilityId, { contactId, contactEnabled });
@@ -754,15 +859,9 @@ async function saveWechatSettings(value) {
   const next = value && typeof value === "object" ? value : {};
   try {
     state.wechatSnapshot = await api.wechat.saveSettings(next);
-    if (typeof next.enabled === "boolean") {
-      setNotice(next.enabled
-        ? "微信连接已开启；现在可以在任一会话的“··· → 设置”里生成二维码。"
-        : "微信连接已关闭；已有绑定会保留，重新开启后可恢复。");
-    } else {
-      setNotice("微信投递设置已保存。");
-    }
+    setNotice("微信投递设置已保存。");
   } catch (error) {
-    setNotice(error?.message || (typeof next.enabled === "boolean" ? "无法更新微信连接。" : "无法保存微信投递设置。"));
+    setNotice(error?.message || "无法保存微信投递设置。");
   }
   render();
 }
@@ -968,6 +1067,18 @@ async function answerIncomingVoiceCall(requestId) {
 function declineIncomingVoiceCall(requestId) {
   if (!state.incomingVoiceCall || String(state.incomingVoiceCall.requestId || "") !== String(requestId || "")) return;
   state.incomingVoiceCall = null;
+  if (typeof api.conversation?.call?.dismissRequest === "function") {
+    void api.conversation.call.dismissRequest({ requestId }).catch(() => undefined);
+  }
+  render();
+}
+
+function cancelIncomingVoiceCall(requestId) {
+  const matchesIncoming = String(state.incomingVoiceCall?.requestId || "") === String(requestId || "");
+  const matchesPending = String(state.pendingIncomingVoiceCall?.requestId || "") === String(requestId || "");
+  if (!matchesIncoming && !matchesPending) return;
+  if (matchesIncoming) state.incomingVoiceCall = null;
+  if (matchesPending) state.pendingIncomingVoiceCall = null;
   render();
 }
 
@@ -985,16 +1096,45 @@ function observeIncomingConversationMessages() {
       void showIncomingVoiceCall(event);
       return;
     }
+    if (event?.type === "call-request-cancelled") {
+      cancelIncomingVoiceCall(event?.requestId);
+      return;
+    }
     void showIncomingConversationNotice(event);
   });
-  // This also records the renderer as the event recipient in the main process,
-  // so scheduled replies can arrive while another page is open.
-  void api.conversation.snapshot?.().catch(() => undefined);
+  // Register the renderer without opening a contact session or reading its
+  // transcript. Scheduled replies can still arrive while another page is open.
+  void api.conversation.registerEventRecipient?.().catch(() => undefined);
 }
 
 observeIncomingConversationMessages();
 
 let todayCalendarRefreshId = 0;
+let todayStartupSnapshotRequest = 0;
+let rendererStartupReadySent = false;
+
+function notifyMainAfterFirstPaint() {
+  if (rendererStartupReadySent) return;
+  rendererStartupReadySent = true;
+  if (typeof api.appLifecycle?.rendererReady !== "function") return;
+  void api.appLifecycle.rendererReady().catch(() => undefined);
+}
+
+function scheduleTodaySnapshotsAfterFirstPaint() {
+  const request = ++todayStartupSnapshotRequest;
+  const load = () => {
+    if (request === todayStartupSnapshotRequest && state.view === "today") {
+      void refreshTodayCalendar();
+      void loadTodayUsageSummary();
+    }
+    notifyMainAfterFirstPaint();
+  };
+  if (typeof window.requestAnimationFrame === "function") {
+    window.requestAnimationFrame(() => window.requestAnimationFrame(load));
+  } else {
+    window.setTimeout(load, 0);
+  }
+}
 
 function visibleCalendarYear() {
   const month = String(state.todayMonth || "");
@@ -1123,7 +1263,60 @@ async function loadUsageLedger() {
   } catch (error) {
     state.data = { status: "needs-project", warning: `无法读取费用统计：${error?.message || error}` };
   }
-  if ((state.view === "admin" && state.adminTab === "usage") || state.view === "today") render();
+  if (state.view === "admin" && state.adminTab === "usage") render();
+}
+
+let todayUsageRequest = 0;
+let todayUsageWarmScheduled = false;
+
+function scheduleTodayUsageWarm() {
+  if (todayUsageWarmScheduled || typeof api.ledger?.warmTodaySummary !== "function") return;
+  todayUsageWarmScheduled = true;
+  const work = async () => {
+    try {
+      if (state.view !== "today" || state.todayUsage?.needsRefresh !== true) return;
+      const summary = await api.ledger.warmTodaySummary();
+      if (state.view !== "today") return;
+      state.todayUsage = summary;
+      render();
+    } catch {
+      // The compact sidecar is a performance cache.  A failed rebuild leaves
+      // the durable JSONL untouched and can retry from a later home visit.
+    } finally {
+      todayUsageWarmScheduled = false;
+    }
+  };
+  // Existing JSONL ledgers need one migration pass before they have a compact
+  // dashboard summary. Keep that repair well after the first screen, so an
+  // old account never pays its historical scan while the app is opening.
+  window.setTimeout(() => {
+    if (typeof window.requestIdleCallback === "function") {
+      window.requestIdleCallback(() => { void work(); }, { timeout: 15_000 });
+      return;
+    }
+    void work();
+  }, 1_500);
+}
+
+async function loadTodayUsageSummary() {
+  const request = ++todayUsageRequest;
+  try {
+    if (typeof api.ledger?.todaySummary !== "function") {
+      state.todayUsage = { status: "needs-project", events: [], summary: { today: {} }, warning: "费用摘要服务不可用。" };
+      return state.todayUsage;
+    }
+    const summary = await api.ledger.todaySummary();
+    if (request !== todayUsageRequest) return null;
+    state.todayUsage = summary;
+    if (state.todayUsage?.needsRefresh === true) scheduleTodayUsageWarm();
+    return summary;
+  } catch (error) {
+    if (request !== todayUsageRequest) return null;
+    state.todayUsage = { status: "needs-project", events: [], summary: { today: {} }, warning: `无法读取今日费用摘要：${error?.message || error}` };
+    return state.todayUsage;
+  } finally {
+    if (request === todayUsageRequest && state.view === "today") render();
+  }
 }
 
 async function updateSchedule(request) {
@@ -1142,6 +1335,26 @@ async function setSchedulePlanEnabled(value) {
 
 async function removeSchedulePlan(value) {
   return updateSchedule(() => api.schedule.remove(value));
+}
+
+async function updatePlannedProactiveContactSettings(value) {
+  const response = await api.capabilities.saveSettings("proactive-contact", value);
+  if (!response?.ok) throw new Error(response?.error?.message || "无法更新主动关心设置。");
+  state.capabilitySnapshot = response.value;
+  state.scheduleSnapshot = await api.schedule.snapshot();
+  return { snapshot: state.scheduleSnapshot };
+}
+
+async function setPlannedProactiveContactAutoMaintain(enabled) {
+  if (typeof enabled !== "boolean") throw new Error("主动关心总开关状态无效。");
+  return updatePlannedProactiveContactSettings({ autoMaintain: enabled });
+}
+
+async function setPlannedProactiveContactEnabled({ contactId = "", enabled } = {}) {
+  if (!String(contactId).trim() || typeof enabled !== "boolean") {
+    throw new Error("联系人主动关心设置无效。");
+  }
+  return updatePlannedProactiveContactSettings({ contactEnabled: enabled, contactId });
 }
 
 async function saveRelationshipFile({ content = "", path = "" } = {}) {
@@ -1317,7 +1530,7 @@ function routeForCurrentView() {
         },
         snapshot: {
           calendar: state.todayCalendar,
-          data: state.data,
+          data: state.todayUsage,
           editor: state.todayEventEditor,
           month: state.todayMonth,
           selectedDate: state.todaySelectedDate,
@@ -1358,6 +1571,18 @@ function routeForCurrentView() {
           setCapabilityActive,
           saveSettings: saveCapabilitySettings,
           setContactEnabled: setCapabilityContactEnabled,
+          imageGenerationDesign: {
+            saveCustomAdapter: saveImageGenerationCustomAdapter,
+            deleteCustomAdapter: deleteImageGenerationCustomAdapter,
+          },
+          imageVisionDesign: {
+            saveCustomAdapter: saveImageVisionCustomAdapter,
+            deleteCustomAdapter: deleteImageVisionCustomAdapter,
+          },
+          videoUnderstandingDesign: {
+            saveCustomAdapter: saveVideoUnderstandingCustomAdapter,
+            deleteCustomAdapter: deleteVideoUnderstandingCustomAdapter,
+          },
           voiceDesign: api.voiceDesign,
           saveWechatSettings,
           selectApiBinding: selectCapabilityApiBinding,
@@ -1430,6 +1655,8 @@ function routeForCurrentView() {
           remove: removeSchedulePlan,
           selectScript: () => api.schedule.selectScript(),
           setEnabled: setSchedulePlanEnabled,
+          setProactiveContactAutoMaintain: setPlannedProactiveContactAutoMaintain,
+          setProactiveContactEnabled: setPlannedProactiveContactEnabled,
         },
         snapshot: state.scheduleSnapshot,
       },
@@ -1507,6 +1734,7 @@ function routeForCurrentView() {
         },
         error: state.conversationCompactorError,
         loading: state.conversationCompactorLoading,
+        settings: state.settings,
         snapshot: state.conversationCompactorSnapshot,
       },
     };
@@ -1523,6 +1751,7 @@ function routeForCurrentView() {
         },
         error: state.agentJournalError,
         loading: state.agentJournalLoading,
+        settings: state.settings,
         snapshot: state.agentJournalSnapshot,
       },
     };
@@ -1595,10 +1824,11 @@ async function refreshData() {
   try {
     state.settings = await api.settings.get();
     applyTheme();
-    // Keep boot focused on the chat vertical slice. Calendar, cost, memory,
-    // and multimodal connection snapshots remain stored locally, but are not
-    // read just to open a conversation.
+    // Every page keeps its own snapshot.  The home dashboard asks only for its
+    // compact summaries after its first paint; complete ledgers and other
+    // page-specific data are loaded only when their page is opened.
     state.data = null;
+    state.todayUsage = null;
     state.memoryStatus = null;
     state.todayCalendar = null;
     state.apiServices = null;
@@ -1606,23 +1836,22 @@ async function refreshData() {
     const releaseAnnouncementSnapshot = typeof api.settings?.releaseAnnouncementStatus === "function"
       ? api.settings.releaseAnnouncementStatus().catch(() => null)
       : Promise.resolve(null);
+    // Prime the runtime's selected-model capability cache once during every
+    // application start. Subsequent refreshes reuse state.agentRuntime; model
+    // saves return a fresh snapshot and replace this cached value.
+    const agentRuntimeSnapshot = ensureAgentRuntimeConfig(context).catch(() => null);
     [state.agentRuntime, state.releaseAnnouncement] = await Promise.all([
-      api.agentRuntime.snapshot().catch(() => null),
+      agentRuntimeSnapshot,
       releaseAnnouncementSnapshot,
     ]);
     state.releaseAnnouncementOpen = state.releaseAnnouncement?.pending === true;
     if (!state.onboardingInitialized) await prepareOnboarding({ open: true });
-    // Today is the startup page. Fetch its independent snapshots without
-    // starting a conversation or changing the active route.
-    if (state.view === "today") {
-      void refreshTodayCalendar();
-      void loadUsageLedger();
-    }
   } catch (error) {
     state.data = { status: "needs-project", warning: `读取失败：${error?.message || error}` };
   } finally {
     setLoading(false);
     render();
+    if (state.view === "today") scheduleTodaySnapshotsAfterFirstPaint();
   }
 }
 

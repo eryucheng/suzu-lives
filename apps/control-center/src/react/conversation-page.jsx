@@ -5,12 +5,14 @@ import appleEmojiSpritesheet from "emoji-datasource-apple/img/apple/sheets-128/3
 import { Picker } from "emoji-mart";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { ChatVoice, Select } from "suzu-design-system";
+import { Select } from "suzu-design-system";
 
+import { releasePointerCapture } from "../core/pointer-capture.mjs";
 import { hasMarkdownFormatting, shouldSubmitConversationOnEnter } from "../features/conversation/index.mjs";
 import { useConversationCall } from "./conversation-call.jsx";
 import { captureConversationViewportAnchor, restoreConversationViewportAnchor } from "./conversation-scroll-anchor.mjs";
 import { useConversationVoiceInput } from "./conversation-voice-input.jsx";
+import { usePointerCaptureRecovery } from "./pointer-capture-recovery.mjs";
 import "./conversation-page.css";
 
 let activeConversationAudio = null;
@@ -43,6 +45,8 @@ const CONVERSATION_ROSTER_MAX_WIDTH = 340;
 const CONVERSATION_ROSTER_FIXED_VIEWPORT = 940;
 const CONVERSATION_ROSTER_NARROW_WIDTH = 210;
 const CONVERSATION_SCROLLBAR_IDLE_MS = 1_800;
+const CONVERSATION_HISTORY_TOP_TRIGGER_PX = 1;
+const CONVERSATION_HISTORY_TOP_REARM_PX = 32;
 
 function clampConversationRosterWidth(value) {
   const numeric = Math.round(Number(value));
@@ -469,10 +473,12 @@ function ConversationEmojiPicker({ actions }) {
   );
 }
 
-function ConversationComposer({ actions, callActive = false, composer, composerHeight, focusRequest = 0, onResizeKeyDown, onResizePointerCancel, onResizePointerDown, onResizePointerMove, onResizePointerUp, voiceInput }) {
+function ConversationComposer({ actions, callActive = false, composer, composerHeight, focusRequest = 0, onResizeKeyDown, onResizePointerCancel, onResizePointerCaptureLost, onResizePointerDown, onResizePointerMove, onResizePointerUp, voiceInput }) {
   const inputRef = useRef(null);
   const draftMirrorRef = useRef(null);
+  const handledFocusRequestRef = useRef(0);
   const unavailable = Boolean(composer.unavailable);
+  const sending = Boolean(composer.sending);
   const externalDraft = String(composer.draft || "");
   const [draft, setDraft] = useState(() => externalDraft);
   const draftHasAppleEmoji = textGraphemes(draft).some((segment) => APPLE_EMOJI_BY_NATIVE.has(segment));
@@ -496,20 +502,28 @@ function ConversationComposer({ actions, callActive = false, composer, composerH
   useLayoutEffect(() => {
     resize();
     syncDraftMirrorScroll();
-    if (focusRequest) inputRef.current?.focus();
-  }, [attachments.length, composerHeight, draft, focusRequest]);
+  }, [attachments.length, composerHeight, draft]);
+  useLayoutEffect(() => {
+    if (!focusRequest) {
+      handledFocusRequestRef.current = 0;
+      return;
+    }
+    if (focusRequest === handledFocusRequestRef.current || unavailable || inputRef.current?.disabled) return;
+    inputRef.current?.focus();
+    handledFocusRequestRef.current = focusRequest;
+  }, [focusRequest, unavailable]);
   const submitMessage = () => {
     // The text field intentionally owns a local draft so typing does not
     // re-render the whole conversation. Clear that local copy synchronously
     // when a send is accepted; the outer conversation state restores it if
     // delivery subsequently fails.
-    if (unavailable || composer.attachmentPicking || (!draft.trim() && !attachments.length)) return;
+    if (unavailable || sending || composer.attachmentPicking || (!draft.trim() && !attachments.length)) return;
     setDraft("");
     actions.submitMessage();
   };
   return (
     <form className={`conversation-composer${attachments.length ? " has-attachments" : ""}`} onSubmit={(event) => { event.preventDefault(); submitMessage(); }}>
-      <div aria-label="调整聊天框高度" aria-orientation="horizontal" aria-valuemax={CONVERSATION_COMPOSER_MAX_HEIGHT} aria-valuemin={CONVERSATION_COMPOSER_MIN_HEIGHT} aria-valuenow={composerHeight} className="conversation-composer-resizer" onKeyDown={onResizeKeyDown} onPointerCancel={onResizePointerCancel} onPointerDown={onResizePointerDown} onPointerMove={onResizePointerMove} onPointerUp={onResizePointerUp} role="separator" tabIndex={0} title="拖动调整聊天框高度" />
+      <div aria-label="调整聊天框高度" aria-orientation="horizontal" aria-valuemax={CONVERSATION_COMPOSER_MAX_HEIGHT} aria-valuemin={CONVERSATION_COMPOSER_MIN_HEIGHT} aria-valuenow={composerHeight} className="conversation-composer-resizer" onKeyDown={onResizeKeyDown} onLostPointerCapture={onResizePointerCaptureLost} onPointerCancel={onResizePointerCancel} onPointerDown={onResizePointerDown} onPointerMove={onResizePointerMove} onPointerUp={onResizePointerUp} role="separator" tabIndex={0} title="拖动调整聊天框高度" />
       <div className={`conversation-composer__surface${attachments.length ? " has-attachments" : ""}`}>
         <div className={`conversation-composer__input-layer${draftHasAppleEmoji ? " has-emoji-mirror" : ""}${unavailable ? " is-unavailable" : ""}`}>
           <textarea
@@ -560,24 +574,24 @@ function ConversationComposer({ actions, callActive = false, composer, composerH
             <button
               aria-label="表情"
               className={`conversation-composer__tool${composer.emojiOpen ? " is-active" : ""}`}
-              disabled={unavailable}
+              disabled={unavailable || sending}
               onClick={actions.toggleEmoji}
               title="表情"
               type="button"
             ><ConversationIcon name="emoji" /></button>
-            <button aria-label="添加文件" className="conversation-composer__tool" disabled={unavailable || composer.attachmentPicking} onClick={() => { void actions.selectComposerAttachments("file"); }} title="添加文件" type="button"><ConversationIcon name="folder" /></button>
+            <button aria-label="添加文件" className="conversation-composer__tool" disabled={unavailable || sending || composer.attachmentPicking} onClick={() => { void actions.selectComposerAttachments("file"); }} title="添加文件" type="button"><ConversationIcon name="folder" /></button>
             <button
               aria-label={voiceInput?.label || "语音输入"}
               aria-pressed={voiceInput?.active === true}
-              className={`conversation-composer__tool${voiceInput?.active ? " is-active" : ""}`}
-              disabled={(!voiceInput?.active && (unavailable || callActive)) || !voiceInput?.available}
+              className={`conversation-composer__tool conversation-composer__tool--voice-input${voiceInput?.active ? " is-active" : ""}`}
+              disabled={(!voiceInput?.active && (unavailable || sending || callActive)) || !voiceInput?.available}
               onClick={() => { void voiceInput?.toggle?.(); }}
               title={callActive && !voiceInput?.active ? "语音通话中，暂时不能使用语音输入" : (voiceInput?.label || "语音输入")}
               type="button"
             ><ConversationIcon name="mic" /></button>
           </div>
           <div className="conversation-composer__submit-area">
-            <button className="conversation-send-button" disabled={unavailable || composer.attachmentPicking}>{submitLabel}</button>
+            <button className="conversation-send-button" disabled={unavailable || sending || composer.attachmentPicking}>{submitLabel}</button>
           </div>
         </div>
       </div>
@@ -638,12 +652,34 @@ function readableProgress(audio, duration = readableDuration(audio)) {
   return duration ? Math.min(100, Math.max(0, (currentTime / duration) * 100)) : 0;
 }
 
-function PlayableChatVoice({ fileName, fileUrl }) {
+function voiceDurationLabel(duration) {
+  const seconds = Math.max(0, Math.round(Number(duration) || 0));
+  return seconds ? `${seconds}"` : "…";
+}
+
+function ConversationVoiceWaves({ mirrored = false }) {
+  return (
+    <svg
+      aria-hidden="true"
+      className={`conversation-audio__waves${mirrored ? " is-mirrored" : ""}`}
+      fill="none"
+      viewBox="0 0 30 30"
+    >
+      <path d="M7.5 11.2a5.7 5.7 0 0 1 0 7.6" />
+      <path d="M12 7.1a11.5 11.5 0 0 1 0 15.8" />
+      <path d="M16.8 3.8a16.1 16.1 0 0 1 0 22.4" />
+    </svg>
+  );
+}
+
+function PlayableChatVoice({ fileName, fileUrl, ownMessage = false }) {
   const audioRef = useRef(null);
   const [duration, setDuration] = useState(0);
   const [error, setError] = useState(fileUrl ? "" : "音频文件地址缺失");
   const [playing, setPlaying] = useState(false);
   const [progress, setProgress] = useState(0);
+  const durationLabel = voiceDurationLabel(duration);
+  const bubbleWidth = Math.min(180, Math.max(112, 92 + Math.ceil(duration) * 1.7));
 
   useEffect(() => {
     const audio = audioRef.current;
@@ -714,7 +750,21 @@ function PlayableChatVoice({ fileName, fileUrl }) {
         ref={audioRef}
         src={fileUrl || undefined}
       />
-      <ChatVoice className="conversation-chat-voice" duration={duration} onToggle={togglePlayback} playing={playing} progress={progress} />
+      <button
+        aria-label={`${playing ? "暂停" : "播放"}语音消息，时长 ${durationLabel}`}
+        className={[
+          "conversation-audio__button",
+          ownMessage ? "is-outgoing" : "is-incoming",
+          playing && "is-playing",
+        ].filter(Boolean).join(" ")}
+        disabled={!fileUrl}
+        onClick={() => { void togglePlayback(!playing); }}
+        style={{ "--conversation-audio-width": `${bubbleWidth}px` }}
+        type="button"
+      >
+        <span className="conversation-audio__duration">{durationLabel}</span>
+        <ConversationVoiceWaves mirrored={ownMessage} />
+      </button>
       {error ? <span className="conversation-audio__error" role="status">{error}</span> : null}
     </div>
   );
@@ -757,8 +807,8 @@ function ConversationFileIcon() {
   );
 }
 
-function ConversationMessageBlock({ block, onOpenExternal, onOpenFile, onOpenFileContextMenu, onPreview }) {
-  if (block.type === "audio") return <PlayableChatVoice fileName={block.fileName} fileUrl={block.fileUrl} />;
+function ConversationMessageBlock({ block, onOpenExternal, onOpenFile, onOpenFileContextMenu, onPreview, ownMessage = false }) {
+  if (block.type === "audio") return <PlayableChatVoice fileName={block.fileName} fileUrl={block.fileUrl} ownMessage={ownMessage} />;
   if (block.type === "text") return <ConversationRenderedText onOpenExternal={onOpenExternal} text={block.text} />;
   if (block.type === "detail") return <details className="conversation-detail"><summary>{block.title}</summary><pre>{block.detail}</pre></details>;
   if (block.type !== "media") return null;
@@ -855,7 +905,7 @@ function ConversationMessage({ onOpenExternal, onOpenFile, onOpenFileContextMenu
     >
       {row.avatar ? <div className="conversation-avatar"><PersonAvatar avatar={row.avatar} /></div> : null}
       <div className="conversation-bubble">
-        {row.blocks.map((block, index) => <ConversationMessageBlock block={block} key={`${block.type}-${block.fileUrl || block.text || block.title || index}-${index}`} onOpenExternal={onOpenExternal} onOpenFile={onOpenFile} onOpenFileContextMenu={onOpenFileContextMenu} onPreview={onPreview} />)}
+        {row.blocks.map((block, index) => <ConversationMessageBlock block={block} key={`${block.type}-${block.fileUrl || block.text || block.title || index}-${index}`} onOpenExternal={onOpenExternal} onOpenFile={onOpenFile} onOpenFileContextMenu={onOpenFileContextMenu} onPreview={onPreview} ownMessage={row.kind === "user"} />)}
         <ConversationUsage usage={row.usage} />
         {row.timestamp ? <div className="conversation-meta">{row.timestamp}</div> : null}
       </div>
@@ -895,9 +945,6 @@ function ConversationPermissions({ actions, permissions }) {
 
 function WechatSettingsControls({ actions, contactId, control }) {
   if (!control) return null;
-  if (control.type === "open-capability") {
-    return <div className="conversation-session-settings__actions"><button className="secondary-button" onClick={actions.openWechatCapability} type="button">打开“连接微信”总开关</button></div>;
-  }
   if (control.type === "connection") {
     return <div className="conversation-session-settings__connection-actions"><label className="conversation-session-settings__switch"><input checked={control.enabled} onChange={(event) => { void actions.setWechatContactEnabled(contactId, event.currentTarget.checked); }} type="checkbox" /><span>接收并投递这位联系人</span></label><button className="text-button" onClick={() => { void actions.disconnectWechat(contactId); }} type="button">断开微信</button></div>;
   }
@@ -918,7 +965,7 @@ function ConversationSessionSettings({ actions, onDisplayPreferenceChange, onTim
       <details className="conversation-session-settings__section conversation-session-settings__display-options"><summary className="conversation-settings__time-display"><span>聊天显示</span></summary><div className="conversation-session-settings__checks">{settings.preferences.map((preference) => <label key={preference.key}><input checked={preference.checked} onChange={(event) => { void changeDisplayPreference(preference.key, event.currentTarget.checked); }} type="checkbox" />{preference.label}</label>)}</div></details>
       <section className="conversation-session-settings__section conversation-session-settings__single-row"><label className="conversation-settings__time-display"><span>时间显示</span><Select ariaLabel="时间显示方式" className="conversation-settings__select" onChange={(value) => { void changeTimeDisplay(value); }} options={[{ label: "每条气泡内", value: "bubble" }, { label: "画面中心", value: "center" }]} value={settings.timeDisplay} /></label></section>
       <section className="conversation-session-settings__section conversation-session-settings__single-row"><label className="conversation-settings__time-display"><span>审批模式</span><Select ariaLabel="联系人审批模式" className="conversation-settings__select" disabled={Boolean(settings.saving)} onChange={(value) => { void actions.setContactPermissionMode(value); }} options={CONTACT_APPROVAL_MODE_OPTIONS} value={permissionMode} /></label></section>
-      <section className="conversation-session-settings__section"><header><div><span>COMPANION</span><h2>主动关心</h2><p>开启后，Suzu 会在软件运行期间结合你们的对话安排后续主动联系；关闭后会停止为这位联系人创建新的主动关心任务。</p></div></header><label className="conversation-session-settings__switch"><input checked={settings.proactiveContactEnabled} disabled={Boolean(settings.saving)} onChange={(event) => { void actions.setProactiveContactEnabled(event.currentTarget.checked); }} type="checkbox" /><span>启用主动关心</span></label></section>
+      <section className="conversation-session-settings__section"><header><div><span>COMPANION</span><h2>主动关心</h2><p>开启后，Suzu 会判断此刻是否适合联系，并在每次判断后给出下一次检查时间；软件据此安排下一次检查。关闭后会停止为这位联系人创建新的主动关心任务。</p></div></header><label className="conversation-session-settings__switch"><input checked={settings.proactiveContactEnabled} disabled={Boolean(settings.saving)} onChange={(event) => { void actions.setProactiveContactEnabled(event.currentTarget.checked); }} type="checkbox" /><span>启用主动关心</span></label></section>
       <section className="conversation-session-settings__section"><header><div><span>MEMORY · CORE</span><h2>长期记忆</h2><p>这个开关控制这位联系人的自动写入和召回；已有记忆会保留。召回内容会作为当前 Agent 请求的动态上下文参与对话，聊天页面显示实际消息。</p></div></header><label className="conversation-session-settings__switch"><input checked={settings.longTermMemoryEnabled} onChange={(event) => { void actions.setLongTermMemoryEnabled(event.currentTarget.checked); }} type="checkbox" /><span>启用长期记忆</span></label></section>
       {settings.hasSession ? (
         <>
@@ -1020,17 +1067,68 @@ function AvatarCropDialog({ actions, crop }) {
     observer.observe(stage);
     return () => observer.disconnect();
   }, [actions, crop?.source]);
-  if (!crop) return null;
-  const active = workingCrop || crop;
-  const { layout } = active;
+
   const endDrag = (event) => {
     const drag = dragRef.current;
     if (!drag || (event && event.pointerId !== drag.pointerId)) return;
-    try { stageRef.current?.releasePointerCapture(drag.pointerId); } catch { /* A released pointer needs no further work. */ }
     dragRef.current = null;
     setDragging(false);
+    releasePointerCapture(stageRef.current, drag.pointerId);
   };
-  return <div className="conversation-avatar-crop-overlay" onClick={(event) => { if (event.target === event.currentTarget) actions.closeAvatarCrop(); }}><section aria-labelledby="conversationAvatarCropTitle" aria-modal="true" className="conversation-avatar-crop-dialog" id="conversationAvatarCrop" role="dialog"><header><div><span>CONTACT AVATAR</span><h2 id="conversationAvatarCropTitle">裁剪头像</h2></div><button aria-label="取消裁剪" className="suzu-close-button" onClick={actions.closeAvatarCrop} type="button">×</button></header><p>拖动图片调整位置；方框内的正方形区域会作为头像保存。</p><div aria-label="头像裁剪区域" className={`conversation-avatar-crop-dialog__stage${dragging ? " is-dragging" : ""}`} onPointerCancel={endDrag} onPointerDown={(event) => { if (event.button !== 0) return; event.preventDefault(); dragRef.current = { pointerId: event.pointerId, x: event.clientX, y: event.clientY }; event.currentTarget.setPointerCapture(event.pointerId); setDragging(true); }} onPointerMove={(event) => { const drag = dragRef.current; if (!drag || drag.pointerId !== event.pointerId) return; const next = actions.moveAvatarCrop(event.clientX - drag.x, event.clientY - drag.y); dragRef.current = { ...drag, x: event.clientX, y: event.clientY }; if (next) setWorkingCrop(next); }} onPointerUp={endDrag} ref={stageRef}><img alt="正在裁剪的联系人头像" draggable="false" ref={imageRef} src={active.source} style={{ height: `${layout.displayHeight}px`, transform: `translate(${layout.offsetX}px, ${layout.offsetY}px)`, width: `${layout.displayWidth}px` }} /><span aria-hidden="true" className="conversation-avatar-crop-dialog__frame" /></div><label className="conversation-avatar-crop-dialog__zoom"><span>缩放</span><input max={active.maxZoom} min={active.minZoom} onChange={(event) => { const next = actions.setAvatarCropZoom(event.currentTarget.value); if (next) setWorkingCrop(next); }} step="0.01" type="range" value={layout.zoom} /><output>{active.zoom}%</output></label><footer><button className="text-button" onClick={actions.closeAvatarCrop} type="button">取消</button><button className="primary-button" onClick={() => { void actions.confirmAvatarCrop(imageRef.current); }} type="button">确认使用</button></footer></section></div>;
+
+  usePointerCaptureRecovery(() => endDrag());
+
+  if (!crop) return null;
+  const active = workingCrop || crop;
+  const { layout } = active;
+  const beginDrag = (event) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    dragRef.current = { pointerId: event.pointerId, x: event.clientX, y: event.clientY };
+    event.currentTarget.setPointerCapture(event.pointerId);
+    setDragging(true);
+  };
+  const moveDrag = (event) => {
+    const drag = dragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    const next = actions.moveAvatarCrop(event.clientX - drag.x, event.clientY - drag.y);
+    dragRef.current = { ...drag, x: event.clientX, y: event.clientY };
+    if (next) setWorkingCrop(next);
+  };
+
+  return (
+    <div className="conversation-avatar-crop-overlay" onClick={(event) => { if (event.target === event.currentTarget) actions.closeAvatarCrop(); }}>
+      <section aria-labelledby="conversationAvatarCropTitle" aria-modal="true" className="conversation-avatar-crop-dialog" id="conversationAvatarCrop" role="dialog">
+        <header>
+          <div><span>CONTACT AVATAR</span><h2 id="conversationAvatarCropTitle">裁剪头像</h2></div>
+          <button aria-label="取消裁剪" className="suzu-close-button" onClick={actions.closeAvatarCrop} type="button">×</button>
+        </header>
+        <p>拖动图片调整位置；方框内的正方形区域会作为头像保存。</p>
+        <div
+          aria-label="头像裁剪区域"
+          className={`conversation-avatar-crop-dialog__stage${dragging ? " is-dragging" : ""}`}
+          onLostPointerCapture={endDrag}
+          onPointerCancel={endDrag}
+          onPointerDown={beginDrag}
+          onPointerMove={moveDrag}
+          onPointerUp={endDrag}
+          ref={stageRef}
+        >
+          <img alt="正在裁剪的联系人头像" draggable="false" ref={imageRef} src={active.source} style={{ height: `${layout.displayHeight}px`, transform: `translate(${layout.offsetX}px, ${layout.offsetY}px)`, width: `${layout.displayWidth}px` }} />
+          <span aria-hidden="true" className="conversation-avatar-crop-dialog__frame" />
+        </div>
+        <label className="conversation-avatar-crop-dialog__zoom">
+          <span>缩放</span>
+          <input max={active.maxZoom} min={active.minZoom} onChange={(event) => { const next = actions.setAvatarCropZoom(event.currentTarget.value); if (next) setWorkingCrop(next); }} step="0.01" type="range" value={layout.zoom} />
+          <output>{active.zoom}%</output>
+        </label>
+        <footer>
+          <button className="text-button" onClick={actions.closeAvatarCrop} type="button">取消</button>
+          <button className="primary-button" onClick={() => { void actions.confirmAvatarCrop(imageRef.current); }} type="button">确认使用</button>
+        </footer>
+      </section>
+    </div>
+  );
 }
 
 function ConversationCallBar({ call, onEnd }) {
@@ -1066,26 +1164,22 @@ export function ConversationPage({ actions, api = null, incomingCall = null, sna
   const workspaceRef = useRef(null);
   const chatShellRef = useRef(null);
   const conversationScrollbarRailRef = useRef(null);
+  const conversationScrollbarThumbRef = useRef(null);
   const conversationScrollbarDragRef = useRef(null);
   const composerResizeRef = useRef(null);
   const rosterResizeRef = useRef(null);
   const latestScrollRequest = useRef(0);
   const scrollTargetRequest = useRef(0);
   const viewportAnchorRef = useRef(null);
+  const olderHistoryViewportAnchorRef = useRef(null);
+  const conversationHistoryTopLoadArmedRef = useRef(false);
   const conversationScrollbarIdleTimer = useRef(null);
+  const conversationScrollbarFrame = useRef(null);
   const [rosterWidth, setRosterWidth] = useState(() => clampConversationRosterWidth(snapshot.rosterWidth));
   const [rosterResizing, setRosterResizing] = useState(false);
   const [fixedRosterViewport, setFixedRosterViewport] = useState(viewportUsesFixedConversationRoster);
   const [composerHeight, setComposerHeight] = useState(() => clampConversationComposerHeight(snapshot.composerHeight));
   const [composerResizing, setComposerResizing] = useState(false);
-  const [conversationScrollbarVisible, setConversationScrollbarVisible] = useState(false);
-  const [conversationScrollbar, setConversationScrollbar] = useState(() => ({
-    scrollable: false,
-    thumbHeight: 0,
-    thumbTop: 0,
-    maxScrollTop: 0,
-    maxThumbTop: 0,
-  }));
   const composerHeightRef = useRef(composerHeight);
   const rosterWidthRef = useRef(rosterWidth);
   const contacts = Array.isArray(snapshot.contacts) ? snapshot.contacts : [];
@@ -1101,37 +1195,56 @@ export function ConversationPage({ actions, api = null, incomingCall = null, sna
     if (typeof api?.settings?.openExternal !== "function") return;
     return api.settings.openExternal(url).catch(() => undefined);
   }, [api]);
-  const updateConversationScrollbar = useCallback((list = listRef.current) => {
+  useEffect(() => {
+    conversationHistoryTopLoadArmedRef.current = false;
+    olderHistoryViewportAnchorRef.current = null;
+  }, [activeContactId]);
+  const syncConversationScrollbar = useCallback((list = listRef.current) => {
     const next = conversationScrollbarGeometry(list, conversationScrollbarRailRef.current);
-    setConversationScrollbar((current) => (
-      current.scrollable === next.scrollable
-      && current.thumbHeight === next.thumbHeight
-      && current.thumbTop === next.thumbTop
-      && current.maxScrollTop === next.maxScrollTop
-      && current.maxThumbTop === next.maxThumbTop
-        ? current
-        : next
-    ));
+    const rail = conversationScrollbarRailRef.current;
+    const thumb = conversationScrollbarThumbRef.current;
+    if (!rail || !thumb) return next;
+    rail.classList.toggle("is-scrollable", next.scrollable);
+    if (!next.scrollable) {
+      rail.classList.remove("is-visible");
+      thumb.style.height = "0px";
+      thumb.style.transform = "translateY(0px)";
+      return next;
+    }
+    thumb.style.height = `${next.thumbHeight}px`;
+    thumb.style.transform = `translateY(${next.thumbTop}px)`;
     return next;
   }, []);
+  const requestConversationScrollbarSync = useCallback((list = listRef.current) => {
+    if (conversationScrollbarFrame.current !== null || typeof window === "undefined") return;
+    conversationScrollbarFrame.current = window.requestAnimationFrame(() => {
+      conversationScrollbarFrame.current = null;
+      syncConversationScrollbar(list);
+    });
+  }, [syncConversationScrollbar]);
   const revealConversationScrollbar = useCallback(() => {
+    const rail = conversationScrollbarRailRef.current;
+    if (!rail?.classList.contains("is-scrollable")) return;
     if (conversationScrollbarIdleTimer.current !== null) {
       window.clearTimeout(conversationScrollbarIdleTimer.current);
     }
-    setConversationScrollbarVisible(true);
+    rail.classList.add("is-visible");
     const hideWhenIdle = () => {
       conversationScrollbarIdleTimer.current = null;
       if (conversationScrollbarDragRef.current) {
         conversationScrollbarIdleTimer.current = window.setTimeout(hideWhenIdle, CONVERSATION_SCROLLBAR_IDLE_MS);
         return;
       }
-      setConversationScrollbarVisible(false);
+      conversationScrollbarRailRef.current?.classList.remove("is-visible");
     };
     conversationScrollbarIdleTimer.current = window.setTimeout(hideWhenIdle, CONVERSATION_SCROLLBAR_IDLE_MS);
   }, []);
   useEffect(() => () => {
     if (conversationScrollbarIdleTimer.current !== null) {
       window.clearTimeout(conversationScrollbarIdleTimer.current);
+    }
+    if (conversationScrollbarFrame.current !== null) {
+      window.cancelAnimationFrame(conversationScrollbarFrame.current);
     }
   }, []);
   const moveConversationScrollbar = useCallback((clientY, rail = conversationScrollbarRailRef.current) => {
@@ -1147,11 +1260,11 @@ export function ConversationPage({ actions, api = null, incomingCall = null, sna
     list.scrollTop = geometry.maxThumbTop
       ? (thumbTop / geometry.maxThumbTop) * geometry.maxScrollTop
       : 0;
-    updateConversationScrollbar(list);
-  }, [updateConversationScrollbar]);
+    syncConversationScrollbar(list);
+  }, [syncConversationScrollbar]);
   const beginConversationScrollbarDrag = (event) => {
     if (event.button !== 0) return;
-    const geometry = updateConversationScrollbar();
+    const geometry = syncConversationScrollbar();
     if (!geometry.scrollable) return;
     event.preventDefault();
     conversationScrollbarDragRef.current = { pointerId: event.pointerId, rail: event.currentTarget };
@@ -1169,13 +1282,41 @@ export function ConversationPage({ actions, api = null, incomingCall = null, sna
     const drag = conversationScrollbarDragRef.current;
     if (!drag || drag.pointerId !== event.pointerId) return;
     conversationScrollbarDragRef.current = null;
-    if (event.currentTarget?.hasPointerCapture?.(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+    releasePointerCapture(drag.rail, drag.pointerId);
+    revealConversationScrollbar();
+  };
+  const abortConversationScrollbarDrag = () => {
+    const drag = conversationScrollbarDragRef.current;
+    if (!drag) return;
+    conversationScrollbarDragRef.current = null;
+    releasePointerCapture(drag.rail, drag.pointerId);
     revealConversationScrollbar();
   };
   const captureViewportAnchor = useCallback(() => {
     const anchor = captureConversationViewportAnchor(listRef.current);
     viewportAnchorRef.current = anchor ? { ...anchor, contactId: activeContactId } : null;
   }, [activeContactId]);
+  const captureOlderHistoryViewportAnchor = useCallback(() => {
+    const anchor = captureConversationViewportAnchor(listRef.current);
+    olderHistoryViewportAnchorRef.current = anchor ? { ...anchor, contactId: activeContactId } : null;
+  }, [activeContactId]);
+  const loadOlderHistoryAtTop = useCallback((list = listRef.current, { fromWheel = false } = {}) => {
+    const scrollTop = Math.max(0, Number(list?.scrollTop) || 0);
+    if (
+      scrollTop > CONVERSATION_HISTORY_TOP_TRIGGER_PX
+      || !snapshot.history?.hasMore
+      || snapshot.history?.loadingOlder
+      || typeof actions.loadOlderMessages !== "function"
+    ) return false;
+    // A top-edge wheel is an explicit request for history even when the
+    // current page is shorter than the viewport and therefore cannot emit a
+    // scroll event. Otherwise preserve one-page-per-trip-to-the-top behavior.
+    if (!fromWheel && !conversationHistoryTopLoadArmedRef.current) return false;
+    conversationHistoryTopLoadArmedRef.current = false;
+    captureOlderHistoryViewportAnchor();
+    actions.loadOlderMessages();
+    return true;
+  }, [actions, captureOlderHistoryViewportAnchor, snapshot.history?.hasMore, snapshot.history?.loadingOlder]);
   const setDisplayPreferenceWithAnchor = useCallback((key, checked) => {
     captureViewportAnchor();
     return actions.setDisplayPreference(key, checked);
@@ -1211,15 +1352,15 @@ export function ConversationPage({ actions, api = null, incomingCall = null, sna
     setComposerHeight(nextHeight);
   }, [snapshot.composerHeight]);
   useLayoutEffect(() => {
-    updateConversationScrollbar();
-  }, [messageRows, updateConversationScrollbar]);
+    requestConversationScrollbarSync();
+  }, [messageRows, requestConversationScrollbarSync]);
   useEffect(() => {
     const list = listRef.current;
     if (!list || typeof ResizeObserver !== "function") return undefined;
-    const observer = new ResizeObserver(() => updateConversationScrollbar(list));
+    const observer = new ResizeObserver(() => requestConversationScrollbarSync(list));
     observer.observe(list);
     return () => observer.disconnect();
-  }, [updateConversationScrollbar]);
+  }, [requestConversationScrollbarSync]);
   const applyRosterWidth = (value) => {
     const nextWidth = clampConversationRosterWidth(value);
     rosterWidthRef.current = nextWidth;
@@ -1240,13 +1381,13 @@ export function ConversationPage({ actions, api = null, incomingCall = null, sna
     rosterWidthRef.current = nextWidth;
     setRosterWidth(nextWidth);
     setRosterResizing(false);
-    if (event.currentTarget?.hasPointerCapture?.(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+    releasePointerCapture(event.currentTarget || activeResize.target, activeResize.pointerId);
     if (save) void actions.setConversationRosterWidth?.(nextWidth);
   };
   const beginRosterResize = (event) => {
     if (event.button !== 0 || fixedRosterViewport) return;
     event.preventDefault();
-    rosterResizeRef.current = { pointerId: event.pointerId };
+    rosterResizeRef.current = { pointerId: event.pointerId, target: event.currentTarget };
     event.currentTarget.setPointerCapture?.(event.pointerId);
     setRosterResizing(true);
     applyRosterWidth(rosterWidthFromPointer(event.clientX));
@@ -1258,6 +1399,14 @@ export function ConversationPage({ actions, api = null, incomingCall = null, sna
   const cancelRosterResize = (event) => {
     if (rosterResizeRef.current?.pointerId !== event.pointerId) return;
     finishRosterResize(event, { save: false, useCurrentWidth: true });
+  };
+  const abortRosterResize = () => {
+    const activeResize = rosterResizeRef.current;
+    if (!activeResize) return;
+    finishRosterResize(
+      { currentTarget: activeResize.target, pointerId: activeResize.pointerId },
+      { save: false, useCurrentWidth: true },
+    );
   };
   const resizeRosterFromKeyboard = (event) => {
     if (fixedRosterViewport) return;
@@ -1292,13 +1441,13 @@ export function ConversationPage({ actions, api = null, incomingCall = null, sna
     composerHeightRef.current = nextHeight;
     setComposerHeight(nextHeight);
     setComposerResizing(false);
-    if (event.currentTarget?.hasPointerCapture?.(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+    releasePointerCapture(event.currentTarget || activeResize.target, activeResize.pointerId);
     if (save) void actions.setConversationComposerHeight?.(nextHeight);
   };
   const beginComposerResize = (event) => {
     if (event.button !== 0) return;
     event.preventDefault();
-    composerResizeRef.current = { pointerId: event.pointerId };
+    composerResizeRef.current = { pointerId: event.pointerId, target: event.currentTarget };
     event.currentTarget.setPointerCapture?.(event.pointerId);
     setComposerResizing(true);
     applyComposerHeight(composerHeightFromPointer(event.clientY));
@@ -1311,6 +1460,20 @@ export function ConversationPage({ actions, api = null, incomingCall = null, sna
     if (composerResizeRef.current?.pointerId !== event.pointerId) return;
     finishComposerResize(event, { save: false, useCurrentHeight: true });
   };
+  const abortComposerResize = () => {
+    const activeResize = composerResizeRef.current;
+    if (!activeResize) return;
+    finishComposerResize(
+      { currentTarget: activeResize.target, pointerId: activeResize.pointerId },
+      { save: false, useCurrentHeight: true },
+    );
+  };
+
+  usePointerCaptureRecovery(() => {
+    abortConversationScrollbarDrag();
+    abortRosterResize();
+    abortComposerResize();
+  });
   const resizeComposerFromKeyboard = (event) => {
     let nextHeight = null;
     if (event.key === "ArrowUp") nextHeight = clampConversationComposerHeight(composerHeightRef.current + 16);
@@ -1372,15 +1535,33 @@ export function ConversationPage({ actions, api = null, incomingCall = null, sna
     if (request && request !== latestScrollRequest.current) {
       latestScrollRequest.current = request;
       viewportAnchorRef.current = null;
+      olderHistoryViewportAnchorRef.current = null;
       list.scrollTop = list.scrollHeight;
       return;
+    }
+    // Loading state adds a small status row before the request resolves. Keep
+    // this anchor separate from ordinary display-preference anchors so that
+    // transient row cannot consume it before the older page is actually
+    // prepended. Once the old rows arrive, restore the prior top message to
+    // the same visual offset; the browser then reports the new scroll position
+    // and the custom thumb naturally becomes shorter and moves down the rail.
+    const olderHistoryAnchor = olderHistoryViewportAnchorRef.current;
+    if (olderHistoryAnchor && !snapshot.history?.loadingOlder) {
+      olderHistoryViewportAnchorRef.current = null;
+      if (
+        (!olderHistoryAnchor.contactId || olderHistoryAnchor.contactId === activeContactId)
+        && restoreConversationViewportAnchor(list, olderHistoryAnchor)
+      ) {
+        requestConversationScrollbarSync(list);
+        return;
+      }
     }
     const anchor = viewportAnchorRef.current;
     viewportAnchorRef.current = null;
     if (anchor && (!anchor.contactId || anchor.contactId === activeContactId) && restoreConversationViewportAnchor(list, anchor)) return;
     const top = Number(ui.listScrollTop);
     if (Number.isFinite(top)) list.scrollTop = top;
-  }, [activeContactId, messageRows, ui.listScrollTop, ui.scrollToLatestRequest]);
+  }, [activeContactId, messageRows, requestConversationScrollbarSync, snapshot.history?.loadingOlder, ui.listScrollTop, ui.scrollToLatestRequest]);
   useLayoutEffect(() => {
     const target = ui.scrollTarget;
     const request = Number(target?.request) || 0;
@@ -1407,7 +1588,7 @@ export function ConversationPage({ actions, api = null, incomingCall = null, sna
   return (
     <section aria-label="对话" className={`conversation-workspace${rosterResizing ? " is-resizing-roster" : ""}${composerResizing ? " is-resizing-composer" : ""}`} onClick={dismissOnWorkspaceClick} onKeyDown={dismissOnEscape} ref={workspaceRef} style={{ "--conversation-composer-height": `${composerHeight}px`, "--conversation-roster-width": `${fixedRosterViewport ? CONVERSATION_ROSTER_NARROW_WIDTH : rosterWidth}px` }}>
       <ConversationRoster actions={actions} contacts={contacts} hasContactsRoot={snapshot.hasContactsRoot} rosterEmpty={snapshot.rosterEmpty} />
-      <div aria-label="调整联系人栏宽度" aria-orientation="vertical" aria-valuemax={CONVERSATION_ROSTER_MAX_WIDTH} aria-valuemin={CONVERSATION_ROSTER_MIN_WIDTH} aria-valuenow={fixedRosterViewport ? CONVERSATION_ROSTER_NARROW_WIDTH : rosterWidth} className="conversation-roster-resizer" onKeyDown={resizeRosterFromKeyboard} onPointerCancel={cancelRosterResize} onPointerDown={beginRosterResize} onPointerMove={resizeRoster} onPointerUp={finishRosterResize} role="separator" tabIndex={fixedRosterViewport ? -1 : 0} title="拖动调整联系人栏宽度" />
+      <div aria-label="调整联系人栏宽度" aria-orientation="vertical" aria-valuemax={CONVERSATION_ROSTER_MAX_WIDTH} aria-valuemin={CONVERSATION_ROSTER_MIN_WIDTH} aria-valuenow={fixedRosterViewport ? CONVERSATION_ROSTER_NARROW_WIDTH : rosterWidth} className="conversation-roster-resizer" onKeyDown={resizeRosterFromKeyboard} onLostPointerCapture={cancelRosterResize} onPointerCancel={cancelRosterResize} onPointerDown={beginRosterResize} onPointerMove={resizeRoster} onPointerUp={finishRosterResize} role="separator" tabIndex={fixedRosterViewport ? -1 : 0} title="拖动调整联系人栏宽度" />
       <ContactContextMenu actions={actions} menu={contactContextMenu} />
       <FileContextMenu actions={actions} menu={fileContextMenu} />
       <MessageContextMenu actions={actions} menu={messageContextMenu} />
@@ -1421,13 +1602,40 @@ export function ConversationPage({ actions, api = null, incomingCall = null, sna
         <div className="conversation-chat-shell" ref={chatShellRef}>
           <ConversationPermissions actions={actions} permissions={permissions} />
           <div className="conversation-transcript">
-            <div aria-label={snapshot.listLabel || "Suzu 的聊天记录"} aria-live="polite" className="conversation-list" data-conversation-list="" onPointerDown={revealConversationScrollbar} onScroll={(event) => { actions.setListScroll(event.currentTarget); updateConversationScrollbar(event.currentTarget); revealConversationScrollbar(); }} onWheel={revealConversationScrollbar} ref={listRef} role="log"><ConversationMessageList onOpenExternal={openExternalLink} onOpenFile={actions.openMediaFile} onOpenFileContextMenu={actions.openFileContextMenu} onOpenMessageContextMenu={actions.openMessageContextMenu} onPreview={actions.openMediaPreview} rows={messageRows} /></div>
-            <div aria-hidden="true" className={`conversation-scrollbar${conversationScrollbarVisible && conversationScrollbar.scrollable ? " is-visible" : ""}`} onPointerCancel={finishConversationScrollbarDrag} onPointerDown={beginConversationScrollbarDrag} onPointerMove={dragConversationScrollbar} onPointerUp={finishConversationScrollbarDrag} ref={conversationScrollbarRailRef}>
-              <div className="conversation-scrollbar__thumb" style={{ height: `${conversationScrollbar.thumbHeight}px`, transform: `translateY(${conversationScrollbar.thumbTop}px)` }} />
+            <div
+              aria-label={snapshot.listLabel || "Suzu 的聊天记录"}
+              aria-live="polite"
+              className="conversation-list"
+              data-conversation-list=""
+              onPointerDown={revealConversationScrollbar}
+              onScroll={(event) => {
+                const list = event.currentTarget;
+                const scrollTop = Math.max(0, Number(list.scrollTop) || 0);
+                actions.setListScroll(list);
+                requestConversationScrollbarSync(list);
+                revealConversationScrollbar();
+                if (scrollTop >= CONVERSATION_HISTORY_TOP_REARM_PX) {
+                  conversationHistoryTopLoadArmedRef.current = true;
+                }
+                loadOlderHistoryAtTop(list);
+              }}
+              onWheel={(event) => {
+                revealConversationScrollbar();
+                if (Number(event.deltaY) >= 0) return;
+                if (loadOlderHistoryAtTop(event.currentTarget, { fromWheel: true })) event.preventDefault();
+              }}
+              ref={listRef}
+              role="log"
+            >
+              {snapshot.history?.loadingOlder ? <div className="conversation-history-loading">正在加载更早消息…</div> : null}
+              <ConversationMessageList onOpenExternal={openExternalLink} onOpenFile={actions.openMediaFile} onOpenFileContextMenu={actions.openFileContextMenu} onOpenMessageContextMenu={actions.openMessageContextMenu} onPreview={actions.openMediaPreview} rows={messageRows} />
+            </div>
+            <div aria-hidden="true" className="conversation-scrollbar" onLostPointerCapture={finishConversationScrollbarDrag} onPointerCancel={finishConversationScrollbarDrag} onPointerDown={beginConversationScrollbarDrag} onPointerMove={dragConversationScrollbar} onPointerUp={finishConversationScrollbarDrag} ref={conversationScrollbarRailRef}>
+              <div className="conversation-scrollbar__thumb" ref={conversationScrollbarThumbRef} />
             </div>
           </div>
           {snapshot.unread ? <button className="conversation-latest" onClick={actions.jumpToLatest} type="button">回到最新消息</button> : null}
-          <ConversationComposer actions={actions} callActive={callControl.active} composer={composer} composerHeight={composerHeight} focusRequest={ui.composerFocusRequest} onResizeKeyDown={resizeComposerFromKeyboard} onResizePointerCancel={cancelComposerResize} onResizePointerDown={beginComposerResize} onResizePointerMove={resizeComposer} onResizePointerUp={finishComposerResize} voiceInput={voiceInput} />
+          <ConversationComposer actions={actions} callActive={callControl.active} composer={composer} composerHeight={composerHeight} focusRequest={ui.composerFocusRequest} onResizeKeyDown={resizeComposerFromKeyboard} onResizePointerCancel={cancelComposerResize} onResizePointerCaptureLost={cancelComposerResize} onResizePointerDown={beginComposerResize} onResizePointerMove={resizeComposer} onResizePointerUp={finishComposerResize} voiceInput={voiceInput} />
         </div>
         <ConversationSearchPanel actions={actions} focusRequest={ui.searchFocusRequest} search={snapshot.search} />
         <ConversationCallDialing call={callControl.call} onEnd={callControl.end} />

@@ -26,7 +26,6 @@ import {
 import { resolveVoiceProfile } from "./voice-services.mjs";
 
 const MAX_RESPONSE_BYTES = 100 * 1024 * 1024;
-const MAX_AGENT_VOICE_CANDIDATES = 200;
 const MAX_AGENT_CUSTOM_VOICES = 100;
 const AGENT_ID = /^agent-[a-f0-9]{16}$/iu;
 
@@ -176,18 +175,6 @@ function sourceAgentId(value) {
   return AGENT_ID.test(agentId) ? agentId : "";
 }
 
-function sourceAgentIdFromConfig(value) {
-  const config = objectValue(value);
-  const tts = objectValue(config.tts);
-  return sourceAgentId(config.sourceAgentId || tts.sourceAgentId);
-}
-
-function sourceCandidateIdFromConfig(value) {
-  const config = objectValue(value);
-  const tts = objectValue(config.tts);
-  return clean(config.sourceCandidateId || tts.sourceCandidateId);
-}
-
 function customVoiceSourceFromConfig(value) {
   const config = objectValue(value);
   const tts = objectValue(config.tts);
@@ -276,74 +263,6 @@ function globalCustomVoices(dataRoot) {
   return customVoicesAt(path.join(requiredDataRoot(dataRoot), "voice-message", "custom-voices.json"));
 }
 
-function agentVoiceCandidateIds(dataRoot, agentId) {
-  const identity = clean(agentId);
-  if (!identity) return new Set();
-  const candidatesPath = path.join(resolveAgentDataRoot({ dataRoot, agentId: identity }), "voice-design", "candidates.jsonl");
-  try {
-    const stat = fs.lstatSync(candidatesPath);
-    if (stat.isSymbolicLink() || !stat.isFile()) return new Set();
-    const candidates = new Set();
-    const lines = fs.readFileSync(candidatesPath, "utf8").split(/\r?\n/u).filter(Boolean).slice(-MAX_AGENT_VOICE_CANDIDATES);
-    for (const line of lines) {
-      if (!line.trim()) continue;
-      try {
-        const candidate = objectValue(JSON.parse(line));
-        const candidateId = clean(candidate.id);
-        const voiceId = clean(candidate.voiceId);
-        if (candidateId && voiceId) candidates.add(voiceId);
-      } catch {
-        // Candidate generation already owns validation. An invalid line cannot authorize a voice here.
-      }
-    }
-    return candidates;
-  } catch {
-    return new Set();
-  }
-}
-
-function sourceVoiceCandidateAvailable({ dataRoot, agentId, candidateId, voiceId }) {
-  const identity = sourceAgentId(agentId);
-  if (!identity || !clean(candidateId)) return false;
-  const candidatesPath = path.join(resolveAgentDataRoot({ dataRoot, agentId: identity }), "voice-design", "candidates.jsonl");
-  try {
-    const stat = fs.lstatSync(candidatesPath);
-    if (stat.isSymbolicLink() || !stat.isFile()) return false;
-    const lines = fs.readFileSync(candidatesPath, "utf8").split(/\r?\n/u).filter(Boolean).slice(-MAX_AGENT_VOICE_CANDIDATES);
-    return lines.some((line) => {
-      try {
-        const candidate = objectValue(JSON.parse(line));
-        return clean(candidate.id) === clean(candidateId) && clean(candidate.voiceId) === voiceId && Boolean(clean(candidate.retainedAt));
-      } catch {
-        return false;
-      }
-    });
-  } catch {
-    return false;
-  }
-}
-
-function assertAgentVoiceCandidate({ dataRoot, agentId, voiceId, sourceAgentId: configuredSourceAgentId = "", sourceCandidateId = "" }) {
-  if (!clean(agentId)) {
-    throw failure("agent_identity_missing", "请先选择当前联系人，才能发送联系人专属声音。", 10);
-  }
-  if (configuredSourceAgentId || sourceCandidateId) {
-    if (sourceVoiceCandidateAvailable({ dataRoot, agentId: configuredSourceAgentId, candidateId: sourceCandidateId, voiceId })) return;
-    throw failure(
-      "voice_not_available_for_agent",
-      "联系人所选的百炼音色已经不可用。请在 Suzu 的音色设置中重新选择。",
-      10,
-    );
-  }
-  if (!agentVoiceCandidateIds(dataRoot, agentId).has(voiceId)) {
-    throw failure(
-      "voice_not_available_for_agent",
-      "当前联系人没有保存所选音色“" + voiceId + "”。请先在该联系人的音色设计中创建或选择可用音色。",
-      10,
-    );
-  }
-}
-
 function selectedCustomVoice({ dataRoot, agentId, adapter, customVoiceId, customAdapterId, voiceId, customVoiceSource, customVoiceSourceAgentId }) {
   const exact = (voices) => voices.find((voice) => (
     voice.adapter === adapter
@@ -359,11 +278,7 @@ function selectedCustomVoice({ dataRoot, agentId, adapter, customVoiceId, custom
   return exact(agentCustomVoices(dataRoot, agentId));
 }
 
-function assertAgentVoiceSelection({ dataRoot, agentId, adapter, voiceId, customVoiceId, customAdapterId = "", sourceAgentId: configuredSourceAgentId = "", sourceCandidateId = "", customVoiceSource = "", customVoiceSourceAgentId = "" }) {
-  if (adapter === "dashscope-qwen" && !clean(customVoiceId)) {
-    assertAgentVoiceCandidate({ dataRoot, agentId, voiceId, sourceAgentId: configuredSourceAgentId, sourceCandidateId });
-    return null;
-  }
+function assertAgentVoiceSelection({ dataRoot, agentId, adapter, voiceId, customVoiceId, customAdapterId = "", customVoiceSource = "", customVoiceSourceAgentId = "" }) {
   const selected = selectedCustomVoice({ dataRoot, agentId, adapter, customVoiceId, customAdapterId, voiceId, customVoiceSource, customVoiceSourceAgentId });
   if (!selected) {
     throw failure(
@@ -399,8 +314,6 @@ function resolveAgentVoiceConfig({ dataRoot, agentId, requireVoiceSelection }) {
   const contactAdapter = contactVoiceId ? voiceAdapterFromConfig(contactConfig) : "dashscope-qwen";
   const contactCustomVoiceId = customVoiceIdFromConfig(contactConfig);
   const contactCustomAdapterId = customAdapterIdFromConfig(contactConfig);
-  const contactSourceAgentId = sourceAgentIdFromConfig(contactConfig);
-  const contactSourceCandidateId = sourceCandidateIdFromConfig(contactConfig);
   const contactCustomVoiceSource = customVoiceSourceFromConfig(contactConfig);
   const contactCustomVoiceSourceAgentId = customVoiceSourceAgentIdFromConfig(contactConfig);
   const selection = profileSelection
@@ -409,8 +322,6 @@ function resolveAgentVoiceConfig({ dataRoot, agentId, requireVoiceSelection }) {
       adapter: profileSelection.service.adapter,
       customVoiceId: "",
       customAdapterId: profileSelection.service.customAdapterId || "",
-      sourceAgentId: "",
-      sourceCandidateId: "",
       customVoiceSource: "",
       customVoiceSourceAgentId: "",
       voiceProfileId: profileSelection.profile.id,
@@ -425,8 +336,6 @@ function resolveAgentVoiceConfig({ dataRoot, agentId, requireVoiceSelection }) {
       adapter: contactAdapter,
       customVoiceId: contactCustomVoiceId,
       customAdapterId: contactCustomAdapterId,
-      sourceAgentId: contactSourceAgentId,
-      sourceCandidateId: contactSourceCandidateId,
       customVoiceSource: contactCustomVoiceSource,
       customVoiceSourceAgentId: contactCustomVoiceSourceAgentId,
       voiceProfileId: "",
@@ -440,8 +349,6 @@ function resolveAgentVoiceConfig({ dataRoot, agentId, requireVoiceSelection }) {
       adapter: "dashscope-qwen",
       customVoiceId: "",
       customAdapterId: "",
-      sourceAgentId: "",
-      sourceCandidateId: "",
       customVoiceSource: "",
       customVoiceSourceAgentId: "",
       voiceProfileId: profileId,
@@ -466,8 +373,6 @@ function resolveAgentVoiceConfig({ dataRoot, agentId, requireVoiceSelection }) {
         voiceId: selection.voiceId,
         customVoiceId: selection.customVoiceId,
         customAdapterId: selection.customAdapterId,
-        sourceAgentId: selection.sourceAgentId,
-        sourceCandidateId: selection.sourceCandidateId,
         customVoiceSource: selection.customVoiceSource,
         customVoiceSourceAgentId: selection.customVoiceSourceAgentId,
       });
@@ -483,8 +388,6 @@ function resolveAgentVoiceConfig({ dataRoot, agentId, requireVoiceSelection }) {
         ...(selection.voiceProfileId ? { voiceProfileId: selection.voiceProfileId } : {}),
         customVoiceId: selection.customVoiceId,
         ...(selection.customAdapterId ? { customAdapterId: selection.customAdapterId } : {}),
-        ...(selection.sourceAgentId ? { sourceAgentId: selection.sourceAgentId } : {}),
-        ...(selection.sourceCandidateId ? { sourceCandidateId: selection.sourceCandidateId } : {}),
         ...(selection.customVoiceSource ? { customVoiceSource: selection.customVoiceSource } : {}),
         ...(selection.customVoiceSourceAgentId ? { customVoiceSourceAgentId: selection.customVoiceSourceAgentId } : {}),
         ...(selection.model || customVoice?.model ? { model: selection.model || customVoice.model } : {}),

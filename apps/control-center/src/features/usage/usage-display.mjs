@@ -6,7 +6,6 @@ const USAGE_UNIT_FIELDS = Object.freeze([
   Object.freeze({ key: "inputCharacters", label: "字符" }),
   Object.freeze({ key: "inputAudioSeconds", label: "秒", seconds: true }),
   Object.freeze({ key: "imageRequests", label: "张" }),
-  Object.freeze({ key: "generatedVoices", label: "个音色" }),
   Object.freeze({ key: "inputTokens", label: "输入 Token" }),
   Object.freeze({ key: "outputTextTokens", label: "输出 Token" }),
 ]);

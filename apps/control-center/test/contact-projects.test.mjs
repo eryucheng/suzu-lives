@@ -189,6 +189,7 @@ test("contact presentation state is persisted by ID and deletion removes only th
   const restoredContact = restored.contacts.find((contact) => contact.id === second.activeContact.id);
   assert.equal(restoredContact?.hidden, false);
   assert.equal(Object.hasOwn(JSON.parse(await fs.readFile(metadataPath, "utf8")), "hidden"), false);
+  await service.select({ id: second.activeContact.id });
 
   await assert.rejects(service.remove({ id: first.activeContact.id }), /明确确认/u);
   const removed = await service.remove({ id: first.activeContact.id, confirmed: true });
@@ -198,6 +199,31 @@ test("contact presentation state is persisted by ID and deletion removes only th
   assert.deepEqual(cleanupCalls, [first.activeContact.id]);
   assert.deepEqual(removed.contacts.map((contact) => contact.id), [second.activeContact.id]);
   assert.equal(settings.preferredContactId, second.activeContact.id);
+  assert.equal(settings.projectRoot, second.activeContact.projectRoot);
+});
+
+test("hiding the active contact leaves its conversation and repairs stale hidden selections", async () => {
+  const contactsRoot = await temporaryDirectory("suzu-contact-hidden-selection-");
+  let settings = { contactsRoot, projectRoot: "", preferredContactId: "" };
+  const service = createContactProjectsService({
+    settingsService: { load: () => settings, save: (next) => { settings = next; return settings; } },
+  });
+  const first = await service.create({ name: "首选联系人" });
+  const second = await service.create({ name: "当前联系人" });
+
+  const switched = await service.updatePresentation({ id: second.activeContact.id, hidden: true });
+  assert.equal(switched.activeContact?.id, first.activeContact.id);
+  assert.equal(settings.projectRoot, first.activeContact.projectRoot);
+  await assert.rejects(service.select({ id: second.activeContact.id }), /设置 > 隐私/u);
+
+  const empty = await service.updatePresentation({ id: first.activeContact.id, hidden: true });
+  assert.equal(empty.activeContact, null);
+  assert.equal(settings.projectRoot, "");
+
+  await service.updatePresentation({ id: second.activeContact.id, hidden: false });
+  settings = { ...settings, projectRoot: first.activeContact.projectRoot };
+  const repaired = await service.snapshot();
+  assert.equal(repaired.activeContact?.id, second.activeContact.id);
   assert.equal(settings.projectRoot, second.activeContact.projectRoot);
 });
 

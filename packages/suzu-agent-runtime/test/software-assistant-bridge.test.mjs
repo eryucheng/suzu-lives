@@ -19,23 +19,22 @@ const EXECUTION = Object.freeze({
   rootCallId: "root-1",
 });
 
-test("software assistant bridge exposes only the product state, manual, and registered action tools", async () => {
+test("software assistant bridge exposes only product state and registered action tools", async () => {
   const requests = [];
   const tools = registeredBridge({
     async request(event, payload, options) {
       requests.push({ event, payload, options });
       if (event === "SoftwareAssistantStatus") return { available: true, result: { content: "当前外观：浅色主题。" } };
-      if (event === "SoftwareAssistantManual") return { available: true, result: { content: "打开设置 → API 连接。" } };
       return { available: true, result: { status: "completed", content: "已切换为深色主题。", data: { theme: "dark" } } };
     },
   }, { timeoutMs: 2_000 });
 
-  assert.deepEqual([...tools.keys()], ["suzu_software_status", "suzu_software_manual", "suzu_software_action"]);
+  assert.deepEqual([...tools.keys()], ["suzu_software_status", "suzu_software_action"]);
   assert.match(tools.get("suzu_software_status").description, /读取当前 Suzu Lives 软件状态/u);
-  assert.match(tools.get("suzu_software_manual").description, /读取当前 Suzu Lives 产品手册/u);
   assert.match(tools.get("suzu_software_action").description, /执行一项已登记的 Suzu Lives 软件动作/u);
+  assert.match(tools.get("suzu_software_action").parameters.properties.action.description, /set-contact-avatar/u);
+  assert.match(tools.get("suzu_software_action").parameters.properties.input.description, /avatarPath/u);
   assert.deepEqual(await tools.get("suzu_software_status").execute({}, EXECUTION), { content: "当前外观：浅色主题。" });
-  assert.deepEqual(await tools.get("suzu_software_manual").execute({ query: "配置语音" }, EXECUTION), { content: "打开设置 → API 连接。" });
   assert.deepEqual(await tools.get("suzu_software_action").execute({ action: "set-theme", input: { theme: "dark" } }, EXECUTION), {
     status: "completed",
     content: "已切换为深色主题。",
@@ -45,11 +44,6 @@ test("software assistant bridge exposes only the product state, manual, and regi
     {
       event: "SoftwareAssistantStatus",
       payload: { sessionId: "suzu-software-assistant", callId: "call-1", rootCallId: "root-1" },
-      options: { timeoutMs: 2_000 },
-    },
-    {
-      event: "SoftwareAssistantManual",
-      payload: { sessionId: "suzu-software-assistant", callId: "call-1", rootCallId: "root-1", query: "配置语音" },
       options: { timeoutMs: 2_000 },
     },
     {
@@ -81,7 +75,7 @@ test("software assistant bridge rejects malformed action IDs before they reach t
   }, EXECUTION);
   assert.deepEqual(result, {
     status: "invalid-request",
-    content: "软件动作 ID 无效；请先读取 suzu_software_manual。",
+    content: "软件动作 ID 无效；请先读取当前软件状态并确认已登记动作。",
     data: null,
   });
   assert.equal(requests, 0);

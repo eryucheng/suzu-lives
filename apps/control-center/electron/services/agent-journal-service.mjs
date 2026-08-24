@@ -145,7 +145,11 @@ async function writeDocument(fsOps, root, contactId, document) {
 
 function publicContact(value) {
   const id = validContactId(value?.id);
-  return id ? { id, name: clean(value?.name) || "未命名联系人" } : null;
+  return id ? {
+    id,
+    name: clean(value?.name) || "未命名联系人",
+    agentId: clean(value?.agentId),
+  } : null;
 }
 
 /**

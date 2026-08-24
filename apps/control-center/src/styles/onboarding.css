@@ -172,6 +172,15 @@
   background: color-mix(in srgb, var(--accent2) 6%, transparent);
 }
 
+.onboarding-model-input-capability {
+  display:flex;
+  align-items:center;
+  gap:9px;
+  min-height:25px;
+  color:var(--text);
+  font-size:12px;
+}
+
 .onboarding-error {
   border: 1px solid color-mix(in srgb, var(--bad) 48%, var(--line));
   border-radius: 10px;

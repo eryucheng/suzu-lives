@@ -42,6 +42,7 @@ class FakeSocket extends EventEmitter {
 test("realtime call uses the configured contact voice and streams ASR audio", async () => {
   const events = [];
   const ledgerEvents = [];
+  const sentTasks = [];
   const sentTurns = [];
   const stoppedTurns = [];
   let chatSubscriber = null;
@@ -51,6 +52,10 @@ test("realtime call uses the configured contact voice and streams ASR audio", as
   const chat = {
     sendToSession: async (value) => {
       sentTurns.push(value);
+      return { accepted: true, requestId: value.requestId, sessionId: value.sessionId };
+    },
+    sendTaskToSession: async (value) => {
+      sentTasks.push(value);
       return { accepted: true, requestId: value.requestId, sessionId: value.sessionId };
     },
     stop: async (value) => {
@@ -160,6 +165,12 @@ test("realtime call uses the configured contact voice and streams ASR audio", as
   assert.deepEqual(stopped, { accepted: true, stopped: true });
   assert.equal(stoppedTurns.length, stopsBeforeHangup);
   assert.ok(events.some((event) => event.type === "call-ended"));
+  assert.equal(sentTasks.length, 1);
+  assert.equal(sentTasks[0].kind, "call-ended");
+  assert.deepEqual(sentTasks[0].taskContext, { id: sentTasks[0].requestId, text: "【通话已结束】" });
+  assert.equal(sentTasks[0].outputPolicy, "external");
+  assert.equal(sentTasks[0].deliverToWechat, false);
+  assert.equal(sentTasks[0].queued, true);
   assert.deepEqual(
     service.pushAudio({
       callId: started.callId,
@@ -185,6 +196,7 @@ test("a connected call asks the Agent for one greeting, speaks it, and lets the 
       sentTurns.push(value);
       return { accepted: true, requestId: value.requestId, sessionId: value.sessionId };
     },
+    sendTaskToSession: async (value) => ({ accepted: true, requestId: value.requestId, sessionId: value.sessionId }),
     stop: async (value) => {
       stoppedTurns.push(value);
       return { accepted: true, stopped: true };
@@ -268,6 +280,7 @@ test("call speech queues clauses so the next synthesis starts while the prior au
       sentTurns.push(value);
       return { accepted: true, requestId: value.requestId, sessionId: value.sessionId };
     },
+    sendTaskToSession: async (value) => ({ accepted: true, requestId: value.requestId, sessionId: value.sessionId }),
     stop: async () => ({ accepted: true, stopped: true }),
     subscribe: (callback) => {
       chatSubscriber = callback;
@@ -349,6 +362,7 @@ test("CosyVoice retries a rate limit and reports an exhausted clause as a chat s
       sentTurns.push(value);
       return { accepted: true, requestId: value.requestId, sessionId: value.sessionId };
     },
+    sendTaskToSession: async (value) => ({ accepted: true, requestId: value.requestId, sessionId: value.sessionId }),
     stop: async () => ({ accepted: true, stopped: true }),
     subscribe: (callback) => {
       chatSubscriber = callback;
@@ -423,6 +437,7 @@ test("a rejected TTS request reports a safe actionable call system message", asy
       sentTurns.push(value);
       return { accepted: true, requestId: value.requestId, sessionId: value.sessionId };
     },
+    sendTaskToSession: async (value) => ({ accepted: true, requestId: value.requestId, sessionId: value.sessionId }),
     stop: async () => ({ accepted: true, stopped: true }),
     subscribe: (callback) => {
       chatSubscriber = callback;
@@ -479,6 +494,81 @@ test("a rejected TTS request reports a safe actionable call system message", asy
   );
   assert.equal(JSON.stringify(events), JSON.stringify(events).replaceAll("should-not-be-exposed", ""));
   await service.stop({ callId: started.callId, senderId: "renderer-1" });
+});
+
+test("Agent can request, cancel, and hang up only its contact's realtime call", async () => {
+  const events = [];
+  const sentTasks = [];
+  const scope = {
+    contactId: "contact-suzu",
+    projectRoot: "D:/project",
+    sessionId: "session-suzu",
+  };
+  const service = createRealtimeVoiceCallService({
+    chat: {
+      sendToSession: async (value) => ({ accepted: true, requestId: value.requestId }),
+      sendTaskToSession: async (value) => {
+        sentTasks.push(value);
+        return { accepted: true, requestId: value.requestId };
+      },
+      stop: async () => ({ accepted: true, stopped: true }),
+      subscribe: () => () => {},
+    },
+    connectionsService: {
+      resolveNamedApiConnection: async (feature) => ({
+        "voice-message": { key: "voice-key", type: "generic-api", baseUrl: "https://tts.example.test/v1", model: "voice-model" },
+        "realtime-asr": { key: "asr-key", type: "dashscope", baseUrl: "https://asr.example.test/api/v1", model: "qwen3-asr-flash-realtime" },
+      })[feature] || null,
+    },
+    dataRootProvider: () => "D:/Temp/suzu-lives-agent-call/data",
+    ledgerPathProvider: () => "D:/Temp/suzu-lives-agent-call/usage.jsonl",
+    onEvent: (event) => events.push(event),
+    reader: {
+      ensureActiveSession: async () => ({ id: scope.sessionId, projectRoot: scope.projectRoot, hasTranscript: false }),
+      resolveContactSession: async (contactId) => ({
+        agentId: "agent-suzu",
+        contactId,
+        id: scope.sessionId,
+        projectRoot: scope.projectRoot,
+        hasTranscript: false,
+      }),
+      snapshot: async () => ({ activeContact: { agentId: "agent-suzu", id: scope.contactId, name: "Suzu" } }),
+    },
+    resolveVoiceRuntime: () => ({ tts: { provider: "minimax", apiKey: "voice-key", voiceId: "voice-suzu", model: "voice-model" } }),
+    settingsService: { load: () => ({}) },
+  });
+
+  const firstDial = await service.dialFromAgent({ ...scope, reason: "想跟你聊聊" });
+  assert.equal(firstDial.status, "ringing");
+  assert.match(firstDial.requestId, /^suzu-call-request-/u);
+  assert.deepEqual(events.at(-1), {
+    type: "call-request",
+    requestId: firstDial.requestId,
+    contactId: scope.contactId,
+    sessionId: scope.sessionId,
+    projectRoot: scope.projectRoot,
+    reason: "想跟你聊聊",
+    timestamp: events.at(-1).timestamp,
+  });
+  assert.equal(typeof events.at(-1).timestamp, "string");
+  assert.deepEqual(await service.dialFromAgent(scope), { status: "ringing", requestId: firstDial.requestId });
+  assert.deepEqual(await service.hangupFromAgent(scope), { status: "request-cancelled", requestId: firstDial.requestId });
+  assert.equal(events.at(-1).type, "call-request-cancelled");
+  assert.equal(events.at(-1).requestId, firstDial.requestId);
+
+  const secondDial = await service.dialFromAgent(scope);
+  const started = await service.start({ initiator: "agent", senderId: "renderer-1" });
+  assert.match(started.callId, /^call-/u);
+  assert.deepEqual(await service.hangupFromAgent(scope), { status: "ended", callId: started.callId });
+  assert.equal(events.some((event) => event.type === "call-request" && event.requestId === secondDial.requestId), true);
+  assert.equal(events.some((event) => event.type === "call-ended" && event.callId === started.callId), true);
+  assert.equal(sentTasks.length, 1);
+  assert.equal(sentTasks[0].kind, "call-ended");
+  assert.equal(sentTasks[0].contactId, scope.contactId);
+  await assert.rejects(
+    service.dialFromAgent({ ...scope, projectRoot: "D:/another-contact" }),
+    /工作目录/u,
+  );
 });
 
 test("call helpers keep the configured endpoint and speakable clauses", () => {

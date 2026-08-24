@@ -5,6 +5,12 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 
 import { CapabilityExecutionError, assertInvocationGate, assertVerifiedCapabilityAuthorization } from "@suzu-lives/capability-runtime";
+import {
+  createVisionHttpRequest,
+  DEFAULT_VISION_ADAPTER,
+  extractVisionResponseText,
+  normalizeVisionAdapter,
+} from "./vision-adapters.mjs";
 
 export class MediaUnderstandingError extends Error {}
 
@@ -77,13 +83,18 @@ function endpointFromBaseUrl(value) {
   return `${base}/v1/chat/completions`;
 }
 
-function providerConfiguration(configuration = {}, label) {
+function providerConfiguration(configuration = {}, label, { requireBaseUrl = true, requireModel = true } = {}) {
   const provider = configuration.provider && typeof configuration.provider === "object" && !Array.isArray(configuration.provider)
     ? configuration.provider
     : configuration;
-  const baseUrl = httpUrl(provider.baseUrl, `${label}模型地址`);
-  const model = boundedText(provider.model, `${label}模型`, 200);
-  return { baseUrl, model };
+  const baseUrl = clean(provider.baseUrl);
+  const model = clean(provider.model);
+  if (baseUrl && baseUrl.length > 2_000) throw new MediaUnderstandingError(`${label}模型地址不能超过 2000 个字符。`);
+  if (model.length > 200) throw new MediaUnderstandingError(`${label}模型不能超过 200 个字符。`);
+  if (requireBaseUrl && !baseUrl) throw new MediaUnderstandingError(`${label}模型地址不能为空，且最多 2000 个字符。`);
+  if (requireModel && !model) throw new MediaUnderstandingError(`${label}模型不能为空，且最多 200 个字符。`);
+  const normalizedBaseUrl = baseUrl ? httpUrl(baseUrl, `${label}模型地址`) : "";
+  return { baseUrl: normalizedBaseUrl, model };
 }
 
 async function resolveSecureProviderCredential(credentialResolver, { abilityId, provider }) {
@@ -211,7 +222,7 @@ export function createImageVisionPlan({ imagePath, question, detail = "auto", da
   };
 }
 
-/** OpenAI-compatible image vision executor; only called through a gate. */
+/** Image vision executor; only called through a gate. */
 export async function executeImageVision({
   dataRoot,
   gate,
@@ -227,7 +238,15 @@ export async function executeImageVision({
 } = {}) {
   assertInvocationGate({ abilityId: "image-vision", gate, dependencies: {} });
   assertVerifiedCapabilityAuthorization({ authorization, abilityId: "image-vision", action: "analyze-image", scope: invocation?.scope });
-  const provider = providerConfiguration(configuration, "视觉");
+  const vision = configuration.vision && typeof configuration.vision === "object" && !Array.isArray(configuration.vision)
+    ? configuration.vision
+    : configuration;
+  const adapter = normalizeVisionAdapter(vision.adapter, { fallback: DEFAULT_VISION_ADAPTER });
+  const customAdapter = vision.customAdapter || configuration.customAdapter || null;
+  const provider = providerConfiguration(configuration, "视觉", {
+    requireBaseUrl: adapter !== "custom-http-vision",
+    requireModel: adapter !== "custom-http-vision",
+  });
   const apiKey = await resolveSecureProviderCredential(credentialResolver, { abilityId: "image-vision", provider });
   assertInvocationGate({
     abilityId: "image-vision",
@@ -241,32 +260,46 @@ export async function executeImageVision({
   const requestedDetail = clean(detail).toLowerCase() || "auto";
   if (!IMAGE_DETAILS.has(requestedDetail)) throw new MediaUnderstandingError("图片细节级别只能是 auto、low 或 high。");
   const prompt = boundedText(question || "请客观说明图片中能直接看到的主要内容。", "问题", 2_000);
-  const payload = {
-    model: provider.model,
-    messages: [
-      { role: "system", content: IMAGE_VISION_SYSTEM_PROMPT },
-      { role: "user", content: [{ type: "text", text: prompt }, { type: "image_url", image_url: { url: fileDataUrl(sourcePath, mime), detail: requestedDetail } }] },
-    ],
-    temperature: 0.2,
-    max_tokens: 2_000,
-  };
+  let request;
+  try {
+    request = createVisionHttpRequest({
+      adapter,
+      apiKey,
+      baseUrl: provider.baseUrl,
+      customAdapter,
+      detail: requestedDetail,
+      imageDataUrl: fileDataUrl(sourcePath, mime),
+      imageMimeType: mime,
+      maxOutputTokens: 2_000,
+      model: provider.model,
+      question: prompt,
+      systemPrompt: IMAGE_VISION_SYSTEM_PROMPT,
+    });
+  } catch (error) {
+    throw new MediaUnderstandingError(clean(error?.message) || "图像理解协议配置无效。 ");
+  }
   let response;
   try {
-    response = await fetchImpl(endpointFromBaseUrl(provider.baseUrl), {
+    response = await fetchImpl(request.endpoint, {
       method: "POST",
-      headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json", "User-Agent": "suzu-lives-image-vision/1.0" },
-      body: JSON.stringify(payload),
+      headers: request.headers,
+      body: JSON.stringify(request.body),
     });
   } catch (error) {
     throw new MediaUnderstandingError(`连接视觉模型失败：${clean(error?.message) || "未知错误"}`);
   }
   if (!response?.ok) throw new MediaUnderstandingError(`视觉模型拒绝请求（HTTP ${response?.status || 0}）。`);
   const responsePayload = await responseJson(response, "视觉模型");
-  const answer = extractCompletionText(responsePayload, "视觉模型");
+  let answer;
+  try {
+    answer = extractVisionResponseText({ adapter, customAdapter, payload: responsePayload });
+  } catch (error) {
+    throw new MediaUnderstandingError(clean(error?.message) || "视觉模型返回无法解析。 ");
+  }
   const runtimeDataRoot = mediaRoot(dataRoot, "image-vision");
   const runPath = path.join(runtimeDataRoot, "runs", `vision-${safeStamp(now())}.json`);
-  await writeJsonAtomic(runPath, { status: "ok", sourcePath, question: prompt, detail: requestedDetail, answer, model: responsePayload.model || provider.model, completedAt: now().toISOString() });
-  return { abilityId: "image-vision", status: "ok", answer, runPath, model: responsePayload.model || provider.model, requestId: clean(responsePayload.request_id || responsePayload.id) };
+  await writeJsonAtomic(runPath, { status: "ok", adapter, sourcePath, question: prompt, detail: requestedDetail, answer, model: responsePayload.model || provider.model, completedAt: now().toISOString() });
+  return { abilityId: "image-vision", status: "ok", adapter, answer, runPath, model: responsePayload.model || provider.model, requestId: clean(responsePayload.request_id || responsePayload.id) };
 }
 
 export function createVideoUnderstandingPlan({ video, question, startSeconds = 0, endSeconds = 0, fps = 1, dataRoot } = {}) {

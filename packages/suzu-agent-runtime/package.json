@@ -15,9 +15,12 @@
     "./lifecycle-bridge": "./src/lifecycle-bridge.mjs",
     "./task-trigger": "./src/task-trigger.mjs",
     "./capability-bridge": "./src/capability-bridge.mjs",
+    "./capability-skills": "./src/capability-skills.mjs",
     "./structured-generator": "./src/structured-generator.mjs",
     "./compatible-llm": "./src/compatible-llm.mjs",
     "./compatible-provider-catalog": "./src/compatible-provider-catalog.mjs",
+    "./error-detail": "./src/error-detail.mjs",
+    "./model-capability-catalog": "./src/model-capability-catalog.mjs",
     "./core/*": "./vendor/core/modules/*.mjs"
   },
   "scripts": {

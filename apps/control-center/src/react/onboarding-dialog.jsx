@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Select } from "suzu-design-system";
+import { Input, Select, Switch } from "suzu-design-system";
 
 const STEPS = [
   ["main-model", "主模型"],
@@ -28,6 +28,7 @@ function modelDraft(model = {}) {
     model: String(model.model || selected.model || ""),
     provider: String(model.providerId || selected.id || "deepseek"),
     protocol: String(model.protocol || selected.protocol || "anthropic-messages"),
+    supportsImageInput: model.supportsImageInput === true,
   };
 }
 
@@ -41,7 +42,7 @@ function MainModelStep({ snapshot, actions }) {
 
   useEffect(() => {
     setDraft(modelDraft(model));
-  }, [model.baseUrl, model.model, model.protocol, model.providerId, model.ready]);
+  }, [model.baseUrl, model.model, model.protocol, model.providerId, model.ready, model.supportsImageInput]);
 
   const change = (key, value) => setDraft((current) => ({ ...current, [key]: value }));
   const changeProvider = (providerId) => {
@@ -52,6 +53,7 @@ function MainModelStep({ snapshot, actions }) {
       model: String(selected.model || ""),
       protocol: String(selected.protocol || "anthropic-messages"),
       provider: providerId,
+      supportsImageInput: false,
     }));
   };
   const submit = (event) => {
@@ -66,10 +68,11 @@ function MainModelStep({ snapshot, actions }) {
       <form className="onboarding-form" onSubmit={submit}>
         <div className="onboarding-model-grid">
           <label><span>服务</span><Select ariaLabel="文字模型服务" className="onboarding-provider-select" fullWidth onChange={changeProvider} options={model.providers.map((item) => ({ label: item.label, value: item.id }))} value={draft.provider} /></label>
-          <label><span>接口协议</span>{draft.provider === "deepseek" ? <input disabled value="OpenAI Chat Completions（原生）" /> : <Select ariaLabel="接口协议" fullWidth onChange={(value) => change("protocol", value)} options={PROTOCOL_OPTIONS} value={draft.protocol} />}</label>
-          <label className="onboarding-model-grid__wide"><span>服务地址</span><input autoComplete="url" maxLength={500} onChange={(event) => change("baseUrl", event.currentTarget.value)} placeholder="https://api.example.com" required value={draft.baseUrl} /></label>
-          <label><span>API Key</span><input autoComplete="new-password" maxLength={1000} name="apiKey" onChange={(event) => change("apiKey", event.currentTarget.value)} placeholder={model.ready ? "已保存；重新填写才会替换" : "填写所选服务的 API Key"} required={!model.ready} type="password" value={draft.apiKey} /></label>
-          <label><span>主模型</span><input autoComplete="off" maxLength={200} onChange={(event) => change("model", event.currentTarget.value)} placeholder="填写模型标识" required value={draft.model} /></label>
+          <label><span>接口协议</span>{draft.provider === "deepseek" ? <Input disabled value="OpenAI Chat Completions（原生）" /> : <Select ariaLabel="接口协议" fullWidth onChange={(value) => change("protocol", value)} options={PROTOCOL_OPTIONS} value={draft.protocol} />}</label>
+          <label className="onboarding-model-grid__wide"><span>服务地址</span><Input autoComplete="url" maxLength={500} onChange={(event) => change("baseUrl", event.currentTarget.value)} placeholder="https://api.example.com" required value={draft.baseUrl} /></label>
+          <label><span>API Key</span><Input autoComplete="new-password" maxLength={1000} name="apiKey" onChange={(event) => change("apiKey", event.currentTarget.value)} placeholder={model.ready ? "已保存；重新填写才会替换" : "填写所选服务的 API Key"} required={!model.ready} type="password" value={draft.apiKey} /></label>
+          <label><span>主模型</span><Input autoComplete="off" maxLength={200} onChange={(event) => change("model", event.currentTarget.value)} placeholder="填写模型标识" required value={draft.model} /></label>
+          {draft.provider === "custom" ? <label className="onboarding-model-grid__wide"><span>图片输入</span><div className="onboarding-model-input-capability"><Switch checked={draft.supportsImageInput} onChange={(event) => change("supportsImageInput", event.target.checked)} /><span>{draft.supportsImageInput ? "将聊天图片直接发送给这个模型" : "聊天图片交由已启用的图像理解能力处理"}</span></div></label> : null}
         </div>
         <p className="onboarding-hint">服务地址需要是 HTTPS；本机回环地址可以使用 HTTP。模型标识可按服务商文档直接填写，之后也能在“设置 → 主模型”修改。</p>
         <OnboardingError error={snapshot.error} />
@@ -84,7 +87,7 @@ function ContactStep({ snapshot, actions }) {
     <section className="onboarding-body">
       <span className="reference-kicker">2 / 4 · CONTACT</span>
       <h2>创建第一个联系人</h2>
-      <p>前往对话页，在联系人栏右上角点“＋”。给她写一个备注后，Suzu 会创建独立的资料与会话空间。</p>
+      <p>前往对话页，在联系人栏右上角点“＋”。给 ta 写一个备注后，Suzu 会创建独立的资料与会话空间。</p>
       <OnboardingError error={snapshot.error} />
       <div className="onboarding-actions"><button className="primary-button" onClick={actions.openContactCreate} type="button">去点“＋”新建联系人</button></div>
     </section>
@@ -95,8 +98,8 @@ function PersonaStep({ snapshot, actions }) {
   return (
     <section className="onboarding-body">
       <span className="reference-kicker">3 / 4 · PERSONA</span>
-      <h2>写下她的人设</h2>
-      <p>前往“关系 → 相处设定”，在“人格与相处方式（persona.md）”中写她是谁、如何说话，以及你们怎样相处。保存后会自动进入最后一步。</p>
+      <h2>写下 ta 的人设</h2>
+      <p>前往“关系 → 相处设定”，在“人格与相处方式（persona.md）”中写 ta 是谁、如何说话，以及你们怎样相处。保存后会自动进入最后一步。</p>
       <OnboardingError error={snapshot.error} />
       <div className="onboarding-actions"><button className="primary-button" onClick={actions.openPersonaSetup} type="button">去填写人设</button></div>
     </section>

@@ -295,7 +295,7 @@ function PrivacySettings({ contactsSnapshot, loading, onRestoreContact, pending 
         <div className="settings-card__copy">
           <span className="settings-card__eyebrow">PRIVACY</span>
           <h2>隐藏联系人</h2>
-          <p>隐藏只会让联系人不再出现在对话页列表中；消息、主动关心、记忆和其他资料都不会被删除或停用。</p>
+          <p>隐藏后，对话页会收起这位联系人及其当前会话；消息、主动关心、记忆和其他资料都不会被删除或停用。</p>
         </div>
         {loading ? <p className="settings-privacy-card__status">正在读取隐藏联系人…</p> : null}
         {!loading && error ? <p className="settings-privacy-card__status is-error">无法读取隐藏联系人：{error}</p> : null}

@@ -72,7 +72,7 @@ test("capability status preserves a selected custom HTTP TTS adapter", async () 
   assert.equal(missingAdapterSettings.selectionSource, "invalid-contact");
 });
 
-test("capability status recognizes a profile-selected voice without requiring a legacy candidate", async () => {
+test("capability status recognizes a profile-selected voice", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "suzu-capability-voice-profile-"));
   const dataRoot = path.join(root, "data");
   const projectRoot = path.join(root, "project");

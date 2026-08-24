@@ -100,6 +100,12 @@
 .software-assistant-dialog__footer form > .suzu-design-system-input-wrapper,
 .software-assistant-dialog__footer form > span { min-width:0; }
 
+.software-assistant-dialog__composer-actions {
+  display:flex;
+  align-items:center;
+  gap:8px;
+}
+
 .software-assistant-dialog__send,
 .software-assistant-dialog__stop {
   min-width:72px;

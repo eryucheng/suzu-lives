@@ -5,6 +5,7 @@ import path from "node:path";
 import test from "node:test";
 
 import { resolveAgentDataRoot } from "@suzu-lives/agent-registry";
+import { createScheduleTask, listScheduleTasks } from "@suzu-lives/task-scheduler";
 
 import { createCapabilityAccessPolicy } from "../electron/services/capability-access-policy.mjs";
 import { createCapabilityRegistry, createCapabilityRuntime } from "../electron/services/capability-registry.mjs";
@@ -56,7 +57,6 @@ test("Agent capability adapters reuse product-owned executors with the active co
     },
     recordCapabilityUsage: async (value) => calls.push({ type: "usage", value }),
     runners: {
-      loadPhoneConfig: async () => ({ config: { defaultBackend: "api" } }),
       runAgentImageGeneration: async (value) => {
         calls.push({ type: "image-generation", value });
         assert.deepEqual(await value.connectionResolver(), { apiKey: "image-key", baseUrl: "https://images.example.test/v1", key: "image-key", model: "image-model", name: "我的图像接口", provider: "fixture", type: "openai-compatible" });
@@ -111,9 +111,9 @@ test("Agent capability adapters reuse product-owned executors with the active co
   await adapters["image-generation"](envelope({
     prompt: "一只猫坐在窗边",
     references: [{ role: "identity", path: "D:/references/cat.png" }],
-    seed: 17,
   }));
-  await adapters["phone-camera"](envelope({
+  await adapters["image-generation"](envelope({
+    stylePreset: "phone-camera",
     shot: "selfie",
     scene: "窗边自拍",
     references: [{ scope: "contact", id: "person.main" }],
@@ -123,10 +123,11 @@ test("Agent capability adapters reuse product-owned executors with the active co
   assert.equal(byType.get("image-vision").agentId, contact.agentId);
   assert.equal(byType.get("image-vision").ledgerPath, path.join(dataRoot, "agents", contact.agentId, "cost-ledger", "events.jsonl"));
   assert.equal(byType.get("image-vision").environment.VISION_API_KEY, "vision-key");
-  assert.equal(byType.get("image-vision").environment.VISION_BASE_URL, "https://dashscope.aliyuncs.com/compatible-mode/v1");
+  assert.equal(byType.get("image-vision").environment.VISION_BASE_URL, "https://dashscope.aliyuncs.com/api/v1");
+  assert.equal(byType.get("image-vision").environment.VISION_CONNECTION_TYPE, "dashscope");
   assert.equal(byType.get("image-vision").environment.VISION_MODEL, "vision-model");
   assert.equal(byType.get("video-understanding").environment.VIDEO_UNDERSTANDING_API_KEY, "video-key");
-  assert.equal(byType.get("video-understanding").environment.VIDEO_UNDERSTANDING_BASE_URL, "https://dashscope.aliyuncs.com/compatible-mode/v1");
+  assert.equal(byType.get("video-understanding").environment.VIDEO_UNDERSTANDING_BASE_URL, "https://dashscope.aliyuncs.com/api/v1");
   assert.equal(byType.get("video-understanding").environment.VIDEO_UNDERSTANDING_MODEL, "video-model");
   assert.equal(byType.get("video-understanding").videoPath, "D:/attachments/walk.mp4");
   assert.equal(byType.get("voice-message").apiKeyOverride, "voice-key");
@@ -141,10 +142,9 @@ test("Agent capability adapters reuse product-owned executors with the active co
   assert.equal(byType.get("web-browser").outputRoot, path.join(dataRoot, "agents", contact.agentId, "web-browser"));
   assert.deepEqual(byType.get("web-browser").input, { url: "https://example.test/" });
   assert.deepEqual(byType.get("image-generation").options.refs, ["identity=D:/references/cat.png"]);
-  assert.equal(byType.get("image-generation").options.seed, 17);
   assert.deepEqual(byType.get("phone-camera").options.refs, [{ scope: "contact", id: "person.main" }]);
   assert.equal(calls.filter((entry) => entry.type === "usage").length, 1);
-  assert.equal(calls.find((entry) => entry.type === "usage").value.capabilityId, "phone-camera");
+  assert.equal(calls.find((entry) => entry.type === "usage").value.capabilityId, "image-generation");
 });
 
 test("a profile-selected voice resolves the API assigned to its own voice service", async () => {
@@ -220,6 +220,82 @@ test("a profile-selected voice resolves the API assigned to its own voice servic
   assert.equal(calls[0].baseUrlOverride, "https://api.elevenlabs.io");
   assert.equal(calls[0].connectionName, "ElevenLabs 账户");
   assert.equal(calls[0].connectionType, "generic-api");
+});
+
+test("the Agent schedule action creates a conversation task for only the active contact", async () => {
+  const root = await temporaryDirectory("suzu-agent-schedule-");
+  const dataRoot = path.join(root, "data");
+  const contact = contactFixture(root);
+  const adapters = createAgentCapabilityAdapters({
+    connectionsService: { resolveNamedApiConnection: async () => null },
+    contactProjectsService: { snapshot: async () => ({ contacts: [contact] }) },
+    settingsService: settingsService(dataRoot),
+  });
+  const runtime = createCapabilityRuntime({ registry: createCapabilityRegistry(), adapters });
+  assert.deepEqual(
+    runtime.availableActions({ contactId: contact.id })
+      .filter((action) => action.capabilityId === "schedule")
+      .map((action) => action.action),
+    ["add", "list", "remove"],
+  );
+  const result = await runtime.invoke({
+    capabilityId: "schedule",
+    action: "add",
+    contactId: contact.id,
+    input: {
+      delay: "10m",
+      description: "十分钟后回消息",
+      prompt: "十分钟已到，请自然地找用户说话。",
+    },
+    projectRoot: contact.projectRoot,
+  });
+
+  assert.equal(result.status, "completed");
+  assert.equal(result.value.status, "created");
+  assert.equal(result.value.task.target.contactId, contact.id);
+  assert.equal(result.value.task.source, "agent");
+  const tasks = await listScheduleTasks({ dataRoot });
+  assert.equal(tasks.length, 1);
+  assert.equal(tasks[0].target.contactId, contact.id);
+  assert.equal(tasks[0].target.prompt, "十分钟已到，请自然地找用户说话。");
+  assert.equal(tasks[0].source, "agent");
+  await createScheduleTask({
+    dataRoot,
+    delay: "20m",
+    contactId: "contact-other",
+    description: "其他联系人的回访",
+    prompt: "只属于另一个联系人。",
+    source: "agent",
+  });
+  const listed = await runtime.invoke({
+    capabilityId: "schedule",
+    action: "list",
+    contactId: contact.id,
+    input: {},
+    projectRoot: contact.projectRoot,
+  });
+  assert.equal(listed.status, "completed");
+  assert.equal(listed.value.status, "listed");
+  assert.deepEqual(listed.value.tasks.map((task) => task.id), [result.value.task.id]);
+  const removed = await runtime.invoke({
+    capabilityId: "schedule",
+    action: "remove",
+    contactId: contact.id,
+    input: { id: result.value.task.id },
+    projectRoot: contact.projectRoot,
+  });
+  assert.equal(removed.status, "completed");
+  assert.equal(removed.value.status, "removed");
+  assert.equal((await listScheduleTasks({ dataRoot })).length, 1);
+  const invalid = await runtime.invoke({
+    capabilityId: "schedule",
+    action: "add",
+    contactId: contact.id,
+    input: { delay: "5m", cron: "0 20 * * *", prompt: "不应创建" },
+    projectRoot: contact.projectRoot,
+  });
+  assert.equal(invalid.status, "failed");
+  assert.match(invalid.error.message, /delay 或 cron/u);
 });
 
 test("a contact capability is absent from the Agent catalog until that contact enables it", async () => {

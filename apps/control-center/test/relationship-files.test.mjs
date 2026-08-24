@@ -44,7 +44,23 @@ test("custom files update SUZU.md references once and preserve existing relation
   assert.equal((suzu.match(/^@notes\/bond\.md$/gmu) || []).length, 1);
   assert.match(suzu, /# 用户原文/u);
   assert.match(suzu, /@abilities\.md/u);
+  assert.match(suzu, /相处备注/u);
+  assert.doesNotMatch(suzu, /（文件不存在）/u);
   await assert.rejects(() => current.create({ path: "notes/bond.md", content: "覆盖" }), RelationshipFilesError);
+});
+
+test("relationship file updates expand the staged content in the same transaction", async () => {
+  const root = await project();
+  await fs.writeFile(path.join(root, "SUZU.md"), "# 相处规则\n@persona.md\n", "utf8");
+  await fs.writeFile(path.join(root, "persona.md"), "旧人设", "utf8");
+
+  const current = service(root);
+  await current.save({ path: "persona.md", content: "新人设" });
+
+  assert.equal(await fs.readFile(path.join(root, "persona.md"), "utf8"), "新人设");
+  const suzu = await fs.readFile(path.join(root, "SUZU.md"), "utf8");
+  assert.match(suzu, /新人设/u);
+  assert.doesNotMatch(suzu, /旧人设/u);
 });
 
 test("relationship files roll back a primary-reference transaction after a final write failure", async () => {
@@ -68,6 +84,43 @@ test("relationship files roll back a primary-reference transaction after a final
   await assert.rejects(() => service(root, fsOps).save({ path: "persona.md", content: "新 persona" }), RelationshipFilesError);
   assert.equal(await fs.readFile(path.join(root, "persona.md"), "utf8"), "旧 persona");
   assert.equal(await fs.readFile(path.join(root, "SUZU.md"), "utf8"), original);
+});
+
+test("targeted relationship saves resolve the requested contact instead of the selected project", async () => {
+  const selectedRoot = await project();
+  const createdRoot = await project();
+  await fs.writeFile(path.join(selectedRoot, "SUZU.md"), "# 当前打开的联系人\n", "utf8");
+  await fs.writeFile(path.join(createdRoot, "SUZU.md"), "# 新建联系人\n", "utf8");
+  const current = createRelationshipFilesService({
+    settingsService: { load: () => ({ projectRoot: selectedRoot }) },
+    contactProjectsService: {
+      snapshot: async () => ({
+        activeContact: { id: "contact-selected", projectRoot: selectedRoot },
+        contacts: [
+          { id: "contact-selected", projectRoot: selectedRoot },
+          { id: "contact-created", projectRoot: createdRoot },
+        ],
+      }),
+    },
+  });
+
+  await current.saveForContact({
+    contactId: "contact-created",
+    path: "persona.md",
+    content: "新建联系人的人设",
+  });
+
+  assert.equal(await fs.readFile(path.join(createdRoot, "persona.md"), "utf8"), "新建联系人的人设");
+  const createdSuzu = await fs.readFile(path.join(createdRoot, "SUZU.md"), "utf8");
+  assert.match(createdSuzu, /^@persona\.md$/mu);
+  assert.match(createdSuzu, /新建联系人的人设/u);
+  assert.doesNotMatch(createdSuzu, /（文件不存在）/u);
+  assert.equal(await fs.readFile(path.join(selectedRoot, "SUZU.md"), "utf8"), "# 当前打开的联系人\n");
+  await assert.rejects(() => fs.readFile(path.join(selectedRoot, "persona.md"), "utf8"), /ENOENT/u);
+  await assert.rejects(
+    () => current.saveForContact({ contactId: "contact-missing", path: "persona.md", content: "错误目标" }),
+    RelationshipFilesError,
+  );
 });
 
 test("relationship files reject traversal, managed folders, and symlink escapes", async (t) => {

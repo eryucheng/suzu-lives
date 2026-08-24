@@ -25,25 +25,34 @@ import { createAgentRuntimeConfigService, registerAgentRuntimeConfigIpc } from "
 import { createCapabilityAccessPolicy } from "../services/capability-access-policy.mjs";
 import { createCapabilityRegistry, createCapabilityRuntime } from "../services/capability-registry.mjs";
 import { createAgentCapabilityAdapters } from "../services/agent-capability-adapters.mjs";
+import { createAgentVoiceCallCapabilityAdapter } from "../services/agent-voice-call-capability.mjs";
 import { eraseContactAgentConversation } from "../services/agent-contact-cleanup.mjs";
 import { createTodayCalendarService } from "../services/today-calendar.mjs";
 import { createWeChatLinkService } from "../services/wechat-link.mjs";
 import { createMailFeedbackLinkService } from "../services/mail-feedback-link.mjs";
 import { createContactProjectsService } from "../services/contact-projects.mjs";
-import { createSoftwareAssistantService } from "../services/software-assistant-service.mjs";
 import {
-  createProactiveChainPlanningTask,
-  createProactiveChainTask,
-  isActiveProactiveChainTask,
-  isActiveProactiveChainPlanningTask,
-  maintainProactiveContactChains,
-  proactiveCheckTaskPrompt,
-  PROACTIVE_CHAIN_INITIAL_DELAY,
-  PROACTIVE_CHAIN_PLANNING_TURN_SOURCE,
-  PROACTIVE_CHAIN_RECOVERY_DELAY,
-  PROACTIVE_CHAIN_TURN_SOURCE,
-  proactivePlanningTaskPrompt,
+  createSoftwareAssistantService,
+  softwareAssistantUsageSubject,
+} from "../services/software-assistant-service.mjs";
+import { withDetailedIpcErrors } from "./ipc-error-boundary.mjs";
+import {
+  ensureTimeAwarenessConfig,
+} from "../services/time-awareness-hook.mjs";
+import {
+  isActiveProactiveContactTask,
+  isProactiveContactTask,
+  isRetiredProactiveContactTask,
+  maintainProactiveContactChecks,
+  proactiveContactNextCheckDelay,
   proactiveContactScopeKey,
+  proactiveContactTaskPrompt,
+  proactiveContactTimingTaskPrompt,
+  PROACTIVE_CONTACT_INITIAL_DELAY,
+  PROACTIVE_CONTACT_RECOVERY_DELAY,
+  PROACTIVE_CONTACT_TIMING_TURN_SOURCE,
+  PROACTIVE_CONTACT_TURN_SOURCE,
+  scheduleNextProactiveContactCheck,
 } from "../services/proactive-contact-maintenance.mjs";
 import { runScheduledScript, validateScheduledScriptPath } from "../services/scheduled-script.mjs";
 import { syncAgentJournalSchedule } from "../services/agent-journal-schedule.mjs";
@@ -74,16 +83,20 @@ function projectScopeKey(value) {
   return process.platform === "win32" ? resolved.toLowerCase() : resolved;
 }
 
-function proactiveChainPhase(task, contactId) {
+function proactiveContactTaskPhase(task, contactId) {
   const scope = { contactId };
-  if (isActiveProactiveChainTask(task, scope)) return "check";
-  if (isActiveProactiveChainPlanningTask(task, scope)) return "planning";
+  if (isActiveProactiveContactTask(task, scope)) return "contact";
   return "";
 }
 
-function proactiveChainRequestId(task, phase) {
+function proactiveContactRequestId(task, phase) {
   const id = clean(task?.id);
   return id && phase ? `suzu-${phase}-${id}` : "";
+}
+
+function proactiveContactTimingRequestId(task) {
+  const id = clean(task?.id);
+  return id ? `suzu-timing-${id}` : "";
 }
 
 function scheduleDurationPart(value, label, maximum) {
@@ -130,7 +143,9 @@ function agentJournalTaskPrompt(date) {
 }
 
 export function registerIpcHandlers({ app, appUpdateService = null, dataStorageService, getMainWindow, releaseAnnouncementService = null, settingsService }) {
+  const rendererIpcMain = withDetailedIpcErrors(ipcMain);
   const dataRoot = settingsService.response(settingsService.load()).dataRoot;
+  const softwareAssistantSubject = softwareAssistantUsageSubject(dataRoot);
   let removeContactAssociations = async () => undefined;
   let removeScheduledContactTasks = async () => ({ removed: 0 });
   let wechatService = null;
@@ -156,7 +171,7 @@ export function registerIpcHandlers({ app, appUpdateService = null, dataStorageS
     settingsService,
   });
   const todayCalendarService = createTodayCalendarService({ contactProjectsService, settingsService });
-  const relationshipFilesService = createRelationshipFilesService({ settingsService });
+  const relationshipFilesService = createRelationshipFilesService({ contactProjectsService, settingsService });
   const agentJournalService = createAgentJournalService({ contactProjectsService, settingsService });
   // Memory recall is mounted once in the in-process Agent Core lifecycle registry.
   // Both global and per-contact settings are read when the Hook collects, so
@@ -165,7 +180,10 @@ export function registerIpcHandlers({ app, appUpdateService = null, dataStorageS
   let mailFeedbackService = null;
   let conversation = null;
   let requestAgentJournalScheduleSync = async () => undefined;
-  let requestProactiveContactMaintenance = () => undefined;
+  let requestProactiveContactMaintenance = async () => undefined;
+  const agentVoiceCallCapability = createAgentVoiceCallCapabilityAdapter({
+    voiceCallService: () => conversation?.call || null,
+  });
   const capabilityRegistry = createCapabilityRegistry();
   const capabilityAccessPolicy = createCapabilityAccessPolicy({
     capabilityRegistry,
@@ -182,7 +200,7 @@ export function registerIpcHandlers({ app, appUpdateService = null, dataStorageS
     settingsService,
   });
   capabilityRuntime = createCapabilityRuntime({
-    canInvoke: capabilityAccessPolicy.canInvoke,
+    canInvoke: ({ capability, action, context }) => capabilityAccessPolicy.canInvoke({ capability, action, context }),
     registry: capabilityRegistry,
     adapters: {
       ...agentCapabilityAdapters,
@@ -215,15 +233,14 @@ export function registerIpcHandlers({ app, appUpdateService = null, dataStorageS
         });
       },
       "mail-feedback-link": () => mailFeedbackService?.restart(),
-      "proactive-contact-maintenance": ({ context }) => {
-        requestProactiveContactMaintenance({ scope: context.scope || null });
-        return { requested: true };
-      },
+      "proactive-contact-maintenance": ({ context }) => requestProactiveContactMaintenance({ scope: context.scope || null }),
+      "realtime-voice-call": agentVoiceCallCapability,
     },
   });
   const capabilitiesService = createCapabilitiesService({
     capabilityRegistry,
     capabilityRuntime,
+    connectionsService,
     contactProjectsService,
     settingsService,
     resolveContactSession: (contactId) => {
@@ -233,8 +250,6 @@ export function registerIpcHandlers({ app, appUpdateService = null, dataStorageS
       return conversation.reader.resolveContactSession(contactId);
     },
   });
-  void capabilitiesService.refreshManagedRegistrations()
-    .catch(() => undefined);
   registerSettingsIpc({
     app,
     appUpdateService,
@@ -242,19 +257,24 @@ export function registerIpcHandlers({ app, appUpdateService = null, dataStorageS
     dataStorageService,
     dialog,
     getMainWindow,
-    ipcMain,
+    ipcMain: rendererIpcMain,
     onMemoryRecallEnabledChanged: ({ enabled }) => syncMemoryRecallHooks({ enabled }),
     releaseAnnouncementService,
     shell,
     settingsService,
   });
-  registerAgentRuntimeConfigIpc({ ipcMain, agentRuntimeConfigService });
-  registerLedgerIpc({ contactProjectsService, ipcMain, settingsService });
-  registerTodayCalendarIpc({ ipcMain, todayCalendarService });
-  registerCapabilitiesIpc({ ipcMain, capabilitiesService });
-  registerExternalCapabilitiesIpc({ dialog, getMainWindow, ipcMain, externalCapabilitiesService });
-  registerRelationshipFilesIpc({ ipcMain, relationshipFilesService });
-  registerAgentJournalIpc({ agentJournalService, ipcMain });
+  registerAgentRuntimeConfigIpc({ ipcMain: rendererIpcMain, agentRuntimeConfigService });
+  registerLedgerIpc({
+    contactProjectsService,
+    ipcMain: rendererIpcMain,
+    settingsService,
+    usageSubjects: [softwareAssistantSubject],
+  });
+  registerTodayCalendarIpc({ ipcMain: rendererIpcMain, todayCalendarService });
+  registerCapabilitiesIpc({ ipcMain: rendererIpcMain, capabilitiesService });
+  registerExternalCapabilitiesIpc({ dialog, getMainWindow, ipcMain: rendererIpcMain, externalCapabilitiesService });
+  registerRelationshipFilesIpc({ ipcMain: rendererIpcMain, relationshipFilesService });
+  registerAgentJournalIpc({ agentJournalService, ipcMain: rendererIpcMain });
   conversation = registerConversationIpc({
     app,
     clipboard,
@@ -262,7 +282,7 @@ export function registerIpcHandlers({ app, appUpdateService = null, dataStorageS
     connectionsService,
     dialog,
     getMainWindow,
-    ipcMain,
+    ipcMain: rendererIpcMain,
     capabilityRegistry,
     capabilityRuntime,
     memoryRuntime: memoryService,
@@ -280,15 +300,18 @@ export function registerIpcHandlers({ app, appUpdateService = null, dataStorageS
   memoryService.setStructuredGenerationRuntime(conversation.agentRuntime);
   const softwareAssistantService = createSoftwareAssistantService({
     applicationPath: typeof app?.getAppPath === "function" ? app.getAppPath() : "",
+    contactSnapshot: () => contactProjectsService.snapshot(),
+    createContact: (value) => conversation.reader.createContact(value),
     dataRoot,
     runtime: conversation.agentRuntime,
+    saveRelationshipFile: (value) => relationshipFilesService.saveForContact(value),
     settingsService,
+    usageLedger: conversation.usageLedger,
   });
-  registerSoftwareAssistantIpc({ app, ipcMain, softwareAssistantService });
-  void memoryService.resumeExistingMaintenance().catch(() => undefined);
+  registerSoftwareAssistantIpc({ app, ipcMain: rendererIpcMain, softwareAssistantService });
   const conversationCompactorService = conversation.compactor;
   registerConversationCompactorIpc({
-    ipcMain,
+    ipcMain: rendererIpcMain,
     compactorService: conversationCompactorService,
   });
   // Automatic compaction is now a real Agent Core pre-step component. There is no
@@ -359,9 +382,24 @@ export function registerIpcHandlers({ app, appUpdateService = null, dataStorageS
       listScheduleTasks({ dataRoot }),
       listScheduleHistory({ dataRoot, limit: 100 }),
     ]);
+    const proactiveSettings = capabilitiesService.proactiveContactSettings();
+    const nextProactiveTaskByContact = new Map();
+    for (const task of storedTasks) {
+      const contactId = proactiveContactScopeKey(task?.target);
+      if (!contactId || !isActiveProactiveContactTask(task, { contactId })) continue;
+      const prior = nextProactiveTaskByContact.get(contactId);
+      if (!prior || Date.parse(task.dueAt) < Date.parse(prior.dueAt)) nextProactiveTaskByContact.set(contactId, task);
+    }
+    const presentStoredTask = (task) => {
+      const summary = presentTask(scheduleTaskSummary(task), task);
+      const contactId = proactiveContactScopeKey(task?.target);
+      return contactId && isProactiveContactTask(task, { contactId })
+        ? { ...summary, systemKind: "proactive-contact" }
+        : summary;
+    };
     const tasks = storedTasks
       .filter((task) => !isInternalCompactor(task))
-      .map((task) => presentTask(scheduleTaskSummary(task), task));
+      .map(presentStoredTask);
     const history = storedHistory
       .filter((entry) => !isInternalCompactor(entry?.task))
       .map((entry) => ({ ...entry, task: presentTask(entry.task) }));
@@ -369,11 +407,20 @@ export function registerIpcHandlers({ app, appUpdateService = null, dataStorageS
       contacts: contacts.map(({ id, name }) => ({ id, name })),
       contactsStatus: clean(contactSnapshot?.status) || "needs-root",
       history,
+      proactiveContact: {
+        autoMaintain: proactiveSettings?.autoMaintain === true,
+        contacts: contacts.map(({ id, name }) => ({
+          id,
+          name,
+          enabled: proactiveSettings?.enabledContactIds?.includes(id) === true,
+          dueAt: clean(nextProactiveTaskByContact.get(id)?.dueAt),
+        })),
+      },
       tasks,
     };
   };
-  ipcMain.handle("schedule:snapshot", scheduleSnapshot);
-  ipcMain.handle("schedule:select-script", async () => {
+  rendererIpcMain.handle("schedule:snapshot", scheduleSnapshot);
+  rendererIpcMain.handle("schedule:select-script", async () => {
     const result = await dialog.showOpenDialog(getMainWindow(), {
       title: "选择系统定时脚本",
       properties: ["openFile"],
@@ -383,7 +430,7 @@ export function registerIpcHandlers({ app, appUpdateService = null, dataStorageS
     const selected = await validateScheduledScriptPath(result.filePaths[0]);
     return { canceled: false, fileName: path.basename(selected.scriptPath), scriptPath: selected.scriptPath };
   });
-  ipcMain.handle("schedule:create", async (_event, value) => {
+  rendererIpcMain.handle("schedule:create", async (_event, value) => {
     const input = plainObject(value);
     const scheduleType = clean(input.scheduleType).toLowerCase();
     const targetType = clean(input.targetType).toLowerCase();
@@ -416,7 +463,7 @@ export function registerIpcHandlers({ app, appUpdateService = null, dataStorageS
     }
     return { task: scheduleTaskSummary(task), snapshot: await scheduleSnapshot() };
   });
-  ipcMain.handle("schedule:set-enabled", async (_event, value) => {
+  rendererIpcMain.handle("schedule:set-enabled", async (_event, value) => {
     const input = plainObject(value);
     const task = await setScheduleTaskEnabled({
       dataRoot,
@@ -426,7 +473,7 @@ export function registerIpcHandlers({ app, appUpdateService = null, dataStorageS
     if (!task) throw new Error("要更新的计划不存在。 ");
     return { task: scheduleTaskSummary(task), snapshot: await scheduleSnapshot() };
   });
-  ipcMain.handle("schedule:remove", async (_event, value) => {
+  rendererIpcMain.handle("schedule:remove", async (_event, value) => {
     const input = plainObject(value);
     if (input.confirmed !== true) throw new Error("删除计划前需要明确确认。 ");
     const removed = await removeScheduleTask({ dataRoot, id: clean(input.id) });
@@ -434,28 +481,28 @@ export function registerIpcHandlers({ app, appUpdateService = null, dataStorageS
   });
   let proactiveMaintenanceStopped = false;
   let proactiveMaintenance = Promise.resolve();
-  let proactiveChainTransition = Promise.resolve();
-  const checkProactiveContactChains = ({
+  let proactiveContactTransition = Promise.resolve();
+  const checkProactiveContactChecks = ({
     scope = null,
     now = new Date(),
-    nextTaskDelay = PROACTIVE_CHAIN_INITIAL_DELAY,
+    nextTaskDelay = PROACTIVE_CONTACT_INITIAL_DELAY,
   } = {}) => {
     const next = proactiveMaintenance
       .catch(() => undefined)
-      .then(() => {
+      .then(() => queueProactiveContactTransition(() => {
         if (proactiveMaintenanceStopped) return [];
-        return maintainProactiveContactChains({
+        return maintainProactiveContactChecks({
           dataRoot,
           hasPendingScheduledTurn: ({ contactId }) => (
             conversation.chat.hasPendingTurn?.({
               contactId,
               kind: "schedule",
-              scheduleSource: PROACTIVE_CHAIN_TURN_SOURCE,
+              scheduleSource: PROACTIVE_CONTACT_TURN_SOURCE,
             }) === true
             || conversation.chat.hasPendingTurn?.({
               contactId,
               kind: "schedule",
-              scheduleSource: PROACTIVE_CHAIN_PLANNING_TURN_SOURCE,
+              scheduleSource: PROACTIVE_CONTACT_TIMING_TURN_SOURCE,
             }) === true
           ),
           now,
@@ -463,14 +510,12 @@ export function registerIpcHandlers({ app, appUpdateService = null, dataStorageS
           scope,
           settings: capabilitiesService.proactiveContactSettings(),
         });
-      });
+      }));
     proactiveMaintenance = next;
     return next;
   };
-  requestProactiveContactMaintenance = ({ scope = null } = {}) => {
-    void checkProactiveContactChains({ scope }).catch(() => undefined);
-  };
-  const proactiveChainEnabled = (contactId) => {
+  requestProactiveContactMaintenance = ({ scope = null } = {}) => checkProactiveContactChecks({ scope });
+  const proactiveContactEnabled = (contactId) => {
     const id = proactiveContactScopeKey({ contactId });
     if (!id) return false;
     const settings = capabilitiesService.proactiveContactSettings();
@@ -478,42 +523,85 @@ export function registerIpcHandlers({ app, appUpdateService = null, dataStorageS
       && settings.enabledContactIds?.includes(id) === true
       && capabilitiesService.isCompanionContactEnabled({ abilityId: "proactive-contact", contactId: id }) === true;
   };
-  const queueProactiveChainTransition = (operation) => {
-    const next = proactiveChainTransition
+  function queueProactiveContactTransition(operation) {
+    const next = proactiveContactTransition
       .catch(() => undefined)
       .then(() => proactiveMaintenanceStopped ? undefined : operation());
-    proactiveChainTransition = next;
+    proactiveContactTransition = next;
     return next;
-  };
-  const createPlanningTurn = async (contactId) => {
-    if (!proactiveChainEnabled(contactId)) return null;
-    return createProactiveChainPlanningTask({ dataRoot, contactId });
-  };
-  const createRecoveryCheck = async (contactId) => {
-    if (!proactiveChainEnabled(contactId)) return null;
-    const scope = { contactId };
-    const existing = await listScheduleTasks({ dataRoot });
-    // The planning turn either created its one next check, or this two-hour
-    // fallback restores the chain without starting a second maintenance loop.
-    if (existing.some((task) => isActiveProactiveChainTask(task, scope))) return null;
-    return createProactiveChainTask({
+  }
+  const createProactiveContactRecovery = async (contactId) => {
+    if (!proactiveContactEnabled(contactId)) return null;
+    return scheduleNextProactiveContactCheck({
       dataRoot,
       contactId,
-      delay: PROACTIVE_CHAIN_RECOVERY_DELAY,
+      delay: PROACTIVE_CONTACT_RECOVERY_DELAY,
     });
   };
-  const proactiveChainRequests = new Map();
-  const unsubscribeProactiveChainTurns = conversation.chat.subscribe((event) => {
+  const proactiveContactRequests = new Map();
+  const startProactiveContactTimingTurn = async ({ contactId, task } = {}) => {
+    if (!proactiveContactEnabled(contactId)) return null;
+    const requestId = proactiveContactTimingRequestId(task);
+    if (!requestId) throw new Error("主动关心缺少任务标识。 ");
+    const target = await conversation.reader.resolveContactSession(contactId);
+    proactiveContactRequests.set(requestId, {
+      contactId,
+      content: "",
+      phase: "timing",
+      task,
+    });
+    try {
+      const result = await conversation.chat.sendTaskToSession({
+        taskContext: {
+          id: `${clean(task?.id)}-timing`,
+          text: proactiveContactTimingTaskPrompt(),
+        },
+        contactId,
+        sessionId: target.id,
+        projectRoot: target.projectRoot,
+        hasTranscript: target.hasTranscript === true,
+        kind: "schedule",
+        scheduleSource: PROACTIVE_CONTACT_TIMING_TURN_SOURCE,
+        requestId,
+        deliverToWechat: false,
+        outputPolicy: "silent",
+        resultChannel: "internal",
+      });
+      if (result?.accepted !== true) {
+        proactiveContactRequests.delete(requestId);
+        await createProactiveContactRecovery(contactId);
+      }
+      return result;
+    } catch (error) {
+      proactiveContactRequests.delete(requestId);
+      await createProactiveContactRecovery(contactId);
+      throw error;
+    }
+  };
+  const unsubscribeProactiveContactTurns = conversation.chat.subscribe((event) => {
     const requestId = clean(event?.requestId);
-    const request = proactiveChainRequests.get(requestId);
-    if (!request || !["turn-complete", "turn-stopped", "error"].includes(event?.type)) return;
-    proactiveChainRequests.delete(requestId);
-    void queueProactiveChainTransition(async () => {
-      if (event.type === "turn-complete" && request.phase === "check") {
-        await createPlanningTurn(request.contactId);
+    const request = proactiveContactRequests.get(requestId);
+    if (!request) return;
+    if (event?.type === "internal-result" && request.phase === "timing") {
+      request.content = clean(event.content);
+      return;
+    }
+    if (!["turn-complete", "turn-stopped", "error"].includes(event?.type)) return;
+    proactiveContactRequests.delete(requestId);
+    void queueProactiveContactTransition(async () => {
+      if (!proactiveContactEnabled(request.contactId)) return;
+      if (event.type === "turn-complete" && request.phase === "contact") {
+        await startProactiveContactTimingTurn(request);
         return;
       }
-      await createRecoveryCheck(request.contactId);
+      if (event.type === "turn-complete" && request.phase === "timing") {
+        const delay = proactiveContactNextCheckDelay(request.content);
+        if (delay) {
+          await scheduleNextProactiveContactCheck({ dataRoot, contactId: request.contactId, delay });
+          return;
+        }
+      }
+      await createProactiveContactRecovery(request.contactId);
     }).catch(() => undefined);
   });
   const agentJournalRequests = new Map();
@@ -552,29 +640,25 @@ export function registerIpcHandlers({ app, appUpdateService = null, dataStorageS
     onConversationTask: async (task) => {
       const contactId = clean(task.target.contactId);
       if (!contactId) return undefined;
-      if (task.source !== "manual" && !capabilitiesService.isCompanionContactEnabled({
-        abilityId: "proactive-contact",
-        contactId,
-      })) return undefined;
-      const phase = proactiveChainPhase(task, contactId);
-      if (phase && !proactiveChainEnabled(contactId)) return undefined;
-      const scheduleSource = phase === "check"
-        ? PROACTIVE_CHAIN_TURN_SOURCE
-        : phase === "planning"
-          ? PROACTIVE_CHAIN_PLANNING_TURN_SOURCE
+      const phase = proactiveContactTaskPhase(task, contactId);
+      if (isRetiredProactiveContactTask(task, { contactId })) return undefined;
+      if (isProactiveContactTask(task, { contactId }) && !phase) return undefined;
+      if (phase && !proactiveContactEnabled(contactId)) return undefined;
+      const agentCreatedSchedule = clean(task.source) === "agent";
+      const scheduleSource = phase === "contact"
+        ? PROACTIVE_CONTACT_TURN_SOURCE
+        : agentCreatedSchedule
+          ? "agent-schedule"
           : "";
-      const requestId = proactiveChainRequestId(task, phase);
-      const proactiveSettings = phase ? capabilitiesService.proactiveContactSettings() : null;
+      const requestId = proactiveContactRequestId(task, phase);
       const target = await conversation.reader.resolveContactSession(contactId);
-      if (requestId) proactiveChainRequests.set(requestId, { contactId, phase });
-      try {
-        const result = phase
-          ? await conversation.chat.sendTaskToSession({
+      if (phase) {
+        proactiveContactRequests.set(requestId, { contactId, content: "", phase, task });
+        try {
+          const result = await conversation.chat.sendTaskToSession({
             taskContext: {
               id: task.id,
-              text: phase === "check"
-                ? proactiveCheckTaskPrompt(proactiveSettings?.chainPrompt)
-                : proactivePlanningTaskPrompt(),
+              text: proactiveContactTaskPrompt(),
             },
             contactId,
             sessionId: target.id,
@@ -583,33 +667,31 @@ export function registerIpcHandlers({ app, appUpdateService = null, dataStorageS
             kind: "schedule",
             scheduleSource,
             requestId,
-            // A is a real outreach decision; B is only the follow-up schedule
-            // operation. The runtime owns B's silence instead of making the
-            // model leave a durable NO_REPLY marker in chat history.
-            deliverToWechat: phase === "check",
-            outputPolicy: phase === "planning" ? "silent" : "external",
-          })
-          : await conversation.chat.sendToSession({
-            content: scheduledTaskContent(task),
-            contactId,
-            sessionId: target.id,
-            projectRoot: target.projectRoot,
-            hasTranscript: target.hasTranscript === true,
-            kind: "schedule",
-            scheduleSource,
-            requestId,
-            deliverToWechat: false,
+            deliverToWechat: true,
+            outputPolicy: "external",
           });
-        if (requestId && result?.accepted !== true) {
-          proactiveChainRequests.delete(requestId);
-          void queueProactiveChainTransition(() => createRecoveryCheck(contactId)).catch(() => undefined);
+          if (result?.accepted !== true) {
+            proactiveContactRequests.delete(requestId);
+            void queueProactiveContactTransition(() => createProactiveContactRecovery(contactId)).catch(() => undefined);
+          }
+          return result;
+        } catch (error) {
+          proactiveContactRequests.delete(requestId);
+          void queueProactiveContactTransition(() => createProactiveContactRecovery(contactId)).catch(() => undefined);
+          throw error;
         }
-        return result;
-      } catch (error) {
-        if (requestId) proactiveChainRequests.delete(requestId);
-        if (phase) void queueProactiveChainTransition(() => createRecoveryCheck(contactId)).catch(() => undefined);
-        throw error;
       }
+      return conversation.chat.sendToSession({
+        content: scheduledTaskContent(task),
+        contactId,
+        sessionId: target.id,
+        projectRoot: target.projectRoot,
+        hasTranscript: target.hasTranscript === true,
+        kind: "schedule",
+        scheduleSource,
+        requestId,
+        deliverToWechat: agentCreatedSchedule,
+      });
     },
     onOperationTask: async (task) => {
       if (task.target.type === "script") {
@@ -661,46 +743,78 @@ export function registerIpcHandlers({ app, appUpdateService = null, dataStorageS
       }
     },
   });
+  let backgroundStartup = null;
+  let memoryRecovery = null;
+  let memoryRecoveryTimer = null;
   app?.once?.("before-quit", () => {
     unsubscribeCompactorAuto();
-    unsubscribeProactiveChainTurns();
+    unsubscribeProactiveContactTurns();
     unsubscribeAgentJournalTurns();
     proactiveMaintenanceStopped = true;
-    proactiveChainRequests.clear();
+    proactiveContactRequests.clear();
     agentJournalRequests.clear();
     scheduleRunner.stop();
+    if (memoryRecoveryTimer) {
+      clearTimeout(memoryRecoveryTimer);
+      memoryRecoveryTimer = null;
+    }
     // 退出时停掉 Agent Core 子进程，避免关掉软件后进程残留（残留会挡住重装/卸载）。
     void conversation?.agentRuntime?.close?.().catch?.(() => undefined);
     // 退出时停掉专用浏览器进程。
     void stopWebBrowser({ dataRoot }).catch(() => undefined);
   });
-  void Promise.all([
-    capabilityRuntime.sync({ capabilityId: "agent-journal", reason: "startup" }),
-    capabilityRuntime.sync({ capabilityId: "proactive-contact", reason: "startup" }),
-  ])
-    .catch(() => undefined)
-    .then(() => scheduleRunner.start())
-    .then(() => checkProactiveContactChains())
-    .catch(() => undefined);
   app?.once?.("before-quit", () => mailFeedbackService?.dispose());
   app?.once?.("before-quit", () => memoryService.dispose());
-  void mailFeedbackService.start().catch(() => undefined);
   wechatService = createWeChatLinkService({
     chat: conversation.chat,
     dataRoot,
     reader: conversation.reader,
   });
-  registerWechatIpc({ app, ipcMain, wechatService });
-  void wechatService.start().catch(() => undefined);
-  registerConnectionsIpc({ ipcMain, connectionsService });
+  registerWechatIpc({ app, ipcMain: rendererIpcMain, wechatService });
+  const scheduleMemoryRecovery = () => {
+    if (memoryRecovery || memoryRecoveryTimer) return;
+    // Database recovery can touch every contact. Give the shell time to stay
+    // interactive before beginning that non-urgent maintenance pass.
+    memoryRecoveryTimer = setTimeout(() => {
+      memoryRecoveryTimer = null;
+      memoryRecovery = memoryService.resumeExistingMaintenance().catch(() => undefined);
+    }, 1_500);
+  };
+  const startBackgroundServices = () => {
+    if (backgroundStartup) return backgroundStartup;
+    backgroundStartup = Promise.all([
+      // This writes the installation-time time-zone choice once. Individual
+      // turns only read that stored value; they never rediscover it.
+      ensureTimeAwarenessConfig({ dataRoot }).catch(() => undefined),
+      capabilitiesService.refreshManagedRegistrations().catch(() => undefined),
+      Promise.all([
+        capabilityRuntime.sync({ capabilityId: "agent-journal", reason: "startup" }),
+        capabilityRuntime.sync({ capabilityId: "proactive-contact", reason: "startup" }),
+      ])
+        .catch(() => undefined)
+        .then(() => scheduleRunner.start())
+        .then(() => checkProactiveContactChecks())
+        .catch(() => undefined),
+      mailFeedbackService.start().catch(() => undefined),
+      wechatService.start().catch(() => undefined),
+    ]).then(() => undefined);
+    scheduleMemoryRecovery();
+    return backgroundStartup;
+  };
+  rendererIpcMain.handle("app-lifecycle:renderer-ready", (event) => {
+    if (event.sender !== getMainWindow()?.webContents) return { accepted: false };
+    void startBackgroundServices();
+    return { accepted: true };
+  });
+  registerConnectionsIpc({ ipcMain: rendererIpcMain, connectionsService });
   registerImageWorkbenchIpc({
     connectionsService,
-    ipcMain,
+    ipcMain: rendererIpcMain,
     nativeImage,
     settingsService,
     recordCapabilityUsage: (input) => capabilityRuntime.recordUsage(input),
   });
-  registerVisualReferencesIpc({ contactProjectsService, dialog, getMainWindow, ipcMain, nativeImage, settingsService });
-  registerVoiceDesignIpc({ connectionsService, contactProjectsService, ipcMain, settingsService });
-  registerMemoryIpc({ dialog, getMainWindow, ipcMain, memoryService });
+  registerVisualReferencesIpc({ contactProjectsService, dialog, getMainWindow, ipcMain: rendererIpcMain, nativeImage, settingsService });
+  registerVoiceDesignIpc({ connectionsService, contactProjectsService, ipcMain: rendererIpcMain, settingsService });
+  registerMemoryIpc({ dialog, getMainWindow, ipcMain: rendererIpcMain, memoryService });
 }

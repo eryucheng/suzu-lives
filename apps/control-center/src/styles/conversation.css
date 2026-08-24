@@ -95,6 +95,7 @@
 }
 
 .conversation-message {
+  --conversation-message-avatar-size: 31px;
   display: flex;
   align-items: flex-start;
   gap: 9px;
@@ -112,8 +113,8 @@
 
 .conversation-avatar {
   display: grid;
-  width: 31px;
-  height: 31px;
+  width: var(--conversation-message-avatar-size);
+  height: var(--conversation-message-avatar-size);
   flex: 0 0 auto;
   place-items: center;
   overflow: hidden;
@@ -2263,10 +2264,11 @@
 .content--conversation .conversation-chat-shell {
   position: relative;
   display: grid;
+  min-width: 0;
   width: 100%;
   height: auto;
   min-height: 0;
-  flex: 1 1 auto;
+  flex: 1 1 0;
   grid-template-rows: minmax(0, 1fr) auto;
   overflow: hidden;
   border: 0;
@@ -2342,17 +2344,22 @@
 
 .content--conversation .conversation-transcript {
   position: relative;
+  display: grid;
+  min-width: 0;
   min-height: 0;
+  grid-template-rows: minmax(0, 1fr);
 }
 
 .content--conversation .conversation-list {
   display: flex;
-  height: 100%;
+  min-width: 0;
+  height: auto;
   min-height: 0;
   flex-direction: column;
   gap: 8px;
-  overflow: auto;
-  overscroll-behavior: contain;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
   scrollbar-width: none;
   padding: 20px clamp(16px, 1.8vw, 32px) 16px;
 }
@@ -2360,6 +2367,14 @@
 .content--conversation .conversation-list::-webkit-scrollbar {
   width: 0;
   height: 0;
+}
+
+.content--conversation .conversation-history-loading {
+  align-self: center;
+  color: #8993a7;
+  font-size: 12px;
+  line-height: 20px;
+  padding: 2px 10px;
 }
 
 .content--conversation .conversation-scrollbar {
@@ -2897,6 +2912,12 @@
 .content--conversation .conversation-composer__tool.is-active {
   background: rgba(255, 255, 255, .08);
   color: #fff;
+}
+
+.content--conversation .conversation-composer__tool--voice-input.is-active {
+  background: rgba(51, 197, 126, .18);
+  box-shadow: inset 0 0 0 1px rgba(93, 231, 159, .42);
+  color: #70e3ab;
 }
 
 .content--conversation .conversation-composer__tool:active {
@@ -3811,6 +3832,12 @@
 :root[data-theme="light"] .content--conversation .conversation-composer__tool.is-active {
   background: #efefef;
   color: #1d2025;
+}
+
+:root[data-theme="light"] .content--conversation .conversation-composer__tool--voice-input.is-active {
+  background: #e5f8ed;
+  box-shadow: inset 0 0 0 1px #9cddba;
+  color: #16824d;
 }
 
 :root[data-theme="light"] .content--conversation .conversation-emoji-picker {

@@ -43,7 +43,25 @@ const AGENT_IMAGE_MIME_BY_EXTENSION = Object.freeze({
   ".tiff": "image/tiff",
   ".webp": "image/webp",
 });
+// The fallback image-understanding worker can normalize a few more ordinary
+// raster formats before it calls a visual model. SVG intentionally stays a
+// file: it is source markup rather than a raster image and belongs on the
+// normal file-reading path.
+const UNDERSTANDING_IMAGE_MIME_BY_EXTENSION = Object.freeze({
+  ".avif": "image/avif",
+  ".bmp": "image/bmp",
+  ".gif": "image/gif",
+  ".heic": "image/heic",
+  ".ico": "image/x-icon",
+  ".jpeg": "image/jpeg",
+  ".jpg": "image/jpeg",
+  ".png": "image/png",
+  ".tif": "image/tiff",
+  ".tiff": "image/tiff",
+  ".webp": "image/webp",
+});
 const AGENT_CORE_IMAGE_MEDIA_TYPES = new Set(Object.values(IMAGE_MIME_BY_EXTENSION));
+const UNDERSTANDING_IMAGE_MEDIA_TYPES = new Set(Object.values(UNDERSTANDING_IMAGE_MIME_BY_EXTENSION));
 const VIDEO_MIME_BY_EXTENSION = Object.freeze({
   ".3g2": "video/3gpp2",
   ".3gp": "video/3gpp",
@@ -101,6 +119,12 @@ function nativeImageMime(value, fileName) {
   return IMAGE_MIME_BY_EXTENSION[path.extname(clean(fileName)).toLowerCase()] || "";
 }
 
+function understandingImageMime(value, fileName) {
+  const declared = clean(value).toLowerCase().split(";", 1)[0];
+  if (UNDERSTANDING_IMAGE_MEDIA_TYPES.has(declared)) return declared;
+  return UNDERSTANDING_IMAGE_MIME_BY_EXTENSION[path.extname(clean(fileName)).toLowerCase()] || "";
+}
+
 function videoMime(value, fileName) {
   const declared = clean(value).toLowerCase().split(";", 1)[0];
   if (declared.startsWith("video/")) return declared;
@@ -109,6 +133,7 @@ function videoMime(value, fileName) {
 
 function attachmentMime(value, fileName) {
   return nativeImageMime(value, fileName)
+    || understandingImageMime(value, fileName)
     || videoMime(value, fileName)
     || clean(value).toLowerCase().split(";", 1)[0]
     || "application/octet-stream";
@@ -224,9 +249,9 @@ async function inspectPath(sourcePath, fsOps) {
   return { path: resolved, size: stat.size };
 }
 
-function mediaKind(entry, mimeType) {
+function mediaKind(entry, mimeType, fileName) {
   const requested = clean(entry.kind).toLowerCase();
-  return (requested === "image" || requested === "auto") && AGENT_CORE_IMAGE_MEDIA_TYPES.has(mimeType) ? "image" : "file";
+  return (requested === "image" || requested === "auto") && understandingImageMime(mimeType, fileName) ? "image" : "file";
 }
 
 function understandingKind({ kind, fileName, mimeType }) {
@@ -246,15 +271,36 @@ function displayItem({ kind, fileName, filePath, mimeType, size, source }) {
   });
 }
 
-function promptManifest(items, source, { nativeImages = true } = {}) {
+function imageHandling(value, nativeImages) {
+  const normalized = clean(value).toLowerCase();
+  if (["native", "understanding", "local"].includes(normalized)) return normalized;
+  return nativeImages ? "native" : "understanding";
+}
+
+function promptManifest(items, source, { imageHandling: imageHandlingValue = "", nativeImages = true } = {}) {
   const files = items.filter((item) => item.kind === "file");
   const images = items.filter((item) => item.kind === "image");
+  const handling = imageHandling(imageHandlingValue, nativeImages);
+  const imageRoute = (item) => clean(item.imageRoute) || handling;
+  const nativeImageCount = images.filter((item) => imageRoute(item) === "native").length;
+  const understandingImageCount = images.filter((item) => imageRoute(item) === "understanding").length;
+  const localImageCount = images.filter((item) => imageRoute(item) === "local").length;
+  const imageNote = !images.length
+    ? ""
+    : !localImageCount && !understandingImageCount
+      ? `用户附上了 ${images.length} 张图片；图片已作为原生视觉输入传入。`
+      : !localImageCount && !nativeImageCount
+        ? `用户附上了 ${images.length} 张图片；系统会通过已启用的图像理解能力提供识图结果。`
+        : !nativeImageCount && !understandingImageCount
+          ? `用户附上了 ${images.length} 张图片；当前图片无法作为原生视觉输入传入，且未启用图像理解能力。图片已作为本地附件保存，不得根据图片内容作答。`
+          : [
+            `用户附上了 ${images.length} 张图片。`,
+            nativeImageCount ? `${nativeImageCount} 张已作为原生视觉输入传入。` : "",
+            understandingImageCount ? `${understandingImageCount} 张会通过已启用的图像理解能力提供识图结果。` : "",
+            localImageCount ? `${localImageCount} 张仅作为本地附件保存，不得根据其内容作答。` : "",
+          ].filter(Boolean).join(" ");
   const note = [
-    images.length
-      ? nativeImages
-        ? `用户附上了 ${images.length} 张图片；图片已作为原生视觉输入传入。`
-        : `用户附上了 ${images.length} 张图片；系统会通过已启用的图像理解能力提供识图结果。`
-      : "",
+    imageNote,
     files.length ? `用户附上了 ${files.length} 个本地文件；需要内容时请使用文件工具读取以下缓存路径，不要臆造文件内容。` : "",
   ].filter(Boolean).join(" ");
   return [
@@ -308,6 +354,8 @@ export function createConversationAttachmentService({ dataRoot, fsOps = fs } = {
 
   const prepare = async ({
     content = "",
+    imageHandling: imageHandlingValue = "",
+    includeImageUnderstandingFallback = false,
     includeNativeImages = true,
     media = [],
     mediaSource: sourceValue = "",
@@ -333,6 +381,9 @@ export function createConversationAttachmentService({ dataRoot, fsOps = fs } = {
     const source = mediaSource(sourceValue);
     const saved = [];
     const nativeImages = includeNativeImages !== false;
+    const resolvedImageHandling = imageHandling(imageHandlingValue, nativeImages);
+    const imageUnderstandingFallback = includeImageUnderstandingFallback === true
+      || (!nativeImages && resolvedImageHandling === "understanding");
     let imageCount = 0;
 
     for (const rawEntry of entries) {
@@ -349,16 +400,22 @@ export function createConversationAttachmentService({ dataRoot, fsOps = fs } = {
         throw new ConversationAttachmentError(detail, { code: "ATTACHMENT_SIZE_INVALID" });
       }
       const fileName = safeFileName(entry.fileName || (sourceInfo ? path.basename(sourceInfo.path) : "attachment.bin"));
-      const imageMime = nativeImageMime(entry.mimeType, fileName);
-      const kind = mediaKind(entry, imageMime);
-      if (kind === "image" && nativeImages) {
+      const mimeType = attachmentMime(entry.mimeType, fileName);
+      const kind = mediaKind(entry, mimeType, fileName);
+      const nativeMimeType = kind === "image" ? nativeImageMime(mimeType, fileName) : "";
+      const nativeEligible = kind === "image" && nativeImages && Boolean(nativeMimeType);
+      let imageRoute = "";
+      if (nativeEligible && size <= MAX_AGENT_CORE_IMAGE_BYTES && imageCount < MAX_AGENT_CORE_IMAGES_PER_MESSAGE) {
+        imageRoute = "native";
         imageCount += 1;
-        if (imageCount > MAX_AGENT_CORE_IMAGES_PER_MESSAGE) {
-          throw new ConversationAttachmentError(`一次最多发送 ${MAX_AGENT_CORE_IMAGES_PER_MESSAGE} 张图片。`, { code: "AGENT_CORE_IMAGE_LIMIT_EXCEEDED" });
-        }
-        if (size > MAX_AGENT_CORE_IMAGE_BYTES) {
-          throw new ConversationAttachmentError(`单张图片不能超过 ${MAX_AGENT_CORE_IMAGE_BYTES >> 20} MiB。`, { code: "AGENT_CORE_IMAGE_TOO_LARGE" });
-        }
+      } else if (kind === "image" && imageUnderstandingFallback) {
+        imageRoute = "understanding";
+      } else if (nativeEligible && imageCount >= MAX_AGENT_CORE_IMAGES_PER_MESSAGE) {
+        throw new ConversationAttachmentError(`一次最多发送 ${MAX_AGENT_CORE_IMAGES_PER_MESSAGE} 张图片。`, { code: "AGENT_CORE_IMAGE_LIMIT_EXCEEDED" });
+      } else if (nativeEligible && size > MAX_AGENT_CORE_IMAGE_BYTES) {
+        throw new ConversationAttachmentError(`单张图片不能超过 ${MAX_AGENT_CORE_IMAGE_BYTES >> 20} MiB。`, { code: "AGENT_CORE_IMAGE_TOO_LARGE" });
+      } else if (kind === "image") {
+        imageRoute = "local";
       }
       const target = await cacheAttachment({
         data,
@@ -372,18 +429,27 @@ export function createConversationAttachmentService({ dataRoot, fsOps = fs } = {
         kind,
         fileName,
         filePath: target,
-        mimeType: attachmentMime(entry.mimeType, fileName),
+        mimeType,
         size,
         source,
       });
+      const mediaUnderstandingKind = kind === "image"
+        ? (imageRoute === "understanding" ? "image" : "")
+        : understandingKind(item);
       saved.push({
         ...item,
-        ...(kind === "image" && nativeImages ? { data: await fsOps.readFile(target) } : {}),
-        ...(understandingKind(item) ? { understandingKind: understandingKind(item) } : {}),
+        ...(imageRoute ? { imageRoute } : {}),
+        ...(imageRoute === "native" ? { data: await fsOps.readFile(target) } : {}),
+        ...(mediaUnderstandingKind ? { understandingKind: mediaUnderstandingKind } : {}),
       });
     }
 
-    const publicMedia = Object.freeze(saved.map(({ data, understandingKind: _understandingKind, ...item }) => Object.freeze(item)));
+    const publicMedia = Object.freeze(saved.map(({
+      data,
+      imageRoute: _imageRoute,
+      understandingKind: _understandingKind,
+      ...item
+    }) => Object.freeze(item)));
     const understandingMedia = Object.freeze(saved.flatMap((item) => (
       item.understandingKind
         ? [Object.freeze({
@@ -398,9 +464,12 @@ export function createConversationAttachmentService({ dataRoot, fsOps = fs } = {
     const promptParts = [];
     const text = String(content ?? "");
     if (text.trim()) promptParts.push({ type: "text", text });
-    promptParts.push({ type: "text", text: promptManifest(publicMedia, source, { nativeImages }) });
+    promptParts.push({ type: "text", text: promptManifest(saved, source, {
+      imageHandling: resolvedImageHandling,
+      nativeImages,
+    }) });
     for (const item of saved) {
-      if (!nativeImages || item.kind !== "image") continue;
+      if (item.imageRoute !== "native") continue;
       promptParts.push({
         type: "image",
         mediaType: item.mimeType,

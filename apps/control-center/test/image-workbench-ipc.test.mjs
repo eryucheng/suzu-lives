@@ -1,12 +1,21 @@
 import assert from "node:assert/strict";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
 
-import { imageUsageEvent } from "../electron/ipc/image-workbench-ipc.mjs";
+import { configuredImageWorkbenchConnection } from "../electron/ipc/image-workbench-ipc.mjs";
 
-test("ComfyUI usage entries remain explicitly local and unpriced", () => {
-  const event = imageUsageEvent({ settings: { agentId: "suzu" } }, { provider: "fixture" }, { input: { backend: "comfyui", size: "1024x1024" }, result: { model: "ComfyUI / local", mode: "workflow", requestId: "prompt-a", usage: {}, workflow: "local" }, referenceCount: 2 });
-  assert.equal(event.provider, "本地 ComfyUI");
-  assert.equal(event.feature, "image-workflow");
-  assert.equal(event.metadata.costSource, "local-unpriced");
-  assert.equal(event.metadata.workflow, "local");
+test("image workbench applies the protocol selected for image generation", async () => {
+  const dataRoot = await fs.mkdtemp(path.join(os.tmpdir(), "suzu-image-workbench-protocol-"));
+  const configDirectory = path.join(dataRoot, "capabilities", "image-generation");
+  await fs.mkdir(configDirectory, { recursive: true });
+  await fs.writeFile(path.join(configDirectory, "config.json"), JSON.stringify({ adapter: "dashscope-image" }));
+
+  const connection = await configuredImageWorkbenchConnection({
+    dataRoot,
+    connection: { apiKey: "fixture-key", baseUrl: "https://dashscope.example.test/api/v1", model: "wan2.7-image", type: "generic-api" },
+  });
+
+  assert.equal(connection.imageGenerationAdapter, "dashscope-image");
 });

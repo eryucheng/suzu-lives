@@ -19,4 +19,6 @@ export {
   appendUsageEvent,
   createUsageEvent,
   readUsageEvents,
+  readUsageSummary,
+  rebuildUsageSummary,
 } from "./store.mjs";

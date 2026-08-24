@@ -2,7 +2,12 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Input } from "suzu-design-system";
 import { createPortal } from "react-dom";
 
-import { conversationMessageBlocks, mergeConversationMessages, projectedLiveReply } from "../features/conversation/index.mjs";
+import {
+  conversationMessageBlocks,
+  mergeConversationMessageWindow,
+  mergeConversationMessages,
+  projectedLiveReply,
+} from "../features/conversation/index.mjs";
 import { ConversationMessageList } from "./conversation-page.jsx";
 import "./software-assistant-dialog.css";
 
@@ -33,6 +38,7 @@ function displayMessages(messages) {
       blocks,
       id: clean(message?.id) || `${sourceKind}:${textBlocks(message).join("\n").slice(0, 80)}`,
       kind: sourceKind === "system" ? "assistant" : sourceKind,
+      lineNumber: Number.isSafeInteger(Number(message?.lineNumber)) ? Number(message.lineNumber) : 0,
       timestamp: clean(message?.timestamp),
     }];
   });
@@ -81,19 +87,43 @@ export function SoftwareAssistantDialog({ api, initialPrompt = "", onClose, onPr
   const historyRef = useRef(null);
   const processedPromptRef = useRef("");
   const activeRequestRef = useRef("");
+  // A history snapshot is asynchronous while turn events can continue to
+  // arrive.  Keep the visible transcript monotonic: a late, shorter snapshot
+  // must never replace rows the person has already seen.
+  const historyEpochRef = useRef(0);
+  const refreshSequenceRef = useRef(0);
+  const appliedRefreshSequenceRef = useRef(0);
+
+  const invalidateHistoryRefreshes = useCallback(() => {
+    historyEpochRef.current += 1;
+    appliedRefreshSequenceRef.current = ++refreshSequenceRef.current;
+  }, []);
 
   const refresh = useCallback(async () => {
     if (typeof api?.snapshot !== "function") {
       setError("当前版本没有连接到 Suzu 使用助手。");
       return null;
     }
+    const historyEpoch = historyEpochRef.current;
+    const refreshSequence = ++refreshSequenceRef.current;
     try {
       const snapshot = await api.snapshot();
+      if (historyEpoch !== historyEpochRef.current || refreshSequence < appliedRefreshSequenceRef.current) {
+        return snapshot;
+      }
+      appliedRefreshSequenceRef.current = refreshSequence;
       if (snapshot?.status === "ready") {
-        setMessages(displayMessages(snapshot.messages));
+        const incoming = displayMessages(snapshot.messages);
+        setMessages((current) => mergeConversationMessageWindow(current, incoming).messages);
         setSessionId(clean(snapshot.sessionId));
         setError("");
-        setPhase(snapshot.running === true ? "thinking" : "idle");
+        // A snapshot can have started before the local send promise returned.
+        // Do not let that older `running: false` observation make the composer
+        // look idle while this dialog already owns an active request.
+        setPhase((current) => {
+          if (snapshot.running === true) return "thinking";
+          return activeRequestRef.current ? current : "idle";
+        });
         return snapshot;
       }
       setError(clean(snapshot?.error) || "软件助手暂时无法启动。请先检查主模型设置。");
@@ -106,7 +136,7 @@ export function SoftwareAssistantDialog({ api, initialPrompt = "", onClose, onPr
 
   const send = useCallback(async (raw) => {
     const text = clean(raw);
-    if (!text || phase !== "idle") return false;
+    if (!text) return false;
     if (!sessionId) {
       setError("Suzu 正在启动，请稍后再试。");
       return false;
@@ -139,7 +169,14 @@ export function SoftwareAssistantDialog({ api, initialPrompt = "", onClose, onPr
       setSessionId(acceptedSessionId);
       setPendingMessages((current) => current.map((item) => (
         item.id === pending.id
-          ? { ...item, accepted: true, requestId: activeRequestRef.current, sessionId: acceptedSessionId }
+          ? {
+            ...item,
+            accepted: true,
+            queued: result?.queued === true,
+            requestId: activeRequestRef.current,
+            sessionId: acceptedSessionId,
+            steering: result?.steering === true,
+          }
           : item
       )));
       return true;
@@ -149,7 +186,7 @@ export function SoftwareAssistantDialog({ api, initialPrompt = "", onClose, onPr
       setError(`无法发送：${clean(cause?.message || cause) || "未知错误。"}`);
       return false;
     }
-  }, [api, phase, sessionId]);
+  }, [api, sessionId]);
 
   const projectLiveReply = useCallback((event, { final = false } = {}) => {
     const requestId = clean(event?.requestId) || activeRequestRef.current;
@@ -189,6 +226,7 @@ export function SoftwareAssistantDialog({ api, initialPrompt = "", onClose, onPr
       const result = await api.clearHistory();
       if (result?.cleared !== true) throw new Error("软件助手记录没有被清空。");
       activeRequestRef.current = "";
+      invalidateHistoryRefreshes();
       setMessages([]);
       setPendingMessages([]);
       setLiveReplies(new Map());
@@ -201,10 +239,11 @@ export function SoftwareAssistantDialog({ api, initialPrompt = "", onClose, onPr
     } finally {
       setPhase("idle");
     }
-  }, [api, phase, refresh]);
+  }, [api, invalidateHistoryRefreshes, phase, refresh]);
 
   useEffect(() => {
     if (!open) {
+      invalidateHistoryRefreshes();
       setDraft("");
       setPendingMessages([]);
       setLiveReplies(new Map());
@@ -218,7 +257,7 @@ export function SoftwareAssistantDialog({ api, initialPrompt = "", onClose, onPr
     void refresh();
     const frame = window.requestAnimationFrame(() => composerRef.current?.focus());
     return () => window.cancelAnimationFrame(frame);
-  }, [open, refresh]);
+  }, [invalidateHistoryRefreshes, open, refresh]);
 
   // Agent Core durably appends each model/tool step while a turn is still
   // running. Poll that same transcript cadence as the main conversation so a
@@ -250,6 +289,7 @@ export function SoftwareAssistantDialog({ api, initialPrompt = "", onClose, onPr
         return;
       }
       if (event?.type === "turn-complete" || event?.type === "turn-stopped") {
+        const completedRequestId = requestId;
         activeRequestRef.current = "";
         if (event?.type === "turn-stopped") {
           setLiveReplies((current) => {
@@ -262,7 +302,15 @@ export function SoftwareAssistantDialog({ api, initialPrompt = "", onClose, onPr
           });
         }
         setPhase("idle");
-        void refresh();
+        void refresh().then((snapshot) => {
+          if (event?.type !== "turn-complete" || snapshot?.status !== "ready" || !completedRequestId) return;
+          setLiveReplies((current) => {
+            if (!current.has(completedRequestId)) return current;
+            const next = new Map(current);
+            next.delete(completedRequestId);
+            return next;
+          });
+        });
         return;
       }
       if (event?.type === "error") {
@@ -343,7 +391,7 @@ export function SoftwareAssistantDialog({ api, initialPrompt = "", onClose, onPr
             <Input
               aria-label="向 Suzu 提问"
               autoComplete="off"
-              disabled={busy || !sessionId}
+              disabled={!sessionId}
               maxLength={12000}
               onChange={(event) => setDraft(event.currentTarget.value)}
               onKeyDown={(event) => {
@@ -352,12 +400,15 @@ export function SoftwareAssistantDialog({ api, initialPrompt = "", onClose, onPr
                   void send(draft);
                 }
               }}
-              placeholder="例如：帮我切换为夜间模式，或我想配置语音通话"
+              placeholder="告诉 Suzu 你想完成什么"
               ref={composerRef}
               size="lg"
               value={draft}
             />
-            {canStop ? <button className="software-assistant-dialog__stop" onClick={() => { void stop(); }} type="button">停止</button> : <button className="software-assistant-dialog__send" disabled={busy || !clean(draft) || !sessionId} type="submit">发送</button>}
+            <div className="software-assistant-dialog__composer-actions">
+              {canStop ? <button className="software-assistant-dialog__stop" onClick={() => { void stop(); }} type="button">停止</button> : null}
+              <button className="software-assistant-dialog__send" disabled={!clean(draft) || !sessionId} type="submit">发送</button>
+            </div>
           </form>
         </footer>
       </section>

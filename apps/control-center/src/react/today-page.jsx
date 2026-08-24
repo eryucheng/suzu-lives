@@ -83,8 +83,8 @@ function costLabel(summary, ready) {
   return amount === 0 ? "¥0.00" : money(amount);
 }
 
-function costDetail(summary, ready) {
-  if (!ready) return "进入联系人后显示";
+function costDetail(summary, ready, status = "") {
+  if (!ready) return status === "warming" ? "正在准备历史费用摘要" : "进入联系人后显示";
   const requests = Number(summary?.requestCount || 0);
   const unknown = Number(summary?.unknownRequestCount || 0);
   if (!requests) return "今天还没有已识别调用";
@@ -233,6 +233,7 @@ export function TodayPage({ actions = {}, snapshot = {} }) {
   const defaultContactId = String(snapshot.calendar?.defaultContactId || contacts[0]?.id || "");
   const selectedEvents = eventsForDate(events, selectedDate);
   const ready = snapshot.data?.status === "ready";
+  const usageStatus = String(snapshot.data?.status || "");
   const canEdit = snapshot.calendar?.canEdit === true;
   const calendarMarks = useMemo(
     () => calendarEvents(events, month.getFullYear(), month.getMonth()),
@@ -315,11 +316,11 @@ export function TodayPage({ actions = {}, snapshot = {} }) {
             >
               <div className="today-insight-head">
                 <span className="today-section-kicker">USAGE</span>
-                <Status label={ready ? "今日" : "等待数据"} tone={ready ? "success" : "muted"} />
+                <Status label={ready ? "今日" : usageStatus === "warming" ? "准备中" : "等待数据"} tone={ready ? "success" : "muted"} />
               </div>
               <h2>今日成本</h2>
               <strong className="today-cost-value">{costLabel(snapshot.data?.summary?.today, ready)}</strong>
-              <p>{costDetail(snapshot.data?.summary?.today, ready)}</p>
+              <p>{costDetail(snapshot.data?.summary?.today, ready, usageStatus)}</p>
             </button>
           </GlassPanel>
 
@@ -349,7 +350,7 @@ export function TodayPage({ actions = {}, snapshot = {} }) {
                   ))}
                 </div>
               ) : (
-                <div className="today-activity-empty">{ready ? "还没有可显示的活动。" : "进入联系人后显示最近活动。"}</div>
+                <div className="today-activity-empty">{ready ? "还没有可显示的活动。" : usageStatus === "warming" ? "正在准备历史活动摘要。" : "进入联系人后显示最近活动。"}</div>
               )}
             </button>
           </GlassPanel>

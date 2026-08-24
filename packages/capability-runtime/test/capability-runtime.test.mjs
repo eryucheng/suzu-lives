@@ -33,15 +33,15 @@ test("executor gate rejects disabled, unconfigured, and missing dependencies bef
 
 test("software-issued credential is short-lived, opaque to its raw scope, and accepted once for the exact intent", () => {
   const root = temporaryDirectory("suzu-capability-auth-");
-  const scope = { cameraIndex: 2, operation: "capture", userSelectionDigest: "not-a-real-path" };
-  const issued = issueCapabilityAuthorization({ dataRoot: root, abilityId: "computer-camera", action: "capture", scope, ttlMs: 30_000, now: () => 1_000 });
+  const scope = { resourceIndex: 2, operation: "activate", userSelectionDigest: "not-a-real-path" };
+  const issued = issueCapabilityAuthorization({ dataRoot: root, abilityId: "example-device", action: "activate", scope, ttlMs: 30_000, now: () => 1_000 });
   assert.match(issued.credential, /^suzu-capability-v1\./u);
   assert.doesNotMatch(issued.credential, /userSelectionDigest|not-a-real-path/u);
 
-  const authorization = consumeCapabilityAuthorization({ dataRoot: root, credential: issued.credential, abilityId: "computer-camera", action: "capture", scope, now: () => 2_000 });
-  assert.equal(assertVerifiedCapabilityAuthorization({ authorization, abilityId: "computer-camera", action: "capture", scope }), true);
+  const authorization = consumeCapabilityAuthorization({ dataRoot: root, credential: issued.credential, abilityId: "example-device", action: "activate", scope, now: () => 2_000 });
+  assert.equal(assertVerifiedCapabilityAuthorization({ authorization, abilityId: "example-device", action: "activate", scope }), true);
   assert.throws(
-    () => consumeCapabilityAuthorization({ dataRoot: root, credential: issued.credential, abilityId: "computer-camera", action: "capture", scope, now: () => 2_001 }),
+    () => consumeCapabilityAuthorization({ dataRoot: root, credential: issued.credential, abilityId: "example-device", action: "activate", scope, now: () => 2_001 }),
     (error) => error instanceof CapabilityExecutionError && error.code === "AUTHORIZATION_REPLAYED",
   );
 });

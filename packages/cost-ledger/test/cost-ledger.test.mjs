@@ -8,8 +8,11 @@ import {
   appendUsageEvent,
   calculateCost,
   createPriceCatalog,
+  createUsageEvent,
   priceCatalogView,
   readUsageEvents,
+  readUsageSummary,
+  rebuildUsageSummary,
 } from "../src/index.mjs";
 
 test("calculates DeepSeek default price from normalized usage", () => {
@@ -100,6 +103,45 @@ test("uses the official DeepSeek V4 peak and off-peak rates from their effective
   assert.equal(proPeak.price.ratePeriod, "高峰时段");
 });
 
+test("uses low rates all weekend after DeepSeek's August 23 weekday-only peak update", () => {
+  const usage = {
+    prompt_cache_miss_tokens: 1_000_000,
+    prompt_cache_hit_tokens: 1_000_000,
+    completion_tokens: 1_000_000,
+  };
+  const priorSaturdayPeak = calculateCost({
+    model: "deepseek-v4-flash",
+    timestamp: "2026-08-22T02:00:00.000Z",
+    usage,
+  });
+  const sundayOffPeak = calculateCost({
+    model: "deepseek-v4-flash",
+    timestamp: "2026-08-23T02:00:00.000Z",
+    usage,
+  });
+  const mondayPeak = calculateCost({
+    model: "deepseek-v4-flash",
+    timestamp: "2026-08-24T02:00:00.000Z",
+    usage,
+  });
+  const visionWeekend = calculateCost({
+    model: "deepseek-v4-flash-vision-exp",
+    timestamp: "2026-08-23T02:00:00.000Z",
+    usage,
+  });
+
+  assert.ok(Math.abs(priorSaturdayPeak.amountCny - 12.1) < 0.000001);
+  assert.equal(priorSaturdayPeak.price.revisionId, "official-2026-08-16-peak-offpeak");
+  assert.equal(priorSaturdayPeak.price.ratePeriod, "高峰时段");
+  assert.ok(Math.abs(sundayOffPeak.amountCny - 6.05) < 0.000001);
+  assert.equal(sundayOffPeak.price.revisionId, "official-2026-08-23-weekend-offpeak");
+  assert.equal(sundayOffPeak.price.ratePeriod, "空闲时段");
+  assert.ok(Math.abs(mondayPeak.amountCny - 12.1) < 0.000001);
+  assert.equal(mondayPeak.price.ratePeriod, "高峰时段");
+  assert.ok(Math.abs(visionWeekend.amountCny - 6.05) < 0.000001);
+  assert.equal(visionWeekend.price.ratePeriod, "空闲时段");
+});
+
 test("keeps DeepSeek V4 usage before the price change on the former price", () => {
   const result = calculateCost({
     model: "deepseek-v4-flash",
@@ -141,19 +183,6 @@ test("prices CosyVoice V3.5 Plus by input characters", () => {
   assert.equal(result.status, "estimated");
   assert.equal(result.units.inputCharacters, 10_000);
   assert.equal(result.amountCny, 1.5);
-});
-
-test("prices one successful Qwen voice design creation", () => {
-  const result = calculateCost({
-    model: "qwen-voice-design",
-    timestamp: "2026-07-30T00:00:00.000Z",
-    usage: {},
-    units: {
-      generatedVoices: 1,
-    },
-  });
-  assert.equal(result.status, "estimated");
-  assert.ok(Math.abs(result.amountCny - 0.2) < 0.000001);
 });
 
 test("matches custom prices by event timestamp without changing older events", () => {
@@ -250,4 +279,56 @@ test("appends and reads a raw usage event without storing a price snapshot", asy
   assert.equal(stored.events[0].units.inputTokens, 184);
   assert.equal(Object.hasOwn(stored.events[0], "price"), false);
   assert.equal(Object.hasOwn(stored.events[0], "amountCny"), false);
+});
+
+test("keeps a compact dashboard summary in sync with concurrent ledger appends", async () => {
+  const root = fs.mkdtempSync(path.join(process.env.SUZU_LIVES_TEST_TEMP || "D:\\Temp", "suzu-ledger-summary-"));
+  const ledgerPath = path.join(root, "events.jsonl");
+  const now = new Date();
+  await Promise.all(Array.from({ length: 12 }, (_value, index) => appendUsageEvent(ledgerPath, {
+    id: `summary-${index}`,
+    timestamp: new Date(now.getTime() + index).toISOString(),
+    model: "text-embedding-v4",
+    source: "测试",
+    feature: "summary-test",
+    usage: { prompt_tokens: index + 1 },
+  })));
+
+  const summary = await readUsageSummary(ledgerPath, { now });
+  const stored = await readUsageEvents(ledgerPath);
+  const dayEvents = Object.values(summary.days).flat();
+  assert.equal(summary.status, "ready");
+  assert.equal(stored.events.length, 12);
+  assert.equal(dayEvents.length, 12);
+  assert.equal(summary.recentEvents.length, 12);
+  assert.deepEqual(summary.recentEvents.map((event) => event.id), Array.from({ length: 12 }, (_value, index) => `summary-${index}`));
+});
+
+test("marks an externally changed ledger stale until its sidecar is rebuilt", async () => {
+  const root = fs.mkdtempSync(path.join(process.env.SUZU_LIVES_TEST_TEMP || "D:\\Temp", "suzu-ledger-rebuild-"));
+  const ledgerPath = path.join(root, "events.jsonl");
+  const now = new Date();
+  await appendUsageEvent(ledgerPath, {
+    id: "first",
+    timestamp: now.toISOString(),
+    model: "text-embedding-v4",
+    source: "测试",
+    feature: "summary-test",
+    usage: { prompt_tokens: 1 },
+  });
+  const external = createUsageEvent({
+    id: "external",
+    timestamp: new Date(now.getTime() + 1).toISOString(),
+    model: "text-embedding-v4",
+    source: "测试",
+    feature: "summary-test",
+    usage: { prompt_tokens: 2 },
+  });
+  fs.appendFileSync(ledgerPath, `${JSON.stringify(external)}\n`, "utf8");
+
+  assert.equal((await readUsageSummary(ledgerPath, { now })).status, "stale");
+  const rebuilt = await rebuildUsageSummary(ledgerPath, { now });
+  assert.equal(rebuilt.status, "ready");
+  assert.equal(Object.values(rebuilt.days).flat().length, 2);
+  assert.deepEqual((await readUsageSummary(ledgerPath, { now })).recentEvents.map((event) => event.id), ["first", "external"]);
 });

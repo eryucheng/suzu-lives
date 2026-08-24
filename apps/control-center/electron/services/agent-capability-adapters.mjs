@@ -1,17 +1,19 @@
 import path from "node:path";
 
 import { resolveAgentDataRoot } from "@suzu-lives/agent-registry";
-import { runAgentImageGeneration } from "@suzu-lives/agent-image-generation";
+import { resolveImageGenerationApiConnection, runAgentImageGeneration } from "@suzu-lives/agent-image-generation";
 import { appendUsageEvent } from "@suzu-lives/cost-ledger";
 import { sendMailBridge } from "@suzu-lives/mail-bridge";
+import {
+  createScheduleTask,
+  listScheduleTasks,
+  removeScheduleTask,
+  scheduleTaskSummary,
+} from "@suzu-lives/task-scheduler";
 import { executeWebBrowserAction } from "@suzu-lives/web-browser";
 import { runDirectImageVision } from "@suzu-lives/media-understanding/direct-image-vision";
 import { runDirectVideoUnderstanding } from "@suzu-lives/media-understanding/direct-video-understanding";
-import {
-  loadPhoneCameraComfyConnection,
-  loadPhoneConfig,
-  takePhonePhoto,
-} from "@suzu-lives/phone-camera";
+import { takePhonePhoto } from "@suzu-lives/phone-camera";
 import { resolveConfiguredVoiceService, runDirectVoiceMessage } from "@suzu-lives/voice-message/direct-voice-message";
 
 const CONTACT_ID = /^contact-[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
@@ -104,23 +106,10 @@ function connectionValue(connection, name) {
   return clean(connection?.[name]);
 }
 
-function openAiCompatibleBaseUrl(connection) {
-  const configured = connectionValue(connection, "baseUrl");
-  if (!configured || clean(connection?.type) !== "dashscope") return configured;
-  try {
-    const parsed = new URL(configured);
-    if (parsed.hostname.toLocaleLowerCase("en-US") !== "dashscope.aliyuncs.com") return configured;
-    const pathname = parsed.pathname.replace(/\/+$/u, "");
-    if (pathname !== "/api/v1") return configured;
-    return `${parsed.origin}/compatible-mode/v1`;
-  } catch {
-    return configured;
-  }
-}
-
 function processEnvironment(connection, {
   key = "",
   baseUrl = "",
+  extra = {},
   model = "",
 } = {}) {
   const environment = { ...process.env };
@@ -128,6 +117,11 @@ function processEnvironment(connection, {
   if (apiKey && key) environment[key] = apiKey;
   if (connectionValue(connection, "baseUrl") && baseUrl) environment[baseUrl] = connectionValue(connection, "baseUrl");
   if (connectionValue(connection, "model") && model) environment[model] = connectionValue(connection, "model");
+  for (const [name, value] of Object.entries(plainObject(extra))) {
+    const variable = clean(name);
+    const text = clean(value);
+    if (variable && text) environment[variable] = text;
+  }
   return environment;
 }
 
@@ -164,8 +158,7 @@ export function createAgentCapabilityAdapters({
   }
 
   const executor = {
-    loadPhoneCameraComfyConnection,
-    loadPhoneConfig,
+    resolveImageGenerationApiConnection,
     runAgentImageGeneration,
     runDirectImageVision,
     runDirectVideoUnderstanding,
@@ -238,10 +231,11 @@ export function createAgentCapabilityAdapters({
       question: inputText(input.question, "图片问题", { maximum: 8_000 }),
       configPath: inputText(input.configPath, "配置路径", { maximum: 600 }),
       noRetry: input.noRetry === true,
-      environment: processEnvironment({ ...plainObject(connection), baseUrl: openAiCompatibleBaseUrl(connection) }, {
+      environment: processEnvironment(connection, {
         key: "VISION_API_KEY",
         baseUrl: "VISION_BASE_URL",
         model: "VISION_MODEL",
+        extra: { VISION_CONNECTION_TYPE: connection.type },
       }),
     });
   };
@@ -263,7 +257,7 @@ export function createAgentCapabilityAdapters({
       noCache: input.noCache === true,
       keepClip: input.keepClip === true,
       dryRun: input.dryRun === true,
-      environment: processEnvironment({ ...plainObject(connection), baseUrl: openAiCompatibleBaseUrl(connection) }, {
+      environment: processEnvironment(connection, {
         key: "VIDEO_UNDERSTANDING_API_KEY",
         baseUrl: "VIDEO_UNDERSTANDING_BASE_URL",
         model: "VIDEO_UNDERSTANDING_MODEL",
@@ -303,17 +297,62 @@ export function createAgentCapabilityAdapters({
     if (clean(lifecycle) !== "invoke") return directRuntimeState({ capability, lifecycle });
     const scope = await resolveScope(context);
     const input = inputFor(context);
+    const stylePreset = inputText(input.stylePreset, "画面预设", { maximum: 80 });
+    if (stylePreset === "phone-camera") {
+      const imageConnection = await executor.resolveImageGenerationApiConnection({
+        connection: await requiredApiConnection("image-workbench", "生图"),
+        dataRoot: scope.dataRoot,
+      });
+      const result = await executor.takePhonePhoto({
+        agentRoot: scope.agentRoot,
+        dataRoot: scope.dataRoot,
+        connection: imageConnection,
+        options: {
+          shot: inputText(input.shot, "拍照方式", { required: true, maximum: 30 }),
+          scene: inputText(input.scene, "拍照场景", { required: true, maximum: 5_000 }),
+          refs: phoneReferences(input),
+          size: inputText(input.size, "图片尺寸", { maximum: 80 }),
+          out: inputText(input.outputDirectory || input.out, "输出目录", { maximum: 600 }),
+          dryRun: input.dryRun === true,
+        },
+      });
+      if (result?.status === "ok") {
+        const event = {
+          agentId: scope.agentId,
+          provider: clean(imageConnection?.provider) || "OpenAI Compatible",
+          model: clean(result.model),
+          source: "图像生成",
+          feature: "phone-camera-image",
+          requestId: clean(result.requestId),
+          usage: {},
+          units: { imageRequests: 1, generatedImages: 1 },
+          metadata: {
+            costSource: "provider-reported",
+            backend: "api",
+            referenceCount: list(result.references).length,
+            shot: clean(result.shot),
+            stylePreset,
+          },
+        };
+        if (typeof recordCapabilityUsage === "function") {
+          await recordCapabilityUsage({ capabilityId: "image-generation", ledgerPath: scope.ledgerPath, event });
+        } else {
+          await appendUsageEvent(scope.ledgerPath, {
+            ...event,
+            metadata: { ...event.metadata, capabilityId: "image-generation" },
+          });
+        }
+      }
+      return result;
+    }
+    if (stylePreset) throw new Error("当前不支持这个图像生成画面预设。 ");
     const options = {
       prompt: inputText(input.prompt, "图片提示词", { required: true, maximum: 4_000 }),
-      backend: inputText(input.backend, "图片生成后端", { maximum: 30 }),
-      workflow: inputText(input.workflow, "ComfyUI 工作流", { maximum: 300 }),
       size: inputText(input.size, "图片尺寸", { maximum: 80 }),
       out: inputText(input.outputDirectory || input.out, "输出目录", { maximum: 600 }),
       config: inputText(input.configPath || input.config, "配置路径", { maximum: 600 }),
       refs: agentImageReferences(input),
     };
-    const seed = optionalInteger(input.seed, "随机种子");
-    if (seed !== undefined) options.seed = seed;
     return executor.runAgentImageGeneration({
       agentRoot: scope.agentRoot,
       agentId: scope.agentId,
@@ -330,69 +369,6 @@ export function createAgentCapabilityAdapters({
         });
       },
     });
-  };
-
-  const phoneCamera = async ({ capability, context, lifecycle } = {}) => {
-    if (clean(lifecycle) !== "invoke") return directRuntimeState({ capability, lifecycle });
-    const scope = await resolveScope(context);
-    const input = inputFor(context);
-    const config = inputText(input.configPath || input.config, "配置路径", { maximum: 600 });
-    const phoneConfig = await executor.loadPhoneConfig({ dataRoot: scope.dataRoot, configPath: config });
-    const backend = inputText(input.backend, "图片生成后端", { maximum: 30 }) || phoneConfig.config.defaultBackend;
-    const comfyui = backend === "comfyui"
-      ? await executor.loadPhoneCameraComfyConnection(scope.dataRoot)
-      : { registry: { version: 1, workflows: {} } };
-    const imageConnection = backend === "comfyui"
-      ? comfyui
-      : await requiredApiConnection("image-workbench", "生图");
-    const options = {
-      shot: inputText(input.shot, "拍照方式", { required: true, maximum: 30 }),
-      scene: inputText(input.scene, "拍照场景", { required: true, maximum: 5_000 }),
-      refs: phoneReferences(input),
-      backend,
-      workflow: inputText(input.workflow, "ComfyUI 工作流", { maximum: 300 }),
-      size: inputText(input.size, "图片尺寸", { maximum: 80 }),
-      out: inputText(input.outputDirectory || input.out, "输出目录", { maximum: 600 }),
-      config,
-      dryRun: input.dryRun === true,
-    };
-    const seed = optionalInteger(input.seed, "随机种子");
-    if (seed !== undefined) options.seed = seed;
-    const result = await executor.takePhonePhoto({
-      agentRoot: scope.agentRoot,
-      dataRoot: scope.dataRoot,
-      connection: imageConnection,
-      registry: comfyui.registry,
-      options,
-    });
-    if (result?.status === "ok") {
-      const event = {
-        agentId: scope.agentId,
-        provider: backend === "comfyui" ? "本地 ComfyUI" : clean(imageConnection?.provider) || "OpenAI Compatible",
-        model: clean(result.model),
-        source: "手机拍照式图像",
-        feature: backend === "comfyui" ? "phone-camera-workflow" : "phone-camera-image",
-        requestId: clean(result.requestId),
-        usage: {},
-        units: { imageRequests: 1, generatedImages: 1 },
-        metadata: {
-          costSource: backend === "comfyui" ? "local-unpriced" : "provider-reported",
-          backend,
-          referenceCount: list(result.references).length,
-          shot: clean(result.shot),
-          workflow: clean(result.workflow),
-        },
-      };
-      if (typeof recordCapabilityUsage === "function") {
-        await recordCapabilityUsage({ capabilityId: "phone-camera", ledgerPath: scope.ledgerPath, event });
-      } else {
-        await appendUsageEvent(scope.ledgerPath, {
-          ...event,
-          metadata: { ...event.metadata, capabilityId: "phone-camera" },
-        });
-      }
-    }
-    return result;
   };
 
   const mailBridge = async ({ capability, context, lifecycle } = {}) => {
@@ -418,11 +394,59 @@ export function createAgentCapabilityAdapters({
     });
   };
 
+  const schedule = async ({ capability, context, lifecycle, action } = {}) => {
+    if (clean(lifecycle) !== "invoke") return directRuntimeState({ capability, lifecycle });
+    const scope = await resolveScope(context);
+    const input = inputFor(context);
+    const actionId = clean(action?.action);
+    const currentContactTasks = async () => (await listScheduleTasks({ dataRoot: scope.dataRoot }))
+      .filter((task) => (
+        task.source === "agent"
+        && task.target?.type === "conversation"
+        && clean(task.target.contactId) === scope.contactId
+      ));
+    if (actionId === "list") {
+      return {
+        status: "listed",
+        tasks: (await currentContactTasks()).map((task) => scheduleTaskSummary(task)),
+      };
+    }
+    if (actionId === "remove") {
+      const id = inputText(input.id, "定时任务 ID", { required: true, maximum: 128 });
+      const task = (await currentContactTasks()).find((candidate) => candidate.id === id);
+      if (!task) throw new Error("当前联系人没有这个待执行定时任务。 ");
+      const removed = await removeScheduleTask({ dataRoot: scope.dataRoot, id: task.id });
+      return {
+        status: removed ? "removed" : "already-finished",
+        task: scheduleTaskSummary(task),
+      };
+    }
+    if (actionId !== "add") throw new Error("当前计划动作不可用。 ");
+    const delay = inputText(input.delay, "计划延迟", { maximum: 32 });
+    const cron = inputText(input.cron, "计划 Cron 表达式", { maximum: 128 });
+    if (Boolean(delay) === Boolean(cron)) {
+      throw new Error("计划必须且只能提供 delay 或 cron 其中之一。 ");
+    }
+    const task = await createScheduleTask({
+      dataRoot: scope.dataRoot,
+      delay,
+      cron,
+      prompt: inputText(input.prompt, "计划事项", { required: true, maximum: 20_000 }),
+      contactId: scope.contactId,
+      description: inputText(input.description, "计划说明", { maximum: 500 }) || "Agent 创建的对话计划",
+      source: "agent",
+    });
+    return {
+      status: "created",
+      task: scheduleTaskSummary(task),
+    };
+  };
+
   return Object.freeze({
     "image-generation": imageGeneration,
     "image-vision": imageVision,
     "mail-bridge": mailBridge,
-    "phone-camera": phoneCamera,
+    schedule,
     "video-understanding": videoUnderstanding,
     "voice-message": voiceMessage,
     "web-browser": webBrowser,

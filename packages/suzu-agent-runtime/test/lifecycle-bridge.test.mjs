@@ -39,6 +39,26 @@ function createContext() {
   };
 }
 
+test("bridge transport keeps a queued lifecycle request alive during Node IPC back-pressure", async () => {
+  const channel = createParentChannel((request) => ({ echoed: request.event }));
+  const sendNormally = channel.send;
+  channel.send = (message) => {
+    sendNormally(message);
+    // Node's child-process IPC uses false for queue back-pressure, not only
+    // for an unavailable parent channel.
+    return false;
+  };
+  const transport = createSuzuAgentLifecycleBridgeTransport({ processRef: channel, requestTimeoutMs: 50 });
+
+  const response = await transport.request("CapabilityExecute", { capabilityId: "web-browser", action: "open" });
+
+  assert.deepEqual(response, {
+    available: true,
+    result: { echoed: "CapabilityExecute" },
+  });
+  transport.dispose();
+});
+
 function createPublishingSession(ctx, {
   id = "session-compatibility",
   provider = "deepseek",
@@ -653,5 +673,144 @@ test("bridge removes stale replay metadata after max tokens drops a tool call", 
   assert.deepEqual(repaired.data.message.content, [{ type: "text", text: "保留的文字" }]);
   assert.equal("usage" in repaired.data, false);
   assert.equal(surfaceNodes.at(-1), repaired.seq);
+  transport.dispose();
+});
+
+test("bridge restores streamed reasoning before a DeepSeek tool call enters replay history", async () => {
+  const channel = createParentChannel(() => ({ blocks: [] }));
+  const transport = createSuzuAgentLifecycleBridgeTransport({ processRef: channel, requestTimeoutMs: 50 });
+  const bridge = createSuzuAgentLifecycleBridge({ transport });
+  const ctx = createContext();
+  bridge.apply(ctx, { timeoutMs: 50 });
+  const { events, session, surfaceNodes } = createPublishingSession(ctx, { id: "session-tool-reasoning" });
+  session.append("turn/start", { turn: 10 });
+  session.append("step/start", { turn: 10, step: 1 });
+  const reasoningChunk = session.append("assistant/chunk", {
+    turn: 10,
+    step: 1,
+    chunk: { type: "reasoning-delta", index: 0, text: "先检查可用工具。" },
+  });
+  const toolCallChunk = session.append("assistant/chunk", {
+    turn: 10,
+    step: 1,
+    chunk: {
+      type: "tool-call-delta",
+      index: 1,
+      id: "call-restore",
+      name: "inspect_workspace",
+      argumentsDelta: "{}",
+    },
+  });
+  const original = session.append("assistant/message", {
+    turn: 10,
+    step: 1,
+    message: {
+      id: "assistant-with-missing-reasoning",
+      role: "assistant",
+      content: [{
+        type: "tool-call",
+        id: "call-restore",
+        name: "inspect_workspace",
+        arguments: "{}",
+      }],
+      source: { kind: "model", provider: "deepseek", model: "deepseek-v4-flash" },
+    },
+  }, {
+    surfaceOp: "append",
+    sourceEventSeqs: [reasoningChunk.seq, toolCallChunk.seq],
+  });
+
+  await flushDeferredSessionWork();
+
+  const repaired = events.at(-1);
+  assert.equal(repaired.type, "assistant/message");
+  assert.deepEqual(repaired.surfaceOp, { op: "replace", start: original.seq, end: original.seq });
+  assert.deepEqual(repaired.sourceEventSeqs, [original.seq]);
+  assert.deepEqual(repaired.data.message.content, [
+    { type: "reasoning", text: "先检查可用工具。" },
+    {
+      type: "tool-call",
+      id: "call-restore",
+      name: "inspect_workspace",
+      arguments: "{}",
+    },
+  ]);
+  assert.equal(surfaceNodes.at(-1), repaired.seq);
+  transport.dispose();
+});
+
+test("bridge completes the reasoning repair before a tool continuation can run", async () => {
+  const channel = createParentChannel((request) => {
+    assert.equal(request.event, "PreToolUse");
+    return { decision: { kind: "allow" } };
+  });
+  const transport = createSuzuAgentLifecycleBridgeTransport({ processRef: channel, requestTimeoutMs: 50 });
+  const bridge = createSuzuAgentLifecycleBridge({ transport });
+  const ctx = createContext();
+  bridge.apply(ctx, { timeoutMs: 50 });
+  const { events, session } = createPublishingSession(ctx, { id: "session-tool-continuation" });
+  session.append("turn/start", { turn: 11 });
+  session.append("step/start", { turn: 11, step: 1 });
+  const reasoningChunk = session.append("assistant/chunk", {
+    turn: 11,
+    step: 1,
+    chunk: { type: "reasoning-delta", index: 0, text: "先读取目录。" },
+  });
+  const toolCallChunk = session.append("assistant/chunk", {
+    turn: 11,
+    step: 1,
+    chunk: {
+      type: "tool-call-delta",
+      index: 1,
+      id: "call-continuation",
+      name: "suzu_capability",
+      argumentsDelta: "{}",
+    },
+  });
+  const original = session.append("assistant/message", {
+    turn: 11,
+    step: 1,
+    message: {
+      id: "assistant-awaiting-tool",
+      role: "assistant",
+      content: [{
+        type: "tool-call",
+        id: "call-continuation",
+        name: "suzu_capability",
+        arguments: "{}",
+      }],
+      source: { kind: "model", provider: "deepseek", model: "deepseek-v4-flash" },
+    },
+  }, {
+    surfaceOp: "append",
+    sourceEventSeqs: [reasoningChunk.seq, toolCallChunk.seq],
+  });
+
+  let providerSawRepairedHistory = false;
+  const outcome = await ctx.listeners.get("tools/pre-execute").callback({
+    agent: { id: session.id, session },
+    arguments: {},
+    callId: "call-continuation",
+    rootCallId: "call-continuation",
+    name: "suzu_capability",
+  }, async () => {
+    const repaired = events.at(-1);
+    assert.equal(repaired.type, "assistant/message");
+    assert.deepEqual(repaired.surfaceOp, { op: "replace", start: original.seq, end: original.seq });
+    assert.deepEqual(repaired.data.message.content, [
+      { type: "reasoning", text: "先读取目录。" },
+      {
+        type: "tool-call",
+        id: "call-continuation",
+        name: "suzu_capability",
+        arguments: "{}",
+      },
+    ]);
+    providerSawRepairedHistory = true;
+    return { kind: "allow" };
+  });
+
+  assert.equal(providerSawRepairedHistory, true);
+  assert.deepEqual(outcome, { kind: "allow" });
   transport.dispose();
 });

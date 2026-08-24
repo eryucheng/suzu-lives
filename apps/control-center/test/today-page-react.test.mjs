@@ -30,7 +30,10 @@ test("today is the startup page and refreshes its own snapshots", () => {
 
   assert.match(state, /view: "today"/u);
   assert.match(state, /relationshipPage: "overview"/u);
-  assert.match(application, /if \(state\.view === "today"\) \{\s*void refreshTodayCalendar\(\);\s*void loadUsageLedger\(\);\s*\}/u);
+  assert.match(application, /function scheduleTodaySnapshotsAfterFirstPaint\(\)[\s\S]*?void refreshTodayCalendar\(\);[\s\S]*?void loadTodayUsageSummary\(\);/u);
+  assert.match(application, /function notifyMainAfterFirstPaint\(\)[\s\S]*?api\.appLifecycle\.rendererReady\(\)/u);
+  assert.match(application, /void refreshTodayCalendar\(\);[\s\S]*?void loadTodayUsageSummary\(\);[\s\S]*?notifyMainAfterFirstPaint\(\);/u);
+  assert.match(application, /render\(\);\s*if \(state\.view === "today"\) scheduleTodaySnapshotsAfterFirstPaint\(\);/u);
 });
 
 test("today calendar fills its growing panel while sharing the day panel's horizontal inset", () => {

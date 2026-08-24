@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { Readable } from "node:stream";
 import test from "node:test";
-import { createCandidates, downloadImageUrl, readRuns, validateComfyRegistry, ImageWorkbenchError } from "../src/index.mjs";
+import { createCandidates, downloadImageUrl, readRuns } from "../src/index.mjs";
 
 const credential = () => String.fromCharCode(120, 121, 122);
 const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl+jh0AAAAASUVORK5CYII=", "base64");
@@ -47,6 +47,67 @@ test("DashScope image generation uses the model saved on the selected API connec
   assert.equal(request.model, "my-dashscope-image-model");
 });
 
+test("selected image protocol controls the cloud request format", async () => {
+  let target = "";
+  let request;
+  const run = await createCandidates({
+    root: await root(),
+    connection: {
+      apiKey: credential(),
+      baseUrl: "https://dashscope.example.test/api/v1",
+      imageGenerationAdapter: "dashscope-image",
+      model: "selected-dashscope-model",
+      type: "generic-api",
+    },
+    input,
+    fetchImpl: async (url, options) => {
+      target = url;
+      request = JSON.parse(options.body);
+      return jsonResponse({
+        request_id: "selected-protocol-request",
+        output: { choices: [{ message: { content: [{ image: "https://cdn.example.test/image.png" }] } }] },
+      });
+    },
+    imageDownloader: async () => png,
+  });
+  assert.equal(target.endsWith("/services/aigc/multimodal-generation/generation"), true);
+  assert.equal(request.model, "selected-dashscope-model");
+  assert.equal(run.candidates[0].requestId, "selected-protocol-request");
+});
+
+test("custom image protocol resolves its saved request template and image result", async () => {
+  let target = "";
+  let request;
+  const run = await createCandidates({
+    root: await root(),
+    connection: {
+      apiKey: credential(),
+      customImageGenerationAdapter: {
+        baseUrl: "https://custom.example.test",
+        endpointPath: "/draw",
+        imagePath: "result.url",
+        requestBody: { model: "{{model}}", prompt: "{{prompt}}", size: "{{size}}" },
+        requestHeaders: { Authorization: "Bearer {{apiKey}}" },
+        responseMode: "json-url",
+      },
+      imageGenerationAdapter: "custom-http-image",
+      model: "custom-image-model",
+      type: "generic-api",
+    },
+    input,
+    fetchImpl: async (url, options) => {
+      target = url;
+      request = JSON.parse(options.body);
+      assert.equal(options.headers.Authorization, "Bearer " + credential());
+      return jsonResponse({ result: { url: "https://cdn.example.test/custom.png" } });
+    },
+    imageDownloader: async () => png,
+  });
+  assert.equal(target, "https://custom.example.test/draw");
+  assert.deepEqual(request, { model: "custom-image-model", prompt: "一幅测试图", size: "1024x1024" });
+  assert.equal(run.candidates[0].model, "custom-image-model");
+});
+
 test("API references use the edit endpoint and role-aware multipart request", async () => {
   let target = "";
   await createCandidates({ root: await root(), connection: api, input: { ...input, prompt: "参考测试" }, references: [{ id: "ref-a", role: "identity", description: "人物", filename: "ref.png", mime: "image/png", data: png }], fetchImpl: async (url, options) => { target = url; assert.equal(options.body instanceof FormData, true); assert.match(String(options.body.get("prompt")), /Reference image roles/); return jsonResponse({ data: [{ b64_json: png.toString("base64") }] }); } });
@@ -69,69 +130,38 @@ test("API preserves generation and edit extra request bodies", async () => {
   assert.equal(generation.provider_flag, true); assert.equal(edit.get("edit_flag"), "yes"); assert.equal(edit.has("provider_flag"), false);
 });
 
-test("ComfyUI accepts only registered enabled API-format workflows", () => {
-  assert.throws(() => validateComfyRegistry({ version: 1, workflows: { "bad": { enabled: true, workflow: { nodes: [] }, bindings: { prompt: {} }, reference_slots: [], output_nodes: [] } } }), ImageWorkbenchError);
-  const registry = validateComfyRegistry({ version: 1, workflows: { "ok": { enabled: true, workflow: { "1": { class_type: "Text", inputs: { text: "" } } }, bindings: { prompt: { node: "1", input: "text" } }, defaults: {}, reference_slots: [], output_nodes: [] } } });
-  assert.equal(registry.workflows.ok.enabled, true);
-});
-
-test("ComfyUI submits only an enabled registered workflow", async () => {
-  const registry = { version: 1, workflows: { "local-test": { enabled: true, workflow: { "1": { class_type: "Text", inputs: { text: "" } }, "2": { class_type: "SaveImage", inputs: {} } }, bindings: { prompt: { node: "1", input: "text" } }, defaults: {}, reference_slots: [], output_nodes: ["2"] } } };
-  const calls = [];
-  const fetchImpl = async (url) => { calls.push(url); if (url.endsWith("/prompt")) return jsonResponse({ prompt_id: "prompt-a" }); if (url.includes("/history/")) return jsonResponse({ "prompt-a": { outputs: { "2": { images: [{ filename: "out.png", subfolder: "", type: "output" }] } } } }); return bytesResponse(png); };
-  const run = await createCandidates({ root: await root(), connection: { baseUrl: "http://127.0.0.1:8188", timeoutMs: 1000, pollIntervalMs: 1 }, registry, input: { prompt: "本地图", backend: "comfyui", workflow: "local-test", count: 1, size: "512x512" }, fetchImpl });
-  assert.equal(run.candidates[0].workflow, "local-test");
-  assert.equal(calls.some((url) => url.endsWith("/prompt")), true);
-});
-
-test("ComfyUI submits the selected seed and reports history HTTP errors without polling", async () => {
-  const registry = { version: 1, workflows: { "seeded": { enabled: true, workflow: { "1": { class_type: "Text", inputs: { text: "" } }, "2": { class_type: "Seed", inputs: { seed: 0 } }, "3": { class_type: "SaveImage", inputs: {} } }, bindings: { prompt: { node: "1", input: "text" }, seed: { node: "2", input: "seed" } }, defaults: {}, reference_slots: [], output_nodes: ["3"] } } };
-  let submitted;
-  const fetchImpl = async (url, options) => {
-    if (url.endsWith("/prompt")) { submitted = JSON.parse(options.body); return jsonResponse({ prompt_id: "seed-a" }); }
-    if (url.includes("/history/")) return jsonResponse({ "seed-a": { outputs: { "3": { images: [{ filename: "out.png" }] } } } });
-    return bytesResponse(png);
-  };
-  await createCandidates({ root: await root(), connection: { baseUrl: "http://127.0.0.1:8188", timeoutMs: 1000, pollIntervalMs: 1 }, registry, input: { prompt: "种子", backend: "comfyui", workflow: "seeded", seed: 42, count: 1, size: "512x512" }, fetchImpl });
-  assert.equal(submitted.prompt["2"].inputs.seed, 42);
-  const historyErrorRoot = await root();
-  await assert.rejects(() => createCandidates({ root: historyErrorRoot, connection: { baseUrl: "http://127.0.0.1:8188", timeoutMs: 1000, pollIntervalMs: 1 }, registry, input: { prompt: "失败", backend: "comfyui", workflow: "seeded", count: 1, size: "512x512" }, fetchImpl: async (url) => url.endsWith("/prompt") ? jsonResponse({ prompt_id: "history-error" }) : jsonResponse({}, 503) }), /查询任务失败：HTTP 503/u);
-  const rejectRoot = await root(); const viewErrorRoot = await root();
-  await assert.rejects(() => createCandidates({ root: rejectRoot, connection: { baseUrl: "http://127.0.0.1:8188", timeoutMs: 1000, pollIntervalMs: 1 }, registry, input: { prompt: "拒绝", backend: "comfyui", workflow: "seeded", count: 1, size: "512x512" }, fetchImpl: async () => jsonResponse({ node_errors: { bad: "fixture" } }, 400) }), /ComfyUI 拒绝工作流/u);
-  await assert.rejects(() => createCandidates({ root: viewErrorRoot, connection: { baseUrl: "http://127.0.0.1:8188", timeoutMs: 1000, pollIntervalMs: 1 }, registry, input: { prompt: "下载失败", backend: "comfyui", workflow: "seeded", count: 1, size: "512x512" }, fetchImpl: async (url) => url.endsWith("/prompt") ? jsonResponse({ prompt_id: "view-error" }) : url.includes("/history/") ? jsonResponse({ "view-error": { outputs: { "3": { images: [{ filename: "out.png" }] } } } }) : bytesResponse("", 502) }), /下载 ComfyUI 输出失败：HTTP 502/u);
-});
-
-test("ComfyUI aborts the active request for upload, prompt, history, and view failures", async () => {
-  const registry = { version: 1, workflows: { "stages": { enabled: true, workflow: { "1": { class_type: "Text", inputs: { text: "" } }, "2": { class_type: "LoadImage", inputs: { image: "" } }, "3": { class_type: "SaveImage", inputs: {} } }, bindings: { prompt: { node: "1", input: "text" } }, defaults: {}, reference_slots: [{ node: "2", input: "image", roles: ["style"], required: false }], output_nodes: ["3"] } } };
-  const connection = { baseUrl: "http://127.0.0.1:8188", timeoutMs: 1000, pollIntervalMs: 1 }; const withReference = { prompt: "阶段", backend: "comfyui", workflow: "stages", count: 1, size: "512x512" }; const reference = [{ id: "ref", role: "style", filename: "ref.png", mime: "image/png", data: png }];
-  const runCase = async (fetchImpl, expected, references = []) => { const state = {}; const target = await root(); await assert.rejects(() => createCandidates({ root: target, connection, registry, input: withReference, references, fetchImpl: async (url, options) => { options.signal.addEventListener("abort", () => { state.aborted = true; }); return fetchImpl(url, options); } }), expected); assert.equal(state.aborted, true); };
-  await runCase(async () => jsonResponse({}, 400), /上传参考图失败/u, reference);
-  await runCase(async () => jsonResponse({}, 400), /ComfyUI 拒绝工作流/u);
-  await runCase(async (url) => url.endsWith("/prompt") ? jsonResponse({ prompt_id: "history" }) : jsonResponse({}, 503), /查询任务失败/u);
-  await runCase(async (url) => url.endsWith("/prompt") ? jsonResponse({ prompt_id: "view" }) : url.includes("/history/") ? jsonResponse({ view: { outputs: { "3": { images: [{ filename: "out.png" }] } } } }) : bytesResponse("", 502), /下载 ComfyUI 输出失败/u);
-});
-
-test("ComfyUI rejects disabled, missing, and failed registered workflows without falling back", async () => {
-  const workflow = { enabled: false, workflow: { "1": { class_type: "Text", inputs: { text: "" } } }, bindings: { prompt: { node: "1", input: "text" } }, defaults: {}, reference_slots: [], output_nodes: [] };
-  const registry = { version: 1, workflows: { disabled: workflow } }; const connection = { baseUrl: "http://127.0.0.1:8188", timeoutMs: 1000, pollIntervalMs: 1 };
-  const base = { prompt: "本地图", backend: "comfyui", count: 1, size: "512x512" };
-  const missingRoot = await root(); const disabledRoot = await root(); const failedRoot = await root();
-  await assert.rejects(() => createCandidates({ root: missingRoot, connection, registry, input: { ...base, workflow: "missing" } }), /NOT_CONFIGURED/u);
-  await assert.rejects(() => createCandidates({ root: disabledRoot, connection, registry, input: { ...base, workflow: "disabled" } }), /NOT_ENABLED/u);
-  const enabled = { version: 1, workflows: { failed: { ...workflow, enabled: true } } };
-  const failedFetch = async (url) => {
-    if (url.endsWith("/prompt")) return jsonResponse({ prompt_id: "failure" });
-    return jsonResponse({ failure: { status: { status_str: "failed", messages: [["execution_error", {}]] }, outputs: {} } });
-  };
-  await assert.rejects(() => createCandidates({ root: failedRoot, connection, registry: enabled, input: { ...base, workflow: "failed" }, fetchImpl: failedFetch }), /执行失败/u);
-});
-
 test("API accepts a URL result and rejects a timed out request without a fallback", async () => {
   const target = await root(); const calls = [];
   const run = await createCandidates({ root: target, connection: api, input, fetchImpl: async (url) => { calls.push(url); return jsonResponse({ data: [{ url: "https://cdn.example.test/result.png" }] }); }, imageDownloader: async (url) => { calls.push(url); return png; } });
   assert.equal(run.status, "complete"); assert.deepEqual(calls, ["https://example.test/v1/images/generations", "https://cdn.example.test/result.png"]);
   const timeoutRoot = await root();
   await assert.rejects(() => createCandidates({ root: timeoutRoot, connection: { ...api, timeoutMs: 10 }, input, fetchImpl: (_url, options) => new Promise((_resolve, reject) => options.signal.addEventListener("abort", () => reject(new Error("abort")))) }), /超时/u);
+});
+
+test("API reports safe diagnostics for non-JSON service responses", async () => {
+  const htmlRoot = await root(); const binaryRoot = await root(); const oversizedRoot = await root();
+  await assert.rejects(
+    () => createCandidates({
+      root: htmlRoot,
+      connection: api,
+      input,
+      fetchImpl: async () => new Response("<html><body><h1>Missing image route</h1><p>Authorization: Bearer secret-token-value</p></body></html>", { status: 404, headers: { "content-type": "text/html" } }),
+    }),
+    (error) => {
+      assert.match(error.message, /图像 API 请求失败（HTTP 404，响应类型 text\/html）/u);
+      assert.match(error.message, /Missing image route/u);
+      assert.doesNotMatch(error.message, /secret-token-value/u);
+      return true;
+    },
+  );
+  await assert.rejects(
+    () => createCandidates({ root: binaryRoot, connection: api, input, fetchImpl: async () => bytesResponse(png) }),
+    /图像 API 请求返回了非 JSON 数据（HTTP 200，响应类型 image\/png）。/u,
+  );
+  await assert.rejects(
+    () => createCandidates({ root: oversizedRoot, connection: api, input, fetchImpl: async () => new Response("x".repeat(20 * 1024), { status: 502, headers: { "content-type": "text/html" } }) }),
+    /响应正文超过 16 KB，已停止读取/u,
+  );
 });
 
 function streamedResponse({ statusCode = 200, headers = { "content-type": "image/png" }, chunks = [png] } = {}) { const body = Readable.from(chunks); body.statusCode = statusCode; body.headers = headers; return body; }

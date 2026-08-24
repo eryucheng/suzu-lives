@@ -8,22 +8,26 @@ export const CAPABILITY_CATEGORIES = Object.freeze([
 const HIDDEN_CAPABILITY_IDS = new Set(["proactive-contact"]);
 
 export const WECHAT_DELIVERY_OPTIONS = Object.freeze([
-  Object.freeze(["agent", "Agent 的说话内容", "最终回复，默认投递"]),
-  Object.freeze(["attachments", "Hook / 上下文", "当前会话流出现这类记录时投递"]),
-  Object.freeze(["permissions", "审批提示", "工具需要确认时提醒；可回复“允许”或“拒绝”，默认投递"]),
-  Object.freeze(["tools", "工具调用", "工具调用的过程与细节"]),
-  Object.freeze(["thinking", "思考内容", "仅在你明确需要时投递"]),
-  Object.freeze(["system", "系统消息", "停止、错误和系统状态"]),
-  Object.freeze(["tokens", "Token 用量", "本次回复的用量摘要"]),
+  Object.freeze(["agent", "对方回复", "每次回复的正文，默认投递"]),
+  Object.freeze(["attachments", "图片、音频与文件", "在聊天中交付的附件"]),
+  Object.freeze(["permissions", "审批请求", "工具需要确认时的提醒，可回复“允许”或“拒绝”，默认投递"]),
+  Object.freeze(["tools", "工具调用", "工具执行的过程与结果"]),
+  Object.freeze(["thinking", "思考内容", "模型的思考过程"]),
+  Object.freeze(["system", "系统通知", "停止、错误和运行状态"]),
+  Object.freeze(["tokens", "用量统计", "本次回复的 Token 用量"]),
+]);
+
+export const WECHAT_TEXT_SEGMENTATION_OPTIONS = Object.freeze([
+  Object.freeze(["paragraph", "空行分段"]),
+  Object.freeze(["sentence", "句子分段"]),
 ]);
 
 export function wechatConnectionSettings(snapshot) {
   const raw = snapshot && typeof snapshot === "object" ? snapshot : {};
   const delivery = raw.delivery && typeof raw.delivery === "object" ? raw.delivery : {};
   return {
-    enabled: raw.enabled === true,
-    linkedContacts: Number(raw.linkedContacts) || 0,
     delivery: Object.fromEntries(WECHAT_DELIVERY_OPTIONS.map(([key]) => [key, delivery[key] === undefined ? ["agent", "permissions"].includes(key) : delivery[key] === true])),
+    textSegmentation: raw.textSegmentation === "sentence" ? "sentence" : "paragraph",
   };
 }
 
@@ -35,14 +39,13 @@ export function capabilityVisibleInCatalog(capability) {
   return !HIDDEN_CAPABILITY_IDS.has(String(capability?.id || "").trim());
 }
 
-export function createWechatConnectionCapability(snapshot) {
-  const current = wechatConnectionSettings(snapshot);
+export function createWechatConnectionCapability() {
   return {
     id: "wechat-connection",
     name: "连接微信",
-    description: "把指定对话连接到手机微信。",
+    description: "设置已连接微信接收的消息类型。",
     category: "companion",
-    enabled: current.enabled,
+    enabled: true,
     softwareConnector: true,
   };
 }

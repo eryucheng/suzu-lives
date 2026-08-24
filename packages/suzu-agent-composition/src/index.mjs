@@ -31,6 +31,7 @@ export const SUZU_COMPANION_PROFILE_BINDING = Object.freeze({
     "instruction-loader",
     "lifecycle-hooks",
     "capability-bridge",
+    "capability-skills",
     "structured-generation",
     "conversation-compaction",
     "direct-terminal",

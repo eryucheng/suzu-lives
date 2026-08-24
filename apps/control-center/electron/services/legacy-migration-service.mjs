@@ -1309,7 +1309,7 @@ export function createLegacyMigrationService({
     if (id === "dashscope") {
       baseUrl = normalizedHttpUrl(source.value.baseUrl || "https://dashscope.aliyuncs.com/api/v1");
       name = "旧版阿里百炼";
-      bindings = ["image-workbench", "image-generation", "phone-camera", "voice-message"];
+      bindings = ["image-workbench", "image-generation", "voice-message"];
     } else {
       const configuration = await readJsonFileIfPresent(fsOps, configPath, `旧版 ${id} 能力配置`);
       if (!configuration.exists) return { id, status: "needs-manual-configuration", sourcePath, message: "找不到旧版能力的服务地址和模型设置，已保留密钥文件。" };

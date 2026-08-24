@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
-import { createCandidates, validateComfyRegistry } from "@suzu-lives/image-workbench";
+import { createCandidates } from "@suzu-lives/image-workbench";
 import {
   createVisualReferenceLibrary,
   resolveAgentVisualReferenceLibraryRoot,
@@ -20,35 +20,31 @@ function clean(value) { return String(value ?? "").trim(); }
 function object(value) { return value && typeof value === "object" && !Array.isArray(value) ? value : {}; }
 function inside(root, target) { const relative = path.relative(root, target); return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative)); }
 function rooted(root, value, label) { const base = path.resolve(root); const raw = clean(value); const target = path.resolve(base, raw || "."); if (!inside(base, target)) throw new PhoneCameraError(label + "必须位于当前 Agent 的 Suzu Lives 数据目录。 "); return target; }
-function capabilityConfigRoot(dataRoot) { const root = clean(dataRoot); if (!root) throw new PhoneCameraError("缺少 Suzu Lives 软件数据目录。 "); return path.join(path.resolve(root), "capabilities", "phone-camera"); }
-function phoneConfigPath({ dataRoot, configPath = "" } = {}) { const root = capabilityConfigRoot(dataRoot); const target = configPath ? path.resolve(root, configPath) : path.join(root, "config.json"); if (!inside(root, target)) throw new PhoneCameraError("--config 必须位于 Suzu Lives 软件手机拍照配置目录。 "); return target; }
+function imageGenerationConfigRoot(dataRoot) { const root = clean(dataRoot); if (!root) throw new PhoneCameraError("缺少 Suzu Lives 软件数据目录。 "); return path.join(path.resolve(root), "capabilities", "image-generation"); }
+function imageGenerationConfigPath({ dataRoot } = {}) { return path.join(imageGenerationConfigRoot(dataRoot), "config.json"); }
 function list(value) { return Array.isArray(value) ? value : []; }
+function phoneCameraStyle(value) {
+  const source = object(value);
+  return object(source.phone_camera ?? source.phoneCamera);
+}
 
 export function normalizePhoneConfig(value = {}) {
   const source = object(value); const references = object(source.references); const output = object(source.output); const prompt = object(source.prompt); const sizes = object(source.size_by_shot);
   const maxImages = Number(references.max_images ?? 8);
   if (!Number.isInteger(maxImages) || maxImages < 1 || maxImages > MAX_REFERENCES) throw new PhoneCameraError(`references.max_images 必须在 1 到 ${MAX_REFERENCES} 之间。`);
-  return { sizeByShot: { rear: clean(sizes.rear) || clean(profiles.shots.rear.default_size), selfie: clean(sizes.selfie) || clean(profiles.shots.selfie.default_size), mirror: clean(sizes.mirror) || clean(profiles.shots.mirror.default_size) }, references: { maxImages }, output: { directory: clean(output.directory) || "phone-camera" }, prompt: { prefix: clean(prompt.prefix), suffix: clean(prompt.suffix) }, defaultBackend: clean(source.default_backend) || "api" };
+  return { sizeByShot: { rear: clean(sizes.rear) || clean(profiles.shots.rear.default_size), selfie: clean(sizes.selfie) || clean(profiles.shots.selfie.default_size), mirror: clean(sizes.mirror) || clean(profiles.shots.mirror.default_size) }, references: { maxImages }, output: { directory: clean(output.directory) || "image-generation/phone-camera" }, prompt: { prefix: clean(prompt.prefix), suffix: clean(prompt.suffix) } };
 }
 
-export async function loadPhoneConfig({ dataRoot, configPath = "" } = {}) {
-  const target = phoneConfigPath({ dataRoot, configPath });
-  try { return { config: normalizePhoneConfig(JSON.parse(await fs.readFile(target, "utf8"))), path: target, source: "saved" }; }
-  catch (error) { if (error?.code === "ENOENT") return { config: normalizePhoneConfig(), path: target, source: "default" }; if (error instanceof SyntaxError) throw new PhoneCameraError("--config 必须是 JSON 对象。 "); throw error; }
-}
-
-export async function loadPhoneCameraComfyConnection(dataRoot) {
-  const root = clean(dataRoot);
-  if (!root) throw new PhoneCameraError("缺少 Suzu Lives 软件数据目录。 ");
-  const filePath = path.join(path.resolve(root), "connections", "comfyui.json");
-  let value = {};
-  try { value = JSON.parse(await fs.readFile(filePath, "utf8")); } catch {}
-  return {
-    baseUrl: clean(value.baseUrl) || "http://127.0.0.1:8188",
-    timeoutMs: Number(value.timeoutMs) || 600000,
-    pollIntervalMs: Number(value.pollIntervalMs) || 1000,
-    registry: validateComfyRegistry(value.registry || { version: 1, workflows: {} }),
-  };
+export async function loadPhoneCameraStyleConfig({ dataRoot } = {}) {
+  const target = imageGenerationConfigPath({ dataRoot });
+  try {
+    const value = JSON.parse(await fs.readFile(target, "utf8"));
+    return { config: normalizePhoneConfig(phoneCameraStyle(value)), path: target, source: "saved" };
+  } catch (error) {
+    if (error?.code === "ENOENT") return { config: normalizePhoneConfig(), path: target, source: "default" };
+    if (error instanceof SyntaxError) throw new PhoneCameraError("图像生成配置必须是 JSON 对象。 ");
+    throw error;
+  }
 }
 
 function referencePrompt(references) {
@@ -122,14 +118,17 @@ export async function expandReferences({ agentRoot, dataRoot = "", requested = [
   catch (error) { if (error instanceof VisualReferenceError) throw new PhoneCameraError(error.message); throw error; }
 }
 
-export async function takePhonePhoto({ agentRoot, dataRoot, connection, registry, fetchImpl, options = {} } = {}) {
+export async function takePhonePhoto({ agentRoot, dataRoot, connection, fetchImpl, options = {} } = {}) {
   const root = path.resolve(clean(agentRoot)); if (!clean(agentRoot)) throw new PhoneCameraError("缺少当前 Agent 数据目录。 ");
-  const { config, path: phoneConfigPath, source: configSource } = await loadPhoneConfig({ dataRoot, configPath: options.config });
-  const shot = clean(options.shot); const scene = clean(options.scene); const backend = clean(options.backend) || config.defaultBackend; if (!SHOTS.has(shot)) throw new PhoneCameraError("--shot 必须是 rear、selfie 或 mirror。 "); if (!['api', 'comfyui'].includes(backend)) throw new PhoneCameraError("--backend 必须是 api 或 comfyui。 ");
+  const loaded = options.styleConfig === undefined
+    ? await loadPhoneCameraStyleConfig({ dataRoot })
+    : { config: normalizePhoneConfig(options.styleConfig), source: "provided" };
+  const { config, source: configSource } = loaded;
+  const shot = clean(options.shot); const scene = clean(options.scene); const backend = "api"; if (!SHOTS.has(shot)) throw new PhoneCameraError("--shot 必须是 rear、selfie 或 mirror。 ");
   const references = await expandReferences({ agentRoot: root, dataRoot, requested: list(options.refs), maxImages: config.references.maxImages }); const prompt = buildPhonePrompt({ scene, shot, config, references }); const size = clean(options.size) || config.sizeByShot[shot];
-  if (options.dryRun) return { status: "dry-run", backend, workflow: clean(options.workflow) || null, shot, size, references: references.map(({ index, id, role, path: referencePath }) => ({ index, id, role, path: referencePath })), prompt, configSource };
+  if (options.dryRun) return { status: "dry-run", backend, shot, size, references: references.map(({ index, id, role, path: referencePath }) => ({ index, id, role, path: referencePath })), prompt, configSource };
   const outputRoot = rooted(root, clean(options.out) || config.output.directory, "--out");
-  const result = await createCandidates({ root: outputRoot, connection, registry, input: { prompt, backend, workflow: clean(options.workflow), count: 1, size, seed: Number.isInteger(options.seed) ? options.seed : null, includeReferencePrompt: false }, references, maxReferences: MAX_REFERENCES, fetchImpl });
+  const result = await createCandidates({ root: outputRoot, connection, input: { prompt, backend, count: 1, size, includeReferencePrompt: false }, references, maxReferences: MAX_REFERENCES, fetchImpl });
   const candidate = result.candidates[0]; const outputPath = path.join(outputRoot, candidate.file);
-  return { status: "ok", backend, path: outputPath, sent: false, shot, references: references.map((item) => item.id), model: candidate.model, requestId: candidate.requestId || "", seed: candidate.seed, workflow: candidate.workflow || "" };
+  return { status: "ok", backend, path: outputPath, sent: false, shot, references: references.map((item) => item.id), model: candidate.model, requestId: candidate.requestId || "" };
 }

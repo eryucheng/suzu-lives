@@ -486,6 +486,103 @@ test("embedded host keeps the create-time model selection when Core's live defau
   });
 });
 
+test("embedded host pages persisted session history without returning the whole transcript", async () => {
+  const events = Array.from({ length: 7 }, (_value, index) => ({
+    seq: index + 1,
+    type: "user/message",
+  }));
+  const host = new SuzuAgentHost({
+    sessions: { get: () => null },
+    get(name) {
+      return name === "sessionPersistence"
+        ? {
+          list: async () => [{ id: "paged-session" }],
+          inspect: async () => ({ events }),
+        }
+        : undefined;
+    },
+  }, { send: () => true });
+
+  const latest = await host.handle("sessions.history", {
+    sessionId: "paged-session",
+    maxMessages: 3,
+  });
+  assert.deepEqual(latest.events.map((event) => event.seq), [5, 6, 7]);
+  assert.equal(latest.hasMore, true);
+
+  const older = await host.handle("sessions.history", {
+    sessionId: "paged-session",
+    maxMessages: 3,
+    beforeSeq: 5,
+  });
+  assert.deepEqual(older.events.map((event) => event.seq), [2, 3, 4]);
+  assert.equal(older.hasMore, true);
+
+  const first = await host.handle("sessions.history", {
+    sessionId: "paged-session",
+    maxMessages: 3,
+    beforeSeq: 2,
+  });
+  assert.deepEqual(first.events.map((event) => event.seq), [1]);
+  assert.equal(first.hasMore, false);
+});
+
+test("embedded host keeps an internal turn intact when a history page would start inside it", async () => {
+  const events = [
+    { seq: 1, type: "turn/start" },
+    { seq: 2, type: "user/message" },
+    { seq: 3, type: "assistant/message" },
+    { seq: 4, type: "turn/end" },
+    { seq: 5, type: "turn/start" },
+    { seq: 6, type: "user/message" },
+    { seq: 7, type: "assistant/message" },
+    { seq: 8, type: "turn/end" },
+    { seq: 9, type: "user/message" },
+    { seq: 10, type: "assistant/message" },
+  ];
+  const host = new SuzuAgentHost({
+    sessions: { get: () => null },
+    get(name) {
+      return name === "sessionPersistence"
+        ? {
+          list: async () => [{ id: "bounded-turn-session" }],
+          inspect: async () => ({ events }),
+        }
+        : undefined;
+    },
+  }, { send: () => true });
+
+  const latest = await host.handle("sessions.history", {
+    sessionId: "bounded-turn-session",
+    maxMessages: 4,
+  });
+
+  assert.deepEqual(latest.events.map((event) => event.seq), [5, 6, 7, 8, 9, 10]);
+  assert.equal(latest.hasMore, true);
+});
+
+test("embedded host returns an empty history for a contact that has not sent a first message", async () => {
+  const host = new SuzuAgentHost({
+    sessions: { get: () => null },
+    get(name) {
+      return name === "sessionPersistence"
+        ? {
+          list: async () => [],
+          inspect: async () => {
+            throw new Error("新联系人不应读取不存在的持久化会话。 ");
+          },
+        }
+        : undefined;
+    },
+  }, { send: () => true });
+
+  const history = await host.handle("sessions.history", {
+    sessionId: "new-contact-session",
+    maxMessages: 240,
+  });
+  assert.deepEqual(history, { events: [], hasMore: false });
+});
+
 test("embedded host applies a changed live main model to a persisted contact session", () => {
   let liveSelection = { provider: "deepseek-official", model: "deepseek-v4-flash" };
   const host = new SuzuAgentHost({
