@@ -3,10 +3,10 @@
 .textarea {
   width: 100%;
   min-height: 90px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--surface-border, var(--border));
   border-radius: var(--radius-md);
   outline: 0;
-  background: var(--panel-soft);
+  background: var(--surface-control, var(--panel-soft));
   color: var(--text);
   padding: 10px 12px;
   font: inherit;

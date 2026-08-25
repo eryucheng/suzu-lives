@@ -1,3 +1,5 @@
+import { PRODUCT_FEATURES } from "../../shared/product-features.mjs";
+
 const DEFAULT_LIMIT = 24;
 const FEATURED_LIMIT = 9;
 
@@ -35,13 +37,15 @@ export const SUZU_SEARCH_ITEMS = Object.freeze([
   item({ id: "memory", title: "长期记忆", detail: "联系人 · 召回、查看与维护", keywords: ["记忆", "召回", "memory", "长期", "记忆库", "大脑"], icon: "people", target: { view: "relationships", relationshipPage: "memory" } }),
   item({ id: "relationship-files", title: "相处设定", detail: "联系人 · SUZU.md 与资料", keywords: ["suzu", "persona", "user", "markdown", "关系文件", "人设"], icon: "people", target: { view: "relationships", relationshipPage: "settings" }, featured: true }),
   item({ id: "plans", title: "计划", detail: "软件 · 定时任务与自动计划", keywords: ["任务", "定时", "日程", "cron", "计划"], icon: "calendar", target: { view: "plans" } }),
-  item({ id: "create", title: "创造", detail: "软件 · 视觉工作台与参考资料", keywords: ["创造", "图片", "图片生成", "生图", "视觉", "参考图"], icon: "palette", target: { view: "create" }, featured: true }),
+  item({ id: "create", title: "创造", detail: "软件 · 视觉工作台", keywords: ["创造", "图片", "图片生成", "生图", "视觉", "参考图"], icon: "palette", target: { view: "create" }, featured: true }),
+  ...(PRODUCT_FEATURES.customEmojiStickers ? [item({ id: "sticker-workbench", title: "表情包工作台", detail: "创造 · 自定义表情与检索信息", keywords: ["表情包", "表情", "贴图", "sticker", "检索", "裁剪"], icon: "palette", target: { view: "create", createPage: "stickers" } })] : []),
   item({ id: "capabilities", title: "能力", detail: "软件 · 感知、陪伴、行动与创作能力", keywords: ["能力", "插件", "安装", "功能", "skill", "mcp"], icon: "sliders", target: { view: "capabilities" }, featured: true }),
   item({ id: "voice-message", title: "语音消息", detail: "能力 · TTS、ASR、音色与语音通话设置", keywords: ["语音", "tts", "asr", "音色", "声音", "通话", "语音通话"], icon: "sliders", target: { view: "capabilities", capabilityPage: "detail", capabilityCategory: "create", capabilityId: "voice-message" } }),
   item({ id: "image-vision", title: "图像理解", detail: "能力 · 图片理解 API 与读取偏好", keywords: ["图像理解", "图片理解", "看图", "识图"], icon: "sliders", target: { view: "capabilities", capabilityPage: "detail", capabilityCategory: "perceive", capabilityId: "image-vision" } }),
   item({ id: "video-understanding", title: "视频理解", detail: "能力 · 直接把完整视频交给模型", keywords: ["视频理解", "看视频", "视频", "阿里视频"], icon: "sliders", target: { view: "capabilities", capabilityPage: "detail", capabilityCategory: "perceive", capabilityId: "video-understanding" } }),
   item({ id: "settings", title: "设置", detail: "软件 · 常规", keywords: ["偏好", "软件设置", "选项"], icon: "gear", target: { view: "settings", settingsTab: "general" }, featured: true }),
   item({ id: "appearance", title: "外观", detail: "设置 · 常规", keywords: ["主题", "浅色", "深色", "颜色"], icon: "gear", target: { view: "settings", settingsTab: "general" } }),
+  item({ id: "wallpaper", title: "壁纸", detail: "设置 · 壁纸", keywords: ["背景", "动态壁纸", "视频壁纸", "自定义壁纸", "wallpaper engine"], icon: "gear", target: { view: "settings", settingsTab: "wallpaper" } }),
   item({ id: "software-update", title: "软件更新", detail: "设置 · 常规", keywords: ["更新", "版本", "下载", "安装"], icon: "gear", target: { view: "settings", settingsTab: "general" } }),
   item({ id: "api-connections", title: "API 连接", detail: "设置 · API 备注、地址与密钥", keywords: ["api", "接口", "key", "密钥", "base url", "服务地址", "中转", "连接"], icon: "gear", target: { view: "settings", settingsTab: "api" }, featured: true }),
   item({ id: "data-storage", title: "数据存储位置", detail: "设置 · 数据", keywords: ["数据", "目录", "工作目录", "缓存", "迁移"], icon: "gear", target: { view: "settings", settingsTab: "data" } }),

@@ -5,7 +5,7 @@ import path from "node:path";
 import { resolveAgentDataRoot } from "@suzu-lives/agent-registry";
 import { resolveImageGenerationApiConnection } from "@suzu-lives/agent-image-generation";
 import { appendUsageEvent } from "@suzu-lives/cost-ledger";
-import { createCandidates, readCandidate, readRuns } from "@suzu-lives/image-workbench";
+import { createCandidates, imageReferenceCapability, readCandidate, readRuns } from "@suzu-lives/image-workbench";
 import {
   createVisualReferenceLibrary,
   resolveAgentVisualReferenceLibraryRoot,
@@ -30,7 +30,48 @@ function valuesFor(settingsService) {
     dataRoot,
   };
 }
-async function snapshot(settingsService, connectionsService) { const settings = settingsService.load(); const api = await connectionsService.imageApiSnapshot(); if (!settings.agentId || !settings.projectRoot || !existsDirectory(settings.projectRoot)) return { status: "needs-project", api, runs: [] }; const values = valuesFor(settingsService); return { status: "ready", api, runs: await readRuns(values.root) }; }
+function unavailableReferenceCapability(reason) {
+  return {
+    adapter: "none",
+    adapterLabel: "不发送参考图",
+    detail: "",
+    maxReferences: 0,
+    model: "",
+    protocol: "",
+    reason,
+    supported: false,
+  };
+}
+
+function referenceCapabilityForConnection(connection) {
+  return imageReferenceCapability({
+    connection,
+    customImageGenerationAdapter: connection?.customImageGenerationAdapter,
+    imageGenerationAdapter: connection?.imageGenerationAdapter,
+    referenceImageAdapter: connection?.referenceImageAdapter,
+    referenceImageModel: connection?.referenceImageModel,
+  });
+}
+
+export async function imageWorkbenchReferenceCapability({ connection, dataRoot }) {
+  const configured = await configuredImageWorkbenchConnection({ connection, dataRoot });
+  return referenceCapabilityForConnection(configured);
+}
+
+async function snapshot(settingsService, connectionsService) {
+  const settings = settingsService.load();
+  const dataRoot = settingsService.response(settings).dataRoot;
+  const api = await connectionsService.imageApiSnapshot();
+  let referenceCapability;
+  try {
+    referenceCapability = await imageWorkbenchReferenceCapability({ connection: await connectionsService.resolveImageApi(), dataRoot });
+  } catch (error) {
+    referenceCapability = unavailableReferenceCapability(`无法读取当前模型的参考图适配器：${String(error?.message || "配置无效。").trim()}`);
+  }
+  if (!settings.agentId || !settings.projectRoot || !existsDirectory(settings.projectRoot)) return { status: "needs-project", api, referenceCapability, runs: [] };
+  const values = valuesFor(settingsService);
+  return { status: "ready", api, referenceCapability, runs: await readRuns(values.root) };
+}
 function selectedReference(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("参考图必须明确包含资料归属和 ID。 ");
   const scope = String(value.scope || "").trim();
@@ -75,7 +116,15 @@ export function registerImageWorkbenchIpc({
 }) {
   ipcMain.handle("image-workbench:snapshot", () => snapshot(settingsService, connectionsService));
   ipcMain.handle("image-workbench:generate", async (_event, input) => {
-    const values = valuesFor(settingsService); const api = await configuredImageWorkbenchConnection({ connection: await connectionsService.resolveImageApi(), dataRoot: values.dataRoot }); const references = await selectedReferences(values.libraries, input?.referenceIds || []);
+    const values = valuesFor(settingsService);
+    const api = await configuredImageWorkbenchConnection({ connection: await connectionsService.resolveImageApi(), dataRoot: values.dataRoot });
+    const referenceCapability = referenceCapabilityForConnection(api);
+    const requestedReferenceIds = input?.referenceIds;
+    if (Array.isArray(requestedReferenceIds) && requestedReferenceIds.length && !referenceCapability.supported) throw new Error(referenceCapability.reason);
+    if (Array.isArray(requestedReferenceIds) && requestedReferenceIds.length > referenceCapability.maxReferences) {
+      throw new Error(`模型“${referenceCapability.model}”使用“${referenceCapability.adapterLabel}”时最多可发送 ${referenceCapability.maxReferences} 张参考图；本次选择了 ${requestedReferenceIds.length} 张。请减少参考图，或改用支持更多参考图的模型适配器。`);
+    }
+    const references = await selectedReferences(values.libraries, requestedReferenceIds || []);
     await createCandidates({
       root: values.root,
       connection: api,

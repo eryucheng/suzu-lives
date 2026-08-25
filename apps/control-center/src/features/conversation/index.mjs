@@ -14,6 +14,7 @@ import {
 import { getAgentProfile, getIdentity, profileInitial } from "../../core/identity.mjs";
 import { endActiveConversationCall } from "../../react/conversation-call-coordinator.mjs";
 import { parseSuzuConversationCommand } from "../../../shared/conversation-command.mjs";
+import { PRODUCT_FEATURES } from "../../../shared/product-features.mjs";
 import {
   hasConversationMarkdownFormatting,
   splitConversationReplyBuffer,
@@ -38,6 +39,7 @@ const viewState = {
   error: "",
   focus: null,
   lastVersion: null,
+  livePresentationOrder: 0,
   liveReplies: new Map(),
   liveTools: [],
   historyLoadingOlder: false,
@@ -53,6 +55,9 @@ const viewState = {
   pending: [],
   pendingLoad: null,
   permissions: new Map(),
+  replyFinalizationContexts: new Map(),
+  replyFinalizing: new Set(),
+  replyRevealTimers: new Map(),
   search: null,
   searchCategory: "messages",
   searchError: "",
@@ -74,6 +79,9 @@ const viewState = {
   wechatSnapshot: null,
   wechatQrOpen: false,
   wechatUnsubscribe: null,
+  qqSnapshot: null,
+  qqBindingOpen: false,
+  qqUnsubscribe: null,
 };
 
 const TRANSCRIPT_MATCH_GRACE_MS = 5_000;
@@ -85,6 +93,8 @@ const CLIPBOARD_IMAGE_EXTENSION_BY_MIME = Object.freeze({
   "image/png": "png",
   "image/webp": "webp",
 });
+const COPYABLE_IMAGE_MEDIA_KINDS = new Set(["image", "sticker"]);
+export const COMPLETED_REPLY_BUBBLE_INTERVAL_MS = 300;
 
 // Direct terminal work should be inspectable in the normal chat flow.  Other
 // optional diagnostic blocks remain opt-in, but tool calls/results are shown
@@ -96,6 +106,11 @@ const CENTER_TIME_GAP_MS = 5 * 60 * 1_000;
 // the client state and row projection from growing without bound as a person
 // repeatedly loads older pages.
 export const CONVERSATION_MESSAGE_WINDOW_MAX = 720;
+
+function nextLivePresentationOrder() {
+  viewState.livePresentationOrder += 1;
+  return viewState.livePresentationOrder;
+}
 
 function preferences(settings) {
   return { ...defaults, ...(settings?.conversationPreferences || {}) };
@@ -219,8 +234,25 @@ function fileContextMenuPosition(point = {}) {
   return contextMenuPosition(point, { height: 112, width: 176 });
 }
 
-function messageContextMenuPosition(point = {}) {
-  return contextMenuPosition(point, { height: 64, width: 176 });
+function messageContextMenuPosition(point = {}, itemCount = 1) {
+  return contextMenuPosition(point, { height: Math.max(64, 12 + Math.max(1, Number(itemCount) || 1) * 42), width: 176 });
+}
+
+function messageTextForCopy(row) {
+  return (Array.isArray(row?.blocks) ? row.blocks : [])
+    .filter((block) => block?.type === "text")
+    .map((block) => String(block.text ?? ""))
+    .filter((text) => text.trim())
+    .join("\n\n");
+}
+
+function messageImagesForCopy(row) {
+  return (Array.isArray(row?.blocks) ? row.blocks : [])
+    .filter((block) => block?.type === "media" && COPYABLE_IMAGE_MEDIA_KINDS.has(clean(block.mediaKind)) && clean(block.fileUrl))
+    .map((block) => ({
+      fileName: clean(block.fileName) || "图片",
+      fileUrl: clean(block.fileUrl),
+    }));
 }
 
 function sameProjectRoot(left, right) {
@@ -372,16 +404,72 @@ function timestampsFollowAppendOrder(items) {
   return true;
 }
 
-function insertLiveReplyAtTimestamp(items, reply) {
-  const timestamp = Date.parse(reply?.timestamp);
-  if (!Number.isFinite(timestamp)) return [...items, reply];
+function insertMessageAtTimestamp(items, message) {
+  const timestamp = Date.parse(message?.timestamp);
+  if (!Number.isFinite(timestamp)) return [...items, message];
   const index = items.findIndex((item) => {
     const itemTimestamp = Date.parse(item?.timestamp);
     return Number.isFinite(itemTimestamp) && itemTimestamp > timestamp;
   });
   return index < 0
-    ? [...items, reply]
-    : [...items.slice(0, index), reply, ...items.slice(index)];
+    ? [...items, message]
+    : [...items.slice(0, index), message, ...items.slice(index)];
+}
+
+function optionalTimelineSequence(item) {
+  const value = item?.coreSequence ?? item?.lineNumber;
+  if (value === null || value === undefined || value === "") return null;
+  const sequence = Number(value);
+  return Number.isSafeInteger(sequence) && sequence >= 0 ? sequence : null;
+}
+
+function optionalPresentationOrder(item) {
+  const value = item?.presentationOrder;
+  if (value === null || value === undefined || value === "") return null;
+  const order = Number(value);
+  return Number.isSafeInteger(order) && order >= 0 ? order : null;
+}
+
+function compareLivePresentationMessages(left, right) {
+  const leftSequence = optionalTimelineSequence(left);
+  const rightSequence = optionalTimelineSequence(right);
+  if (leftSequence !== null && rightSequence !== null && leftSequence !== rightSequence) {
+    return leftSequence - rightSequence;
+  }
+  const leftOrder = optionalPresentationOrder(left);
+  const rightOrder = optionalPresentationOrder(right);
+  if (leftOrder !== null && rightOrder !== null && leftOrder !== rightOrder) {
+    return leftOrder - rightOrder;
+  }
+  const leftTimestamp = Date.parse(left?.timestamp);
+  const rightTimestamp = Date.parse(right?.timestamp);
+  if (Number.isFinite(leftTimestamp) && Number.isFinite(rightTimestamp) && leftTimestamp !== rightTimestamp) {
+    return leftTimestamp - rightTimestamp;
+  }
+  return 0;
+}
+
+function orderedLivePresentationMessages(items) {
+  return (Array.isArray(items) ? items : [])
+    .map((item, index) => ({ index, item }))
+    .sort((left, right) => compareLivePresentationMessages(left.item, right.item) || left.index - right.index)
+    .map(({ item }) => item);
+}
+
+function insertLivePresentationMessage(items, message) {
+  const sequence = optionalTimelineSequence(message);
+  if (sequence !== null) {
+    const index = items.findIndex((item) => {
+      const itemSequence = optionalTimelineSequence(item);
+      return itemSequence !== null && itemSequence > sequence;
+    });
+    return index < 0
+      ? [...items, message]
+      : [...items.slice(0, index), message, ...items.slice(index)];
+  }
+  return timestampsFollowAppendOrder(items)
+    ? insertMessageAtTimestamp(items, message)
+    : [...items, message];
 }
 
 function insertPendingMessageAtTimestamp(items, message) {
@@ -462,6 +550,12 @@ function anchorPendingUsersInTranscript(source, pendingItems) {
 }
 
 function liveReplySentences(item) {
+  const sentences = allLiveReplySentences(item);
+  const visibleCount = visibleLiveReplySentenceCount(item, sentences.length);
+  return sentences.slice(0, visibleCount);
+}
+
+function allLiveReplySentences(item) {
   // Projected live replies always carry `sentences`: an empty array means the
   // current token buffer is intentionally still hidden. The content fallback
   // is only for older/foreign reply records that predate sentence projection.
@@ -470,6 +564,62 @@ function liveReplySentences(item) {
   }
   const fallback = String(item?.content ?? "");
   return clean(fallback) ? [fallback] : [];
+}
+
+function liveReplySentenceTimelineMetadata(item, index) {
+  const timeline = Array.isArray(item?.sentenceTimeline) ? item.sentenceTimeline : [];
+  const entry = timeline[index];
+  const timestamp = clean(entry?.timestamp) || clean(item?.timestamp);
+  const coreSequence = optionalTimelineSequence(entry) ?? optionalTimelineSequence(item);
+  const presentationOrder = optionalPresentationOrder(entry) ?? optionalPresentationOrder(item);
+  return {
+    ...(timestamp ? { timestamp } : {}),
+    ...(coreSequence === null ? {} : { coreSequence }),
+    ...(presentationOrder === null ? {} : { presentationOrder }),
+  };
+}
+
+function liveReplyEventTimelineMetadata(event, fallbackTimestamp = "") {
+  const timestamp = clean(event?.timestamp) || clean(fallbackTimestamp) || new Date().toISOString();
+  const coreSequence = optionalTimelineSequence(event);
+  const presentationOrder = optionalPresentationOrder(event);
+  return {
+    timestamp,
+    ...(coreSequence === null ? {} : { coreSequence }),
+    ...(presentationOrder === null ? {} : { presentationOrder }),
+  };
+}
+
+function reconcileLiveReplySentenceTimeline(previous, sentences, event) {
+  const previousSentences = allLiveReplySentences(previous);
+  return sentences.map((text, index) => (
+    previousSentences[index] === text
+      ? liveReplySentenceTimelineMetadata(previous, index)
+      : liveReplyEventTimelineMetadata(event, liveReplyTimestamp(previous, event))
+  ));
+}
+
+function visibleLiveReplySentenceCount(item, total) {
+  const configured = Number(item?.visibleSentenceCount);
+  if (!Number.isSafeInteger(configured)) return total;
+  return Math.min(Math.max(configured, 0), total);
+}
+
+function hasHiddenLiveReplySentences(item) {
+  const sentences = allLiveReplySentences(item);
+  return visibleLiveReplySentenceCount(item, sentences.length) < sentences.length;
+}
+
+function withVisibleLiveReplySentences(previous, next) {
+  if (!next) return null;
+  const sentences = allLiveReplySentences(next);
+  const priorVisible = previous
+    ? visibleLiveReplySentenceCount(previous, allLiveReplySentences(previous).length)
+    : 0;
+  const visibleSentenceCount = sentences.length
+    ? Math.min(sentences.length, Math.max(priorVisible, 1))
+    : 0;
+  return { ...next, visibleSentenceCount };
 }
 
 function liveReplyValues(value) {
@@ -490,19 +640,24 @@ export function companionPeerLabel(contactName, activeSessionId = "", liveReplyI
 
 function liveReplyMessages(item) {
   const id = clean(item?.requestId) || "reply";
-  return liveReplySentences(item).map((text, index) => ({
-    // This message only exists while the live reply is being projected. Mark
-    // it as new so the renderer can play one entrance animation on mount.
-    animateIn: true,
-    id: `reply-${id}-sentence-${index + 1}`,
-    kind: "assistant",
-    sourceMessageId: `reply-${id}`,
-    // A bubble only enters this projection after a whole sentence is ready,
-    // so it must never use the token-streaming visual treatment.
-    streaming: false,
-    timestamp: item.timestamp,
-    blocks: [{ kind: "text", text }],
-  }));
+  return liveReplySentences(item).map((text, index) => {
+    const timeline = liveReplySentenceTimelineMetadata(item, index);
+    return {
+      // This message only exists while the live reply is being projected. Mark
+      // it as new so the renderer can play one entrance animation on mount.
+      animateIn: true,
+      id: `reply-${id}-sentence-${index + 1}`,
+      kind: "assistant",
+      sourceMessageId: `reply-${id}`,
+      // A bubble only enters this projection after a whole sentence is ready,
+      // so it must never use the token-streaming visual treatment.
+      streaming: false,
+      timestamp: timeline.timestamp || item.timestamp,
+      ...(timeline.coreSequence === undefined ? {} : { coreSequence: timeline.coreSequence }),
+      ...(timeline.presentationOrder === undefined ? {} : { presentationOrder: timeline.presentationOrder }),
+      blocks: [{ kind: "text", text }],
+    };
+  });
 }
 
 export function mergeConversationMessages(items, pendingItems = [], liveReplyItems = new Map(), activeSessionId = "", transientSystemMessages = [], transientToolMessages = []) {
@@ -517,10 +672,7 @@ export function mergeConversationMessages(items, pendingItems = [], liveReplyIte
       && (!clean(item.content) || !messageMatches(source, "assistant", item.content, item.timestamp))
     ))
     .flatMap(liveReplyMessages);
-  const localMessages = [
-    ...(Array.isArray(transientSystemMessages) ? transientSystemMessages : []),
-    ...(Array.isArray(transientToolMessages) ? transientToolMessages : []),
-  ].filter((item) => (
+  const visibleLocalMessage = (item) => (
     ["assistant", "system"].includes(item?.kind)
       && clean(item.sessionId) === sessionId
       && hasDisplayableBlock(item)
@@ -528,18 +680,21 @@ export function mergeConversationMessages(items, pendingItems = [], liveReplyIte
       // system row, then arrives durably from Agent Core.  Retire only that
       // exact local duplicate once the stored conversation has caught up.
       && (item.kind !== "system" || !messageMatches(source, "system", messageText(item), item.timestamp))
-  ));
+  );
+  // Call markers use their existing local append behavior until Agent Core
+  // persists them. Tool rows and streamed text instead share one Core event
+  // timeline, so a response can remain between the tool events that surround it.
+  const transientSystemRows = (Array.isArray(transientSystemMessages) ? transientSystemMessages : [])
+    .filter(visibleLocalMessage);
+  const transientToolRows = (Array.isArray(transientToolMessages) ? transientToolMessages : [])
+    .filter(visibleLocalMessage);
   // Keep the pending send timestamp as an anchor both before and after the
   // same user message becomes durable. This protects the human-facing order
   // when Agent Core writes its input event later than its first assistant step.
   const sourceWithPending = anchorPendingUsersInTranscript(source, pending);
-  const appended = [...sourceWithPending, ...localMessages];
-  // Source rows are already in the transcript's append order.  Preserve that
-  // order for special turns such as calls; only place a local unfinished reply
-  // back between normal chronological rows so a later message can push it up.
-  return timestampsFollowAppendOrder(appended)
-    ? liveReplies.reduce((result, reply) => insertLiveReplyAtTimestamp(result, reply), appended)
-    : [...appended, ...liveReplies];
+  const baseTimeline = [...sourceWithPending, ...transientSystemRows];
+  return orderedLivePresentationMessages([...transientToolRows, ...liveReplies])
+    .reduce((timeline, message) => insertLivePresentationMessage(timeline, message), baseTimeline);
 }
 
 function displayedMessages(items) {
@@ -617,7 +772,7 @@ export function projectedLiveReply(previous, event, { final = false } = {}) {
       sentences: Array.isArray(previous?.sentences) ? previous.sentences : [],
     }
     : splitCompanionReplyBuffer(content, { final });
-  const previousCount = Array.isArray(previous?.sentences) ? previous.sentences.length : 0;
+  const previousCount = allLiveReplySentences(previous).length;
   const deliveredNewSentence = delivery.sentences.length > previousCount;
   return {
     ...previous,
@@ -627,6 +782,7 @@ export function projectedLiveReply(previous, event, { final = false } = {}) {
     remainder: delivery.remainder,
     requestId: clean(event?.requestId) || clean(previous?.requestId),
     sentences: delivery.sentences,
+    sentenceTimeline: reconcileLiveReplySentenceTimeline(previous, delivery.sentences, event),
     sessionId: clean(event?.sessionId) || clean(previous?.sessionId),
     timestamp: liveReplyTimestamp(previous, event),
   };
@@ -650,7 +806,7 @@ export function liveReplyPresentationChanged(previous, next) {
     || liveReplyMessagesChanged(previous, next);
 }
 
-function finishedLiveReply(reply) {
+function finishedLiveReply(reply, event = {}) {
   if (!reply) return null;
   if (reply.done === true) return reply;
   const delivery = splitCompanionReplyBuffer(reply.content, { final: true });
@@ -660,7 +816,90 @@ function finishedLiveReply(reply) {
     phase: "idle",
     remainder: delivery.remainder,
     sentences: delivery.sentences,
+    sentenceTimeline: reconcileLiveReplySentenceTimeline(reply, delivery.sentences, event),
   };
+}
+
+function replyRevealSetTimeout(callback) {
+  if (typeof window !== "undefined" && typeof window.setTimeout === "function") {
+    return window.setTimeout(callback, COMPLETED_REPLY_BUBBLE_INTERVAL_MS);
+  }
+  return globalThis.setTimeout(callback, COMPLETED_REPLY_BUBBLE_INTERVAL_MS);
+}
+
+function clearReplyRevealTimeout(timer) {
+  if (typeof window !== "undefined" && typeof window.clearTimeout === "function") {
+    window.clearTimeout(timer);
+    return;
+  }
+  globalThis.clearTimeout(timer);
+}
+
+function clearReplyReveal(requestId) {
+  const timer = viewState.replyRevealTimers.get(requestId);
+  if (timer !== undefined) clearReplyRevealTimeout(timer);
+  viewState.replyRevealTimers.delete(requestId);
+  viewState.replyFinalizationContexts.delete(requestId);
+  viewState.replyFinalizing.delete(requestId);
+}
+
+function clearReplyReveals() {
+  for (const requestId of viewState.replyRevealTimers.keys()) clearReplyReveal(requestId);
+  viewState.replyFinalizationContexts.clear();
+  viewState.replyFinalizing.clear();
+}
+
+function finishCompletedLiveReply(requestId) {
+  const reply = viewState.liveReplies.get(requestId);
+  if (!reply?.done || hasHiddenLiveReplySentences(reply)) return;
+  const finalizationContext = viewState.replyFinalizationContexts.get(requestId);
+  if (!finalizationContext || viewState.replyFinalizing.has(requestId)) return;
+  viewState.replyFinalizationContexts.delete(requestId);
+  viewState.replyFinalizing.add(requestId);
+  void load(finalizationContext, true)
+    .then((loaded) => {
+      if (loaded === true) viewState.liveReplies.delete(requestId);
+    })
+    .finally(() => {
+      viewState.replyFinalizing.delete(requestId);
+      viewState.liveTools = viewState.liveTools.filter((item) => item.requestId !== requestId);
+      finalizationContext.render();
+    });
+}
+
+function scheduleLiveReplyReveal(context, requestId) {
+  const reply = viewState.liveReplies.get(requestId);
+  if (!reply) return;
+  if (!hasHiddenLiveReplySentences(reply)) {
+    finishCompletedLiveReply(requestId);
+    return;
+  }
+  if (viewState.replyRevealTimers.has(requestId)) return;
+  const timer = replyRevealSetTimeout(() => {
+    viewState.replyRevealTimers.delete(requestId);
+    const current = viewState.liveReplies.get(requestId);
+    if (!current || !hasHiddenLiveReplySentences(current)) {
+      finishCompletedLiveReply(requestId);
+      return;
+    }
+    const total = allLiveReplySentences(current).length;
+    const next = {
+      ...current,
+      phase: current.done ? current.phase : "delivering",
+      visibleSentenceCount: Math.min(total, visibleLiveReplySentenceCount(current, total) + 1),
+    };
+    const messagesChanged = liveReplyMessagesChanged(current, next);
+    const presentationChanged = liveReplyPresentationChanged(current, next);
+    viewState.liveReplies.set(requestId, next);
+    if (messagesChanged) {
+      if (!viewState.shouldStickToLatest) viewState.unread = true;
+      scheduleScrollToLatest();
+    }
+    if (presentationChanged) context.render();
+    if (hasHiddenLiveReplySentences(next)) scheduleLiveReplyReveal(context, requestId);
+    else finishCompletedLiveReply(requestId);
+  });
+  viewState.replyRevealTimers.set(requestId, timer);
 }
 
 export function splitAssistantMessageOnBlankLines(message) {
@@ -750,12 +989,22 @@ function messageBlock(value, prefs, message) {
   }
   if (value.kind === "thinking" && !prefs.thinking) return null;
   if ((value.kind === "tool_use" || value.kind === "tool_result") && !prefs.tools) return null;
+  const toolBlock = value.kind === "tool_use" || value.kind === "tool_result";
+  const toolName = clean(value.name) || "工具";
   const title = value.kind === "thinking"
     ? `思考 · ${value.preview || ""}`
     : value.kind === "tool_use"
-      ? `工具调用 · ${value.name}${value.summary ? ` · ${value.summary}` : ""}`
+      ? `工具调用 · ${toolName}${value.summary ? ` · ${value.summary}` : ""}`
       : `${value.error ? "工具结果（错误）" : "工具结果"}${value.summary ? ` · ${value.summary}` : ""}`;
-  return { detail: String(value.text || value.detail || ""), title, type: "detail" };
+  return {
+    detail: String(value.text || value.detail || value.summary || ""),
+    title,
+    type: "detail",
+    ...(toolBlock ? {
+      detailKind: value.kind,
+      ...(value.error ? { error: true } : {}),
+    } : {}),
+  };
 }
 
 function usagePayload(value) {
@@ -804,6 +1053,7 @@ function messageRow(message, context, showTimestamp = true) {
       : null;
   const blocks = messageBlocks(message, prefs);
   const mediaOnly = message.blocks.length === 1 && message.blocks[0]?.kind === "media";
+  const audioOnly = blocks.length === 1 && blocks[0]?.type === "audio";
   const usageMeta = prefs.tokens && message.kind === "assistant" ? usagePayload(message.usage) : null;
   if (!blocks.length && !usageMeta) return null;
   const timestamp = showTimestamp && message.timestamp ? dateTime(message.timestamp) : "";
@@ -815,6 +1065,7 @@ function messageRow(message, context, showTimestamp = true) {
   const focused = (lineNumber && lineNumber === focusLineNumber) || (sourceMessageId && sourceMessageId === focusMessageId);
   return {
     anchorId,
+    audioOnly,
     avatar: profile ? avatarPayload(profile, profile.displayName) : null,
     blocks,
     deletable: Boolean(
@@ -834,6 +1085,60 @@ function messageRow(message, context, showTimestamp = true) {
     type: "message",
     usage: usageMeta,
   };
+}
+
+function isToolActivityBlock(block) {
+  return block?.type === "detail" && ["tool_use", "tool_result"].includes(block.detailKind);
+}
+
+function isToolActivityMessageRow(row) {
+  return row?.type === "message"
+    && row.kind === "assistant"
+    && !row.usage
+    && Array.isArray(row.blocks)
+    && row.blocks.length > 0
+    && row.blocks.every(isToolActivityBlock);
+}
+
+// Keep the transcript model granular for ordering, search, and persistence,
+// then collapse only adjacent tool-only rows for the shared React renderer.
+// This also makes the compact tool presentation available in the software
+// assistant, which reuses ConversationMessageList with its own message rows.
+export function groupConversationToolActivityRows(rows) {
+  const grouped = [];
+  let current = null;
+  for (const row of Array.isArray(rows) ? rows : []) {
+    if (!isToolActivityMessageRow(row)) {
+      current = null;
+      grouped.push(row);
+      continue;
+    }
+    if (!current) {
+      current = {
+        anchorId: row.anchorId,
+        entries: [],
+        entering: Boolean(row.entering),
+        focused: Boolean(row.focused),
+        lineNumber: row.lineNumber,
+        live: Boolean(row.live),
+        sourceMessageId: row.sourceMessageId,
+        timestamp: row.timestamp,
+        type: "tool-group",
+      };
+      grouped.push(current);
+    }
+    current.entries.push(...row.blocks.map((block) => ({
+      ...block,
+      anchorId: row.anchorId,
+      focused: Boolean(row.focused),
+      lineNumber: row.lineNumber,
+      sourceMessageId: row.sourceMessageId,
+    })));
+    current.entering ||= Boolean(row.entering);
+    current.focused ||= Boolean(row.focused);
+    current.live ||= Boolean(row.live);
+  }
+  return grouped;
 }
 
 export function conversationMessageRows(items, context, searched = false) {
@@ -1054,6 +1359,7 @@ function sessionSettingsSnapshot(context, selected, prefs) {
   const contactName = clean(contact?.name) || clean(selected?.title) || "未命名联系人";
   const agent = getAgentProfile(context.state.settings);
   const wechat = viewState.wechatSnapshot;
+  const qq = viewState.qqSnapshot;
   // The WeChat connector is scoped by contact ID. Its snapshot deliberately
   // exposes the selected contact link as `contact`, not the Agent session.
   const connection = wechat?.contact || null;
@@ -1070,8 +1376,29 @@ function sessionSettingsSnapshot(context, selected, prefs) {
     : connection
       ? { enabled: Boolean(connection.enabled), type: "connection" }
       : pendingQr
-        ? { type: "pending-qr" }
-        : { type: "begin" };
+      ? { type: "pending-qr" }
+      : { type: "begin" };
+  const qqConnection = qq?.contact || null;
+  const pendingBinding = qq?.pendingBinding || null;
+  const qqBot = qq?.bot || null;
+  const qqConnectionLabel = !qq
+    ? "正在读取 QQ 连接状态"
+    : !qqBot?.configured
+      ? "QQ 机器人尚未配置"
+      : qqConnection
+        ? (qqConnection.enabled ? (qqConnection.status === "connected" ? "已连接" : qqConnection.status === "attention" ? "需要处理" : "已保存，正在恢复") : "这位联系人的 QQ 连接已暂停")
+        : pendingBinding
+          ? "等待在 QQ 中发送绑定码"
+          : "尚未连接";
+  const qqControl = !qq
+    ? null
+    : !qqBot?.configured
+      ? { type: "not-configured" }
+      : qqConnection
+        ? { enabled: Boolean(qqConnection.enabled), type: "connection" }
+        : pendingBinding
+          ? { type: "pending-binding" }
+          : { type: "begin" };
   return {
     contactAvatar: contact ? avatarPayload(agent, contactName) : null,
     contactId,
@@ -1101,6 +1428,14 @@ function sessionSettingsSnapshot(context, selected, prefs) {
       pendingQrError: clean(pendingQr?.error),
       status: connectionLabel,
     } : null,
+    qq: contactId ? {
+      connectionError: clean(qqConnection?.lastError),
+      control: qqControl,
+      enabled: Boolean(qqConnection?.enabled),
+      hint: Boolean(qqConnection),
+      pendingBindingError: "",
+      status: qqConnectionLabel,
+    } : null,
   };
 }
 
@@ -1127,6 +1462,17 @@ function wechatQrSnapshot(contact) {
       ? "已扫码，请在手机微信中确认，并发送一条文字消息。"
       : "请使用要绑定这位联系人的微信扫描二维码。",
     title,
+  };
+}
+
+function qqBindingSnapshot(contact) {
+  const pendingBinding = viewState.qqSnapshot?.pendingBinding;
+  const code = clean(pendingBinding?.code);
+  if (!viewState.qqBindingOpen || !code) return null;
+  return {
+    code,
+    expiresAt: clean(pendingBinding?.expiresAt),
+    title: clean(contact?.name) || "当前联系人",
   };
 }
 
@@ -1256,13 +1602,15 @@ export function conversationReactSnapshot(context) {
   const messageContextMenuState = viewState.messageContextMenu;
   const messageContextMenuRow = messageRows.find((row) => (
     row?.type === "message"
-    && row.deletable
     && Number(row.lineNumber) === Number(messageContextMenuState?.lineNumber)
     && (!clean(messageContextMenuState?.messageId)
       || clean(row.sourceMessageId) === clean(messageContextMenuState?.messageId))
   )) || null;
   const messageContextMenu = messageContextMenuRow
     ? {
+      canDelete: messageContextMenuRow.deletable === true,
+      copyText: messageTextForCopy(messageContextMenuRow),
+      images: messageImagesForCopy(messageContextMenuRow),
       kind: messageContextMenuRow.kind,
       lineNumber: Number(messageContextMenuRow.lineNumber),
       messageId: clean(messageContextMenuRow.sourceMessageId),
@@ -1308,6 +1656,7 @@ export function conversationReactSnapshot(context) {
       contactCreate: viewState.contactCreateOpen,
       contactRename: activeContact ? contactRenameSnapshot() : null,
       mediaPreview: activeContact ? mediaPreviewSnapshot() : null,
+      qqBinding: qqBindingSnapshot(activeContact),
       wechatQr: wechatQrSnapshot(activeContact),
     },
     peer,
@@ -1338,6 +1687,8 @@ function resetSessionSettings() {
   viewState.contactCapabilitiesSnapshot = null;
   viewState.wechatSnapshot = null;
   viewState.wechatQrOpen = false;
+  viewState.qqSnapshot = null;
+  viewState.qqBindingOpen = false;
 }
 
 async function refreshCurrentSessionSettings(context) {
@@ -1348,13 +1699,15 @@ async function refreshCurrentSessionSettings(context) {
   }
   viewState.settingsLoading = true;
   try {
-    const [contactCapabilitiesSnapshot, wechatSnapshot] = await Promise.all([
+    const [contactCapabilitiesSnapshot, wechatSnapshot, qqSnapshot] = await Promise.all([
       context.api.capabilities?.snapshot ? context.api.capabilities.snapshot() : null,
       context.api.wechat?.snapshot ? context.api.wechat.snapshot({ contactId }) : null,
+      context.api.qq?.snapshot ? context.api.qq.snapshot({ contactId }) : null,
     ]);
     if (clean(viewState.snapshot?.activeContact?.id) !== contactId) return;
     viewState.contactCapabilitiesSnapshot = contactCapabilitiesSnapshot;
     viewState.wechatSnapshot = wechatSnapshot;
+    viewState.qqSnapshot = qqSnapshot;
   } catch (error) {
     if (clean(viewState.snapshot?.activeContact?.id) === contactId) {
       viewState.error = `读取联系人设置失败：${error?.message || error}`;
@@ -1720,13 +2073,19 @@ function handleConversationEvent(context, event) {
     const phase = clean(event.phase);
     const toolName = clean(event.toolName) || "Agent 工具";
     const isStart = phase === "started";
+    const coreSequence = optionalTimelineSequence(event);
+    const presentationOrder = nextLivePresentationOrder();
+    const callId = clean(event.callId);
     viewState.liveTools.push({
       animateIn: true,
       blocks: [isStart
         ? { kind: "tool_use", name: toolName, summary: content.slice(0, 80), detail: content }
         : { kind: "tool_result", error: phase === "failed", summary: content.slice(0, 80), detail: content }],
-      id: `live-tool-${requestId}-${viewState.liveTools.length + 1}`,
+      id: `live-tool-${requestId}-${coreSequence === null ? `arrival-${presentationOrder}` : `seq-${coreSequence}`}`,
       kind: "assistant",
+      ...(callId ? { callId } : {}),
+      ...(coreSequence === null ? {} : { coreSequence }),
+      presentationOrder,
       requestId,
       sessionId,
       timestamp: clean(event.timestamp) || new Date().toISOString(),
@@ -1769,6 +2128,7 @@ function handleConversationEvent(context, event) {
     viewState.permissions.forEach((item, id) => {
       if (item.sessionId === sessionId) viewState.permissions.delete(id);
     });
+    clearReplyReveal(requestId);
     const reply = viewState.liveReplies.get(requestId);
     if (reply) viewState.liveReplies.set(requestId, { ...reply, done: true, phase: "idle" });
     viewState.notice = "";
@@ -1782,6 +2142,7 @@ function handleConversationEvent(context, event) {
     viewState.permissions.forEach((item, id) => {
       if (item.sessionId === sessionId) viewState.permissions.delete(id);
     });
+    clearReplyReveal(requestId);
     const reply = viewState.liveReplies.get(requestId);
     if (reply) viewState.liveReplies.set(requestId, { ...reply, done: true, phase: "idle" });
     viewState.error = "";
@@ -1792,28 +2153,41 @@ function handleConversationEvent(context, event) {
   }
   if (event?.type === "turn-complete" && requestId && sessionId) {
     viewState.busySessions.delete(sessionId);
-    const reply = finishedLiveReply(viewState.liveReplies.get(requestId));
+    const previous = viewState.liveReplies.get(requestId);
+    const reply = withVisibleLiveReplySentences(previous, finishedLiveReply(previous, {
+      ...event,
+      presentationOrder: nextLivePresentationOrder(),
+    }));
+    const messagesChanged = liveReplyMessagesChanged(previous, reply);
+    const presentationChanged = liveReplyPresentationChanged(previous, reply);
     if (reply) viewState.liveReplies.set(requestId, reply);
-    context.render();
-    void load(context, true)
-      .then((loaded) => {
-        // Completed assistant steps now live in the durable transcript. Retire
-        // the temporary stream only after that transcript was read successfully.
-        if (loaded === true) viewState.liveReplies.delete(requestId);
-      })
-      .finally(() => {
-        viewState.liveTools = viewState.liveTools.filter((item) => item.requestId !== requestId);
-        context.render();
-      });
+    if (messagesChanged) {
+      if (!viewState.shouldStickToLatest) viewState.unread = true;
+      scheduleScrollToLatest();
+    }
+    if (presentationChanged) context.render();
+    if (reply) {
+      viewState.replyFinalizationContexts.set(requestId, context);
+      scheduleLiveReplyReveal(context, requestId);
+    } else {
+      void load(context, true)
+        .finally(() => {
+          viewState.liveTools = viewState.liveTools.filter((item) => item.requestId !== requestId);
+          context.render();
+        });
+    }
     void context.refreshUsageLedger?.();
     return;
   }
   if (!requestId || !sessionId) return;
   if (event.type === "reply" || event.type === "reply-stream") {
     const previous = viewState.liveReplies.get(requestId);
-    const next = projectedLiveReply(previous, event, {
+    const next = withVisibleLiveReplySentences(previous, projectedLiveReply(previous, {
+      ...event,
+      presentationOrder: nextLivePresentationOrder(),
+    }, {
       final: event.type === "reply" || event.done === true,
-    });
+    }));
     const messagesChanged = liveReplyMessagesChanged(previous, next);
     const presentationChanged = liveReplyPresentationChanged(previous, next);
     viewState.liveReplies.set(requestId, next);
@@ -1822,13 +2196,14 @@ function handleConversationEvent(context, event) {
       scheduleScrollToLatest();
     }
     if (presentationChanged) context.render();
-    if (event.type === "reply" || event.done === true) load(context, true);
+    scheduleLiveReplyReveal(context, requestId);
   }
 }
 
 export function startConversationPolling(context) {
   stopConversationPolling();
   viewState.transientSystemMessages.length = 0;
+  viewState.livePresentationOrder = 0;
   viewState.liveTools = [];
   viewState.historyLoadingOlder = false;
   viewState.historyWindowDetached = false;
@@ -1845,10 +2220,20 @@ export function startConversationPolling(context) {
       }
     });
   }
+  if (typeof context.api.qq?.onEvent === "function") {
+    viewState.qqUnsubscribe = context.api.qq.onEvent((event) => {
+      const activeContactId = clean(viewState.snapshot?.activeContact?.id);
+      if (!activeContactId || !clean(event?.contactId) || clean(event.contactId) === activeContactId) {
+        void refreshCurrentSessionSettings(context);
+      }
+    });
+  }
 }
 
 export function stopConversationPolling() {
   invalidateConversationLoads();
+  clearReplyReveals();
+  viewState.livePresentationOrder = 0;
   if (viewState.timer) window.clearInterval(viewState.timer);
   viewState.timer = null;
   viewState.historyLoadingOlder = false;
@@ -1857,6 +2242,8 @@ export function stopConversationPolling() {
   viewState.unsubscribe = null;
   viewState.wechatUnsubscribe?.();
   viewState.wechatUnsubscribe = null;
+  viewState.qqUnsubscribe?.();
+  viewState.qqUnsubscribe = null;
   viewState.composerFocusRequest = 0;
   viewState.searchFocusRequest = 0;
   viewState.scrollTarget = null;
@@ -1866,7 +2253,7 @@ export function stopConversationPolling() {
 
 export function dismissConversationOverlays(target = viewState) {
   const state = target && typeof target === "object" ? target : viewState;
-  const open = Boolean(state.contactCreateOpen || state.contactContextMenu || state.contactRenameOpen || state.fileContextMenu || state.messageContextMenu || state.menuOpen || state.searchOpen || state.settingsOpen || state.emojiOpen || state.wechatQrOpen || state.mediaPreview || state.avatarCrop);
+  const open = Boolean(state.contactCreateOpen || state.contactContextMenu || state.contactRenameOpen || state.fileContextMenu || state.messageContextMenu || state.menuOpen || state.searchOpen || state.settingsOpen || state.emojiOpen || state.wechatQrOpen || state.qqBindingOpen || state.mediaPreview || state.avatarCrop);
   state.contactCreateOpen = false;
   state.contactContextMenu = null;
   state.contactRenameOpen = false;
@@ -1877,6 +2264,7 @@ export function dismissConversationOverlays(target = viewState) {
   state.settingsOpen = false;
   state.emojiOpen = false;
   state.wechatQrOpen = false;
+  state.qqBindingOpen = false;
   state.mediaPreview = null;
   state.avatarCrop = null;
   return open;
@@ -2164,6 +2552,7 @@ async function openConversationMediaPreviewForItem(context, value = {}) {
 
 function resetConversationForContactChange() {
   invalidateConversationLoads();
+  clearReplyReveals();
   resetSessionSettings();
   releaseComposerAttachmentPreviews(viewState.attachments);
   viewState.attachments = [];
@@ -2246,6 +2635,10 @@ export function createConversationReactActions(context) {
     },
     closeWechatQr: () => {
       viewState.wechatQrOpen = false;
+      context.render();
+    },
+    closeQqBinding: () => {
+      viewState.qqBindingOpen = false;
       context.render();
     },
     confirmAvatarCrop: async (image) => {
@@ -2370,16 +2763,18 @@ export function createConversationReactActions(context) {
     openMessageContextMenu: (row, point) => {
       const lineNumber = Number(row?.lineNumber);
       const kind = clean(row?.kind);
+      const copyText = messageTextForCopy(row);
+      const images = messageImagesForCopy(row);
       if (viewState.sending
-        || row?.deletable !== true
         || !Number.isSafeInteger(lineNumber)
         || lineNumber <= 0
-        || !["user", "assistant", "dynamic-context"].includes(kind)) return;
+        || !["user", "assistant", "dynamic-context"].includes(kind)
+        || (row?.deletable !== true && !copyText && !images.length)) return;
       viewState.messageContextMenu = {
         kind,
         lineNumber,
         messageId: clean(row?.sourceMessageId),
-        ...messageContextMenuPosition(point),
+        ...messageContextMenuPosition(point, Number(row?.deletable === true) + Number(Boolean(copyText)) + images.length),
       };
       viewState.contactContextMenu = null;
       viewState.fileContextMenu = null;
@@ -2400,6 +2795,35 @@ export function createConversationReactActions(context) {
         viewState.notice = `已复制“${fileName}”，可在资源管理器中粘贴。`;
       } catch (error) {
         viewState.error = `无法复制附件：${error?.message || error}`;
+      }
+      context.render();
+    },
+    copyMessageText: async (message) => {
+      const text = String(message?.copyText ?? "");
+      if (!text.trim() || !context.api.conversation.copyMessageText) return;
+      viewState.messageContextMenu = null;
+      context.render();
+      try {
+        await context.api.conversation.copyMessageText({ text });
+        viewState.error = "";
+        viewState.notice = "已复制消息。";
+      } catch (error) {
+        viewState.error = `无法复制消息：${error?.message || error}`;
+      }
+      context.render();
+    },
+    copyMediaImage: async (image) => {
+      const fileUrl = clean(image?.fileUrl);
+      if (!fileUrl || !context.api.conversation.copyMediaImage) return;
+      const fileName = clean(image?.fileName) || "图片";
+      viewState.messageContextMenu = null;
+      context.render();
+      try {
+        await context.api.conversation.copyMediaImage({ fileUrl });
+        viewState.error = "";
+        viewState.notice = `已复制“${fileName}”，可直接粘贴。`;
+      } catch (error) {
+        viewState.error = `无法复制图片：${error?.message || error}`;
       }
       context.render();
     },
@@ -2887,6 +3311,18 @@ export function createConversationReactActions(context) {
       }
       context.render();
     },
+    setQqContactEnabled: async (contactId, enabled) => {
+      const id = clean(contactId);
+      if (!id || !context.api.qq?.setContactEnabled) return;
+      try {
+        viewState.qqSnapshot = await context.api.qq.setContactEnabled({ contactId: id, enabled: Boolean(enabled) });
+        viewState.error = "";
+        viewState.notice = enabled ? "这位联系人已恢复 QQ 消息。" : "这位联系人的 QQ 消息已暂停。";
+      } catch (error) {
+        viewState.error = `无法更新联系人 QQ 连接：${error?.message || error}`;
+      }
+      context.render();
+    },
     startWechat: async (contactId) => {
       const id = clean(contactId);
       if (!id || !context.api.wechat?.begin) return;
@@ -2897,6 +3333,19 @@ export function createConversationReactActions(context) {
         viewState.notice = "微信二维码已生成。扫码后请发一条文字消息确认已绑定这位联系人。";
       } catch (error) {
         viewState.error = `无法生成微信二维码：${error?.message || error}`;
+      }
+      context.render();
+    },
+    startQq: async (contactId) => {
+      const id = clean(contactId);
+      if (!id || !context.api.qq?.begin) return;
+      try {
+        viewState.qqSnapshot = await context.api.qq.begin({ contactId: id });
+        viewState.qqBindingOpen = true;
+        viewState.error = "";
+        viewState.notice = "QQ 绑定码已生成。请在 QQ 机器人里发送这串绑定码。";
+      } catch (error) {
+        viewState.error = `无法生成 QQ 绑定码：${error?.message || error}`;
       }
       context.render();
     },
@@ -2956,6 +3405,10 @@ export function createConversationReactActions(context) {
       viewState.wechatQrOpen = true;
       context.render();
     },
+    viewQqBinding: () => {
+      viewState.qqBindingOpen = true;
+      context.render();
+    },
     disconnectWechat: async (contactId) => {
       const id = clean(contactId);
       if (!id || !context.api.wechat?.disconnect) return;
@@ -2969,41 +3422,54 @@ export function createConversationReactActions(context) {
       }
       context.render();
     },
+    disconnectQq: async (contactId) => {
+      const id = clean(contactId);
+      if (!id || !context.api.qq?.disconnect) return;
+      if (!window.confirm("断开后，这个 QQ 账号将不再进入当前联系人的固定 Suzu 对话。确定断开吗？")) return;
+      try {
+        viewState.qqSnapshot = await context.api.qq.disconnect({ contactId: id, confirmed: true });
+        viewState.qqBindingOpen = false;
+        viewState.error = "";
+        viewState.notice = "当前联系人的 QQ 连接已断开。";
+      } catch (error) {
+        viewState.error = `无法断开 QQ：${error?.message || error}`;
+      }
+      context.render();
+    },
     insertEmoji: (emoji) => {
       viewState.draft = `${viewState.draft}${String(emoji || "")}`;
       viewState.emojiOpen = false;
       focusComposer();
       context.render();
     },
-    loadEmojiStickers: async () => {
-      const stickers = context.api?.conversation?.emojiStickers;
-      if (typeof stickers?.snapshot !== "function") return { items: [], status: "unavailable" };
-      return stickers.snapshot();
-    },
-    addEmojiSticker: async () => {
-      const stickers = context.api?.conversation?.emojiStickers;
-      if (typeof stickers?.select !== "function" || typeof stickers?.add !== "function") {
-        throw new Error("当前版本无法添加收藏表情包。");
-      }
-      const selection = await stickers.select();
-      if (selection?.canceled) return selection;
-      return stickers.add({ selectionToken: clean(selection?.selectionToken) });
-    },
-    sendEmojiSticker: async (id) => {
-      const stickers = context.api?.conversation?.emojiStickers;
-      if (typeof stickers?.send !== "function") throw new Error("当前版本无法发送收藏表情包。");
-      const result = await stickers.send({ id: clean(id) });
-      viewState.emojiOpen = false;
-      viewState.error = "";
-      viewState.notice = "";
-      reconnectConversationHistoryWindow();
-      viewState.shouldStickToLatest = true;
-      scheduleScrollToLatest();
-      focusComposer();
-      context.render();
-      void load(context, true);
-      return result;
-    },
+    ...(PRODUCT_FEATURES.customEmojiStickers ? {
+      loadEmojiStickers: async () => {
+        const stickers = context.api?.conversation?.emojiStickers;
+        if (typeof stickers?.snapshot !== "function") return { items: [], status: "unavailable" };
+        return stickers.snapshot();
+      },
+      addEmojiSticker: async () => {
+        viewState.emojiOpen = false;
+        context.setView?.("create");
+        context.setCreatePage?.("stickers");
+        return { canceled: true, navigated: true };
+      },
+      sendEmojiSticker: async (id) => {
+        const stickers = context.api?.conversation?.emojiStickers;
+        if (typeof stickers?.send !== "function") throw new Error("当前版本无法发送收藏表情包。");
+        const result = await stickers.send({ id: clean(id) });
+        viewState.emojiOpen = false;
+        viewState.error = "";
+        viewState.notice = "";
+        reconnectConversationHistoryWindow();
+        viewState.shouldStickToLatest = true;
+        scheduleScrollToLatest();
+        focusComposer();
+        context.render();
+        void load(context, true);
+        return result;
+      },
+    } : {}),
     jumpFromMediaPreview: async ({ lineNumber, messageId } = {}) => {
       viewState.mediaPreview = null;
       await focusConversationRecord(context, { lineNumber, messageId });

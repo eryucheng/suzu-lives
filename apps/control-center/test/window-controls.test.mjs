@@ -48,6 +48,7 @@ test("custom window controls live inside the titlebar no-drag region", () => {
   const shell = readFileSync(resolve(HERE, "..", "src", "react", "app-shell.jsx"), "utf8");
   const styles = readFileSync(resolve(HERE, "..", "src", "react", "app-shell.css"), "utf8");
   assert.match(shell, /<header className="topbar shell-topbar">\s*<WindowControls \/>/u);
-  assert.match(styles, /\.shell-topbar\s*\{[^}]*position:relative;[^}]*-webkit-app-region:drag;/su);
+  assert.match(styles, /\.shell-topbar\s*\{[^}]*position:relative;[^}]*z-index:50;[^}]*-webkit-app-region:drag;/su);
+  assert.match(styles, /\.shell-sidebar-resizer\s*\{[^}]*z-index:40;/su);
   assert.match(styles, /\.shell-window-controls\s*\{[^}]*position:absolute;[^}]*-webkit-app-region:no-drag;/su);
 });

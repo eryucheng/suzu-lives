@@ -51,6 +51,27 @@ test("capability Skill loads the matching action contract and no other capabilit
   assert.equal(capabilitySkillForName(actions, "suzu-not-enabled"), null);
 });
 
+test("the generic mail Skill explains how a business mail Skill sends an email", () => {
+  const mailActions = [{
+    capabilityId: "mail-bridge",
+    capabilityName: "邮箱通道",
+    capabilityDescription: "通过已配置的邮箱发送和接收邮件。",
+    action: "send",
+    actionName: "发送邮件",
+    actionDescription: "input 必须包含邮件正文。",
+  }];
+  assert.deepEqual(capabilitySkillCatalog(mailActions), [{
+    name: "suzu-mail-bridge",
+    description: "邮箱通道：通过已配置的邮箱发送和接收邮件。",
+  }]);
+
+  const skill = capabilitySkillForName(mailActions, "suzu-mail-bridge");
+  assert.match(skill.content, /邮件业务 Skill/u);
+  assert.match(skill.content, /先从技能目录读取/u);
+  assert.match(skill.content, /subject: "业务 Skill 指定的主题"/u);
+  assert.doesNotMatch(skill.content, /自动化待办/u);
+});
+
 test("follow-up Skill is available when the current contact can maintain scheduled tasks", () => {
   const scheduleActions = [
     {

@@ -4,8 +4,16 @@
   height:100%;
 }
 
+.desktop-shell {
+  position:relative;
+  isolation:isolate;
+  overflow:hidden;
+  background:var(--surface-app-canvas,var(--bg));
+}
+
 .desktop-shell > .app-shell {
   position:relative;
+  z-index:var(--z-app,10);
   display:grid;
   --shell-command-center-offset:-120px;
   --shell-main-center-offset:120px;
@@ -152,6 +160,9 @@
 
 .shell-topbar {
   position:relative;
+  /* The command field can extend into the sidebar while that sidebar is
+     resized. Keep the entire titlebar above the sidebar and its splitter. */
+  z-index:50;
   display:grid;
   grid-template-columns:minmax(120px,1fr) minmax(280px,620px) minmax(120px,1fr);
   height:var(--shell-topbar-height);
@@ -197,6 +208,60 @@
   background:var(--shell-chrome-bg);
 }
 
+:root[data-ui-style="wallpaper-glass"] .desktop-shell > .app-shell {
+  --shell-chrome-bg:var(--surface-shell-chrome);
+}
+
+:root[data-ui-style="wallpaper-glass"] .shell-sidebar {
+  --text:rgba(249,251,255,.96);
+  --text-secondary:rgba(225,232,244,.82);
+  --text-muted:rgba(207,217,233,.68);
+  --border:rgba(255,255,255,.18);
+  color:var(--text);
+  text-shadow:0 1px 4px rgba(0,0,0,.72);
+}
+
+:root[data-ui-style="wallpaper-glass"] .shell-sidebar,
+:root[data-ui-style="wallpaper-glass"] .shell-topbar,
+:root[data-ui-style="wallpaper-glass"] .shell-bottombar,
+:root[data-ui-style="wallpaper-glass"] .shell-main::before,
+:root[data-ui-style="wallpaper-glass"] .shell-main::after {
+  -webkit-backdrop-filter:var(--surface-backdrop);
+  backdrop-filter:var(--surface-backdrop);
+}
+
+:root[data-ui-style="wallpaper-glass"] .shell-main {
+  position:relative;
+  isolation:isolate;
+  background:var(--surface-shell-main);
+}
+
+:root[data-ui-style="wallpaper-glass"] .shell-main::before,
+:root[data-ui-style="wallpaper-glass"] .shell-main::after {
+  position:absolute;
+  z-index:0;
+  left:0;
+  width:var(--shell-workspace-corner);
+  height:var(--shell-workspace-corner);
+  background:var(--shell-chrome-bg);
+  content:"";
+  pointer-events:none;
+}
+
+:root[data-ui-style="wallpaper-glass"] .shell-main::before {
+  top:var(--shell-topbar-height);
+}
+
+:root[data-ui-style="wallpaper-glass"] .shell-main::after {
+  bottom:var(--shell-bottombar-height);
+}
+
+:root[data-ui-style="wallpaper-glass"] .shell-main > .content {
+  position:relative;
+  z-index:1;
+  background:var(--surface-page);
+}
+
 .shell-topbar-edge { min-width:0; }
 
 .shell-command {
@@ -214,7 +279,7 @@
 
 .shell-window-controls {
   position:absolute;
-  z-index:20;
+  z-index:var(--z-window-controls,20);
   top:0;
   right:0;
   display:flex;
@@ -280,7 +345,7 @@
 
 .notice {
   position:fixed;
-  z-index:110;
+  z-index:var(--z-popover,110);
   pointer-events:none;
   top:calc(var(--shell-topbar-height) + 12px);
   left:calc(50% + var(--shell-main-center-offset));
@@ -297,17 +362,19 @@
 
 .incoming-conversation-notice {
   position:fixed;
-  z-index:111;
+  z-index:calc(var(--z-popover,110) + 1);
   top:calc(var(--shell-topbar-height) + 12px);
-  left:calc(50% + 108px);
+  left:50%;
   right:auto;
   display:flex;
-  width:min(480px,calc(100vw - var(--shell-sidebar-width) - 48px));
+  width:min(480px,calc(100vw - 48px));
   gap:10px;
   align-items:center;
   border:1px solid var(--border);
   border-radius:14px;
-  background:var(--panel);
+  background:var(--surface-overlay,var(--panel));
+  -webkit-backdrop-filter:var(--surface-overlay-backdrop,none);
+  backdrop-filter:var(--surface-overlay-backdrop,none);
   box-shadow:0 14px 34px color-mix(in srgb,#101522 25%,transparent);
   padding:9px 12px;
   transform:translateX(-50%);
@@ -340,7 +407,7 @@
 
 .incoming-voice-call {
   position:fixed;
-  z-index:130;
+  z-index:var(--z-incoming-call,130);
   top:50%;
   left:calc(50% + 108px);
   display:grid;
@@ -520,7 +587,6 @@
 /* Compact navigation is controlled by the shell's state. A narrow window
    starts compact, but the splitter remains available for a manual expansion. */
 @media (max-width:1180px) {
-  .incoming-conversation-notice { top:calc(var(--shell-topbar-height) + 12px); left:calc(50% + 35px); right:auto; width:min(480px,calc(100vw - 104px)); }
   .incoming-voice-call { left:calc(50% + 35px); width:min(360px,calc(100vw - 104px)); }
 }
 

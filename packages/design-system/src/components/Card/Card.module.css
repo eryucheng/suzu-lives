@@ -1,13 +1,16 @@
 /* Card —— 卡片（移植自 Suzu-Lives .panel） */
 
 .card {
+  position: relative;
   min-width: 0;
   padding: 20px;
   overflow: hidden;
-  border: 1px solid var(--border);
+  border: 1px solid var(--surface-border, var(--border));
   border-radius: var(--radius-xl);
-  background: var(--panel);
-  box-shadow: var(--shadow-md);
+  background: var(--surface-card-glaze, none), var(--surface-standard-card, var(--panel));
+  -webkit-backdrop-filter: var(--surface-card-backdrop, none);
+  backdrop-filter: var(--surface-card-backdrop, none);
+  box-shadow: var(--surface-standard-card-shadow, var(--shadow-md));
 }
 
 .header {

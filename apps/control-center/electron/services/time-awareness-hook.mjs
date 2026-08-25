@@ -318,7 +318,7 @@ async function timeAwarenessDetails({
 
 function renderTimeAwarenessText({ dayNoticeNames = [], localTime } = {}) {
   if (!localTime) return "";
-  const base = `你知道现在是${localTime.month}月${localTime.day}日 ${WEEKDAYS[localTime.weekday]} ${pad(localTime.hour)}:${pad(localTime.minute)}。`;
+  const base = `你知道现在是${localTime.year}年${localTime.month}月${localTime.day}日 ${WEEKDAYS[localTime.weekday]} ${pad(localTime.hour)}:${pad(localTime.minute)}。`;
   if (!dayNoticeNames.length) return base;
   return `${base}今天是${dayNoticeNames.map((name, index) => index ? `也是${name}` : name).join("，")}。`;
 }

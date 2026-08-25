@@ -19,6 +19,10 @@
   gap:5px;
 }
 
+.content--conversation .conversation-message.is-audio-only .conversation-audio {
+  transform:translateY(2px);
+}
+
 .content--conversation .conversation-audio > audio { display:none; }
 
 .content--conversation .conversation-audio__button {

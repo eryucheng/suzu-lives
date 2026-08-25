@@ -93,3 +93,150 @@
   --glass-backdrop: 8px;
   --glass-shadow: 0 12px 32px rgba(30,30,60,0.18), 0 2px 6px rgba(30,30,60,0.12);
 }
+
+/* ---------- 应用表面与层级 ---------- */
+:root {
+  --z-wallpaper: 0;
+  --z-wallpaper-scrim: 1;
+  --z-app: 10;
+  --z-window-controls: 20;
+  --z-resizer: 40;
+  --z-shell-topbar: 50;
+  --z-onboarding: 70;
+  --z-menu: 90;
+  --z-dialog: 100;
+  --z-popover: 110;
+  --z-incoming-call: 130;
+  --z-assistant: 200;
+  --z-media-preview: 1000;
+  --z-loading: 2000;
+
+  --surface-app-canvas: var(--bg);
+  --surface-wallpaper-scrim: transparent;
+  --surface-shell-main: var(--bg-elevated);
+  --surface-shell-chrome: var(--bg-elevated);
+  --surface-page: var(--bg);
+  --surface-card: var(--glass-bg);
+  --surface-standard-card: var(--panel);
+  --surface-control: var(--panel-soft);
+  --surface-dialog: var(--panel);
+  --surface-overlay: var(--panel);
+  --surface-overlay-scrim: rgba(5,5,15,.5);
+  --surface-border: var(--border);
+  --surface-backdrop: none;
+  --surface-card-backdrop: none;
+  --surface-overlay-backdrop: none;
+  --surface-glass-highlight: rgba(255,255,255,.14);
+  --surface-glass-edge: rgba(255,255,255,.1);
+  --surface-glass-sheen: linear-gradient(118deg,rgba(255,255,255,.14),transparent 26%,transparent 68%,rgba(196,214,255,.07));
+  --surface-card-glaze: none;
+  --surface-standard-card-shadow: var(--shadow-md);
+  --surface-glass-shadow: var(--glass-shadow);
+  --surface-chat-workspace: #0d0f13;
+  --surface-chat-roster: #171a20;
+  --surface-chat-pane: #101216;
+  --surface-chat-header: #14171c;
+  --surface-chat-control: #20252d;
+  --surface-chat-composer: #171a20;
+  --surface-chat-bubble: #20252d;
+  --surface-chat-bubble-user: linear-gradient(135deg,#6f64e7,#4d47a1);
+  --surface-chat-bubble-muted: #1a1e25;
+}
+
+:root[data-theme='light'] {
+  --surface-chat-workspace: #fff;
+  --surface-chat-roster: #f4f4f5;
+  --surface-chat-pane: #fff;
+  --surface-chat-header: #fff;
+  --surface-chat-control: #f0f1f3;
+  --surface-chat-composer: #fff;
+  --surface-chat-bubble: #fff;
+  --surface-chat-bubble-user: #95ec69;
+  --surface-chat-bubble-muted: #f5f6f8;
+}
+
+:root[data-ui-style='wallpaper-glass'] {
+  --panel: rgba(10,16,27,.24);
+  --panel-soft: rgba(16,24,38,.2);
+  --surface-wallpaper-scrim:
+    radial-gradient(130% 84% at 50% -22%,rgba(255,255,255,.035),transparent 56%),
+    linear-gradient(180deg,rgba(3,6,13,.015),transparent 46%,rgba(3,6,13,.045));
+  --surface-shell-main: transparent;
+  --surface-shell-chrome: transparent;
+  --surface-page: transparent;
+  --surface-card: linear-gradient(145deg,rgba(18,29,48,.22),rgba(7,12,22,.065) 52%,rgba(15,25,42,.13));
+  --surface-standard-card: var(--surface-card);
+  --surface-control: linear-gradient(135deg,rgba(255,255,255,.075),rgba(13,22,37,.12));
+  --surface-dialog: linear-gradient(145deg,rgba(31,42,64,.78),rgba(11,17,28,.72));
+  --surface-overlay: linear-gradient(145deg,rgba(35,47,71,.73),rgba(12,19,31,.76));
+  --surface-overlay-scrim: rgba(3,6,12,.42);
+  --surface-border: rgba(255,255,255,.3);
+  --surface-glass-highlight: rgba(255,255,255,.42);
+  --surface-glass-edge: rgba(255,255,255,.24);
+  --surface-glass-sheen: linear-gradient(118deg,rgba(255,255,255,.1),transparent 24%,transparent 67%,rgba(158,194,255,.05));
+  --surface-card-glaze:
+    radial-gradient(120% 74% at 12% -14%,rgba(255,255,255,.11),transparent 46%),
+    linear-gradient(116deg,rgba(255,255,255,.035),transparent 28%,transparent 68%,rgba(137,178,255,.035));
+  --surface-standard-card-shadow:
+    inset 0 1px 0 rgba(255,255,255,.34),
+    inset 1px 0 0 rgba(255,255,255,.12),
+    inset 0 -1px 0 rgba(108,143,205,.13),
+    0 14px 34px rgba(1,4,10,.17),
+    0 3px 9px rgba(1,4,10,.1);
+  --surface-glass-shadow: var(--surface-standard-card-shadow);
+  --surface-backdrop: blur(6px) saturate(148%) brightness(1.025);
+  --surface-card-backdrop: blur(5px) saturate(152%) brightness(1.03);
+  --surface-overlay-backdrop: blur(32px) saturate(158%) brightness(1.08);
+  --surface-chat-workspace: transparent;
+  --surface-chat-roster: rgba(8,13,22,.18);
+  --surface-chat-pane: transparent;
+  --surface-chat-header: rgba(8,14,24,.12);
+  --surface-chat-control: linear-gradient(135deg,rgba(255,255,255,.08),rgba(10,17,29,.13));
+  --surface-chat-composer: rgba(8,14,24,.18);
+  --surface-chat-bubble: #18212d;
+  --surface-chat-bubble-user: linear-gradient(135deg,#2d7c5e,#205e4a);
+  --surface-chat-bubble-muted: #151d28;
+  --glass-border: var(--surface-border);
+  --glass-bg: var(--surface-card);
+  --glass-top-highlight: var(--surface-glass-highlight);
+  --glass-shadow: var(--surface-glass-shadow);
+}
+
+:root[data-theme='light'][data-ui-style='wallpaper-glass'] {
+  --panel: rgba(252,253,255,.18);
+  --panel-soft: rgba(247,249,253,.15);
+  --surface-wallpaper-scrim:
+    radial-gradient(130% 84% at 50% -22%,rgba(255,255,255,.055),transparent 58%),
+    linear-gradient(180deg,rgba(244,247,255,.012),transparent 46%,rgba(237,242,251,.028));
+  --surface-shell-chrome: transparent;
+  --surface-page: transparent;
+  --surface-card: linear-gradient(145deg,rgba(255,255,255,.27),rgba(247,251,255,.075) 52%,rgba(225,235,255,.12));
+  --surface-standard-card: var(--surface-card);
+  --surface-control: linear-gradient(135deg,rgba(255,255,255,.25),rgba(235,242,255,.1));
+  --surface-dialog: linear-gradient(145deg,rgba(255,255,255,.9),rgba(240,246,255,.78));
+  --surface-overlay: linear-gradient(145deg,rgba(255,255,255,.88),rgba(239,246,255,.8));
+  --surface-overlay-scrim: rgba(26,31,45,.22);
+  --surface-border: rgba(255,255,255,.74);
+  --surface-glass-highlight: rgba(255,255,255,.94);
+  --surface-glass-edge: rgba(255,255,255,.68);
+  --surface-glass-sheen: linear-gradient(118deg,rgba(255,255,255,.3),transparent 24%,transparent 67%,rgba(202,220,255,.1));
+  --surface-card-glaze:
+    radial-gradient(120% 74% at 12% -14%,rgba(255,255,255,.36),transparent 46%),
+    linear-gradient(116deg,rgba(255,255,255,.09),transparent 28%,transparent 68%,rgba(174,201,255,.055));
+  --surface-standard-card-shadow:
+    inset 0 1px 0 rgba(255,255,255,.96),
+    inset 1px 0 0 rgba(255,255,255,.52),
+    inset 0 -1px 0 rgba(126,151,194,.18),
+    0 14px 34px rgba(37,54,82,.1),
+    0 3px 9px rgba(37,54,82,.055);
+  --surface-glass-shadow: var(--surface-standard-card-shadow);
+  --surface-chat-workspace: transparent;
+  --surface-chat-roster: rgba(255,255,255,.17);
+  --surface-chat-pane: transparent;
+  --surface-chat-header: rgba(255,255,255,.16);
+  --surface-chat-control: linear-gradient(135deg,rgba(255,255,255,.28),rgba(235,242,255,.12));
+  --surface-chat-composer: rgba(250,252,255,.2);
+  --surface-chat-bubble: #ffffff;
+  --surface-chat-bubble-user: #95ec69;
+  --surface-chat-bubble-muted: #f4f6f8;
+}

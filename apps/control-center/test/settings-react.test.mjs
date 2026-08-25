@@ -73,6 +73,7 @@ test("settings owns the reusable API connection library without a global capabil
   const admin = readFileSync(resolve(ROOT, "src", "react", "admin-page.jsx"), "utf8");
   const app = readFileSync(resolve(ROOT, "src", "app.mjs"), "utf8");
 
+  assert.match(page, /\{ label: "壁纸", value: "wallpaper" \}/u);
   assert.match(page, /\{ label: "主模型", value: "main-model" \}/u);
   assert.match(page, /\{ label: "API", value: "api" \}/u);
   assert.match(page, /ApiConnectionsSettings/u);
@@ -87,7 +88,7 @@ test("settings owns the reusable API connection library without a global capabil
   assert.doesNotMatch(admin, /<datalist/u);
   assert.doesNotMatch(admin, /main-model-candidates/u);
   assert.doesNotMatch(admin, /function ApiBindings/u);
-  assert.match(app, /\["general", "main-model", "api", "data", "privacy"\]/u);
+  assert.match(app, /\["general", "wallpaper", "main-model", "api", "data", "privacy"\]/u);
   assert.match(app, /state\.settingsTab === "main-model"\) void loadAgentRuntimeConfig\(context\)/u);
   assert.match(app, /state\.settingsTab === "api"\) void loadApiServices\(context\)/u);
 });

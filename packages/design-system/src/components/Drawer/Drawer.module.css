@@ -3,8 +3,8 @@
 .overlay {
   position: fixed;
   inset: 0;
-  z-index: 100;
-  background: rgba(5, 5, 15, 0.5);
+  z-index: var(--z-dialog, 100);
+  background: var(--surface-overlay-scrim, rgba(5, 5, 15, 0.5));
   animation: fade-in 0.18s ease;
 }
 
@@ -16,8 +16,10 @@
   overflow: hidden;
   display: flex;
   flex-direction: column;
-  background: var(--panel);
-  border: 1px solid var(--border);
+  background: var(--surface-dialog, var(--panel));
+  -webkit-backdrop-filter: var(--surface-overlay-backdrop, none);
+  backdrop-filter: var(--surface-overlay-backdrop, none);
+  border: 1px solid var(--surface-border, var(--border));
   color: var(--text);
   box-shadow: var(--shadow-lg);
   animation: slide-right 0.22s ease;

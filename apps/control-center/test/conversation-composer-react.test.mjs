@@ -9,6 +9,7 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 test("composer keeps only working emoji, unified attachment, and voice-input controls", () => {
   const page = readFileSync(resolve(HERE, "..", "src", "react", "conversation-page.jsx"), "utf8");
   const styles = readFileSync(resolve(HERE, "..", "src", "styles", "conversation.css"), "utf8");
+  const documentHtml = readFileSync(resolve(HERE, "..", "src", "index.html"), "utf8");
   const voiceInput = readFileSync(resolve(HERE, "..", "src", "react", "conversation-voice-input.jsx"), "utf8");
   const conversation = readFileSync(resolve(HERE, "..", "src", "features", "conversation", "index.mjs"), "utf8");
 
@@ -16,6 +17,12 @@ test("composer keeps only working emoji, unified attachment, and voice-input con
   assert.match(page, /aria-label="添加文件"[\s\S]*?selectComposerAttachments\("file"\)/u);
   assert.match(page, /function clipboardImageFiles\(clipboardData\)/u);
   assert.match(page, /onPaste=\{\(event\) => \{[\s\S]*?clipboardImageFiles\(event\.clipboardData\)[\s\S]*?event\.preventDefault\(\)[\s\S]*?actions\.pasteComposerImages\(images\)/u);
+  assert.match(page, /const imagePreviewUrl = attachment\.kind === "image" \? String\(attachment\.fileUrl \|\| ""\) : "";/u);
+  assert.match(page, /conversation-composer__attachment\$\{imagePreviewUrl \? " is-image" : ""\}/u);
+  assert.match(page, /<img alt=\{`图片预览：\$\{attachment\.fileName\}`\} src=\{imagePreviewUrl\} \/>/u);
+  assert.match(documentHtml, /img-src 'self' blob: data: file:/u);
+  assert.match(styles, /conversation-composer__attachment\.is-image\s*\{[\s\S]*?width: 78px;[\s\S]*?height: 60px;/u);
+  assert.match(styles, /conversation-composer__attachment\.is-image > img\s*\{[\s\S]*?width: 100%;[\s\S]*?height: 100%;/u);
   assert.match(page, /conversation-send-button" disabled=\{unavailable \|\| sending \|\| composer\.attachmentPicking\}/u);
   assert.match(page, /aria-label=\{voiceInput\?\.label \|\| "语音输入"\}/u);
   assert.match(page, /conversation-composer__tool--voice-input/u);
@@ -75,7 +82,7 @@ test("composer height can be adjusted within a bounded range without covering th
   assert.match(page, /onResizePointerMove=\{resizeComposer\}/u);
   assert.match(styles, /--conversation-composer-height: 168px;/u);
   assert.match(styles, /\.conversation-composer-resizer\s*\{[\s\S]*?cursor: row-resize;/u);
-  assert.match(styles, /\.conversation-composer \{[\s\S]*?height: var\(--conversation-composer-height\);/u);
+  assert.match(styles, /\.content--conversation \.conversation-composer \{[\s\S]*?--conversation-composer-inline-padding: clamp\(10px, 1\.25vw, 18px\);[\s\S]*?height: var\(--conversation-composer-height\);[\s\S]*?padding: 10px var\(--conversation-composer-inline-padding\);/u);
   assert.match(styles, /\.conversation-latest \{[\s\S]*?bottom: calc\(var\(--conversation-composer-height\) \+ 4px\);/u);
   assert.match(conversation, /composerHeight: context\.state\.settings\?\.conversationComposerHeight/u);
   assert.match(conversation, /setConversationComposerHeight: async/u);

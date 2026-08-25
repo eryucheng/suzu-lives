@@ -4,7 +4,13 @@ import path from "node:path";
 import test from "node:test";
 
 import { createSuzuAgentLifecycle } from "@suzu-lives/agent-lifecycle";
+import { resolveAgentDataRoot } from "@suzu-lives/agent-registry";
+import {
+  createVisualReferenceLibrary,
+  resolveAgentVisualReferenceLibraryRoot,
+} from "@suzu-lives/visual-reference-library";
 import { createCapabilityRegistry, createCapabilityRuntime } from "../electron/services/capability-registry.mjs";
+import { resolveImageGenerationVisualReferenceRegistryPath } from "../electron/services/agent-image-generation-skill.mjs";
 import { createConversationChatService } from "../electron/services/conversation-chat.mjs";
 import { createConversationAttachmentService } from "../electron/services/conversation-attachment-service.mjs";
 import {
@@ -149,6 +155,112 @@ test("Agent Core chat keeps Suzu's queue, stream, memory, and terminal event con
   assert.equal(events.find((event) => event.type === "turn-complete")?.requestId, accepted.requestId);
   assert.deepEqual(memoryCalls.map((item) => item.type), ["prepare", "complete"]);
   assert.equal(memoryCalls[1].value.assistantText, "你好，我在。还有半句");
+  chat.dispose();
+});
+
+test("Agent Core chat forwards the canonical event order for text and tools", async () => {
+  const root = await temporaryRoot();
+  const projectRoot = path.join(root, "contact");
+  await fs.mkdir(projectRoot, { recursive: true });
+  const runtime = createFakeRuntime();
+  const events = [];
+  const chat = createConversationChatService({
+    settingsService: { load: () => ({}) },
+    reader: fakeReader(projectRoot),
+    runtime,
+    onEvent: (event) => events.push(event),
+  });
+
+  const accepted = await chat.send({ content: "帮我查一下" });
+  runtime.emit({ type: "turn-started", sessionId: "contact-session", turnId: accepted.requestId });
+  runtime.emit({
+    type: "assistant-delta",
+    sessionId: "contact-session",
+    turnId: accepted.requestId,
+    text: "我先查一下。",
+    data: { coreSequence: 31, coreTime: 31_000, step: 1 },
+  });
+  runtime.emit({
+    type: "tool-started",
+    sessionId: "contact-session",
+    turnId: accepted.requestId,
+    toolName: "weather",
+    data: { callId: "weather-call", coreSequence: 32, coreTime: 32_000, step: 1 },
+  });
+  runtime.emit({
+    type: "tool-completed",
+    sessionId: "contact-session",
+    turnId: accepted.requestId,
+    toolName: "weather",
+    data: { callId: "weather-call", coreSequence: 33, coreTime: 33_000, step: 1, result: "晴" },
+  });
+  runtime.emit({
+    type: "assistant-delta",
+    sessionId: "contact-session",
+    turnId: accepted.requestId,
+    text: "查完了。",
+    data: { coreSequence: 34, coreTime: 34_000, step: 2 },
+  });
+  runtime.emit({
+    type: "assistant-completed",
+    sessionId: "contact-session",
+    turnId: accepted.requestId,
+    text: "我先查一下。查完了。",
+    data: { assistantMessageCount: 2, coreSequence: 35, coreTime: 35_000, step: 2 },
+  });
+  await flush();
+
+  const presentation = events.filter((event) => ["reply-stream", "tool", "reply", "turn-complete"].includes(event.type));
+  assert.deepEqual(presentation.map((event) => [event.type, event.phase || "", event.coreSequence]), [
+    ["reply-stream", "", 31],
+    ["tool", "started", 32],
+    ["tool", "completed", 33],
+    ["reply-stream", "", 34],
+    ["reply", "", 35],
+    ["turn-complete", "", 35],
+  ]);
+  const tool = presentation.find((event) => event.type === "tool" && event.phase === "started");
+  assert.equal(tool?.callId, "weather-call");
+  assert.equal(tool?.coreStep, 1);
+  chat.dispose();
+});
+
+test("Agent Core chat preserves a QQ return route only in transport metadata", async () => {
+  const root = await temporaryRoot();
+  const projectRoot = path.join(root, "contact");
+  await fs.mkdir(projectRoot, { recursive: true });
+  const runtime = createFakeRuntime();
+  const events = [];
+  const chat = createConversationChatService({
+    settingsService: { load: () => ({}) },
+    reader: fakeReader(projectRoot),
+    runtime,
+    onEvent: (event) => events.push(event),
+  });
+  const route = {
+    mode: "reply",
+    channel: "qq",
+    connectionId: "qq-connection-1",
+    replyMessageId: "qq-message-1",
+  };
+
+  const accepted = await chat.sendToSession({
+    content: "来自 QQ 的消息",
+    contactId: "contact-suzu",
+    sessionId: "contact-session",
+    projectRoot,
+    deliveryRoute: route,
+  });
+  assert.equal(runtime.calls.sendTurn[0].input.includes("qq-connection-1"), false);
+  assert.equal(runtime.calls.sendTurn[0].input.includes("qq-message-1"), false);
+  runtime.emit({ type: "turn-started", sessionId: "contact-session", turnId: accepted.requestId });
+  runtime.emit({ type: "assistant-completed", sessionId: "contact-session", turnId: accepted.requestId, text: "我在。" });
+  await flush();
+
+  const reply = events.find((event) => event.type === "agent-reply");
+  assert.deepEqual(reply?.deliveryRoute, route);
+  assert.equal(reply?.deliverToWechat, false);
+  assert.deepEqual(events.find((event) => event.type === "turn-complete")?.deliveryRoute, route);
   chat.dispose();
 });
 
@@ -806,7 +918,19 @@ test("Agent Core chat answers capability catalog and action bridge requests thro
 test("Agent Core exposes enabled product abilities as concise Skills and loads one action contract on demand", async () => {
   const root = await temporaryRoot();
   const projectRoot = path.join(root, "contact");
+  const dataRoot = path.join(root, "data");
+  const source = path.join(root, "reference.png");
   await fs.mkdir(projectRoot, { recursive: true });
+  await fs.mkdir(path.join(projectRoot, ".suzu-lives"), { recursive: true });
+  await fs.writeFile(path.join(projectRoot, ".suzu-lives", "contact.json"), JSON.stringify({
+    id: "contact-22222222-2222-2222-2222-222222222222",
+    agentId: "agent-conversation-image-skill-test",
+  }));
+  await fs.writeFile(source, Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 0]));
+  const referenceLibrary = createVisualReferenceLibrary({
+    libraryRoot: resolveAgentVisualReferenceLibraryRoot(resolveAgentDataRoot({ dataRoot, projectRoot })),
+  });
+  await referenceLibrary.add({ source, id: "home.kitchen", role: "location", description: "暖色厨房" });
   const runtime = createFakeRuntime();
   const calls = [];
   const capabilityRuntime = {
@@ -823,7 +947,7 @@ test("Agent Core exposes enabled product abilities as concise Skills and loads o
     },
   };
   const chat = createConversationChatService({
-    settingsService: { load: () => ({}) },
+    settingsService: { load: () => ({}), response: () => ({ dataRoot }) },
     reader: fakeReader(projectRoot),
     runtime,
     capabilityRuntime,
@@ -859,12 +983,17 @@ test("Agent Core exposes enabled product abilities as concise Skills and loads o
       name: "suzu-image-generation",
     },
   });
-  await flush();
-  const loaded = runtime.calls.respondLifecycleRequest.at(-1);
+  const loaded = await waitFor(() => runtime.calls.respondLifecycleRequest.find((entry) => entry.requestId === "capability-skill-read"));
   assert.equal(loaded.requestId, "capability-skill-read");
   assert.equal(loaded.result.skill.name, "suzu-image-generation");
   assert.match(loaded.result.skill.content, /capabilityId：`image-generation`/u);
   assert.match(loaded.result.skill.content, /input 必须包含图片提示词/u);
+  assert.match(loaded.result.skill.content, /视觉参考注册表/u);
+  const referenceRegistryPath = resolveImageGenerationVisualReferenceRegistryPath({ dataRoot, projectRoot });
+  assert.ok(loaded.result.skill.content.includes(referenceRegistryPath));
+  assert.doesNotMatch(loaded.result.skill.content, /home\.kitchen/u);
+  const referenceRegistry = JSON.parse(await fs.readFile(referenceRegistryPath, "utf8"));
+  assert.equal(referenceRegistry.references.some((entry) => entry.scope === "contact" && entry.id === "home.kitchen"), true);
   assert.equal(runtime.calls.respondLifecycleRequest[0].result.skills[0].description.includes("input"), false);
   assert.deepEqual(calls, [
     {
@@ -884,6 +1013,92 @@ test("Agent Core exposes enabled product abilities as concise Skills and loads o
       turnId: accepted.requestId,
     },
   ]);
+  chat.dispose();
+});
+
+test("Agent Core exposes each mail business Skill before the generic mailbox Skill", async () => {
+  const root = await temporaryRoot();
+  const projectRoot = path.join(root, "contact");
+  const dataRoot = path.join(root, "data");
+  await fs.mkdir(projectRoot, { recursive: true });
+  const configPath = path.join(dataRoot, "automation", "mail-bridge", "config.json");
+  await fs.mkdir(path.dirname(configPath), { recursive: true });
+  await fs.writeFile(configPath, JSON.stringify({
+    agentSkills: [{
+      id: "rule-check-in",
+      name: "查岗",
+      description: "当用户需要确认对方是否在岗时使用。",
+      subject: "查岗",
+    }],
+  }), "utf8");
+  const runtime = createFakeRuntime();
+  const capabilityRuntime = {
+    availableActions() {
+      return [{
+        capabilityId: "mail-bridge",
+        capabilityName: "邮箱通道",
+        capabilityDescription: "通过已配置的邮箱发送邮件。",
+        action: "send",
+        actionName: "发送邮件",
+        actionDescription: "input 必须包含邮件正文。",
+      }];
+    },
+  };
+  const chat = createConversationChatService({
+    settingsService: {
+      load: () => ({ dataRoot }),
+      response: () => ({ dataRoot }),
+    },
+    reader: fakeReader(projectRoot),
+    runtime,
+    capabilityRuntime,
+  });
+
+  const accepted = await chat.send({ content: "帮我把明早的待办同步出去" });
+  runtime.emit({ type: "turn-started", sessionId: "contact-session", turnId: accepted.requestId });
+  runtime.emit({
+    type: "lifecycle-request",
+    requestId: "mail-skill-catalog",
+    lifecycleEvent: "CapabilitySkillCatalog",
+    data: { sessionId: "contact-session", coreTurn: 1, step: 1 },
+  });
+  const catalog = await waitFor(() => runtime.calls.respondLifecycleRequest.find((result) => result.requestId === "mail-skill-catalog"));
+  const businessSkill = catalog.result.skills.find((skill) => skill.name === "suzu-mail-rule-check-in");
+  assert.match(businessSkill.description, /^查岗：/u);
+  assert.match(businessSkill.description, /主题为“查岗”/u);
+  assert.equal(catalog.result.skills.some((skill) => skill.name === "suzu-mail-bridge"), true);
+
+  runtime.emit({
+    type: "lifecycle-request",
+    requestId: "mail-business-skill-read",
+    lifecycleEvent: "CapabilitySkillRead",
+    data: {
+      sessionId: "contact-session",
+      coreTurn: 1,
+      step: 1,
+      name: "suzu-mail-rule-check-in",
+    },
+  });
+  const businessLoaded = await waitFor(() => runtime.calls.respondLifecycleRequest.find((result) => result.requestId === "mail-business-skill-read"));
+  assert.match(businessLoaded.result.skill.content, /# 查岗/u);
+  assert.match(businessLoaded.result.skill.content, /suzu-mail-bridge/u);
+  assert.match(businessLoaded.result.skill.content, /主题为 "查岗"/u);
+
+  runtime.emit({
+    type: "lifecycle-request",
+    requestId: "mail-bridge-skill-read",
+    lifecycleEvent: "CapabilitySkillRead",
+    data: {
+      sessionId: "contact-session",
+      coreTurn: 1,
+      step: 1,
+      name: "suzu-mail-bridge",
+    },
+  });
+  const genericLoaded = await waitFor(() => runtime.calls.respondLifecycleRequest.find((result) => result.requestId === "mail-bridge-skill-read"));
+  assert.match(genericLoaded.result.skill.content, /邮件业务 Skill/u);
+  assert.match(genericLoaded.result.skill.content, /subject: "业务 Skill 指定的主题"/u);
+  assert.doesNotMatch(genericLoaded.result.skill.content, /当用户需要确认对方是否在岗/u);
   chat.dispose();
 });
 
@@ -1860,7 +2075,7 @@ test("Agent Core reader renders the full append-only human transcript after mode
     sessionId: "contact-session",
     contactId: "contact-suzu",
     cwd: projectRoot,
-    maxMessages: 360,
+    maxMessages: 100,
   });
   await reader.removeContact({ id: "contact-suzu", confirmed: true });
   assert.deepEqual(removals, [{ id: "contact-suzu", confirmed: true }]);
@@ -1912,18 +2127,158 @@ test("Agent Core reader reads the current page first and accepts an older-histor
   });
 
   const latest = await reader.snapshot();
-  assert.equal(calls[0].maxMessages, 360);
+  assert.equal(calls[0].maxMessages, 100);
   assert.equal(calls[0].beforeSeq, undefined);
-  assert.equal(latest.historyPage.oldestEventSeq, 441);
+  assert.equal(latest.historyPage.oldestEventSeq, 701);
   assert.equal(latest.historyPage.hasMore, true);
-  assert.deepEqual(latest.messages.slice(0, 2).map((message) => message.id), ["message-441", "message-442"]);
+  assert.deepEqual(latest.messages.slice(0, 2).map((message) => message.id), ["message-701", "message-702"]);
 
   const older = await reader.snapshot({ beforeSeq: latest.historyPage.oldestEventSeq });
-  assert.equal(calls[1].maxMessages, 360);
-  assert.equal(calls[1].beforeSeq, 441);
-  assert.equal(older.historyPage.oldestEventSeq, 81);
+  assert.equal(calls[1].maxMessages, 100);
+  assert.equal(calls[1].beforeSeq, 701);
+  assert.equal(older.historyPage.oldestEventSeq, 601);
   assert.equal(older.historyPage.hasMore, true);
-  assert.deepEqual(older.messages.slice(-2).map((message) => message.id), ["message-439", "message-440"]);
+  assert.deepEqual(older.messages.slice(-2).map((message) => message.id), ["message-699", "message-700"]);
+});
+
+test("Agent Core reader returns a visible transcript page from a stream-heavy history", async () => {
+  const projectRoot = "D:\\Contacts\\stream-heavy";
+  const contact = {
+    id: "contact-stream-heavy",
+    name: "流式联系人",
+    projectRoot,
+    sessionId: "stream-heavy-session",
+  };
+  const olderEvents = Array.from({ length: 360 }, (_value, index) => ({
+    type: "user/message",
+    seq: index + 1,
+    time: (index + 1) * 1_000,
+    surfaceOp: "append",
+    data: {
+      id: `older-message-${index + 1}`,
+      source: { kind: "user" },
+      content: [{ type: "text", text: `较早消息 ${index + 1}` }],
+    },
+  }));
+  const latestEvents = [
+    ...Array.from({ length: 356 }, (_value, index) => ({
+      type: "assistant/chunk",
+      seq: 2_001 + index,
+      time: (2_001 + index) * 1_000,
+      data: { chunk: `chunk-${index + 1}` },
+    })),
+    ...Array.from({ length: 4 }, (_value, index) => ({
+      type: "assistant/message",
+      seq: 2_357 + index,
+      time: (2_357 + index) * 1_000,
+      surfaceOp: "append",
+      data: {
+        message: {
+          id: `latest-message-${index + 1}`,
+          content: [{ type: "text", text: `最新消息 ${index + 1}` }],
+        },
+      },
+    })),
+  ];
+  const calls = [];
+  const reader = createConversationReader({
+    runtime: {
+      async history({ beforeSeq, maxMessages, ...scope }) {
+        calls.push({ beforeSeq, maxMessages, ...scope });
+        if (beforeSeq === undefined) return { events: latestEvents, hasMore: true };
+        if (beforeSeq === 2_001) return { events: olderEvents, hasMore: false };
+        throw new Error(`意外的历史游标：${beforeSeq}`);
+      },
+    },
+    settingsService: { load: () => ({ projectRoot }) },
+    contactProjectsService: {
+      async snapshot() {
+        return {
+          status: "ready",
+          contactsRoot: "D:\\Contacts",
+          contacts: [contact],
+          activeContact: contact,
+          preferredContact: contact,
+        };
+      },
+    },
+  });
+
+  const latest = await reader.snapshot();
+  assert.deepEqual(calls.map(({ beforeSeq, maxMessages }) => ({ beforeSeq, maxMessages })), [
+    { beforeSeq: undefined, maxMessages: 100 },
+    { beforeSeq: 2_001, maxMessages: 2_000 },
+  ]);
+  assert.equal(latest.messages.length, 100);
+  assert.equal(latest.messages[0]?.id, "older-message-265");
+  assert.equal(latest.messages.at(-1)?.id, "latest-message-4");
+  assert.equal(latest.historyPage.oldestEventSeq, 265);
+  assert.equal(latest.historyPage.hasMore, true);
+});
+
+test("Agent Core reader uses saved display preferences when filling a visible page", async () => {
+  const projectRoot = "D:\\Contacts\\hidden-thinking";
+  const contact = {
+    id: "contact-hidden-thinking",
+    name: "隐藏思考联系人",
+    projectRoot,
+    sessionId: "hidden-thinking-session",
+  };
+  const olderEvents = Array.from({ length: 100 }, (_value, index) => ({
+    type: "user/message",
+    seq: 101 + index,
+    time: (101 + index) * 1_000,
+    surfaceOp: "append",
+    data: {
+      id: `visible-message-${index + 1}`,
+      source: { kind: "user" },
+      content: [{ type: "text", text: `可见消息 ${index + 1}` }],
+    },
+  }));
+  const latestEvents = Array.from({ length: 100 }, (_value, index) => ({
+    type: "assistant/message",
+    seq: 201 + index,
+    time: (201 + index) * 1_000,
+    surfaceOp: "append",
+    data: {
+      message: {
+        id: `thinking-message-${index + 1}`,
+        content: [{ type: "reasoning", text: `思考 ${index + 1}` }],
+      },
+    },
+  }));
+  const calls = [];
+  const reader = createConversationReader({
+    runtime: {
+      async history({ beforeSeq, maxMessages, ...scope }) {
+        calls.push({ beforeSeq, maxMessages, ...scope });
+        if (beforeSeq === undefined) return { events: latestEvents, hasMore: true };
+        if (beforeSeq === 201) return { events: olderEvents, hasMore: false };
+        throw new Error(`意外的历史游标：${beforeSeq}`);
+      },
+    },
+    settingsService: { load: () => ({ projectRoot, conversationPreferences: { thinking: false } }) },
+    contactProjectsService: {
+      async snapshot() {
+        return {
+          status: "ready",
+          contactsRoot: "D:\\Contacts",
+          contacts: [contact],
+          activeContact: contact,
+          preferredContact: contact,
+        };
+      },
+    },
+  });
+
+  const latest = await reader.snapshot();
+  assert.deepEqual(calls.map(({ beforeSeq, maxMessages }) => ({ beforeSeq, maxMessages })), [
+    { beforeSeq: undefined, maxMessages: 100 },
+    { beforeSeq: 201, maxMessages: 2_000 },
+  ]);
+  assert.equal(latest.messages.length, 200);
+  assert.equal(latest.historyPage.oldestEventSeq, 101);
+  assert.equal(latest.historyPage.hasMore, false);
 });
 
 test("Agent Core reader hides internal contact checks without hiding proactive replies", async () => {

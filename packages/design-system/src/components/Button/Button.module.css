@@ -31,9 +31,9 @@
 }
 
 .variant-secondary {
-  background: color-mix(in srgb, var(--panel) 70%, transparent);
+  background: color-mix(in srgb, var(--surface-control, var(--panel)) 70%, transparent);
   color: var(--text);
-  border-color: var(--border);
+  border-color: var(--surface-border, var(--border));
 }
 .variant-secondary:hover:not(:disabled) {
   border-color: color-mix(in srgb, var(--brand-400) 50%, var(--border));

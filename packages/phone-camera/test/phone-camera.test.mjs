@@ -11,6 +11,7 @@ import { buildPhonePrompt, expandReferences, PhoneCameraError, takePhonePhoto } 
 const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl+jh0AAAAASUVORK5CYII=", "base64");
 async function temporary() { return fs.mkdtemp(path.join(os.tmpdir(), "suzu-phone-camera-")); }
 function jsonResponse(value) { return new Response(JSON.stringify(value), { headers: { "content-type": "application/json" } }); }
+function referenceConnection() { return { baseUrl: "https://images.example.test/v1", model: "fixture", apiKey: "fixture", referenceImageAdapter: "openai-images-edit", referenceImageModel: "fixture" }; }
 
 test("phone profiles preserve rear, selfie, and mirror camera constraints", () => {
   const rear = buildPhonePrompt({ scene: "桌上的晚饭", shot: "rear" }); const selfie = buildPhonePrompt({ scene: "窗边自拍", shot: "selfie" }); const mirror = buildPhonePrompt({ scene: "镜前穿搭", shot: "mirror" });
@@ -29,11 +30,27 @@ test("dry run keeps ordered asset metadata and does not create output", async ()
   await assert.rejects(() => fs.stat(path.join(agentRoot, "image-generation", "phone-camera")), /ENOENT/u);
 });
 
+test("selfie and mirror automatically include the current contact's identity references", async () => {
+  const agentRoot = await temporary(); const dataRoot = await temporary(); const source = path.join(agentRoot, "fixture.png"); await fs.writeFile(source, png);
+  const library = createVisualReferenceLibrary({ libraryRoot: path.join(agentRoot, "visual-references") });
+  await library.add({ source, id: "person.main", role: "identity", description: "当前联系人的正脸与发型", preserve: ["五官"], ignore: ["背景"] });
+  await library.add({ source, id: "room.window", role: "location", description: "窗边房间" });
+  let request;
+  const selfie = await takePhonePhoto({ agentRoot, dataRoot, connection: referenceConnection(), fetchImpl: async (_url, options) => { request = options.body; return jsonResponse({ data: [{ b64_json: png.toString("base64") }] }); }, options: { shot: "selfie", scene: "在窗边发一张自拍", out: "phone-output" } });
+  assert.deepEqual(selfie.references, ["contact:person.main"]);
+  assert.equal(request.getAll("image[]").length, 1);
+  assert.match(request.get("prompt"), /当前联系人的正脸与发型/u);
+  const mirror = await takePhonePhoto({ agentRoot, dataRoot, options: { shot: "mirror", scene: "站在镜前的全身照", dryRun: true } });
+  assert.deepEqual(mirror.references.map((item) => item.id), ["contact:person.main"]);
+  const rear = await takePhonePhoto({ agentRoot, dataRoot, options: { shot: "rear", scene: "拍窗边的房间", dryRun: true } });
+  assert.deepEqual(rear.references, []);
+});
+
 test("references expand requested asset and set order, then use the software-owned image engine", async () => {
   const agentRoot = await temporary(); const dataRoot = await temporary(); const source = path.join(agentRoot, "fixture.png"); await fs.writeFile(source, png);
   const library = createVisualReferenceLibrary({ libraryRoot: path.join(agentRoot, "visual-references") }); await library.upsertSet({ id: "home", description: "卧室" }); await library.add({ source, id: "person.main", role: "identity", description: "人物", preserve: ["发型"], ignore: ["外套"], sets: ["home"] });
   const expanded = await expandReferences({ agentRoot, dataRoot, requested: [{ scope: "contact", id: "home" }, { scope: "contact", id: "person.main" }], maxImages: 8 }); assert.deepEqual(expanded.map((item) => item.id), ["contact:person.main"]);
-  let request; const result = await takePhonePhoto({ agentRoot, dataRoot, connection: { baseUrl: "https://images.example.test/v1", model: "fixture", apiKey: "fixture" }, fetchImpl: async (_url, options) => { request = options.body; return jsonResponse({ data: [{ b64_json: png.toString("base64") }] }); }, options: { shot: "mirror", scene: "在卧室镜前看穿搭", refs: [{ scope: "contact", id: "home" }], out: "phone-output" } });
+  let request; const result = await takePhonePhoto({ agentRoot, dataRoot, connection: referenceConnection(), fetchImpl: async (_url, options) => { request = options.body; return jsonResponse({ data: [{ b64_json: png.toString("base64") }] }); }, options: { shot: "mirror", scene: "在卧室镜前看穿搭", refs: [{ scope: "contact", id: "home" }], out: "phone-output" } });
   assert.equal(result.status, "ok"); assert.equal(result.shot, "mirror"); assert.deepEqual(result.references, ["contact:person.main"]); assert.match(request.get("prompt"), /Do not inherit: 外套/u); assert.doesNotMatch(request.get("prompt"), /- Input image 1/u);
   assert.equal(await fs.stat(result.path).then((item) => item.isFile()), true);
 });
@@ -44,7 +61,7 @@ test("phone camera keeps the 16-reference limit without changing the shared draw
   const library = createVisualReferenceLibrary({ libraryRoot: path.join(agentRoot, "visual-references") }); await library.upsertSet({ id: "full-scene", description: "完整场景" });
   for (let index = 1; index <= 16; index += 1) await library.add({ source, id: "identity." + String(index).padStart(2, "0"), role: "identity", description: "人物 " + index, sets: ["full-scene"] });
   let request;
-  const result = await takePhonePhoto({ agentRoot, dataRoot, connection: { baseUrl: "https://images.example.test/v1", model: "fixture", apiKey: "fixture" }, fetchImpl: async (_url, options) => { request = options.body; return jsonResponse({ data: [{ b64_json: png.toString("base64") }] }); }, options: { shot: "rear", scene: "十六张参考图的场景", refs: [{ scope: "contact", id: "full-scene" }], out: "phone-output" } });
+  const result = await takePhonePhoto({ agentRoot, dataRoot, connection: referenceConnection(), fetchImpl: async (_url, options) => { request = options.body; return jsonResponse({ data: [{ b64_json: png.toString("base64") }] }); }, options: { shot: "rear", scene: "十六张参考图的场景", refs: [{ scope: "contact", id: "full-scene" }], out: "phone-output" } });
   assert.equal(result.status, "ok"); assert.equal(result.references.length, 16); assert.equal(request.getAll("image[]").length, 16);
 });
 

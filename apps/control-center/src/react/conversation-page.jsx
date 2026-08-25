@@ -4,11 +4,13 @@ import emojiMartI18n from "@emoji-mart/data/i18n/zh.json";
 import appleEmojiSpritesheet from "emoji-datasource-apple/img/apple/sheets-128/32.png";
 import { Picker } from "emoji-mart";
 import ReactMarkdown from "react-markdown";
+import { createPortal } from "react-dom";
 import remarkGfm from "remark-gfm";
 import { Select } from "suzu-design-system";
 
+import { PRODUCT_FEATURES } from "../../shared/product-features.mjs";
 import { releasePointerCapture } from "../core/pointer-capture.mjs";
-import { hasMarkdownFormatting, shouldSubmitConversationOnEnter } from "../features/conversation/index.mjs";
+import { groupConversationToolActivityRows, hasMarkdownFormatting, shouldSubmitConversationOnEnter } from "../features/conversation/index.mjs";
 import { useConversationCall } from "./conversation-call.jsx";
 import { captureConversationViewportAnchor, restoreConversationViewportAnchor } from "./conversation-scroll-anchor.mjs";
 import { useConversationVoiceInput } from "./conversation-voice-input.jsx";
@@ -382,6 +384,10 @@ function ConversationEmojiPicker({ actions }) {
   const [stickerError, setStickerError] = useState("");
 
   useEffect(() => {
+    if (!PRODUCT_FEATURES.customEmojiStickers) {
+      setLoadingStickers(false);
+      return undefined;
+    }
     let current = true;
     void (async () => {
       try {
@@ -435,7 +441,7 @@ function ConversationEmojiPicker({ actions }) {
   return (
     <section aria-label="表情选择器" className="conversation-emoji-panel conversation-emoji-picker">
       <div className="conversation-emoji-picker__body">
-        {tab === "favorites" ? (
+        {PRODUCT_FEATURES.customEmojiStickers && tab === "favorites" ? (
           <div aria-label="收藏表情包" className="conversation-sticker-favorites" role="tabpanel">
             <div className="conversation-sticker-favorites__grid">
               <button
@@ -463,11 +469,11 @@ function ConversationEmojiPicker({ actions }) {
           </div>
         ) : <EmojiMartContent mode={tab} onSelect={actions.insertEmoji} />}
       </div>
-      {stickerError ? <p className="conversation-emoji-picker__error" role="status">{stickerError}</p> : null}
-      <nav aria-label="表情选择器分类" className="conversation-emoji-picker__tabs" role="tablist">
+      {PRODUCT_FEATURES.customEmojiStickers && stickerError ? <p className="conversation-emoji-picker__error" role="status">{stickerError}</p> : null}
+      <nav aria-label="表情选择器分类" className={`conversation-emoji-picker__tabs${PRODUCT_FEATURES.customEmojiStickers ? "" : " is-compact"}`} role="tablist">
         <button aria-label="搜索表情" aria-selected={tab === "search"} className={tab === "search" ? "is-active" : ""} onClick={() => selectTab("search")} role="tab" title="搜索表情" type="button"><ConversationIcon name="search" /></button>
         <button aria-label="全部表情" aria-selected={tab === "collection"} className={tab === "collection" ? "is-active" : ""} onClick={() => selectTab("collection")} role="tab" title="全部表情" type="button"><ConversationIcon name="emoji" /></button>
-        <button aria-label="收藏表情包" aria-selected={tab === "favorites"} className={tab === "favorites" ? "is-active" : ""} onClick={() => selectTab("favorites")} role="tab" title="收藏表情包" type="button"><ConversationIcon name="favorite" /></button>
+        {PRODUCT_FEATURES.customEmojiStickers ? <button aria-label="收藏表情包" aria-selected={tab === "favorites"} className={tab === "favorites" ? "is-active" : ""} onClick={() => selectTab("favorites")} role="tab" title="收藏表情包" type="button"><ConversationIcon name="favorite" /></button> : null}
       </nav>
     </section>
   );
@@ -559,15 +565,16 @@ function ConversationComposer({ actions, callActive = false, composer, composerH
           <span>/suzu queue &lt;内容&gt; 排队</span>
         </div> : null}
         {attachments.length ? <div aria-label="待发送附件" className="conversation-composer__attachments">
-          {attachments.map((attachment) => (
-            <span className="conversation-composer__attachment" key={attachment.selectionToken} title={attachment.fileName}>
-              {attachment.kind === "image" && attachment.fileUrl
-                ? <img alt="" src={attachment.fileUrl} />
+          {attachments.map((attachment) => {
+            const imagePreviewUrl = attachment.kind === "image" ? String(attachment.fileUrl || "") : "";
+            return <span className={`conversation-composer__attachment${imagePreviewUrl ? " is-image" : ""}`} key={attachment.selectionToken} title={attachment.fileName}>
+              {imagePreviewUrl
+                ? <img alt={`图片预览：${attachment.fileName}`} src={imagePreviewUrl} />
                 : <ConversationIcon name="folder" />}
-              <span>{attachment.fileName}</span>
+              <span className="conversation-composer__attachment-name">{attachment.fileName}</span>
               <button aria-label={`移除 ${attachment.fileName}`} disabled={unavailable} onClick={() => actions.removeComposerAttachment(attachment.selectionToken)} type="button">×</button>
-            </span>
-          ))}
+            </span>;
+          })}
         </div> : null}
         <div className="conversation-composer__footer">
           <div aria-label="聊天工具" className="conversation-composer__tools">
@@ -793,7 +800,9 @@ function MessageContextMenu({ actions, menu }) {
     role="menu"
     style={{ left: menu.x, top: menu.y }}
   >
-    <button className="conversation-message-context-menu__danger" onClick={() => { void actions.deleteMessage?.(menu); }} role="menuitem" type="button">删除</button>
+    {menu.copyText ? <button onClick={() => { void actions.copyMessageText?.(menu); }} role="menuitem" type="button">复制文字</button> : null}
+    {(menu.images || []).map((image, index, images) => <button key={image.fileUrl} onClick={() => { void actions.copyMediaImage?.(image); }} role="menuitem" type="button">{images.length > 1 ? `复制图片：${image.fileName || index + 1}` : "复制图片"}</button>)}
+    {menu.canDelete ? <button className="conversation-message-context-menu__danger" onClick={() => { void actions.deleteMessage?.(menu); }} role="menuitem" type="button">删除</button> : null}
   </div>;
 }
 
@@ -803,6 +812,15 @@ function ConversationFileIcon() {
       <path d="M12 2h26l14 14v54a4 4 0 0 1-4 4H12a4 4 0 0 1-4-4V6a4 4 0 0 1 4-4Z" fill="currentColor" opacity=".16" />
       <path d="M38 2v14h14" fill="currentColor" opacity=".26" />
       <text fill="currentColor" fontFamily="ui-sans-serif, system-ui, sans-serif" fontSize="29" fontWeight="700" textAnchor="middle" x="31" y="52">?</text>
+    </svg>
+  );
+}
+
+function ConversationToolActivityIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24">
+      <rect height="16" rx="2.5" width="20" x="2" y="4" fill="none" stroke="currentColor" strokeWidth="1.8" />
+      <path d="m7.5 9 2.7 2.7-2.7 2.7M13.5 15h3" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.8" />
     </svg>
   );
 }
@@ -875,14 +893,23 @@ function ConversationUsage({ usage }) {
   return <div className="conversation-usage">{items.join(" · ")}</div>;
 }
 
-function ConversationMessage({ onOpenExternal, onOpenFile, onOpenFileContextMenu, onOpenMessageContextMenu, onPreview, row }) {
+function toolActivityLabel(entries) {
+  const calls = entries.filter((entry) => entry.detailKind === "tool_use").length;
+  const results = entries.filter((entry) => entry.detailKind === "tool_result").length;
+  const count = Math.max(calls, results, 1);
+  const pending = entries.at(-1)?.detailKind === "tool_use";
+  const failed = entries.filter((entry) => entry.error).length;
+  const label = `${pending ? "正在调用" : "已调用"} ${count} 个工具`;
+  return failed ? `${label} · ${failed} 项出错` : label;
+}
+
+function ConversationToolActivity({ row }) {
+  const entries = Array.isArray(row.entries) ? row.entries : [];
   const className = [
-    "conversation-message",
-    row.kind,
+    "conversation-tool-activity",
     row.entering && "is-entering",
-    row.mediaOnly && "is-media-only",
-    row.live && "is-live",
     row.focused && "is-focus-target",
+    row.live && "is-live",
   ].filter(Boolean).join(" ");
   return (
     <article
@@ -890,18 +917,63 @@ function ConversationMessage({ onOpenExternal, onOpenFile, onOpenFileContextMenu
       data-conversation-anchor-id={row.anchorId || undefined}
       data-conversation-line-number={row.lineNumber || undefined}
       data-conversation-message-id={row.sourceMessageId || undefined}
+    >
+      <details className="conversation-tool-activity__group">
+        <summary>
+          <span className="conversation-tool-activity__icon"><ConversationToolActivityIcon /></span>
+          <span className="conversation-tool-activity__label">{toolActivityLabel(entries)}</span>
+          {row.timestamp ? <time className="conversation-tool-activity__time">{row.timestamp}</time> : null}
+        </summary>
+        <div className="conversation-tool-activity__entries">
+          {entries.map((entry, index) => (
+            <details
+              className={`conversation-tool-activity__entry${entry.error ? " is-error" : ""}`}
+              data-conversation-line-number={entry.lineNumber || undefined}
+              data-conversation-message-id={entry.sourceMessageId || undefined}
+              key={`${entry.anchorId || entry.sourceMessageId || entry.detailKind}-${index}`}
+            >
+              <summary>{entry.title}</summary>
+              {entry.detail ? <pre>{entry.detail}</pre> : null}
+            </details>
+          ))}
+        </div>
+      </details>
+    </article>
+  );
+}
+
+function ConversationMessage({ onOpenExternal, onOpenFile, onOpenFileContextMenu, onOpenMessageContextMenu, onPreview, row }) {
+  const className = [
+    "conversation-message",
+    row.kind,
+    row.entering && "is-entering",
+    row.mediaOnly && "is-media-only",
+    row.audioOnly && "is-audio-only",
+    row.live && "is-live",
+    row.focused && "is-focus-target",
+  ].filter(Boolean).join(" ");
+  const contextMenuEnabled = row.deletable === true || row.blocks.some((block) => (
+    (block?.type === "text" && String(block.text ?? "").trim())
+    || (block?.type === "media" && ["image", "sticker"].includes(block.mediaKind) && block.fileUrl)
+  ));
+  return (
+    <article
+      className={className}
+      data-conversation-anchor-id={row.anchorId || undefined}
+      data-conversation-line-number={row.lineNumber || undefined}
+      data-conversation-message-id={row.sourceMessageId || undefined}
       onContextMenu={(event) => {
-        if (event.defaultPrevented || !row.deletable || !onOpenMessageContextMenu) return;
+        if (event.defaultPrevented || !contextMenuEnabled || !onOpenMessageContextMenu) return;
         event.preventDefault();
         onOpenMessageContextMenu(row, { x: event.clientX, y: event.clientY });
       }}
       onKeyDown={(event) => {
-        if (!row.deletable || !onOpenMessageContextMenu || (event.key !== "ContextMenu" && !(event.shiftKey && event.key === "F10"))) return;
+        if (!contextMenuEnabled || !onOpenMessageContextMenu || (event.key !== "ContextMenu" && !(event.shiftKey && event.key === "F10"))) return;
         event.preventDefault();
         const bounds = event.currentTarget.getBoundingClientRect();
         onOpenMessageContextMenu(row, { x: bounds.left + 12, y: bounds.bottom + 6 });
       }}
-      tabIndex={row.deletable ? 0 : undefined}
+      tabIndex={contextMenuEnabled ? 0 : undefined}
     >
       {row.avatar ? <div className="conversation-avatar"><PersonAvatar avatar={row.avatar} /></div> : null}
       <div className="conversation-bubble">
@@ -915,13 +987,14 @@ function ConversationMessage({ onOpenExternal, onOpenFile, onOpenFileContextMenu
 
 export function ConversationMessageList({ onOpenExternal, onOpenFile, onOpenFileContextMenu, onOpenMessageContextMenu, onPreview, rows }) {
   if (!rows.length) return null;
-  return rows.map((row, index) => {
-    const key = row.type === "message"
+  return groupConversationToolActivityRows(rows).map((row, index) => {
+    const key = row.type === "message" || row.type === "tool-group"
       ? `${row.type}-${row.anchorId || row.sourceMessageId || row.lineNumber || index}`
       : `${row.type}-${row.sourceMessageId || row.lineNumber || "row"}-${index}`;
     if (row.type === "day") return <div className="conversation-day" key={key}>{row.label}</div>;
     if (row.type === "time") return <div className="conversation-time-divider" key={key}>{row.label}</div>;
     if (row.type === "empty") return <div className="conversation-empty" key={key}>{row.text}</div>;
+    if (row.type === "tool-group") return <ConversationToolActivity key={key} row={row} />;
     return <ConversationMessage key={key} onOpenExternal={onOpenExternal} onOpenFile={onOpenFile} onOpenFileContextMenu={onOpenFileContextMenu} onOpenMessageContextMenu={onOpenMessageContextMenu} onPreview={onPreview} row={row} />;
   });
 }
@@ -954,6 +1027,20 @@ function WechatSettingsControls({ actions, contactId, control }) {
   return <div className="conversation-session-settings__actions"><button className="secondary-button" onClick={() => { void actions.startWechat(contactId); }} type="button">生成微信二维码</button></div>;
 }
 
+function QQSettingsControls({ actions, contactId, control }) {
+  if (!control) return null;
+  if (control.type === "connection") {
+    return <div className="conversation-session-settings__connection-actions"><label className="conversation-session-settings__switch"><input checked={control.enabled} onChange={(event) => { void actions.setQqContactEnabled(contactId, event.currentTarget.checked); }} type="checkbox" /><span>接收并投递这位联系人</span></label><button className="text-button" onClick={() => { void actions.disconnectQq(contactId); }} type="button">断开 QQ</button></div>;
+  }
+  if (control.type === "pending-binding") {
+    return <div className="conversation-session-settings__actions"><button className="secondary-button" onClick={actions.viewQqBinding} type="button">显示绑定码</button><button className="text-button" onClick={() => { void actions.startQq(contactId); }} type="button">重新生成绑定码</button></div>;
+  }
+  if (control.type === "not-configured") {
+    return <p className="conversation-session-settings__hint">请先在「能力 → 连接 QQ」设置 QQ 机器人。</p>;
+  }
+  return <div className="conversation-session-settings__actions"><button className="secondary-button" onClick={() => { void actions.startQq(contactId); }} type="button">连接 QQ</button></div>;
+}
+
 function ConversationSessionSettings({ actions, onDisplayPreferenceChange, onTimeDisplayChange, settings }) {
   if (!settings) return null;
   const changeDisplayPreference = typeof onDisplayPreferenceChange === "function" ? onDisplayPreferenceChange : actions.setDisplayPreference;
@@ -971,8 +1058,9 @@ function ConversationSessionSettings({ actions, onDisplayPreferenceChange, onTim
         <>
           <section className="conversation-session-settings__section"><header><div><span>LOCAL MEDIA</span><h2>本地附件</h2><p>Agent 交付给这位联系人的图片和文件保存在 Suzu 本地缓存中。</p></div></header><div className="conversation-session-settings__actions"><button className="secondary-button" onClick={() => { void actions.openMediaDirectory(settings.contactId); }} type="button">打开文件目录</button></div></section>
           {settings.wechat ? <section className="conversation-session-settings__section conversation-session-settings__wechat"><header><div><span>WECHAT</span><h2>微信连接</h2><p>二维码会在中间弹出。扫码后，请向这个微信机器人发一条文字消息，确认它已进入当前联系人的固定对话；回复默认投递 Agent 的说话内容。</p></div><span className="conversation-session-settings__status">{settings.wechat.status}</span></header><WechatSettingsControls actions={actions} contactId={settings.contactId} control={settings.wechat.control} />{settings.wechat.pendingQrError ? <p className="conversation-session-settings__error">{settings.wechat.pendingQrError}</p> : null}{settings.wechat.connectionError ? <p className="conversation-session-settings__error">{settings.wechat.connectionError}</p> : null}{settings.wechat.hint ? <p className="conversation-session-settings__hint">指令和普通消息与这里一致：/suzu stop、/suzu queue …；普通消息会优先处理。</p> : null}</section> : null}
+          {settings.qq ? <section className="conversation-session-settings__section conversation-session-settings__wechat"><header><div><span>QQ</span><h2>QQ 连接</h2><p>在 QQ 机器人中发送一次绑定码后，消息会进入这位联系人的固定对话；从 QQ 发来的消息，回复只会回到 QQ。主动关心会按渠道投递设置发送。</p></div><span className="conversation-session-settings__status">{settings.qq.status}</span></header><QQSettingsControls actions={actions} contactId={settings.contactId} control={settings.qq.control} />{settings.qq.pendingBindingError ? <p className="conversation-session-settings__error">{settings.qq.pendingBindingError}</p> : null}{settings.qq.connectionError ? <p className="conversation-session-settings__error">{settings.qq.connectionError}</p> : null}{settings.qq.hint ? <p className="conversation-session-settings__hint">指令和普通消息与这里一致：/suzu stop、/suzu queue …；普通消息会优先处理。</p> : null}</section> : null}
         </>
-      ) : <section className="conversation-session-settings__section"><header><div><span>CONTACT SETTINGS</span><h2>联系人设置</h2><p>当前联系人还没有聊天记录。发送第一条消息后，这里会显示本地附件和微信连接。</p></div></header></section>}
+      ) : <section className="conversation-session-settings__section"><header><div><span>CONTACT SETTINGS</span><h2>联系人设置</h2><p>当前联系人还没有聊天记录。发送第一条消息后，这里会显示本地附件、微信和 QQ 连接。</p></div></header></section>}
     </aside>
   );
 }
@@ -1036,6 +1124,13 @@ function ContactRenameDialog({ actions, contact }) {
 function WechatQrDialog({ actions, qr }) {
   if (!qr) return null;
   return <div className="conversation-wechat-qr-overlay" onClick={(event) => { if (event.target === event.currentTarget) actions.closeWechatQr(); }}><section aria-labelledby="conversationWechatQrTitle" aria-modal="true" className="conversation-wechat-qr-dialog" id="conversationWechatQr" role="dialog"><header><div><span>WECHAT · 当前联系人</span><h2 id="conversationWechatQrTitle">连接「{qr.title}」</h2></div><button aria-label="关闭二维码" className="suzu-close-button" onClick={actions.closeWechatQr} type="button">×</button></header><img alt="用于连接当前联系人的微信二维码" src={qr.imageDataUrl} /><p className="conversation-wechat-qr-dialog__status">{qr.status}</p><p className="conversation-wechat-qr-dialog__instruction"><strong>扫码后，请在微信里向这个机器人发送一条文字消息。</strong><span>这条消息会作为“我”进入这位联系人的固定 Suzu 对话，用来确认连接正确。</span></p><button className="secondary-button" onClick={actions.closeWechatQr} type="button">我知道了</button></section></div>;
+}
+
+function QQBindingDialog({ actions, binding }) {
+  if (!binding) return null;
+  const expiry = new Date(binding.expiresAt);
+  const expiryLabel = Number.isFinite(expiry.getTime()) ? expiry.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" }) : "稍后";
+  return <div className="conversation-wechat-qr-overlay" onClick={(event) => { if (event.target === event.currentTarget) actions.closeQqBinding(); }}><section aria-labelledby="conversationQqBindingTitle" aria-modal="true" className="conversation-wechat-qr-dialog conversation-qq-binding-dialog" id="conversationQqBinding" role="dialog"><header><div><span>QQ · 当前联系人</span><h2 id="conversationQqBindingTitle">连接「{binding.title}」</h2></div><button aria-label="关闭 QQ 绑定码" className="suzu-close-button" onClick={actions.closeQqBinding} type="button">×</button></header><p className="conversation-wechat-qr-dialog__status">绑定码将在 {expiryLabel} 失效。</p><p className="conversation-wechat-qr-dialog__instruction"><strong>打开 Suzu QQ 机器人后，发送下面的绑定码。</strong><span className="conversation-qq-binding-dialog__code">{binding.code}</span><span>这串码只连接「{binding.title}」；对话中的回复会自动回到 QQ。</span></p><div className="conversation-qq-binding-dialog__actions"><button className="secondary-button" onClick={() => { void actions.copyMessageText?.({ copyText: binding.code }); }} type="button">复制绑定码</button><button className="text-button" onClick={actions.closeQqBinding} type="button">我知道了</button></div></section></div>;
 }
 
 function MediaPreviewDialog({ actions, preview }) {
@@ -1147,13 +1242,15 @@ function ConversationCallDialing({ call, onEnd }) {
 
 function ConversationOverlays({ actions, overlays }) {
   const active = overlays || {};
-  return <>
+  const layer = <div className="content--conversation conversation-portal-layer">
     <ContactCreateDialog actions={actions} open={active.contactCreate} />
     <ContactRenameDialog actions={actions} contact={active.contactRename} />
     <WechatQrDialog actions={actions} qr={active.wechatQr} />
+    <QQBindingDialog actions={actions} binding={active.qqBinding} />
     <MediaPreviewDialog actions={actions} preview={active.mediaPreview} />
     <AvatarCropDialog actions={actions} crop={active.avatarCrop} />
-  </>;
+  </div>;
+  return typeof document === "undefined" ? layer : createPortal(layer, document.body);
 }
 
 export function ConversationPage({ actions, api = null, incomingCall = null, snapshot = {} }) {
@@ -1582,7 +1679,7 @@ export function ConversationPage({ actions, api = null, incomingCall = null, sna
     event.preventDefault();
   };
   const dismissOnWorkspaceClick = (event) => {
-    const interactive = event.target.closest?.(".conversation-pane__actions, .conversation-menu, .conversation-session-settings, .conversation-search-panel, .conversation-composer, .conversation-composer-resizer, .conversation-roster, .conversation-roster-resizer, .conversation-contact-context-menu, .conversation-file-context-menu, .conversation-message-context-menu, .conversation-permissions, .conversation-media__preview, .conversation-contact-create-dialog, .conversation-wechat-qr-dialog, .conversation-media-preview-dialog, .conversation-avatar-crop-dialog");
+    const interactive = event.target.closest?.(".conversation-pane__actions, .conversation-menu, .conversation-session-settings, .conversation-search-panel, .conversation-composer, .conversation-composer-resizer, .conversation-roster, .conversation-roster-resizer, .conversation-contact-context-menu, .conversation-file-context-menu, .conversation-message-context-menu, .conversation-permissions, .conversation-media__preview, .conversation-contact-create-dialog, .conversation-wechat-qr-dialog, .conversation-qq-binding-dialog, .conversation-media-preview-dialog, .conversation-avatar-crop-dialog");
     if (!interactive) actions.dismissOverlays();
   };
   return (

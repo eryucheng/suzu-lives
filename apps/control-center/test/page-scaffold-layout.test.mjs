@@ -57,6 +57,7 @@ test("普通页面都通过统一的页面内容区承接卡片布局", () => {
     "conversation-compactor-page.jsx",
     "memory-page.jsx",
     "create-page.jsx",
+    "create-sticker-page.jsx",
     "create-visual-page.jsx",
   ]) {
     const page = readFileSync(resolve(REACT, file), "utf8");

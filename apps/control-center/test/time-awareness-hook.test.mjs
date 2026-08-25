@@ -78,7 +78,7 @@ test("time awareness refreshes the clock at the configured interval and presents
   assert.equal(first?.kind, "time-awareness");
   assert.deepEqual(first?.display, { category: "time", context: true, label: "时间感知", transcript: false });
   assert.equal(first?.metadata?.intervalMinutes, DEFAULT_TIME_AWARENESS_INTERVAL_MINUTES);
-  assert.match(first?.text || "", /10月1日/u);
+  assert.match(first?.text || "", /2026年10月1日/u);
   assert.match(first?.text || "", /09:00/u);
   assert.match(first?.text || "", /你知道现在是/u);
   assert.doesNotMatch(first?.text || "", /本机时区|UTC[+-]\d{2}:\d{2}/u);
@@ -134,7 +134,7 @@ test("time awareness presents a new calendar day's notice on its first eligible 
 
   current = new Date(2026, 9, 2, 0, 5, 1);
   const nextDay = await hook.collect(payload);
-  assert.match(nextDay?.text || "", /10月2日/u);
+  assert.match(nextDay?.text || "", /2026年10月2日/u);
   assert.match(nextDay?.text || "", /纪念日/u);
   assert.equal(nextDay?.metadata?.dayNotice, true);
 });
@@ -152,7 +152,7 @@ test("time awareness supplies a fresh clock at an automatic task opening", async
     projectRoot,
     sessionId: "session-suzu",
   };
-  assert.match((await hook.collect(payload))?.text || "", /09:00/u);
+  assert.match((await hook.collect(payload))?.text || "", /2026年8月23日 星期日 09:00。/u);
 
   current = new Date(2026, 7, 23, 9, 1, 0);
   const proactiveOpening = await hook.collect({

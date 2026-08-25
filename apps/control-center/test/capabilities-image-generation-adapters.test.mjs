@@ -43,12 +43,14 @@ test("image generation saves a custom protocol separately from its API connectio
 
   await service.saveSettings({
     id: "image-generation",
-    value: { adapter: "custom-http-image", customAdapterId: created.id },
+    value: { adapter: "custom-http-image", customAdapterId: created.id, referenceAdapter: "custom-data-url-array" },
   });
   const configPath = path.join(dataRoot, "capabilities", "image-generation", "config.json");
   const config = JSON.parse(await fs.readFile(configPath, "utf8"));
   assert.equal(config.adapter, "custom-http-image");
   assert.equal(config.custom_adapter_id, created.id);
+  assert.equal(config.reference_adapter, "custom-data-url-array");
+  assert.equal(config.reference_model, "fixture-model");
   assert.equal(Object.hasOwn(config, "default_backend"), false);
 
   await assert.rejects(
@@ -56,6 +58,9 @@ test("image generation saves a custom protocol separately from its API connectio
     /正在被图像生成使用/u,
   );
   await service.saveSettings({ id: "image-generation", value: { adapter: "openai-images" } });
+  const afterProtocolChange = JSON.parse(await fs.readFile(configPath, "utf8"));
+  assert.equal(afterProtocolChange.reference_adapter, "none");
+  assert.equal(afterProtocolChange.reference_model, "");
   const afterDelete = await service.deleteImageGenerationCustomAdapter({ id: created.id });
   const customAdapters = afterDelete.capabilities.find((item) => item.id === "image-generation")?.savedSettings.customAdapters;
   assert.deepEqual(customAdapters, []);
@@ -78,7 +83,7 @@ test("image generation rejects an incompatible API for the selected protocol", a
   );
 });
 
-test("phone-camera preferences are saved inside image generation settings", async () => {
+test("image generation settings do not create phone-camera presentation preferences", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "suzu-image-generation-phone-preset-"));
   const dataRoot = path.join(root, "data");
   const service = serviceFor(dataRoot, {
@@ -93,27 +98,10 @@ test("phone-camera preferences are saved inside image generation settings", asyn
     id: "image-generation",
     value: {
       adapter: "openai-images",
-      rearSize: "1792x1024",
-      selfieSize: "1024x1792",
-      mirrorSize: "1024x1536",
-      maxImages: 12,
-      promptPrefix: "人物保持自然状态。",
-      promptSuffix: "环境光线贴近当前场景。",
     },
   });
 
   const config = JSON.parse(await fs.readFile(path.join(dataRoot, "capabilities", "image-generation", "config.json"), "utf8"));
-  assert.deepEqual(config.phone_camera, {
-    size_by_shot: {
-      rear: "1792x1024",
-      selfie: "1024x1792",
-      mirror: "1024x1536",
-    },
-    references: { max_images: 12 },
-    prompt: {
-      prefix: "人物保持自然状态。",
-      suffix: "环境光线贴近当前场景。",
-    },
-  });
+  assert.equal(Object.hasOwn(config, "phone_camera"), false);
   await assert.rejects(fs.stat(path.join(dataRoot, "capabilities", "phone-camera", "config.json")), /ENOENT/u);
 });

@@ -57,6 +57,8 @@ export async function loadCapabilities(context) {
     catch (error) { context.setNotice(error?.message || "能力已读取，但暂时无法读取 API 选择。 "); }
     try { context.state.wechatSnapshot = await context.api.wechat?.snapshot?.(); }
     catch (error) { context.setNotice(error?.message || "能力已读取，但暂时无法读取微信连接状态。 "); }
+    try { context.state.qqSnapshot = await context.api.qq?.snapshot?.(); }
+    catch (error) { context.setNotice(error?.message || "能力已读取，但暂时无法读取 QQ 连接状态。 "); }
     try {
       const snapshot = await context.api.capabilities.companionTargets();
       context.state.companionContacts = {

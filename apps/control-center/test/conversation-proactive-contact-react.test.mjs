@@ -131,6 +131,17 @@ test("联系人设置读取微信连接服务返回的 contact 连接状态", as
           pendingQr: null,
         }),
       },
+      qq: {
+        snapshot: async ({ contactId }) => ({
+          bot: { configured: true, status: "connected" },
+          contact: {
+            contactId,
+            enabled: true,
+            status: "connected",
+          },
+          pendingBinding: null,
+        }),
+      },
     },
     render: () => {},
     state: { settings: {} },
@@ -144,6 +155,8 @@ test("联系人设置读取微信连接服务返回的 contact 连接状态", as
     const settings = conversationReactSnapshot(context).sessionSettings;
     assert.equal(settings?.wechat?.status, "已连接");
     assert.deepEqual(settings?.wechat?.control, { enabled: true, type: "connection" });
+    assert.equal(settings?.qq?.status, "已连接");
+    assert.deepEqual(settings?.qq?.control, { enabled: true, type: "connection" });
     actions.closeSessionSettings();
   } finally {
     stopConversationPolling();

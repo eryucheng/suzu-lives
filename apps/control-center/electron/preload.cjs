@@ -25,6 +25,14 @@ contextBridge.exposeInMainWorld("suzuConsole", {
     downloadUpdate: () => ipcRenderer.invoke("settings:download-update"),
     installUpdate: () => ipcRenderer.invoke("settings:install-update"),
     systemStatus: () => ipcRenderer.invoke("settings:system-status"),
+    chooseWallpaper: () => ipcRenderer.invoke("settings:choose-wallpaper"),
+    selectWallpaperSource: (sourceType) => ipcRenderer.invoke("settings:select-wallpaper-source", sourceType),
+    discardWallpaperSource: (selectionId) => ipcRenderer.invoke("settings:discard-wallpaper-source", selectionId),
+    importWallpaper: (value) => ipcRenderer.invoke("settings:import-wallpaper", value),
+    selectWallpaper: (folderName) => ipcRenderer.invoke("settings:select-wallpaper", folderName),
+    updateWallpaper: (value) => ipcRenderer.invoke("settings:update-wallpaper", value),
+    removeWallpaper: (folderName) => ipcRenderer.invoke("settings:remove-wallpaper", folderName),
+    clearWallpaper: () => ipcRenderer.invoke("settings:clear-wallpaper"),
     changeDataLocation: () => ipcRenderer.invoke("settings:change-data-location"),
     removePreviousDataCopy: () => ipcRenderer.invoke("settings:remove-previous-data-copy"),
     update: (patch) => ipcRenderer.invoke("settings:update", patch),
@@ -74,6 +82,8 @@ contextBridge.exposeInMainWorld("suzuConsole", {
     openMediaDirectory: (value) => ipcRenderer.invoke("conversation:open-media-directory", value),
     openMediaFile: (value) => ipcRenderer.invoke("conversation:open-media-file", value),
     copyMediaFile: (value) => ipcRenderer.invoke("conversation:copy-media-file", value),
+    copyMessageText: (value) => ipcRenderer.invoke("conversation:copy-message-text", value),
+    copyMediaImage: (value) => ipcRenderer.invoke("conversation:copy-media-image", value),
     create: () => ipcRenderer.invoke("conversation:create"),
     createContact: (value) => ipcRenderer.invoke("conversation:create-contact", value),
     renameContact: (value) => ipcRenderer.invoke("conversation:rename-contact", value),
@@ -93,6 +103,10 @@ contextBridge.exposeInMainWorld("suzuConsole", {
       snapshot: () => ipcRenderer.invoke("conversation:emoji-stickers"),
       select: () => ipcRenderer.invoke("conversation:select-emoji-sticker"),
       add: (value) => ipcRenderer.invoke("conversation:add-emoji-sticker", value),
+      complete: (value) => ipcRenderer.invoke("conversation:complete-emoji-sticker", value),
+      discardSelection: (value) => ipcRenderer.invoke("conversation:discard-emoji-sticker-selection", value),
+      update: (value) => ipcRenderer.invoke("conversation:update-emoji-sticker", value),
+      remove: (value) => ipcRenderer.invoke("conversation:remove-emoji-sticker", value),
       send: (value) => ipcRenderer.invoke("conversation:send-emoji-sticker", value),
     },
     send: (value) => ipcRenderer.invoke("conversation:send", value),
@@ -159,6 +173,20 @@ contextBridge.exposeInMainWorld("suzuConsole", {
       const listener = (_event, payload) => callback(payload);
       ipcRenderer.on("wechat:event", listener);
       return () => ipcRenderer.removeListener("wechat:event", listener);
+    },
+  },
+  qq: {
+    snapshot: (value) => ipcRenderer.invoke("qq:snapshot", value),
+    begin: (value) => ipcRenderer.invoke("qq:begin", value),
+    configure: (value) => ipcRenderer.invoke("qq:configure", value),
+    saveSettings: (value) => ipcRenderer.invoke("qq:save-settings", value),
+    setContactEnabled: (value) => ipcRenderer.invoke("qq:set-contact-enabled", value),
+    disconnect: (value) => ipcRenderer.invoke("qq:disconnect", value),
+    onEvent: (callback) => {
+      if (typeof callback !== "function") return () => {};
+      const listener = (_event, payload) => callback(payload);
+      ipcRenderer.on("qq:event", listener);
+      return () => ipcRenderer.removeListener("qq:event", listener);
     },
   },
   relationshipFiles: {

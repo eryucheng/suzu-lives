@@ -7,6 +7,7 @@ import {
   SUZU_COMPANION_AGENT_PRESET,
   SUZU_COMPANION_PERMISSION_MODE,
   SUZU_SOFTWARE_ASSISTANT_AGENT_PRESET,
+  SUZU_TRANSIENT_INFERENCE_SESSION_ID,
   createSuzuAgentRuntime,
   ensureSuzuCompanionAgentPreset,
   ensureSuzuSoftwareAssistantAgentPreset,
@@ -591,6 +592,64 @@ test("Suzu Agent Runtime sends memory's schema work only to the owned child brid
   await runtime.close();
 });
 
+test("Suzu Agent Runtime exposes reusable one-shot structured inference with an internal route session", async () => {
+  const root = await temporaryRoot();
+  const dataRoot = path.join(root, "data");
+  const workspaceDirectory = path.join(root, "workspace");
+  await fs.mkdir(workspaceDirectory, { recursive: true });
+  const fake = createFakeRuntimeParts();
+  const runtime = createSuzuAgentRuntime({
+    dataRoot,
+    workspaceDirectory,
+    createDriver: fake.createDriver,
+    createRuntimeFacade: fake.createRuntimeFacade,
+    createSupervisor: fake.createSupervisor,
+  });
+  const image = Buffer.from([0x89, 0x50, 0x4e, 0x47]).toString("base64");
+
+  const result = await runtime.runTransientInference({
+    taskId: "sticker.tag.v1",
+    content: [
+      { type: "text", text: "生成表情包标签。" },
+      { type: "image", mediaType: "image/png", data: image, name: "sticker.png" },
+    ],
+    systemPrompt: "识别聊天表情包语义。",
+    schema: { type: "object", required: ["intent"] },
+    schemaName: "sticker-tag-v1",
+    maxOutputTokens: 800,
+    timeoutMs: 30_000,
+  });
+
+  assert.deepEqual(result, {
+    available: true,
+    result: { ok: true, output: { memories: [] } },
+  });
+  assert.deepEqual(fake.calls.createSession, [{
+    sessionId: SUZU_TRANSIENT_INFERENCE_SESSION_ID,
+    contactId: "",
+    cwd: workspaceDirectory,
+    presentation: { agentPreset: SUZU_COMPANION_AGENT_PRESET, permissionMode: SUZU_COMPANION_PERMISSION_MODE },
+  }]);
+  assert.deepEqual(fake.calls.requestLifecycleCommand, [{
+    event: "StructuredGenerate",
+    payload: {
+      sessionId: SUZU_TRANSIENT_INFERENCE_SESSION_ID,
+      content: [
+        { type: "text", text: "生成表情包标签。" },
+        { type: "image", mediaType: "image/png", data: image, name: "sticker.png" },
+      ],
+      systemPrompt: "识别聊天表情包语义。",
+      schema: { type: "object", required: ["intent"] },
+      schemaName: "sticker-tag-v1",
+      taskId: "sticker.tag.v1",
+      maxOutputTokens: 800,
+      timeoutMs: 30_000,
+    },
+    timeoutMs: 30_000,
+  }]);
+  await runtime.close();
+});
+
 test("Suzu companion preset refreshes its product-owned composition while keeping user instructions in SUZU.md", async () => {
   const root = await temporaryRoot();
   const runtimeHome = path.join(root, "runtime-home");
@@ -660,6 +719,9 @@ test("Suzu software assistant preset is refreshed as a fixed product composition
   assert.match(contactSkill, /user\.md.*用户本人的资料/u);
   assert.match(contactSkill, /action.*set-contact-avatar/u);
   assert.match(contactSkill, /avatarPath/u);
+  assert.match(contactSkill, /图片不必接近方形/u);
+  assert.match(contactSkill, /裁后的正方形图片/u);
+  assert.match(contactSkill, /保留比例且不拉伸/u);
   assert.match(contactSkill, /needs-confirmation.*contactId/u);
   assert.match(contextSkill, /能力 → 行动 → 写日记/u);
   assert.match(todaySkill, /联系人计划会在指定时间向该联系人的会话投递提示/u);

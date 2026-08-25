@@ -8,11 +8,14 @@ import { formatErrorForDisplay } from "@suzu-lives/suzu-agent-runtime/error-deta
 import {
   CUSTOM_IMAGE_GENERATION_ADAPTER_FILE,
   CUSTOM_IMAGE_GENERATION_ADAPTER_SCHEMA_VERSION,
+  DEFAULT_IMAGE_REFERENCE_ADAPTER,
   imageGenerationAdapterLabel,
   imageGenerationAdapterSupportsConnection,
+  imageReferenceCapability,
   MAX_CUSTOM_IMAGE_GENERATION_ADAPTERS,
   normalizeCustomImageGenerationAdapter,
   normalizeImageGenerationAdapter,
+  normalizeImageReferenceAdapter,
   publicCustomImageGenerationAdapter,
   readCustomImageGenerationAdapters,
 } from "@suzu-lives/image-workbench";
@@ -49,6 +52,10 @@ import { normalizeTtsAdapter, ttsAdapterLabel } from "@suzu-lives/voice-message/
 import { readVoiceProfiles, readVoiceServices, resolveVoiceProfile } from "@suzu-lives/voice-message/voice-services";
 import { DEFAULT_AGENT_JOURNAL_TIME } from "../services/agent-journal-schedule.mjs";
 import { createCapabilityRegistry } from "../services/capability-registry.mjs";
+import {
+  MAX_MAIL_BRIDGE_AGENT_SKILLS,
+  mailBridgeAgentSkills,
+} from "../services/mail-bridge-agent-settings.mjs";
 
 const COMPANION_CONTACT_ID = /^contact-[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
 const MAX_COMPANION_CONTACTS = 160;
@@ -134,6 +141,7 @@ function mailBridgeSettings(value) {
   const source = plainObject(value);
   const mail = plainObject(source.mail);
   const outbound = plainObject(source.outbound);
+  const agentSkills = mailBridgeAgentSkills(source);
   const allowedSenders = Array.isArray(mail.allowedSenders)
     ? mail.allowedSenders.map((item) => publicText(item, 320)).filter(Boolean).slice(0, 30)
     : [];
@@ -169,8 +177,8 @@ function mailBridgeSettings(value) {
       allowedSenders,
       passwordEnv: publicText(outbound.passwordEnv || mail.passwordEnv, 128),
       credentialConfigured,
-      routeSubject: publicText(route.subject || DEFAULT_MAIL_BRIDGE_ROUTE_SUBJECT, 200),
-      routePrompt: publicText(route.promptTemplate || DEFAULT_MAIL_BRIDGE_ROUTE_PROMPT, 12000),
+      feedbackSubject: publicText(route.subject || DEFAULT_MAIL_BRIDGE_ROUTE_SUBJECT, 200),
+      agentSkills,
     },
   };
 }
@@ -285,19 +293,21 @@ function localCdpUrl(value, label, fallback = "") {
   return result;
 }
 
-function imageSize(value, label, fallback) {
-  const result = clean(value) || fallback;
-  if (!/^[1-9]\d{2,4}x[1-9]\d{2,4}$/u.test(result)) throw new Error(`${label}需要使用“宽x高”的尺寸格式。`);
-  return result;
-}
-
-function sizeOrFallback(value, fallback) {
-  const result = clean(value);
-  return /^[1-9]\d{2,4}x[1-9]\d{2,4}$/u.test(result) ? result : fallback;
-}
-
 function publicText(value, maximum = 200) {
   return clean(value).slice(0, maximum);
+}
+
+function mailSkillKey(value) {
+  return clean(value).toLocaleLowerCase();
+}
+
+function withMailBridgeAgentSkills(value, agentSkills) {
+  const source = plainObject(value);
+  const { agentDelivery: _legacyDelivery, ...withoutLegacyDelivery } = source;
+  return {
+    ...withoutLegacyDelivery,
+    agentSkills,
+  };
 }
 
 function publicCustomVoices(agentRoot) {
@@ -500,15 +510,11 @@ function savedCapabilitySettings(settings, dataRoot) {
   const voiceAgentRoot = currentVoiceAgentRoot(settings, dataRoot);
   const mailBridge = publicJson(dataRoot, ["automation", "mail-bridge", "config.json"]);
   const mailBridgeState = mailBridgeSettings(mailBridge);
-  const phoneCamera = plainObject(imageGeneration.phone_camera);
-  const phoneSizes = plainObject(phoneCamera.size_by_shot);
-  const phoneReferences = plainObject(phoneCamera.references);
   const webBrowser = publicJson(dataRoot, ["capabilities", "web-browser", "config.json"]);
   const webBrowserScope = contactScopedAgentCapabilitySettings(webBrowser);
   const browserRuntime = publicJson(dataRoot, ["capabilities", "web-browser", "runtime.json"]);
   const agentJournal = publicJson(dataRoot, ["automation", "agent-journal", "config.json"]);
   const proactiveContact = publicJson(dataRoot, ["automation", "proactive-contact", "config.json"]);
-  const phonePrompt = plainObject(phoneCamera.prompt);
   const customImageGenerationAdapters = readCustomImageGenerationAdapters(dataRoot).map((adapter) => publicCustomImageGenerationAdapter(adapter));
   const customVisionAdapters = readCustomVisionAdapters(dataRoot).map((adapter) => publicCustomVisionAdapter(adapter));
   const customVideoAdapters = readCustomVideoAdapters(dataRoot).map((adapter) => publicCustomVideoAdapter(adapter));
@@ -524,15 +530,8 @@ function savedCapabilitySettings(settings, dataRoot) {
       adapter: normalizeImageGenerationAdapter(imageGeneration.adapter),
       customAdapterId: clean(imageGeneration.custom_adapter_id).toLowerCase(),
       customAdapters: customImageGenerationAdapters,
-      phoneCamera: {
-        sizeByShot: {
-          rear: sizeOrFallback(phoneSizes.rear, "1536x1024"),
-          selfie: sizeOrFallback(phoneSizes.selfie, "1024x1536"),
-          mirror: sizeOrFallback(phoneSizes.mirror, "1024x1536"),
-        },
-        references: { maxImages: numberOrFallback(phoneReferences.max_images, { minimum: 1, maximum: 16, fallback: 8, integer: true }) },
-        prompt: { prefix: clean(phonePrompt.prefix), suffix: clean(phonePrompt.suffix) },
-      },
+      referenceAdapter: normalizeImageReferenceAdapter(imageGeneration.reference_adapter),
+      referenceModel: clean(imageGeneration.reference_model),
     },
     "image-vision": {
       saved: Boolean(Object.keys(vision).length || imageVisionScope.knownContactIds.length),
@@ -765,7 +764,7 @@ export function createCapabilitiesService({
   const selectedImageGenerationConnection = async () => selectedCapabilityConnection("image-generation", "图片生成");
   const validateImageGenerationConnection = async (adapter) => {
     const connection = await selectedImageGenerationConnection();
-    if (!connection) return;
+    if (!connection) return null;
     if (!imageGenerationAdapterSupportsConnection(adapter, connection.type)) {
       throw new Error(`${imageGenerationAdapterLabel(adapter)}不能使用当前选择的 API；请先选择兼容的 API。`);
     }
@@ -775,6 +774,7 @@ export function createCapabilitiesService({
     if (adapter !== "custom-http-image" && !clean(connection.model)) {
       throw new Error(`${imageGenerationAdapterLabel(adapter)}需要所选 API 填写模型名称。`);
     }
+    return connection;
   };
   const saveImageGenerationCustomAdapter = async (value = {}) => {
     const settings = settingsService.load();
@@ -1071,39 +1071,43 @@ export function createCapabilitiesService({
     if (capabilityId === "image-generation") {
       const existing = publicJson(dataRoot, ["capabilities", "image-generation", "config.json"]);
       const adapter = normalizeImageGenerationAdapter(input.adapter ?? existing.adapter);
+      const referenceAdapterWasProvided = Object.hasOwn(plainObject(input), "referenceAdapter");
+      let referenceAdapter = normalizeImageReferenceAdapter(input.referenceAdapter ?? existing.reference_adapter);
       const customAdapterId = adapter === "custom-http-image"
         ? clean(input.customAdapterId ?? existing.custom_adapter_id).toLowerCase()
         : "";
-      if (adapter === "custom-http-image" && !readCustomImageGenerationAdapters(dataRoot).some((item) => item.id === customAdapterId)) {
+      const customImageAdapters = readCustomImageGenerationAdapters(dataRoot);
+      const customImageAdapter = adapter === "custom-http-image"
+        ? customImageAdapters.find((item) => item.id === customAdapterId) || null
+        : null;
+      if (adapter === "custom-http-image" && !customImageAdapter) {
         throw new Error("请选择已保存的自定义图像协议。 ");
       }
-      await validateImageGenerationConnection(adapter);
-      const phoneCamera = plainObject(existing.phone_camera);
-      const prompt = plainObject(phoneCamera.prompt);
-      const sizes = plainObject(phoneCamera.size_by_shot);
-      const references = plainObject(phoneCamera.references);
+      const connection = await validateImageGenerationConnection(adapter);
+      if (referenceAdapter !== DEFAULT_IMAGE_REFERENCE_ADAPTER) {
+        if (!connection) {
+          if (referenceAdapterWasProvided) throw new Error("请先为图像生成选择 API 并填写模型名，再配置参考图适配器。 ");
+          referenceAdapter = DEFAULT_IMAGE_REFERENCE_ADAPTER;
+        } else {
+          const capability = imageReferenceCapability({
+            connection,
+            customImageGenerationAdapter: customImageAdapter,
+            imageGenerationAdapter: adapter,
+            referenceImageAdapter: referenceAdapter,
+            referenceImageModel: clean(connection.model),
+          });
+          if (!capability.supported) {
+            if (referenceAdapterWasProvided) throw new Error(capability.reason);
+            referenceAdapter = DEFAULT_IMAGE_REFERENCE_ADAPTER;
+          }
+        }
+      }
       await writeJsonBelow(dataRoot, ["capabilities", "image-generation", "config.json"], {
         ...existing,
         adapter,
         custom_adapter_id: customAdapterId,
-        phone_camera: {
-          ...phoneCamera,
-          size_by_shot: {
-            ...sizes,
-            rear: imageSize(input.rearSize ?? sizes.rear, "后置画面尺寸", "1536x1024"),
-            selfie: imageSize(input.selfieSize ?? sizes.selfie, "自拍画面尺寸", "1024x1536"),
-            mirror: imageSize(input.mirrorSize ?? sizes.mirror, "镜前画面尺寸", "1024x1536"),
-          },
-          references: {
-            ...references,
-            max_images: boundedNumber(input.maxImages ?? references.max_images, "参考图数量", { minimum: 1, maximum: 16, fallback: 8, integer: true }),
-          },
-          prompt: {
-            ...prompt,
-            prefix: boundedText(input.promptPrefix ?? prompt.prefix, "手机拍照式画面前置提示"),
-            suffix: boundedText(input.promptSuffix ?? prompt.suffix, "手机拍照式画面补充提示"),
-          },
-        },
+        reference_adapter: referenceAdapter,
+        reference_model: referenceAdapter === DEFAULT_IMAGE_REFERENCE_ADAPTER ? "" : clean(connection?.model),
       });
       return synchronizedSnapshot(capabilityId, { reason: "settings-saved" });
     }
@@ -1225,20 +1229,81 @@ export function createCapabilitiesService({
     }
     if (capabilityId === MAIL_BRIDGE_ID) {
       const existing = publicJson(dataRoot, ["automation", "mail-bridge", "config.json"]);
+      const existingAgentSkills = mailBridgeAgentSkills(existing);
+      if (Object.hasOwn(input, "removeMailSkillId")) {
+        const id = requiredText(input.removeMailSkillId, "要删除的邮件 Skill", 128);
+        const agentSkills = existingAgentSkills.filter((skill) => skill.id !== id);
+        if (agentSkills.length === existingAgentSkills.length) {
+          throw new Error("要删除的邮件 Skill 不存在或已被删除。 ");
+        }
+        await writeJsonBelow(
+          dataRoot,
+          ["automation", "mail-bridge", "config.json"],
+          withMailBridgeAgentSkills(existing, agentSkills),
+        );
+        return synchronizedSnapshot(capabilityId, { reason: "mail-skill-removed" });
+      }
+      if (
+        Object.hasOwn(input, "mailSkillName")
+        || Object.hasOwn(input, "mailSkillDescription")
+        || Object.hasOwn(input, "mailSkillSubject")
+      ) {
+        const requestedId = boundedText(input.mailSkillId, "邮件 Skill", 128);
+        const current = requestedId
+          ? existingAgentSkills.find((skill) => skill.id === requestedId)
+          : null;
+        if (requestedId && !current) throw new Error("要编辑的邮件 Skill 不存在或已被删除。 ");
+        if (!current && existingAgentSkills.length >= MAX_MAIL_BRIDGE_AGENT_SKILLS) {
+          throw new Error(`邮件业务 Skill 最多只能添加 ${MAX_MAIL_BRIDGE_AGENT_SKILLS} 条。`);
+        }
+        const name = requiredText(input.mailSkillName ?? current?.name, "邮件 Skill 名称", 100);
+        const description = requiredText(input.mailSkillDescription ?? current?.description, "邮件 Skill 说明", 4000);
+        const subject = requiredText(input.mailSkillSubject ?? current?.subject, "邮件主题", 200);
+        const id = current?.id || `rule-${randomUUID()}`;
+        if (existingAgentSkills.some((skill) => skill.id !== id && mailSkillKey(skill.name) === mailSkillKey(name))) {
+          throw new Error("已经有同名的邮件 Skill，请换一个名称。 ");
+        }
+        if (existingAgentSkills.some((skill) => skill.id !== id && mailSkillKey(skill.subject) === mailSkillKey(subject))) {
+          throw new Error("已经有使用这个主题的邮件 Skill，请换一个主题。 ");
+        }
+        const nextSkill = { id, name, description, subject };
+        const agentSkills = current
+          ? existingAgentSkills.map((skill) => (skill.id === id ? nextSkill : skill))
+          : [...existingAgentSkills, nextSkill];
+        await writeJsonBelow(
+          dataRoot,
+          ["automation", "mail-bridge", "config.json"],
+          withMailBridgeAgentSkills(existing, agentSkills),
+        );
+        return synchronizedSnapshot(capabilityId, { reason: "mail-skill-saved" });
+      }
       const existingMail = plainObject(existing.mail);
       const existingOutbound = plainObject(existing.outbound);
       const { password: _mailPassword, ...mailWithoutPassword } = existingMail;
       const { password: _outboundPassword, ...outboundWithoutPassword } = existingOutbound;
       const passwordEnv = environmentVariableName(input.passwordEnv || existingOutbound.passwordEnv || existingMail.passwordEnv || DEFAULT_MAIL_BRIDGE_PASSWORD_ENV);
-      const routeSubject = requiredText(input.routeSubject ?? input.feedbackSubject, "邮件主题路由", 200);
-      const routePrompt = requiredText(input.routePrompt ?? input.feedbackPrompt, "邮件投递提示词", 12000);
+      const existingRoutes = Array.isArray(existing.routes) ? existing.routes.map((item) => plainObject(item)) : [];
+      const activeRoute = existingRoutes.find((route) => (
+        route.enabled !== false && clean(route.subject) && clean(route.promptTemplate)
+      )) || {};
+      const routeSubject = requiredText(
+        input.feedbackSubject ?? input.routeSubject ?? activeRoute.subject ?? DEFAULT_MAIL_BRIDGE_ROUTE_SUBJECT,
+        "回信主题",
+        200,
+      );
+      const routePrompt = requiredText(
+        input.routePrompt ?? input.feedbackPrompt ?? activeRoute.promptTemplate ?? DEFAULT_MAIL_BRIDGE_ROUTE_PROMPT,
+        "回信内容格式",
+        12000,
+      );
       const allowedSenders = normalizedLines(input.allowedSenders, "允许的邮件发件人", { maximum: 30, itemMaximum: 320 });
       if (!allowedSenders.length) throw new Error("至少填写一个允许的邮件发件人。 ");
-      const existingRoutes = Array.isArray(existing.routes) ? existing.routes.map((item) => plainObject(item)) : [];
-      const currentRoute = existingRoutes.find((route) => clean(route.subject) === routeSubject) || {};
-      const otherRoutes = existingRoutes.filter((route) => clean(route.subject) !== routeSubject);
+      const currentRoute = existingRoutes.find((route) => clean(route.subject) === routeSubject) || activeRoute;
+      const otherRoutes = existingRoutes.filter((route) => (
+        route !== currentRoute && clean(route.subject) !== routeSubject
+      ));
       await writeJsonBelow(dataRoot, ["automation", "mail-bridge", "config.json"], {
-        ...existing,
+        ...withMailBridgeAgentSkills(existing, existingAgentSkills),
         mail: {
           ...mailWithoutPassword,
           imapHost: requiredText(input.imapHost || existingMail.imapHost || DEFAULT_MAIL_BRIDGE_IMAP_HOST, "IMAP 服务器", 320),

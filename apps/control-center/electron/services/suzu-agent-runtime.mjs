@@ -27,6 +27,7 @@ import { createSuzuInstructionBridge } from "./suzu-instruction-bridge.mjs";
 export { SUZU_COMPANION_AGENT_PRESET };
 export const SUZU_SOFTWARE_ASSISTANT_AGENT_PRESET = "suzu-software-assistant";
 export const SUZU_COMPANION_PERMISSION_MODE = DEFAULT_SUZU_AGENT_PERMISSION_MODE;
+export const SUZU_TRANSIENT_INFERENCE_SESSION_ID = "suzu-transient-inference";
 
 const DEFAULT_SUZU_AGENT_COMPOSITION = createSuzuAgentComposition();
 
@@ -797,6 +798,57 @@ export function createSuzuAgentRuntime({
     return cachedModelCapabilities;
   };
 
+  /**
+   * Runs one product-owned structured inference request without entering the
+   * Agent turn queue or appending messages to a transcript. A stable internal
+   * route session is used only when the caller does not already have one.
+   */
+  const runTransientInference = async ({
+    contactId = "",
+    content,
+    cwd = workspace,
+    input,
+    maxOutputTokens,
+    schema,
+    schemaName,
+    sessionId = SUZU_TRANSIENT_INFERENCE_SESSION_ID,
+    systemPrompt,
+    taskId,
+    timeoutMs,
+  } = {}) => {
+    if (closed) throw new SuzuAgentRuntimeServiceError("Suzu Agent Core 会话运行时已经关闭。", { code: "RUNTIME_CLOSED" });
+    const routeSessionId = clean(sessionId) || SUZU_TRANSIENT_INFERENCE_SESSION_ID;
+    const routeWorkspace = clean(cwd) || workspace;
+    const opened = await ensureSession({
+      sessionId: routeSessionId,
+      contactId,
+      cwd: routeWorkspace,
+    });
+    const coreSessionId = clean(opened?.runtimeSessionId) || routeSessionId;
+    if (!coreSessionId || !supervisor?.requestLifecycleCommand) {
+      return Object.freeze({ available: false, reason: "transient-inference-unavailable" });
+    }
+    const structuredContent = Array.isArray(content)
+      ? content.map((block) => ({ ...plainObject(block) }))
+      : null;
+    return supervisor.requestLifecycleCommand({
+      event: "StructuredGenerate",
+      payload: {
+        sessionId: coreSessionId,
+        ...(structuredContent?.length
+          ? { content: structuredContent }
+          : { input: String(input ?? "") }),
+        systemPrompt: String(systemPrompt ?? ""),
+        schema: plainObject(schema),
+        schemaName: clean(schemaName),
+        ...(clean(taskId) ? { taskId: clean(taskId) } : {}),
+        ...(maxOutputTokens === undefined ? {} : { maxOutputTokens }),
+        ...(timeoutMs === undefined ? {} : { timeoutMs }),
+      },
+      ...(timeoutMs === undefined ? {} : { timeoutMs }),
+    });
+  };
+
   return Object.freeze({
     /** Product-internal access to Agent Core's private IPC control plane.
      * It is never forwarded to the renderer; the configuration service uses it
@@ -848,11 +900,13 @@ export function createSuzuAgentRuntime({
       return supervisor.respondLifecycleRequest({ requestId, result: plainObject(result) });
     },
 
+    async runTransientInference(value) {
+      return runTransientInference(value);
+    },
+
     /**
-     * Product-internal structured work runs inside the already configured Agent
-     * Core child. This deliberately transfers prompts and JSON schemas only: the
-     * credential remains in its private credential plane and never becomes an
-     * Electron-side OpenAI-compatible connection.
+     * Backward-compatible memory adapter. New product features should call
+     * runTransientInference() with their own task ID, prompt, and schema.
      */
     async generateStructuredMemory({
       contactId = "",
@@ -865,24 +919,16 @@ export function createSuzuAgentRuntime({
       maxOutputTokens,
       timeoutMs,
     } = {}) {
-      if (closed) throw new SuzuAgentRuntimeServiceError("Suzu Agent Core 会话运行时已经关闭。", { code: "RUNTIME_CLOSED" });
-      const opened = await ensureSession({ sessionId, contactId, cwd });
-      const coreSessionId = clean(opened?.runtimeSessionId) || clean(sessionId);
-      if (!coreSessionId || !supervisor?.requestLifecycleCommand) {
-        return Object.freeze({ available: false, reason: "structured-generator-unavailable" });
-      }
-      return supervisor.requestLifecycleCommand({
-        event: "StructuredGenerate",
-        payload: {
-          sessionId: coreSessionId,
-          input: String(input ?? ""),
-          systemPrompt: String(systemPrompt ?? ""),
-          schema: plainObject(schema),
-          schemaName: clean(schemaName),
-          ...(maxOutputTokens === undefined ? {} : { maxOutputTokens }),
-          ...(timeoutMs === undefined ? {} : { timeoutMs }),
-        },
-        ...(timeoutMs === undefined ? {} : { timeoutMs }),
+      return runTransientInference({
+        contactId,
+        cwd,
+        input,
+        maxOutputTokens,
+        schema,
+        schemaName,
+        sessionId,
+        systemPrompt,
+        timeoutMs,
       });
     },
 

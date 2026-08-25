@@ -14,6 +14,7 @@ import profiles from "../profiles.json" with { type: "json" };
 export class PhoneCameraError extends Error {}
 export const MAX_REFERENCES = 16;
 const SHOTS = new Set(["rear", "selfie", "mirror"]);
+const SELF_PORTRAIT_SHOTS = new Set(["selfie", "mirror"]);
 const REFERENCE_SCOPES = new Set(["shared", "contact"]);
 
 function clean(value) { return String(value ?? "").trim(); }
@@ -79,6 +80,18 @@ function validateReferenceRequest(value) {
   return reference;
 }
 
+async function contactIdentityReferenceRequests({ agentRoot, shot } = {}) {
+  if (!SELF_PORTRAIT_SHOTS.has(shot)) return [];
+  const root = path.resolve(clean(agentRoot));
+  if (!clean(agentRoot)) throw new PhoneCameraError("缺少当前联系人资料目录。 ");
+  const library = createVisualReferenceLibrary({ libraryRoot: resolveAgentVisualReferenceLibraryRoot(root) });
+  const snapshot = await library.snapshot();
+  if (snapshot.status === "invalid") throw new PhoneCameraError(snapshot.message || "当前联系人的视觉参考库无效。 ");
+  return list(snapshot.assets)
+    .filter((asset) => clean(asset?.role) === "identity" && clean(asset?.id))
+    .map((asset) => ({ scope: "contact", id: clean(asset.id) }));
+}
+
 export async function expandReferences({ agentRoot, dataRoot = "", requested = [], maxImages = 8 } = {}) {
   if (!requested.length) return [];
   if (!Number.isInteger(maxImages) || maxImages < 1 || maxImages > MAX_REFERENCES) throw new PhoneCameraError(`references.max_images 必须在 1 到 ${MAX_REFERENCES} 之间。`);
@@ -125,7 +138,8 @@ export async function takePhonePhoto({ agentRoot, dataRoot, connection, fetchImp
     : { config: normalizePhoneConfig(options.styleConfig), source: "provided" };
   const { config, source: configSource } = loaded;
   const shot = clean(options.shot); const scene = clean(options.scene); const backend = "api"; if (!SHOTS.has(shot)) throw new PhoneCameraError("--shot 必须是 rear、selfie 或 mirror。 ");
-  const references = await expandReferences({ agentRoot: root, dataRoot, requested: list(options.refs), maxImages: config.references.maxImages }); const prompt = buildPhonePrompt({ scene, shot, config, references }); const size = clean(options.size) || config.sizeByShot[shot];
+  const automaticIdentityReferences = await contactIdentityReferenceRequests({ agentRoot: root, shot });
+  const references = await expandReferences({ agentRoot: root, dataRoot, requested: [...automaticIdentityReferences, ...list(options.refs)], maxImages: config.references.maxImages }); const prompt = buildPhonePrompt({ scene, shot, config, references }); const size = clean(options.size) || config.sizeByShot[shot];
   if (options.dryRun) return { status: "dry-run", backend, shot, size, references: references.map(({ index, id, role, path: referencePath }) => ({ index, id, role, path: referencePath })), prompt, configSource };
   const outputRoot = rooted(root, clean(options.out) || config.output.directory, "--out");
   const result = await createCandidates({ root: outputRoot, connection, input: { prompt, backend, count: 1, size, includeReferencePrompt: false }, references, maxReferences: MAX_REFERENCES, fetchImpl });

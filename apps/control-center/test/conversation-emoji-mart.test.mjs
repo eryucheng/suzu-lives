@@ -2,9 +2,11 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
+import { PRODUCT_FEATURES } from "../shared/product-features.mjs";
+
 const ROOT = new URL("..", import.meta.url);
 
-test("conversation uses a local Apple Emoji Mart picker with search, collection, and favorites tabs", async () => {
+test("conversation uses a local Apple Emoji Mart picker with active search and collection tabs", async () => {
   const [page, styles, packageJson] = await Promise.all([
     readFile(new URL("src/react/conversation-page.jsx", ROOT), "utf8"),
     readFile(new URL("src/styles/conversation.css", ROOT), "utf8"),
@@ -30,17 +32,17 @@ test("conversation uses a local Apple Emoji Mart picker with search, collection,
   assert.match(page, /searchPosition: mode === "search" \? "static" : "none",/);
   assert.match(page, /aria-label="搜索表情"/);
   assert.match(page, /aria-label="全部表情"/);
-  assert.match(page, /aria-label="收藏表情包"/);
-  assert.match(page, /aria-label="添加收藏表情包"/);
-  assert.match(page, /支持 PNG、JPG、WebP、GIF；发送时会标记为表情包。/);
+  assert.equal(PRODUCT_FEATURES.customEmojiStickers, false);
+  assert.match(page, /PRODUCT_FEATURES\.customEmojiStickers \? <button aria-label="收藏表情包"/);
+  assert.match(page, /conversation-emoji-picker__tabs\$\{PRODUCT_FEATURES\.customEmojiStickers \? "" : " is-compact"\}/);
   assert.match(page, /<ConversationEmojiPicker actions=\{actions\} \/>/);
   assert.doesNotMatch(page, /COMMON_EMOJI/);
-  assert.match(styles, /\.conversation-emoji-panel \{[\s\S]*?bottom: 54px;[\s\S]*?left: calc\(clamp\(14px, 2vw, 26px\) \+ 26\.5px\);[\s\S]*?translate: -50% 0;[\s\S]*?width: min\(376px, calc\(100vw - 48px\)\);/);
+  assert.match(styles, /\.conversation-emoji-panel \{[\s\S]*?bottom: 54px;[\s\S]*?left: calc\(var\(--conversation-composer-inline-padding\) \+ 26\.5px\);[\s\S]*?translate: -50% 0;[\s\S]*?width: min\(376px, calc\(100vw - 48px\)\);/);
   assert.match(styles, /\.conversation-pane:has\(\.conversation-emoji-panel\) \{[\s\S]*?overflow: visible;/);
   assert.match(styles, /\.conversation-chat-shell:has\(\.conversation-emoji-panel\) \{[\s\S]*?overflow: visible;/);
   assert.match(styles, /\.conversation-inline-emoji \{[\s\S]*?background-repeat: no-repeat;/);
   assert.match(styles, /\.conversation-emoji-picker__tabs \{[\s\S]*?grid-template-columns: repeat\(3, 1fr\);/);
-  assert.match(styles, /\.conversation-sticker-favorites__grid \{[\s\S]*?overflow: auto;/);
+  assert.match(styles, /\.conversation-emoji-picker__tabs\.is-compact \{[\s\S]*?grid-template-columns: repeat\(2, 1fr\);/);
   assert.match(packageJson, /"emoji-mart": "\^5\.6\.0"/);
   assert.match(packageJson, /"emoji-datasource-apple": "\^15\.0\.1"/);
 });

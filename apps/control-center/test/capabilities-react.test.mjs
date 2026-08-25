@@ -6,7 +6,11 @@ import test from "node:test";
 
 import {
   capabilityOverview,
+  createQQConnectionCapability,
   createWechatConnectionCapability,
+  QQ_DELIVERY_OPTIONS,
+  QQ_TEXT_SEGMENTATION_OPTIONS,
+  qqConnectionSettings,
   WECHAT_DELIVERY_OPTIONS,
   WECHAT_TEXT_SEGMENTATION_OPTIONS,
   wechatConnectionSettings,
@@ -20,11 +24,27 @@ function source(...parts) {
 
 test("WeChat delivery keeps approval prompts enabled by default", () => {
   const permissions = WECHAT_DELIVERY_OPTIONS.find(([key]) => key === "permissions");
+  const proactive = WECHAT_DELIVERY_OPTIONS.find(([key]) => key === "proactive");
   assert.deepEqual(permissions, ["permissions", "审批请求", "工具需要确认时的提醒，可回复“允许”或“拒绝”，默认投递"]);
+  assert.deepEqual(proactive, ["proactive", "主动关心", "Suzu 主动发起的联系，默认投递"]);
   const settings = wechatConnectionSettings({ delivery: { tools: false } });
   assert.equal(settings.delivery.permissions, true);
+  assert.equal(settings.delivery.proactive, true);
   assert.equal(settings.delivery.tools, false);
   assert.deepEqual(WECHAT_TEXT_SEGMENTATION_OPTIONS, [["paragraph", "空行分段"], ["sentence", "句子分段"]]);
+  assert.equal(settings.textSegmentation, "paragraph");
+});
+
+test("QQ delivery keeps approval prompts enabled by default", () => {
+  const permissions = QQ_DELIVERY_OPTIONS.find(([key]) => key === "permissions");
+  const proactive = QQ_DELIVERY_OPTIONS.find(([key]) => key === "proactive");
+  assert.deepEqual(permissions, ["permissions", "审批请求", "工具需要确认时的提醒，可回复“允许”或“拒绝”，默认投递"]);
+  assert.deepEqual(proactive, ["proactive", "主动关心", "Suzu 主动发起的联系，默认投递"]);
+  const settings = qqConnectionSettings({ delivery: { tools: false } });
+  assert.equal(settings.delivery.permissions, true);
+  assert.equal(settings.delivery.proactive, true);
+  assert.equal(settings.delivery.tools, false);
+  assert.deepEqual(QQ_TEXT_SEGMENTATION_OPTIONS, [["paragraph", "空行分段"], ["sentence", "句子分段"]]);
   assert.equal(settings.textSegmentation, "paragraph");
 });
 
@@ -40,6 +60,25 @@ test("WeChat capability configures delivery and reply segmentation", async () =>
   assert.match(wechat, /WECHAT_TEXT_SEGMENTATION_OPTIONS/u);
   assert.match(wechat, /textSegmentation/u);
   assert.doesNotMatch(wechat, /微信连接已开启|微信连接已关闭|按联系人绑定|settings\.enabled|settings\.linkedContacts/u);
+});
+
+test("QQ capability keeps bot setup separate from contact binding", async () => {
+  const detail = await source("src", "react", "capability-detail-page.jsx");
+  const start = detail.indexOf("function QQSettings");
+  const end = detail.indexOf("function GenericCapabilitySettings");
+  const qq = detail.slice(start, end);
+
+  assert.match(qq, /title="QQ 机器人"/u);
+  assert.match(qq, /name?=/u);
+  assert.match(qq, /actions\.configureQqBot/u);
+  assert.match(qq, /打开想连接的联系人设置/u);
+  assert.match(qq, /用 QQ 将绑定码发送给机器人/u);
+  assert.doesNotMatch(qq, /entryUrl|setEntryUrl/u);
+  assert.match(qq, /title="投送到 QQ 的内容"/u);
+  assert.match(qq, /QQ_DELIVERY_OPTIONS/u);
+  assert.match(qq, /QQ_TEXT_SEGMENTATION_OPTIONS/u);
+  assert.match(qq, /回复只会回到 QQ/u);
+  assert.doesNotMatch(qq, /当前联系人|联系人项目/u);
 });
 
 test("capability inner pages reuse every existing save and switch boundary", async () => {
@@ -61,6 +100,7 @@ test("capability inner pages reuse every existing save and switch boundary", asy
     assert.match(detail, new RegExp(`function ${setting}`, "u"));
   }
   assert.match(detail, /WechatSettings/u);
+  assert.match(detail, /QQSettings/u);
   assert.match(detail, /capabilityVisibleInCatalog/u);
   assert.match(detail, /ExternalCapabilitiesPage/u);
   assert.match(detail, /CapabilitySettingsForm/u);
@@ -85,6 +125,8 @@ test("capability inner pages reuse every existing save and switch boundary", asy
   assert.match(app, /contactId, contactEnabled/u);
   assert.match(app, /api\.capabilities\.saveSettings/u);
   assert.match(app, /api\.wechat\.saveSettings/u);
+  assert.match(app, /api\.qq\.saveSettings/u);
+  assert.match(app, /api\.qq\.configure/u);
   assert.match(app, /api\.externalCapabilities\.importManifest/u);
   assert.match(app, /api\.externalCapabilities\.setEnabled/u);
   assert.match(app, /api\.externalCapabilities\.remove/u);
@@ -112,7 +154,7 @@ test("image vision keeps processing policy inside the capability", async () => {
   assert.doesNotMatch(imageVision, /图片读取精度|等待时间|最长回复|最大图片大小|最长边|压缩质量|遇到拒答/u);
 });
 
-test("image generation keeps the phone-camera preset with its request protocol", async () => {
+test("image generation keeps phone-camera presentation rules out of user settings", async () => {
   const detail = await source("src", "react", "capability-detail-page.jsx");
   const imageGenerationStart = detail.indexOf("function ImageGenerationSettings");
   const imageGenerationEnd = detail.indexOf("const CUSTOM_TTS_RESPONSE_OPTIONS");
@@ -126,9 +168,27 @@ test("image generation keeps the phone-camera preset with its request protocol",
   assert.match(imageGeneration, /name="adapter"/u);
   assert.match(imageGeneration, /name="customAdapterId"/u);
   assert.match(imageGeneration, /CustomImageGenerationAdapterDialog/u);
-  assert.match(imageGeneration, /手机拍照式图片/u);
-  assert.match(imageGeneration, /作为图像生成的专用画面预设/u);
+  assert.doesNotMatch(imageGeneration, /手机拍照式图片|画面预设|rearSize|selfieSize|mirrorSize|maxImages|promptPrefix|promptSuffix/u);
   assert.doesNotMatch(detail, /function PhoneCameraSettings/u);
+});
+
+test("mail bridge presents business mail Skills separately from mailbox connection details", async () => {
+  const detail = await source("src", "react", "capability-detail-page.jsx");
+  const start = detail.indexOf("function MailAgentSkillDialog");
+  const end = detail.indexOf("function WechatSettings");
+  const mailBridge = detail.slice(start, end);
+
+  assert.match(mailBridge, /title="邮件业务 Skill"/u);
+  assert.match(mailBridge, /name="mailSkillName"/u);
+  assert.match(mailBridge, /name="mailSkillDescription"/u);
+  assert.match(mailBridge, /name="mailSkillSubject"/u);
+  assert.match(mailBridge, /新增邮件 Skill/u);
+  assert.match(mailBridge, /mail-agent-skill-list/u);
+  assert.match(mailBridge, /配置邮箱连接/u);
+  assert.match(mailBridge, /接收回信的主题/u);
+  assert.match(mailBridge, /高级服务器设置/u);
+  assert.match(mailBridge, /name="feedbackSubject"/u);
+  assert.doesNotMatch(mailBridge, /deliverySubject|deliveryDescription|邮件主题路由|交给 Agent 的邮件提示词|routePrompt|routeSubject/u);
 });
 
 test("video understanding keeps request protocol selection beside its API binding", async () => {
@@ -173,7 +233,7 @@ test("voice message uses adapters and keeps custom adapters in the request-proto
   assert.doesNotMatch(voiceMessage, /eyebrow="VOICE SERVICES"/u);
 });
 
-test("companion catalog keeps WeChat and mail while moving proactive contact into contact settings", () => {
+test("companion catalog keeps external chat connectors and mail while moving proactive contact into contact settings", () => {
   const overview = capabilityOverview({
     capabilitySnapshot: {
       capabilities: [
@@ -183,12 +243,14 @@ test("companion catalog keeps WeChat and mail while moving proactive contact int
       ],
     },
     wechatSnapshot: { enabled: true },
+    qqSnapshot: { bot: { configured: true } },
   });
 
   assert.equal(createWechatConnectionCapability({}).category, "companion");
+  assert.equal(createQQConnectionCapability({}).category, "companion");
   assert.deepEqual(
     overview.capabilities.filter((capability) => capability.category === "companion").map((capability) => capability.id),
-    ["mail-bridge", "wechat-connection"],
+    ["mail-bridge", "wechat-connection", "qq-connection"],
   );
   assert.equal(overview.capabilities.some((capability) => capability.id === "proactive-contact"), false);
 });

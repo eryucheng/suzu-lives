@@ -452,12 +452,80 @@
   padding:18px;
 }
 
+.mail-bridge-config-form__advanced {
+  display:grid;
+  gap:14px;
+  border:1px solid color-mix(in srgb,var(--border) 86%,var(--accent));
+  border-radius:12px;
+  background:var(--panel-soft);
+  padding:14px;
+}
+
+.mail-bridge-config-form__advanced summary {
+  color:var(--text);
+  cursor:pointer;
+  font-size:var(--font-size-sm);
+  font-weight:var(--font-weight-bold);
+}
+
+.mail-bridge-config-form__advanced > p {
+  margin:0;
+  color:var(--text-muted);
+  font-size:var(--font-size-sm);
+  line-height:1.55;
+}
+
 .mail-bridge-config-form__actions {
   display:flex;
   justify-content:flex-end;
   gap:10px;
   border-top:1px solid color-mix(in srgb,var(--border) 84%,transparent);
   padding-top:16px;
+}
+
+.mail-agent-skill-list {
+  display:grid;
+  gap:10px;
+}
+
+.mail-agent-skill {
+  display:grid;
+  grid-template-columns:minmax(0,1fr) auto;
+  align-items:start;
+  gap:16px;
+  border:1px solid color-mix(in srgb,var(--border) 88%,transparent);
+  border-radius:12px;
+  background:var(--panel-soft);
+  padding:14px;
+}
+
+.mail-agent-skill__copy {
+  min-width:0;
+}
+
+.mail-agent-skill__copy strong {
+  color:var(--text);
+  font-size:var(--font-size-sm);
+}
+
+.mail-agent-skill__copy p {
+  margin:6px 0;
+  color:var(--text-secondary);
+  font-size:var(--font-size-sm);
+  line-height:1.58;
+  white-space:pre-wrap;
+}
+
+.mail-agent-skill__copy small {
+  color:var(--text-muted);
+  font-size:var(--font-size-xs);
+}
+
+.mail-agent-skill__actions {
+  display:flex;
+  flex-wrap:wrap;
+  justify-content:flex-end;
+  gap:8px;
 }
 
 .capability-api-binding-react {

@@ -100,12 +100,12 @@
 }
 
 .settings-action-button {
-  background:var(--panel);
+  background:var(--surface-control,var(--panel));
   box-shadow:none;
 }
 
 .settings-action-button:hover:not(:disabled) {
-  background:var(--panel);
+  background:var(--surface-control,var(--panel));
   border-color:color-mix(in srgb, var(--accent2) 45%, var(--border));
 }
 
@@ -113,6 +113,274 @@
   border-color:color-mix(in srgb, var(--accent) 30%, transparent);
   background:color-mix(in srgb, var(--accent) 13%, transparent);
   color:var(--text);
+}
+
+.settings-appearance-heading {
+  margin-bottom:var(--space-xl);
+}
+
+.settings-appearance-options {
+  display:grid;
+}
+
+.settings-appearance-option {
+  display:grid;
+  grid-template-columns:minmax(0,1fr) auto;
+  align-items:center;
+  gap:var(--space-xl);
+  border-top:1px solid var(--border);
+  padding:var(--space-lg) 0;
+}
+
+.settings-appearance-option:last-child {
+  padding-bottom:0;
+}
+
+.settings-appearance-option strong {
+  color:var(--text);
+  font-size:var(--font-size-sm);
+}
+
+.settings-appearance-option .settings-card__copy > span {
+  color:var(--text-muted);
+  font-size:var(--font-size-xs);
+  line-height:1.5;
+}
+
+.settings-wallpaper-file {
+  max-width:min(700px,60vw);
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+
+.settings-appearance-option--wallpapers {
+  display:block;
+}
+
+.settings-wallpaper-library {
+  display:grid;
+  min-width:0;
+  gap:var(--space-lg);
+}
+
+.settings-wallpaper-library__head {
+  display:grid;
+  grid-template-columns:minmax(0,1fr) auto;
+  align-items:center;
+  gap:var(--space-xl);
+}
+
+.settings-wallpaper-list {
+  display:grid;
+  gap:8px;
+}
+
+.settings-wallpaper-item {
+  display:grid;
+  grid-template-columns:72px minmax(0,1fr) auto;
+  align-items:center;
+  gap:var(--space-md);
+  border:1px solid var(--border);
+  border-radius:14px;
+  padding:10px;
+  background:color-mix(in srgb, var(--surface-control,var(--panel)) 78%, transparent);
+}
+
+.settings-wallpaper-item.is-active {
+  border-color:color-mix(in srgb, var(--accent) 38%, var(--border));
+  background:color-mix(in srgb, var(--accent) 9%, var(--surface-control,var(--panel)));
+}
+
+.settings-wallpaper-item__preview {
+  display:grid;
+  width:72px;
+  height:50px;
+  place-items:center;
+  overflow:hidden;
+  border:1px solid color-mix(in srgb, var(--border) 82%, transparent);
+  border-radius:10px;
+  background:color-mix(in srgb, var(--surface-page) 82%, var(--panel));
+  color:var(--text-muted);
+  font-size:var(--font-size-sm);
+  font-weight:var(--font-weight-bold);
+}
+
+.settings-wallpaper-item__preview img,
+.settings-wallpaper-item__preview video {
+  display:block;
+  width:100%;
+  height:100%;
+  object-fit:cover;
+}
+
+.settings-wallpaper-item__copy {
+  display:grid;
+  min-width:0;
+  gap:3px;
+}
+
+.settings-wallpaper-item__copy > div {
+  display:flex;
+  align-items:center;
+  flex-wrap:wrap;
+  gap:var(--space-sm);
+}
+
+.settings-wallpaper-item__copy strong {
+  overflow:hidden;
+  color:var(--text);
+  font-size:var(--font-size-sm);
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+
+.settings-wallpaper-item__copy > span {
+  overflow:hidden;
+  color:var(--text-muted);
+  font-size:var(--font-size-xs);
+  line-height:1.45;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+
+.settings-wallpaper-item__actions {
+  display:flex;
+  align-items:center;
+  gap:6px;
+}
+
+.settings-wallpaper-empty {
+  max-width:none !important;
+  border:1px dashed var(--border);
+  border-radius:14px;
+  padding:18px;
+  text-align:center;
+}
+
+.settings-wallpaper-dialog {
+  display:grid;
+  width:100%;
+  min-width:0;
+  gap:var(--space-lg);
+}
+
+.settings-wallpaper-dialog > p,
+.settings-wallpaper-remove-dialog p,
+.settings-wallpaper-remove-dialog span {
+  margin:0;
+  color:var(--text-secondary);
+  font-size:var(--font-size-sm);
+  line-height:1.65;
+}
+
+.settings-wallpaper-source-actions,
+.settings-wallpaper-dialog__actions {
+  display:flex;
+  flex-wrap:wrap;
+  justify-content:flex-end;
+  gap:var(--space-sm);
+}
+
+.settings-wallpaper-source-actions {
+  justify-content:flex-start;
+}
+
+.settings-wallpaper-source {
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:var(--space-md);
+  border:1px solid var(--border);
+  border-radius:12px;
+  padding:11px 12px;
+  background:var(--surface-control,var(--panel));
+}
+
+.settings-wallpaper-source.is-empty {
+  justify-content:flex-start;
+  color:var(--text-muted);
+  font-size:var(--font-size-xs);
+}
+
+.settings-wallpaper-source > div {
+  display:grid;
+  min-width:0;
+  gap:2px;
+}
+
+.settings-wallpaper-source span {
+  color:var(--text-muted);
+  font-size:var(--font-size-xs);
+}
+
+.settings-wallpaper-source strong {
+  overflow:hidden;
+  color:var(--text);
+  font-size:var(--font-size-sm);
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+
+.settings-wallpaper-name-field {
+  display:grid;
+  gap:6px;
+  color:var(--text);
+  font-size:var(--font-size-sm);
+  font-weight:var(--font-weight-semibold);
+}
+
+.settings-wallpaper-name-field > span:not(:first-child),
+.settings-wallpaper-name-field input {
+  width:100%;
+}
+
+.settings-wallpaper-name-field small {
+  color:var(--text-muted);
+  font-size:var(--font-size-xs);
+  font-weight:var(--font-weight-regular);
+  line-height:1.5;
+}
+
+.settings-wallpaper-pin-field {
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:var(--space-xl);
+  border:1px solid var(--border);
+  border-radius:var(--radius-lg);
+  background:color-mix(in srgb, var(--surface-control,var(--panel)) 76%, transparent);
+  padding:var(--space-md) var(--space-lg);
+}
+
+.settings-wallpaper-pin-field > div {
+  display:grid;
+  min-width:0;
+  gap:4px;
+}
+
+.settings-wallpaper-pin-field strong {
+  color:var(--text);
+  font-size:var(--font-size-sm);
+}
+
+.settings-wallpaper-pin-field span {
+  color:var(--text-muted);
+  font-size:var(--font-size-xs);
+  line-height:1.45;
+}
+
+.settings-wallpaper-dialog__error {
+  margin:0 !important;
+  color:var(--danger,#c74a55) !important;
+  font-size:var(--font-size-xs) !important;
+}
+
+.settings-wallpaper-remove-dialog {
+  display:grid;
+  width:100%;
+  min-width:0;
+  gap:8px;
 }
 
 .settings-warning-card {
@@ -277,4 +545,11 @@
   .settings-privacy-contact { align-items:stretch; flex-direction:column; }
   .settings-privacy-contact > .settings-action-button { align-self:flex-start; }
   .settings-system-status-item__head { align-items:stretch; flex-direction:column; }
+  .settings-appearance-option { grid-template-columns:minmax(0,1fr); }
+  .settings-wallpaper-file { max-width:100%; }
+  .settings-wallpaper-library__head { grid-template-columns:minmax(0,1fr); }
+  .settings-wallpaper-library__head .settings-card__actions { justify-content:flex-start; }
+  .settings-wallpaper-item { grid-template-columns:64px minmax(0,1fr); }
+  .settings-wallpaper-item__preview { width:64px; }
+  .settings-wallpaper-item__actions { grid-column:1 / -1; justify-content:flex-end; }
 }

@@ -104,9 +104,13 @@ test("an empty current announcement never creates a popup", () => {
   assert.equal(normalizeReleaseAnnouncement({}), null);
 });
 
-test("the v0.2 release announcement uses the Suzu runtime name, not its upstream implementation name", () => {
+test("the v0.3 release announcement describes the public companion updates", () => {
   const text = [CURRENT_RELEASE_ANNOUNCEMENT.title, CURRENT_RELEASE_ANNOUNCEMENT.summary, ...CURRENT_RELEASE_ANNOUNCEMENT.items].join("\n");
 
-  assert.match(text, /Suzu.*Agent Core/u);
-  assert.doesNotMatch(text, /\bDSH\b/u);
+  assert.equal(CURRENT_RELEASE_ANNOUNCEMENT.title, "Suzu Lives v0.2.10 → v0.3.0");
+  assert.match(text, /QQ 联系人连接/u);
+  assert.match(text, /自定义图片、视频壁纸/u);
+  assert.equal(CURRENT_RELEASE_ANNOUNCEMENT.items.length, 3);
+  assert.doesNotMatch(text, /表情包/u);
+  assert.doesNotMatch(text, /\bDSH\b|\bAgent Core\b/u);
 });

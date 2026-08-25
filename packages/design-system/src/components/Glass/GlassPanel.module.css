@@ -1,12 +1,14 @@
-/* GlassPanel —— 静态渐变模拟的磨砂玻璃面板 */
+/* GlassPanel —— 由应用表面 token 决定经典或壁纸玻璃材质。 */
 
 .panel {
   position: relative;
   overflow: hidden; /* 让 ::before 高光在圆角处被裁剪，不露出边角 */
   border-radius: var(--radius-lg);
-  border: 1px solid var(--glass-border);
-  background: var(--glass-bg);
-  box-shadow: var(--glass-panel-shadow, var(--glass-shadow));
+  border: 1px solid var(--surface-border, var(--glass-border));
+  background: var(--surface-card-glaze, none), var(--surface-card, var(--glass-bg));
+  -webkit-backdrop-filter: var(--surface-card-backdrop, none);
+  backdrop-filter: var(--surface-card-backdrop, none);
+  box-shadow: var(--surface-glass-shadow, var(--glass-panel-shadow, var(--glass-shadow)));
 }
 
 /* 强度变体 */

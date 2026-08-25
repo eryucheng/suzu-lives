@@ -12,10 +12,21 @@ import { PROACTIVE_CONTACT_TURN_SOURCE } from "./proactive-contact-maintenance.m
 
 const MAX_MESSAGES = 500;
 const HISTORY_PAGE_SIZE = 600;
-// This is an event page rather than a rendered-bubble count. Internal Core
-// events can occupy a sizeable part of a page, so keep enough headroom for a
-// useful first transcript while retaining bounded client-side history.
-const CHAT_HISTORY_PAGE_SIZE = 360;
+// A conversation page is defined by what a person can see. Agent Core still
+// stores stream and lifecycle records, so the reader may scan several raw
+// event pages to assemble this one visible page.
+const CHAT_HISTORY_EVENT_PAGE_SIZE = 100;
+const CHAT_HISTORY_VISIBLE_MESSAGE_LIMIT = 100;
+const CHAT_HISTORY_BACKFILL_PAGE_SIZE = 2_000;
+const CHAT_HISTORY_INITIAL_MAX_EVENTS = 12_000;
+const TRANSCRIPT_DISPLAY_DEFAULTS = Object.freeze({
+  attachments: false,
+  dynamicContext: false,
+  tools: true,
+  thinking: false,
+  system: false,
+  tokens: false,
+});
 const SESSION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
 const MAX_CONVERSATION_ATTACHMENT_ITEMS = 24;
 const VOICE_CALL_TURN_OPEN = "<suzu-voice-call-turn>";
@@ -256,7 +267,7 @@ function historyEventSequence(entry) {
   return Number.isSafeInteger(sequence) && sequence >= 0 ? sequence : null;
 }
 
-function historyPageMetadata(events, history, { limit = CHAT_HISTORY_PAGE_SIZE } = {}) {
+function historyPageMetadata(events, history, { limit = CHAT_HISTORY_EVENT_PAGE_SIZE } = {}) {
   const sequences = (Array.isArray(events) ? events : [])
     .map(historyEventSequence)
     .filter((sequence) => sequence !== null);
@@ -269,8 +280,59 @@ function historyPageMetadata(events, history, { limit = CHAT_HISTORY_PAGE_SIZE }
   });
 }
 
-function emptyHistoryPage({ limit = CHAT_HISTORY_PAGE_SIZE } = {}) {
+function emptyHistoryPage({ limit = CHAT_HISTORY_EVENT_PAGE_SIZE } = {}) {
   return historyPageMetadata([], null, { limit });
+}
+
+function visibleTranscriptEntries(messages, value = {}) {
+  const preferences = { ...TRANSCRIPT_DISPLAY_DEFAULTS, ...plainObject(value) };
+  return (Array.isArray(messages) ? messages : []).flatMap((message, index) => {
+    const kind = clean(message?.kind);
+    if ((kind === "attachment" && !preferences.attachments)
+      || (kind === "dynamic-context" && !preferences.dynamicContext)
+      || (kind === "system" && !preferences.system)) return [];
+    const visibleBlocks = (Array.isArray(message?.blocks) ? message.blocks : []).filter((block) => {
+      if (clean(block?.kind) === "thinking") return preferences.thinking;
+      const blockKind = clean(block?.kind);
+      return !((blockKind === "tool_use" || blockKind === "tool_result") && !preferences.tools);
+    });
+    const visible = visibleBlocks.length > 0 || (kind === "assistant" && preferences.tokens && message?.usage);
+    return visible ? [{ index, message }] : [];
+  });
+}
+
+function visibleTranscriptPage(messages, preferences, { limit = CHAT_HISTORY_VISIBLE_MESSAGE_LIMIT } = {}) {
+  const source = Array.isArray(messages) ? messages : [];
+  const visible = visibleTranscriptEntries(source, preferences);
+  if (visible.length <= limit) {
+    return Object.freeze({
+      messages: source,
+      omittedVisibleMessages: false,
+      oldestVisibleEventSeq: null,
+    });
+  }
+  const firstVisible = visible.at(-limit);
+  const oldestVisibleEventSeq = Number(firstVisible?.message?.lineNumber);
+  return Object.freeze({
+    messages: source.slice(Number(firstVisible?.index) || 0),
+    omittedVisibleMessages: true,
+    oldestVisibleEventSeq: Number.isSafeInteger(oldestVisibleEventSeq) && oldestVisibleEventSeq > 0
+      ? oldestVisibleEventSeq
+      : null,
+  });
+}
+
+function visibleHistoryPageMetadata(events, history, page, { limit = CHAT_HISTORY_VISIBLE_MESSAGE_LIMIT } = {}) {
+  const metadata = historyPageMetadata(events, history, { limit });
+  const omittedVisibleMessages = page?.omittedVisibleMessages === true;
+  const oldestVisibleEventSeq = Number(page?.oldestVisibleEventSeq);
+  return Object.freeze({
+    ...metadata,
+    hasMore: metadata.hasMore || omittedVisibleMessages,
+    ...(omittedVisibleMessages && Number.isSafeInteger(oldestVisibleEventSeq) && oldestVisibleEventSeq > 0
+      ? { oldestEventSeq: oldestVisibleEventSeq }
+      : {}),
+  });
 }
 
 function historyPageValue(value = {}) {
@@ -1241,6 +1303,55 @@ export function createConversationReader({
     }
   };
 
+  const displayMessages = (events, catalog, deletions, maxMessages = MAX_MESSAGES) => conversationDisplayMessages(events, maxMessages, {
+    dataRoot,
+    deletedEventSequences: deletions.eventSequences,
+    includeDynamicContext: catalog.settings?.conversationPreferences?.dynamicContext === true,
+  });
+
+  // Agent Core pages are measured in durable events. A streamed reply can
+  // contain hundreds of chunks, reasoning records, and lifecycle events while
+  // producing only a few rows. Assemble the requested visible page before it
+  // reaches the renderer. The raw-event ceiling keeps the scan bounded for
+  // unusually verbose sessions.
+  const readVisibleHistoryPage = async (catalog, initialHistory, deletions) => {
+    let history = initialHistory;
+    let events = Array.isArray(initialHistory?.events) ? initialHistory.events : [];
+    let messages = displayMessages(events, catalog, deletions);
+    let visible = visibleTranscriptEntries(messages, catalog.settings?.conversationPreferences);
+    const visitedCursors = new Set();
+
+    while (
+      history?.hasMore === true
+      && visible.length < CHAT_HISTORY_VISIBLE_MESSAGE_LIMIT
+      && events.length < CHAT_HISTORY_INITIAL_MAX_EVENTS
+    ) {
+      const cursor = historyPageMetadata(events, history, { limit: CHAT_HISTORY_EVENT_PAGE_SIZE }).oldestEventSeq;
+      if (!Number.isSafeInteger(cursor) || cursor < 0 || visitedCursors.has(cursor)) break;
+      visitedCursors.add(cursor);
+
+      const remainingEvents = CHAT_HISTORY_INITIAL_MAX_EVENTS - events.length;
+      const olderHistory = await activeHistory(catalog, {
+        beforeSeq: cursor,
+        limit: Math.min(CHAT_HISTORY_BACKFILL_PAGE_SIZE, remainingEvents),
+      });
+      const olderEvents = Array.isArray(olderHistory?.events) ? olderHistory.events : [];
+      const olderCursor = historyPageMetadata(olderEvents, olderHistory, {
+        limit: CHAT_HISTORY_BACKFILL_PAGE_SIZE,
+      }).oldestEventSeq;
+      // A runtime that cannot move the cursor must not turn an initial render
+      // into an unbounded retry loop.
+      if (!olderEvents.length || !Number.isSafeInteger(olderCursor) || olderCursor >= cursor) break;
+
+      events = [...olderEvents, ...events];
+      history = { ...plainObject(history), hasMore: olderHistory?.hasMore === true };
+      messages = displayMessages(events, catalog, deletions);
+      visible = visibleTranscriptEntries(messages, catalog.settings?.conversationPreferences);
+    }
+
+    return { history, events, messages };
+  };
+
   const reconcileUsageHistory = async (catalog, events, highestSequence) => {
     if (typeof onAgentUsageEvents !== "function"
       || !catalog.activeContact?.agentId
@@ -1315,7 +1426,7 @@ export function createConversationReader({
     };
   };
 
-  const unavailableContext = (catalog, contactsVersion, error, { historyLimit = CHAT_HISTORY_PAGE_SIZE } = {}) => {
+  const unavailableContext = (catalog, contactsVersion, error, { historyLimit = CHAT_HISTORY_EVENT_PAGE_SIZE } = {}) => {
     const unavailable = unavailableHistory(error);
     const session = {
       id: catalog.sessionId,
@@ -1340,7 +1451,12 @@ export function createConversationReader({
     };
   };
 
-  const context = async ({ historyLimit = HISTORY_PAGE_SIZE, beforeSeq = undefined, reconcileUsage = true } = {}) => {
+  const context = async ({
+    historyLimit = HISTORY_PAGE_SIZE,
+    beforeSeq = undefined,
+    reconcileUsage = true,
+    assembleVisiblePage = false,
+  } = {}) => {
     const safeHistoryLimit = Number.isSafeInteger(historyLimit) && historyLimit > 0
       ? Math.min(historyLimit, 2_000)
       : HISTORY_PAGE_SIZE;
@@ -1381,18 +1497,26 @@ export function createConversationReader({
     } catch (error) {
       return unavailableContext(catalog, contactsVersion, error, { historyLimit: safeHistoryLimit });
     }
-    const events = Array.isArray(history.events) ? history.events : [];
+    let events = Array.isArray(history.events) ? history.events : [];
     let deletions;
     try {
       deletions = await activeMessageDeletions(catalog);
     } catch (error) {
       return unavailableContext(catalog, contactsVersion, error, { historyLimit: safeHistoryLimit });
     }
-    const messages = conversationDisplayMessages(events, MAX_MESSAGES, {
-      dataRoot,
-      deletedEventSequences: deletions.eventSequences,
-      includeDynamicContext: catalog.settings?.conversationPreferences?.dynamicContext === true,
-    });
+    let messages = displayMessages(events, catalog, deletions);
+    if (assembleVisiblePage) {
+      try {
+        const expanded = await readVisibleHistoryPage(catalog, history, deletions);
+        history = expanded.history;
+        events = expanded.events;
+        messages = expanded.messages;
+      } catch (error) {
+        return unavailableContext(catalog, contactsVersion, error, { historyLimit: safeHistoryLimit });
+      }
+    }
+    const visiblePage = visibleTranscriptPage(messages, catalog.settings?.conversationPreferences);
+    messages = visiblePage.messages;
     const contextRecords = conversationContextRecords(events, HISTORY_PAGE_SIZE, {
       deletedEventSequences: deletions.eventSequences,
     });
@@ -1406,7 +1530,9 @@ export function createConversationReader({
       draft: events.length === 0,
     };
     const highestSequence = events.reduce((maximum, entry) => Math.max(maximum, Number(historyEvent(entry).seq) || 0), 0);
-    const historyPage = historyPageMetadata(events, history, { limit: safeHistoryLimit });
+    const historyPage = visibleHistoryPageMetadata(events, history, visiblePage, {
+      limit: CHAT_HISTORY_VISIBLE_MESSAGE_LIMIT,
+    });
     if (reconcileUsage && beforeSeq === undefined) {
       if (safeHistoryLimit >= HISTORY_PAGE_SIZE) {
         await reconcileUsageHistory(catalog, events, highestSequence);
@@ -1442,7 +1568,8 @@ export function createConversationReader({
     const request = historyPageValue(value);
     const current = await context({
       beforeSeq: request.beforeSeq,
-      historyLimit: CHAT_HISTORY_PAGE_SIZE,
+      historyLimit: CHAT_HISTORY_EVENT_PAGE_SIZE,
+      assembleVisiblePage: true,
     });
     return {
       status: current.status,

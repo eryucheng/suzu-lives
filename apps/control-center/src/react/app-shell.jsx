@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { flushSync } from "react-dom";
+import { createPortal, flushSync } from "react-dom";
 import { Avatar, Button, Dialog, Input, SideNav, SideNavItem } from "suzu-design-system";
 import { releasePointerCapture } from "../core/pointer-capture.mjs";
 import { ApplicationRouter } from "./app-router.jsx";
@@ -7,6 +7,7 @@ import { ConversationCallProvider } from "./conversation-call.jsx";
 import { OnboardingDialog } from "./onboarding-dialog.jsx";
 import { usePointerCaptureRecovery } from "./pointer-capture-recovery.mjs";
 import { SoftwareAssistantDialog } from "./software-assistant-dialog.jsx";
+import { WallpaperStage } from "./wallpaper-stage.jsx";
 
 let latestWorkspace = null;
 let latestNotice = "";
@@ -106,7 +107,7 @@ function IncomingConversationNotice({ notice = null }) {
   if (!notice?.preview) return null;
   return (
     <aside aria-atomic="true" aria-live="polite" className="incoming-conversation-notice" role="status">
-      <img alt="" className="incoming-conversation-notice__icon" src="./app-icon.png" />
+      <img alt="" className="incoming-conversation-notice__icon" src={notice.avatar || "./app-icon.png"} />
       <div className="incoming-conversation-notice__copy">
         <div className="incoming-conversation-notice__meta">
           <strong>{notice.senderName || "Suzu"}</strong>
@@ -124,7 +125,7 @@ function IncomingVoiceCall({ call = null, onAnswer, onDecline }) {
   const senderName = String(call.senderName || "Suzu").trim() || "Suzu";
   const reason = String(call.reason || "").trim();
   const answering = call.phase === "answering";
-  return (
+  const dialog = (
     <aside aria-label={`${senderName} 的语音来电`} className="incoming-voice-call" role="dialog">
       <div className="incoming-voice-call__content">
         <span className="incoming-voice-call__eyebrow">VOICE CALL</span>
@@ -143,6 +144,7 @@ function IncomingVoiceCall({ call = null, onAnswer, onDecline }) {
       </div>}
     </aside>
   );
+  return typeof document === "undefined" ? dialog : createPortal(dialog, document.body);
 }
 
 function ReleaseAnnouncementDialog({ announcement = null, onAcknowledge, open = false }) {
@@ -391,7 +393,8 @@ export function AppShell() {
   };
 
   return (
-    <div className="desktop-shell">
+    <div className="desktop-shell" data-ui-style={workspace?.appearance?.styleId || "classic"}>
+      <WallpaperStage appearance={workspace?.appearance} onError={workspace?.actions?.reportWallpaperError} />
       <div
         className={`app-shell${sidebarResizing ? " is-resizing-sidebar" : ""}`}
         data-sidebar-compact={sidebarIsCompact ? "true" : "false"}

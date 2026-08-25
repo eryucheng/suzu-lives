@@ -3,16 +3,18 @@ name: image-generation
 description: 通过 Suzu Lives 的图像引擎生成图片。
 ---
 
-# Image Generation
+# 图像生成
 
-执行稳定入口：
+普通图片：
 
-`suzu-lives image-generation --prompt "画面中实际需要生成的内容"`
+`suzu-lives image-generation --prompt "画面内容"`
 
-手机拍照式画面与普通图片共用图像生成能力。Agent action 使用 `stylePreset: "phone-camera"`，并提供 `shot`（`rear`、`selfie` 或 `mirror`）与 `scene`；该路径读取图像生成设置中的画面预设。
+参考图使用重复的 `--ref [identity|location|object|style=]PATH`。用户要求参考当前聊天图片时，将附件路径作为 `--ref` 传入。
 
-可选 `--size WIDTHxHEIGHT`，以及重复的 `--ref [identity|location|object|style=]PATH`。请求协议和 API 由 Suzu Lives 的统一软件配置决定。
+已有视觉资料可能影响画面时，先读取当前 `suzu-image-generation` 产品 Skill 给出的视觉参考注册表，再根据其中的角色和描述判断是否使用、选哪项。
 
-`--out` 必须位于当前 Agent 的 Suzu Lives 数据目录；`--config` 必须位于软件统一的 `capabilities/image-generation` 配置目录。图片 API 使用“设置 → API”里为“生图”选定的连接，不读取外部配置或凭据；模型与请求协议由该连接决定。成功 JSON 的 `status: "ok"` 才代表图片已保存。
+手机拍照式画面使用：
 
-生成后的 JSON 会给出本地图片路径。若用户要求交付，使用当前 Suzu 会话系统提示中提供的附件交付命令；它会显示在本会话中，并在该会话已绑定微信时自动发送。不要使用 `--send`，也不要自动导入视觉参考库或调用 image-vision；是否识图、保存为参考、或交付是独立后续动作。
+`{ stylePreset: "phone-camera", shot: "rear" | "selfie" | "mirror", scene: "画面内容", references?: [{ scope: "contact" | "shared", id: "资料或分组 ID" }] }`
+
+自拍或镜前照会自动附带当前联系人的 `identity` 参考图。场景、物品和风格参考按本次画面从可用资料中选择后传入。

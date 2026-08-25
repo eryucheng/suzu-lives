@@ -2,11 +2,13 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  COMPLETED_REPLY_BUBBLE_INTERVAL_MS,
   companionPeerLabel,
   conversationMessageBlocks,
   conversationMessageRows,
   dismissConversationOverlays,
   filterConversationItems,
+  groupConversationToolActivityRows,
   hasMarkdownFormatting,
   isScheduledAgentReply,
   liveReplyPresentationChanged,
@@ -247,9 +249,24 @@ test("the shared conversation block adapter renders native tool calls and result
   });
 
   assert.deepEqual(blocks, [
-    { detail: "{\"command\":\"Get-ChildItem\"}", title: "工具调用 · pwsh · {\"command\":\"Get-ChildItem\"}", type: "detail" },
-    { detail: "已读取联系人目录", title: "工具结果 · 已读取联系人目录", type: "detail" },
+    { detail: "{\"command\":\"Get-ChildItem\"}", detailKind: "tool_use", title: "工具调用 · pwsh · {\"command\":\"Get-ChildItem\"}", type: "detail" },
+    { detail: "已读取联系人目录", detailKind: "tool_result", title: "工具结果 · 已读取联系人目录", type: "detail" },
   ]);
+});
+
+test("adjacent tool-only messages collapse into one activity group without crossing a reply", () => {
+  const rows = conversationMessageRows([
+    { id: "tool-start", kind: "assistant", timestamp: "2026-08-25T10:00:00.000Z", blocks: [{ kind: "tool_use", name: "shell", detail: "git status" }] },
+    { id: "tool-result", kind: "assistant", timestamp: "2026-08-25T10:00:01.000Z", blocks: [{ kind: "tool_result", detail: "工作区干净" }] },
+    { id: "reply", kind: "assistant", timestamp: "2026-08-25T10:00:02.000Z", blocks: [{ kind: "text", text: "我检查好了。" }] },
+    { id: "tool-next", kind: "assistant", timestamp: "2026-08-25T10:00:03.000Z", blocks: [{ kind: "tool_use", name: "mail", detail: "发送邮件" }] },
+  ], { state: { settings: { conversationPreferences: {} } } });
+
+  const grouped = groupConversationToolActivityRows(rows).filter((row) => row.type !== "time");
+  assert.deepEqual(grouped.map((row) => row.type), ["tool-group", "message", "tool-group"]);
+  assert.deepEqual(grouped[0]?.entries.map((entry) => entry.detailKind), ["tool_use", "tool_result"]);
+  assert.equal(grouped[0]?.entries[0]?.detail, "git status");
+  assert.equal(grouped[2]?.entries.length, 1);
 });
 
 test("new system and tool records retain the chat-bubble entrance marker", () => {
@@ -380,6 +397,69 @@ test("companion reply projection hides unfinished token text and only adds compl
   assert.deepEqual(unfinished.map((item) => item.blocks[0]?.text), ["继续"]);
 });
 
+test("live text and tool cards follow one Agent Core event timeline", () => {
+  const firstReply = projectedLiveReply(null, {
+    content: "我先查一下。",
+    coreSequence: 21,
+    presentationOrder: 1,
+    requestId: "turn-ordered",
+    sessionId: "session-1",
+    timestamp: "2026-08-25T10:00:01.000Z",
+  });
+  const secondReply = projectedLiveReply(firstReply, {
+    content: "我先查一下。查完了。",
+    coreSequence: 24,
+    presentationOrder: 4,
+    requestId: "turn-ordered",
+    sessionId: "session-1",
+    timestamp: "2026-08-25T10:00:04.000Z",
+  });
+  assert.deepEqual(secondReply.sentenceTimeline.map((item) => item.coreSequence), [21, 24]);
+
+  const merged = mergeConversationMessages([
+    {
+      id: "user",
+      kind: "user",
+      lineNumber: 20,
+      timestamp: "2026-08-25T10:00:00.000Z",
+      blocks: [{ kind: "text", text: "帮我查一下" }],
+    },
+    {
+      id: "durable-later",
+      kind: "assistant",
+      lineNumber: 25,
+      timestamp: "2026-08-25T10:00:05.000Z",
+      blocks: [{ kind: "text", text: "持久记录已经落盘。" }],
+    },
+  ], [], new Map([["turn-ordered", secondReply]]), "session-1", [], [
+    {
+      id: "tool-start",
+      kind: "assistant",
+      sessionId: "session-1",
+      requestId: "turn-ordered",
+      coreSequence: 22,
+      presentationOrder: 2,
+      timestamp: "2026-08-25T10:00:02.000Z",
+      blocks: [{ kind: "tool_use", summary: "工具调用：weather" }],
+    },
+    {
+      id: "tool-result",
+      kind: "assistant",
+      sessionId: "session-1",
+      requestId: "turn-ordered",
+      coreSequence: 23,
+      presentationOrder: 3,
+      timestamp: "2026-08-25T10:00:03.000Z",
+      blocks: [{ kind: "tool_result", summary: "工具结果：weather" }],
+    },
+  ]);
+
+  assert.deepEqual(
+    merged.map((item) => item.blocks[0]?.text || item.blocks[0]?.summary),
+    ["帮我查一下", "我先查一下。", "工具调用：weather", "工具结果：weather", "查完了。", "持久记录已经落盘。"],
+  );
+});
+
 test("multi-step completion keeps the streamed bubbles instead of projecting one aggregate duplicate", () => {
   const first = projectedLiveReply(null, {
     content: "我先检查。",
@@ -441,9 +521,9 @@ test("companion header substitutes the contact note only during a real thinking 
 });
 
 test("conversation overlays close together when the user clicks away or presses Escape", () => {
-  const state = { avatarCrop: { source: "data:image/png;base64,avatar" }, contactCreateOpen: true, contactContextMenu: { contactId: "contact-test" }, contactRenameOpen: true, emojiOpen: true, fileContextMenu: { fileUrl: "file:///C:/temp/report.txt" }, mediaPreview: { url: "file:///C:/temp/image.png" }, menuOpen: true, messageContextMenu: { lineNumber: 42 }, searchOpen: false, settingsOpen: true, wechatQrOpen: true };
+  const state = { avatarCrop: { source: "data:image/png;base64,avatar" }, contactCreateOpen: true, contactContextMenu: { contactId: "contact-test" }, contactRenameOpen: true, emojiOpen: true, fileContextMenu: { fileUrl: "file:///C:/temp/report.txt" }, mediaPreview: { url: "file:///C:/temp/image.png" }, menuOpen: true, messageContextMenu: { lineNumber: 42 }, qqBindingOpen: true, searchOpen: false, settingsOpen: true, wechatQrOpen: true };
   assert.equal(dismissConversationOverlays(state), true);
-  assert.deepEqual(state, { avatarCrop: null, contactCreateOpen: false, contactContextMenu: null, contactRenameOpen: false, emojiOpen: false, fileContextMenu: null, mediaPreview: null, menuOpen: false, messageContextMenu: null, searchOpen: false, settingsOpen: false, wechatQrOpen: false });
+  assert.deepEqual(state, { avatarCrop: null, contactCreateOpen: false, contactContextMenu: null, contactRenameOpen: false, emojiOpen: false, fileContextMenu: null, mediaPreview: null, menuOpen: false, messageContextMenu: null, qqBindingOpen: false, searchOpen: false, settingsOpen: false, wechatQrOpen: false });
   assert.equal(dismissConversationOverlays(state), false);
 });
 
@@ -618,6 +698,13 @@ test("conversation queues a follow-up snapshot instead of dropping it while the 
 test("completed multi-step replies retire their live projection after durable history catches up", async () => {
   const priorWindow = globalThis.window;
   const contact = { agentId: "agent-suzu", id: "contact-suzu", name: "Suzu" };
+  const timers = [];
+  let nextTimerId = 0;
+  const runNextTimer = () => {
+    const timer = timers.shift();
+    assert.ok(timer);
+    timer.callback();
+  };
   let eventListener = () => {};
   let version = "before-completion";
   let messages = [{
@@ -641,7 +728,16 @@ test("completed multi-step replies retire their live projection after durable hi
   });
   globalThis.window = {
     clearInterval: () => {},
+    clearTimeout(timer) {
+      const index = timers.indexOf(timer);
+      if (index >= 0) timers.splice(index, 1);
+    },
     setInterval: () => 1,
+    setTimeout(callback, delay) {
+      const timer = { callback, delay, id: ++nextTimerId };
+      timers.push(timer);
+      return timer;
+    },
   };
   const context = {
     api: {
@@ -679,6 +775,14 @@ test("completed multi-step replies retire their live projection after durable hi
       conversationReactSnapshot(context).messageRows
         .filter((row) => row.type === "message")
         .map((row) => row.blocks[0]?.text),
+      ["处理这个文件", "我先检查。"],
+    );
+    assert.deepEqual(timers.map((timer) => timer.delay), [COMPLETED_REPLY_BUBBLE_INTERVAL_MS]);
+    runNextTimer();
+    assert.deepEqual(
+      conversationReactSnapshot(context).messageRows
+        .filter((row) => row.type === "message")
+        .map((row) => row.blocks[0]?.text),
       ["处理这个文件", "我先检查。", "检查完成。"],
     );
 
@@ -699,6 +803,89 @@ test("completed multi-step replies retire their live projection after durable hi
         .map((row) => row.blocks[0]?.text),
       ["处理这个文件", "我先检查。", "检查完成。", "结果如下：\n\n- 文件已保存"],
     );
+  } finally {
+    stopConversationPolling();
+    if (priorWindow === undefined) delete globalThis.window;
+    else globalThis.window = priorWindow;
+  }
+});
+
+test("live replies reveal consecutive bubbles at a short interval", async () => {
+  const priorWindow = globalThis.window;
+  const contact = { agentId: "agent-suzu", id: "contact-suzu", name: "Suzu" };
+  const timers = [];
+  let eventListener = () => {};
+  let nextTimerId = 0;
+  const runNextTimer = () => {
+    const timer = timers.shift();
+    assert.ok(timer);
+    timer.callback();
+  };
+  globalThis.window = {
+    clearInterval: () => {},
+    clearTimeout(timer) {
+      const index = timers.indexOf(timer);
+      if (index >= 0) timers.splice(index, 1);
+    },
+    setInterval: () => 1,
+    setTimeout(callback, delay) {
+      const timer = { callback, delay, id: ++nextTimerId };
+      timers.push(timer);
+      return timer;
+    },
+  };
+  const context = {
+    api: {
+      conversation: {
+        onEvent(listener) {
+          eventListener = listener;
+          return () => { eventListener = () => {}; };
+        },
+        snapshot: async () => ({
+          activeContact: contact,
+          activeSessionId: "session-suzu",
+          contacts: [contact],
+          contactsRoot: "D:/suzu-data/contacts",
+          historyPage: { hasMore: false, oldestEventSeq: 1 },
+          messages: [],
+          projectRoot: "D:/suzu-data/contacts/suzu",
+          sessions: [{ id: "session-suzu", title: "Suzu" }],
+          status: "ready",
+          version: "reply-reveal",
+        }),
+      },
+    },
+    render: () => {},
+    state: { settings: { conversationPreferences: {} } },
+  };
+
+  try {
+    startConversationPolling(context);
+    await flush();
+    assert.deepEqual(splitCompanionReplyBuffer("第一段\n\n第二段\n\n第三段", { final: true }).sentences, ["第一段", "第二段", "第三段"]);
+    eventListener({
+      content: "第一段\n\n第二段\n\n第三段",
+      done: true,
+      projectRoot: "D:/suzu-data/contacts/suzu",
+      requestId: "turn-reveal",
+      sessionId: "session-suzu",
+      timestamp: "2026-08-24T10:00:01.000Z",
+      type: "reply",
+    });
+    const visibleText = () => conversationReactSnapshot(context).messageRows
+      .filter((row) => row.type === "message")
+      .map((row) => row.blocks[0]?.text);
+
+    assert.deepEqual(visibleText(), ["第一段"]);
+    assert.deepEqual(timers.map((timer) => timer.delay), [COMPLETED_REPLY_BUBBLE_INTERVAL_MS]);
+
+    runNextTimer();
+    assert.deepEqual(visibleText(), ["第一段", "第二段"]);
+    assert.deepEqual(timers.map((timer) => timer.delay), [COMPLETED_REPLY_BUBBLE_INTERVAL_MS]);
+
+    runNextTimer();
+    assert.deepEqual(visibleText(), ["第一段", "第二段", "第三段"]);
+    assert.equal(timers.length, 0);
   } finally {
     stopConversationPolling();
     if (priorWindow === undefined) delete globalThis.window;

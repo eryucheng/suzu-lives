@@ -1,0 +1,46 @@
+.loading-overlay {
+  position: fixed;
+  z-index: var(--z-loading, 2000);
+  inset: 0;
+  display: grid;
+  place-content: center;
+  gap: 13px;
+  background: rgba(5, 7, 12, .77);
+  color: rgba(222, 218, 242, .82);
+  font-family: Inter, "Segoe UI Variable", "Microsoft YaHei UI", sans-serif;
+  text-align: center;
+  backdrop-filter: blur(10px);
+}
+
+.loader {
+  width: 32px;
+  height: 32px;
+  margin: auto;
+  border: 3px solid rgba(255, 255, 255, .12);
+  border-top-color: #998cff;
+  border-radius: 50%;
+  animation: suzu-loading-spin .8s linear infinite;
+}
+
+.startup-status {
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+:root[data-theme="light"] .loading-overlay {
+  background: rgba(240, 243, 249, .78);
+  color: rgba(76, 69, 110, .76);
+}
+
+:root[data-theme="light"] .loader {
+  border-color: rgba(76, 69, 110, .14);
+  border-top-color: #6e64d8;
+}
+
+@keyframes suzu-loading-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .loader { animation: none; }
+}

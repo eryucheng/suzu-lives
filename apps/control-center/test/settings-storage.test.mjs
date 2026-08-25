@@ -5,7 +5,7 @@ import path from "node:path";
 import test from "node:test";
 
 import { legacyStableAgentId } from "@suzu-lives/agent-registry";
-import { createSettingsService, normalizeConversationComposerHeight, normalizeConversationPreferences, normalizeConversationRosterWidth, normalizeMemoryRecallEnabled, normalizeOnboardingCompleted, normalizeOnboardingMultimodalCompleted, normalizeShellSidebarWidth, registerSettingsIpc } from "../electron/ipc/settings-ipc.mjs";
+import { createSettingsService, normalizeAppearance, normalizeConversationComposerHeight, normalizeConversationPreferences, normalizeConversationRosterWidth, normalizeMemoryRecallEnabled, normalizeOnboardingCompleted, normalizeOnboardingMultimodalCompleted, normalizeShellSidebarWidth, registerSettingsIpc } from "../electron/ipc/settings-ipc.mjs";
 import { createContactProjectsService } from "../electron/services/contact-projects.mjs";
 import { renderManagedAgentRuntimeSettings, renderSettings } from "../src/features/settings/index.mjs";
 
@@ -41,6 +41,164 @@ test("the first settings snapshot materializes the managed contacts directory", 
   assert.equal(snapshot.contactsRoot, contactsRoot);
   assert.equal(settingsService.load().contactsRoot, contactsRoot);
   assert.equal(fs.statSync(contactsRoot).isDirectory(), true);
+});
+
+test("appearance defaults to classic and accepts only managed wallpaper metadata", () => {
+  assert.deepEqual(normalizeAppearance(), { styleId: "classic", wallpaper: null });
+  assert.deepEqual(normalizeAppearance({
+    styleId: "wallpaper-glass",
+    wallpaper: { folderName: "深海少女" },
+  }), {
+    styleId: "wallpaper-glass",
+    wallpaper: { folderName: "深海少女" },
+  });
+  assert.deepEqual(normalizeAppearance({
+    styleId: "wallpaper-glass",
+    wallpaper: { folderName: "../private" },
+  }), { styleId: "wallpaper-glass", wallpaper: null });
+  assert.deepEqual(normalizeAppearance({
+    styleId: "wallpaper-glass",
+    wallpaper: { kind: "image", fileName: "wallpaper-123e4567-e89b-12d3-a456-426614174000.png" },
+  }), {
+    styleId: "wallpaper-glass",
+    wallpaper: { kind: "image", fileName: "wallpaper-123e4567-e89b-12d3-a456-426614174000.png" },
+  });
+  assert.deepEqual(normalizeAppearance({
+    styleId: "wallpaper-glass",
+    wallpaper: { kind: "image", fileName: "../private.png" },
+  }), { styleId: "wallpaper-glass", wallpaper: null });
+  assert.deepEqual(normalizeAppearance({
+    styleId: "wallpaper-glass",
+    wallpaper: { kind: "video", fileName: "wallpaper-123e4567-e89b-12d3-a456-426614174000.png" },
+  }), { styleId: "wallpaper-glass", wallpaper: null });
+
+  const settings = createSettingsService({ app: { getPath: () => path.join(os.tmpdir(), "suzu-settings-unused") } });
+  const currentAppearance = {
+    styleId: "classic",
+    wallpaper: { kind: "image", fileName: "wallpaper-123e4567-e89b-12d3-a456-426614174000.png" },
+  };
+  assert.deepEqual(settings.safePatch({
+    appearance: {
+      styleId: "wallpaper-glass",
+      wallpaper: { kind: "image", fileName: "../../outside.png", url: "file:///outside.png" },
+    },
+  }, { appearance: currentAppearance }).appearance, {
+    ...currentAppearance,
+    styleId: "wallpaper-glass",
+  });
+});
+
+test("wallpaper imports copy media into named library folders that remain after deactivation", async () => {
+  const userData = fs.mkdtempSync(path.join(os.tmpdir(), "suzu-settings-wallpaper-"));
+  const sourceDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "suzu-wallpaper-source-"));
+  const sourcePath = path.join(sourceDirectory, "chosen image.PNG");
+  fs.writeFileSync(sourcePath, "wallpaper-image-fixture");
+  const app = { getPath: () => userData, relaunch: () => {}, exit: () => {} };
+  const settingsService = createSettingsService({ app });
+  const handlers = new Map();
+  registerSettingsIpc({
+    app,
+    contactProjectsService: {},
+    dataStorageService: null,
+    dialog: { showOpenDialog: async () => ({ canceled: false, filePaths: [sourcePath] }), showMessageBox: async () => ({ response: 1 }) },
+    getMainWindow: () => null,
+    ipcMain: { handle: (name, handler) => handlers.set(name, handler) },
+    shell: { showItemInFolder: () => {}, openPath: () => {} },
+    settingsService,
+  });
+
+  try {
+    const source = await handlers.get("settings:select-wallpaper-source")(null, "file");
+    assert.equal(source.status, "selected");
+    assert.equal(source.source.suggestedName, "chosen image");
+    const selected = await handlers.get("settings:import-wallpaper")(null, {
+      name: "红色少女",
+      selectionId: source.source.selectionId,
+    });
+    assert.equal(selected.status, "imported");
+    assert.equal(selected.applied, true);
+    assert.equal(selected.settings.appearance.styleId, "wallpaper-glass");
+    assert.equal(selected.settings.appearance.wallpaper.folderName, "红色少女");
+    assert.equal(selected.settings.appearance.wallpaper.kind, "image");
+    assert.equal(selected.settings.appearance.wallpaper.status, "ready");
+    assert.match(selected.settings.appearance.wallpaper.url, /^file:/u);
+    const managedPath = settingsService.wallpaperPath(settingsService.load().appearance.wallpaper);
+    assert.equal(fs.readFileSync(managedPath, "utf8"), "wallpaper-image-fixture");
+    assert.equal(path.basename(path.dirname(managedPath)), "红色少女");
+    const stored = JSON.parse(fs.readFileSync(path.join(userData, "settings.json"), "utf8"));
+    assert.deepEqual(stored.appearance.wallpaper, { folderName: "红色少女" });
+    assert.equal(Object.hasOwn(stored.appearance.wallpaper, "url"), false);
+    assert.equal(Object.hasOwn(stored.appearance.wallpaper, "status"), false);
+
+    const updated = await handlers.get("settings:update-wallpaper")(null, {
+      folderName: "红色少女",
+      name: "置顶红色少女",
+      pinned: true,
+    });
+    assert.equal(updated.status, "updated");
+    assert.equal(updated.previousFolderName, "红色少女");
+    assert.equal(updated.wallpaper.folderName, "置顶红色少女");
+    assert.equal(updated.wallpaper.pinned, true);
+    assert.equal(updated.settings.appearance.wallpaper.folderName, "置顶红色少女");
+    assert.equal(updated.settings.appearance.wallpapers[0].pinned, true);
+    const renamedPath = settingsService.wallpaperPath(settingsService.load().appearance.wallpaper);
+    assert.equal(path.basename(path.dirname(renamedPath)), "置顶红色少女");
+    assert.equal(fs.readFileSync(renamedPath, "utf8"), "wallpaper-image-fixture");
+    assert.equal(fs.existsSync(path.dirname(managedPath)), false);
+    const storedAfterUpdate = JSON.parse(fs.readFileSync(path.join(userData, "settings.json"), "utf8"));
+    assert.deepEqual(storedAfterUpdate.appearance.wallpaper, { folderName: "置顶红色少女" });
+
+    const cleared = await handlers.get("settings:clear-wallpaper")();
+    assert.equal(cleared.status, "cleared");
+    assert.equal(cleared.settings.appearance.styleId, "classic");
+    assert.equal(cleared.settings.appearance.wallpaper, null);
+    assert.equal(cleared.settings.appearance.wallpapers.length, 1);
+    assert.equal(fs.existsSync(renamedPath), true);
+
+    const removed = await handlers.get("settings:remove-wallpaper")(null, "置顶红色少女");
+    assert.equal(removed.status, "removed");
+    assert.equal(removed.settings.appearance.wallpapers.length, 0);
+    assert.equal(fs.existsSync(path.dirname(renamedPath)), false);
+  } finally {
+    fs.rmSync(userData, { recursive: true, force: true });
+    fs.rmSync(sourceDirectory, { recursive: true, force: true });
+  }
+});
+
+test("the first settings read migrates the previous managed wallpaper into the named library", async () => {
+  const userData = fs.mkdtempSync(path.join(os.tmpdir(), "suzu-settings-wallpaper-migration-"));
+  const legacyDirectory = path.join(userData, "appearance", "wallpaper");
+  const legacyFileName = "wallpaper-123e4567-e89b-12d3-a456-426614174000.png";
+  const legacyPath = path.join(legacyDirectory, legacyFileName);
+  fs.mkdirSync(legacyDirectory, { recursive: true });
+  fs.writeFileSync(legacyPath, "legacy-wallpaper");
+  fs.writeFileSync(path.join(userData, "settings.json"), JSON.stringify({
+    appearance: { styleId: "wallpaper-glass", wallpaper: { fileName: legacyFileName, kind: "image" } },
+  }));
+  const app = { getPath: () => userData, relaunch: () => {}, exit: () => {} };
+  const settingsService = createSettingsService({ app });
+  const handlers = new Map();
+  registerSettingsIpc({
+    app,
+    contactProjectsService: {},
+    dataStorageService: null,
+    dialog: { showOpenDialog: async () => ({ canceled: true }), showMessageBox: async () => ({ response: 1 }) },
+    getMainWindow: () => null,
+    ipcMain: { handle: (name, handler) => handlers.set(name, handler) },
+    shell: { showItemInFolder: () => {}, openPath: () => {} },
+    settingsService,
+  });
+
+  try {
+    const settings = await handlers.get("settings:get")();
+    assert.equal(settings.appearance.wallpaper.folderName, "原有壁纸");
+    assert.equal(settings.appearance.wallpaper.status, "ready");
+    assert.equal(settings.appearance.wallpapers.length, 1);
+    assert.equal(fs.existsSync(legacyPath), false);
+    assert.equal(fs.readFileSync(settingsService.wallpaperPath(settingsService.load().appearance.wallpaper), "utf8"), "legacy-wallpaper");
+  } finally {
+    fs.rmSync(userData, { recursive: true, force: true });
+  }
 });
 
 test("settings reads migrate an old path-derived contact avatar to its persistent contact identity", async () => {

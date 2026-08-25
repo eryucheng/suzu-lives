@@ -10,10 +10,10 @@
 .input {
   width: 100%;
   height: 34px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--surface-border, var(--border));
   border-radius: var(--radius-md);
   outline: 0;
-  background: var(--panel-soft);
+  background: var(--surface-control, var(--panel-soft));
   color: var(--text);
   padding: 0 10px;
   font: inherit;

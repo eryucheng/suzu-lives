@@ -29,7 +29,11 @@ export function CreatePage({ actions = {} }) {
         {CREATE_SPACES.map((space) => (
           <CreateSpaceCard
             key={space.id}
-            onOpen={actions.openVisual}
+            onOpen={() => {
+              if (typeof actions.openSpace === "function") actions.openSpace(space.id);
+              else if (space.id === "visual") actions.openVisual?.();
+              else if (space.id === "stickers") actions.openStickers?.();
+            }}
             space={space}
           />
         ))}

@@ -21,7 +21,7 @@
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   outline: 0;
-  background: var(--panel-soft);
+  background: var(--surface-control, var(--panel-soft));
   color: var(--text);
   padding: 0 14px;
   font: inherit;
@@ -71,14 +71,16 @@
 /* ---- 浮层面板 ---- */
 .panel {
   position: fixed;
-  z-index: 110;
+  z-index: var(--z-popover, 110);
   max-height: min(360px, calc(100dvh - 24px));
   overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior: contain;
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
-  background: var(--panel);
+  background: var(--surface-overlay, var(--panel));
+  -webkit-backdrop-filter: var(--surface-overlay-backdrop, none);
+  backdrop-filter: var(--surface-overlay-backdrop, none);
   box-shadow: var(--glass-shadow);
   padding-top: 2px;
   padding-bottom: 2px;

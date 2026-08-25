@@ -9,19 +9,19 @@
 .overlay {
   position: fixed;
   inset: 0;
-  z-index: 100;
+  z-index: var(--z-dialog, 100);
   display: flex;
   align-items: center;
   justify-content: center;
   padding: var(--space-xl);
-  background: rgba(5, 5, 15, 0.5);
+  background: var(--surface-overlay-scrim, rgba(5, 5, 15, 0.5));
   animation: fade-in 0.18s ease;
 }
 
 .dialog {
   /* 默认层：不透明面板。各 preset 只替换这些语义层，不影响正文可读性。 */
-  --dialog-surface-background: var(--panel);
-  --dialog-surface-border: var(--border);
+  --dialog-surface-background: var(--surface-dialog, var(--panel));
+  --dialog-surface-border: var(--surface-border, var(--border));
   --dialog-surface-highlight: linear-gradient(
     90deg,
     transparent,
@@ -43,6 +43,8 @@
   display: flex;
   flex-direction: column;
   background: var(--dialog-surface-background);
+  -webkit-backdrop-filter: var(--surface-overlay-backdrop, none);
+  backdrop-filter: var(--surface-overlay-backdrop, none);
   border: 1px solid var(--dialog-surface-border);
   border-radius: var(--radius-xl);
   box-shadow: var(--dialog-surface-shadow);
@@ -55,7 +57,7 @@
 
 /* 阅读面板与玻璃层共用同一不透明面板。 */
 .surface-soft {
-  --dialog-surface-background: var(--panel);
+  --dialog-surface-background: var(--surface-dialog, var(--panel));
 }
 
 /* 完整操作面板：背景、边框、高光与阴影都不再借用玻璃层。 */

@@ -5,6 +5,7 @@ import { ChatFirstUnavailablePage } from "./chat-first-unavailable-page.jsx";
 import { ConversationCompactorPage } from "./conversation-compactor-page.jsx";
 import { ConversationPage } from "./conversation-page.jsx";
 import { CreatePage } from "./create-page.jsx";
+import { CreateStickerPage } from "./create-sticker-page.jsx";
 import { CreateVisualPage } from "./create-visual-page.jsx";
 import { MemoryPage } from "./memory-page.jsx";
 import { PlansPage } from "./plans-page.jsx";
@@ -12,6 +13,7 @@ import { RelationshipsPage } from "./relationships-page.jsx";
 import { RelationshipSettingsPage } from "./relationship-settings-page.jsx";
 import { SettingsPage } from "./settings-page.jsx";
 import { TodayPage } from "./today-page.jsx";
+import { PRODUCT_FEATURES } from "../../shared/product-features.mjs";
 
 function RouteContent({ route }) {
   const props = route?.props || {};
@@ -24,6 +26,9 @@ function RouteContent({ route }) {
       return <div id="createReactRoot"><CreatePage {...props} /></div>;
     case "create-visual":
       return <div id="createVisualReactRoot"><CreateVisualPage {...props} /></div>;
+    case "create-stickers":
+      if (!PRODUCT_FEATURES.customEmojiStickers) return null;
+      return <div id="createStickerReactRoot"><CreateStickerPage {...props} /></div>;
     case "capabilities":
       return <div id="capabilitiesReactRoot"><CapabilitiesPage {...props} /></div>;
     case "settings":

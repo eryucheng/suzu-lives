@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { Input, Select, Switch } from "suzu-design-system";
 
 const STEPS = [
@@ -131,7 +132,7 @@ export function OnboardingDialog({ onboarding = null }) {
   if (!snapshot || !actions) return null;
   const activeIndex = Math.max(STEPS.findIndex(([id]) => id === snapshot.step), 0);
   const previous = PREVIOUS_STEP[snapshot.step];
-  return (
+  const dialog = (
     <div className="onboarding-overlay">
       <section aria-labelledby="onboardingTitle" aria-modal="true" className="onboarding-dialog" role="dialog">
         <header className="onboarding-header"><div><span className="reference-kicker">SUZU LIVES</span><h1 id="onboardingTitle">开始使用</h1></div><button aria-label="稍后设置" className="onboarding-close suzu-close-button" onClick={actions.close} title="稍后设置" type="button">×</button></header>
@@ -141,4 +142,5 @@ export function OnboardingDialog({ onboarding = null }) {
       </section>
     </div>
   );
+  return typeof document === "undefined" ? dialog : createPortal(dialog, document.body);
 }

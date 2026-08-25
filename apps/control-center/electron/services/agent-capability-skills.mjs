@@ -141,7 +141,29 @@ function scheduleSkillFor(groups) {
   });
 }
 
-function contentFor(group) {
+function mailBridgeGuidance(group) {
+  if (group.capabilityId !== "mail-bridge") return "";
+  return [
+    "## 邮件业务 Skill",
+    "",
+    "先从技能目录读取与当前任务匹配的邮件业务 Skill，例如“查岗”。它会说明使用时机和邮件主题。没有匹配的业务 Skill 时，不要根据普通对话自行猜测用途或主题。",
+    "",
+    "## 发信",
+    "",
+    "业务 Skill 给出主题后，调用 `suzu_capability`，使用 `capabilityId: \"mail-bridge\"`、`action: \"send\"`，并提供 `input: { subject: \"业务 Skill 指定的主题\", content: \"邮件正文\" }`。收件地址由软件配置决定，不可由 Agent 修改。",
+    "",
+    "发送成功仅表示邮件已提交给 SMTP 服务器；不要把它当作对方已经处理完成。",
+  ].join("\n");
+}
+
+function supplementalContentFor(group, detailsByCapability) {
+  const details = detailsByCapability && typeof detailsByCapability === "object" && !Array.isArray(detailsByCapability)
+    ? detailsByCapability
+    : {};
+  return clean(details[group.capabilityId]);
+}
+
+function contentFor(group, { detailsByCapability = {} } = {}) {
   const actions = group.actions.map((action) => [
     `### ${action.actionName}`,
     "",
@@ -154,6 +176,8 @@ function contentFor(group) {
     "",
     group.capabilityDescription || "当前联系人可使用的产品能力。",
     "",
+    ...(mailBridgeGuidance(group) ? [mailBridgeGuidance(group), ""] : []),
+    ...(supplementalContentFor(group, detailsByCapability) ? [supplementalContentFor(group, detailsByCapability), ""] : []),
     "## 使用方式",
     "",
     "调用 `suzu_capability` 时，将目标动作的 capabilityId 和 action 原样填入；input 按该动作的说明提供。",
@@ -181,7 +205,7 @@ export function capabilitySkillCatalog(actions = []) {
   return Object.freeze(skills.sort((left, right) => left.name.localeCompare(right.name, "en")));
 }
 
-export function capabilitySkillForName(actions = [], name = "") {
+export function capabilitySkillForName(actions = [], name = "", { detailsByCapability = {} } = {}) {
   const requestedName = clean(name);
   const groups = normalizedActions(actions);
   const followUp = followUpSkillFor(groups);
@@ -195,6 +219,6 @@ export function capabilitySkillForName(actions = [], name = "") {
   return Object.freeze({
     name: capabilitySkillName(group.capabilityId),
     description: summaryFor(group),
-    content: contentFor(group),
+    content: contentFor(group, { detailsByCapability }),
   });
 }

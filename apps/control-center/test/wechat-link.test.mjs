@@ -99,6 +99,7 @@ test("a legacy global WeChat pause becomes paused contact connections", async ()
 
   const snapshot = await service.snapshot({ contactId: "contact-legacy" });
   assert.equal(snapshot.contact?.enabled, false);
+  assert.equal(snapshot.delivery.proactive, true);
   assert.equal(Object.hasOwn(snapshot, "enabled"), false);
 
   const updated = await service.saveSettings({
@@ -111,6 +112,7 @@ test("a legacy global WeChat pause becomes paused contact connections", async ()
   assert.equal(stored.links[0].enabled, false);
   assert.equal(updated.textSegmentation, "sentence");
   assert.equal(stored.textSegmentation, "sentence");
+  assert.equal(stored.delivery.proactive, true);
   service.dispose();
 });
 
@@ -370,13 +372,15 @@ test("WeChat links persist a contact scope and relay through its fixed DSH sessi
   });
 
   assert.equal((await service.snapshot()).delivery.agent, true);
+  assert.equal((await service.snapshot()).delivery.proactive, true);
   const pending = await service.begin({ contactId: "contact-suzu" });
   assert.match(pending.pendingQr?.imageDataUrl || "", /^data:image\/png;base64,/u);
   releaseConfirmation();
   await waitFor(() => deliveredToSession.length === 1, "微信入站消息没有进入 DSH 会话队列");
   const inboundRequest = deliveredToSession[0];
   assert.match(inboundRequest.requestId, /^wechat-/u);
-  assert.deepEqual({ ...inboundRequest, requestId: undefined }, {
+  const { deliveryRoute, ...inboundWithoutRoute } = inboundRequest;
+  assert.deepEqual({ ...inboundWithoutRoute, requestId: undefined }, {
     content: "从微信发来的文字",
     sessionId: "session-1",
     projectRoot,
@@ -385,6 +389,10 @@ test("WeChat links persist a contact scope and relay through its fixed DSH sessi
     deliverToWechat: true,
     requestId: undefined,
   });
+  assert.equal(deliveryRoute?.mode, "reply");
+  assert.equal(deliveryRoute?.channel, "wechat");
+  assert.equal(typeof deliveryRoute?.connectionId, "string");
+  assert.ok(deliveryRoute?.connectionId);
   await waitFor(() => typingRequests.some((item) => item.status === 1), "微信入站消息没有触发原生输入状态");
   assert.deepEqual(typingConfigs, [{
     ilink_user_id: "owner-1",
@@ -532,6 +540,23 @@ test("WeChat links persist a contact scope and relay through its fixed DSH sessi
   });
   await flush();
   assert.equal(outgoing.length, 4, "NO_REPLY、重复 NO_REPLY 和内部任务包不应投递到微信");
+
+  const disabledProactive = await service.saveSettings({
+    delivery: { ...(await service.snapshot()).delivery, proactive: false },
+  });
+  assert.equal(disabledProactive.delivery.proactive, false);
+  for (const listener of chatSubscribers) listener({
+    type: "agent-reply",
+    kind: "schedule",
+    scheduleSource: "proactive-contact",
+    requestId: "proactive-disabled",
+    sessionId: "session-1",
+    projectRoot,
+    deliveryRoute: { mode: "proactive" },
+    content: "这条主动关心不应投递到微信。",
+  });
+  await flush();
+  assert.equal(outgoing.length, 4, "关闭“主动关心”后不应向微信投递主动联系");
 
   const agentFile = path.join(root, "agent-report.txt");
   const agentImage = path.join(root, "agent-image.png");

@@ -15,7 +15,6 @@ test("capability registry is the single source for catalog, contact config clean
     "image-vision",
     "video-understanding",
     "voice-message",
-    "voice-call",
     "web-browser",
     "mail-bridge",
     "agent-journal",
@@ -46,6 +45,8 @@ test("capability registry is the single source for catalog, contact config clean
   assert.equal(registry.catalog().some((entry) => entry.id === "memory-recall"), false);
   assert.equal(registry.catalog().some((entry) => entry.id === "conversation-attachment"), false);
   assert.equal(registry.catalog().some((entry) => entry.id === "schedule"), false);
+  assert.equal(registry.catalog().some((entry) => entry.id === "voice-call"), false);
+  assert.equal(registry.get("voice-call")?.internal, true);
   assert.deepEqual(registry.agentActions({ capabilityId: "schedule" }).map((action) => ({
     capabilityId: action.capabilityId,
     action: action.action,
@@ -76,7 +77,14 @@ test("capability registry is the single source for catalog, contact config clean
     action: "generate",
     resourceId: "agent-action",
   }]);
-  assert.match(registry.agentActions({ capabilityId: "image-generation" })[0].actionDescription, /stylePreset/u);
+  const [imageGeneration] = registry.agentActions({ capabilityId: "image-generation" });
+  assert.match(imageGeneration.actionDescription, /references/u);
+  assert.match(imageGeneration.actionDescription, /附件路径/u);
+  assert.match(imageGeneration.actionDescription, /phone-camera/u);
+  assert.match(imageGeneration.actionDescription, /rear/u);
+  assert.match(imageGeneration.actionDescription, /资料或分组 ID/u);
+  assert.match(imageGeneration.actionDescription, /自动附带该联系人的 identity 参考图/u);
+  assert.ok(imageGeneration.actionDescription.length <= 320);
   assert.deepEqual(registry.agentActions({ capabilityId: "voice-call" }).map((action) => ({
     capabilityId: action.capabilityId,
     action: action.action,

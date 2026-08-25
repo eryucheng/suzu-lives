@@ -15,6 +15,7 @@ import { runDirectImageVision } from "@suzu-lives/media-understanding/direct-ima
 import { runDirectVideoUnderstanding } from "@suzu-lives/media-understanding/direct-video-understanding";
 import { takePhonePhoto } from "@suzu-lives/phone-camera";
 import { resolveConfiguredVoiceService, runDirectVoiceMessage } from "@suzu-lives/voice-message/direct-voice-message";
+import { readMailBridgeAgentSkills } from "./mail-bridge-agent-settings.mjs";
 
 const CONTACT_ID = /^contact-[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
 
@@ -375,11 +376,19 @@ export function createAgentCapabilityAdapters({
     if (clean(lifecycle) !== "invoke") return directRuntimeState({ capability, lifecycle });
     const scope = await resolveScope(context);
     const input = inputFor(context);
+    const skills = await readMailBridgeAgentSkills({ dataRoot: scope.dataRoot });
+    if (!skills.length) {
+      throw new Error("请先在邮箱通道中添加邮件业务 Skill，再让 Agent 发送邮件。 ");
+    }
+    const subject = inputText(input.subject, "邮件主题", { required: true, maximum: 200 });
+    if (!skills.some((skill) => skill.subject === subject)) {
+      throw new Error("这个邮件主题没有对应的邮件业务 Skill。请先读取匹配当前任务的 Skill。 ");
+    }
     return executor.sendMailBridge({
       content: inputText(input.content, "邮件内容", { required: true, maximum: 20_000 }),
       dataRoot: scope.dataRoot,
       projectRoot: scope.projectRoot,
-      subject: inputText(input.subject, "邮件主题", { required: true, maximum: 320 }),
+      subject,
     });
   };
 

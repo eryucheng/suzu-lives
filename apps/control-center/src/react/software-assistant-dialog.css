@@ -1,6 +1,6 @@
 .software-assistant-overlay {
   position:fixed;
-  z-index:200;
+  z-index:var(--z-assistant,200);
   inset:0;
   display:grid;
   place-items:center;
@@ -47,6 +47,17 @@
   display:flex;
   align-items:center;
   gap:5px;
+}
+
+:root[data-ui-style="wallpaper-glass"] .software-assistant-overlay {
+  background:var(--surface-overlay-scrim);
+}
+
+:root[data-ui-style="wallpaper-glass"] .software-assistant-dialog {
+  border-color:var(--surface-border);
+  background:var(--surface-dialog);
+  -webkit-backdrop-filter:var(--surface-overlay-backdrop);
+  backdrop-filter:var(--surface-overlay-backdrop);
 }
 
 .software-assistant-dialog__clear {

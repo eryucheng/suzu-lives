@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Button, Empty, GlassPanel, PageHeader, Select, Status, Switch } from "suzu-design-system";
 import { imageGenerationAdapterDefinition, imageGenerationAdapterSupportsConnection, IMAGE_GENERATION_ADAPTER_OPTIONS, normalizeImageGenerationAdapter } from "@suzu-lives/image-workbench/image-generation-adapters";
+import { imageReferenceAdapterOptions, imageReferenceCapability, normalizeImageReferenceAdapter } from "@suzu-lives/image-workbench/image-reference-adapters";
 import { normalizeVisionAdapter, VISION_ADAPTER_OPTIONS, visionAdapterDefinition, visionAdapterSupportsConnection } from "@suzu-lives/media-understanding/vision-adapters";
 import { normalizeVideoAdapter, VIDEO_ADAPTER_OPTIONS, videoAdapterDefinition, videoAdapterSupportsConnection } from "@suzu-lives/media-understanding/video-adapters";
 import { TTS_ADAPTER_OPTIONS, ttsAdapterDefinition, ttsAdapterLabel } from "@suzu-lives/voice-message/tts-adapters";
@@ -10,7 +11,11 @@ import {
   CAPABILITY_CATEGORIES,
   capabilityCategory,
   capabilityVisibleInCatalog,
+  createQQConnectionCapability,
   createWechatConnectionCapability,
+  QQ_DELIVERY_OPTIONS,
+  QQ_TEXT_SEGMENTATION_OPTIONS,
+  qqConnectionSettings,
   WECHAT_DELIVERY_OPTIONS,
   WECHAT_TEXT_SEGMENTATION_OPTIONS,
   wechatConnectionSettings,
@@ -351,11 +356,11 @@ function CapabilityEntryCard({ capability, onOpen }) {
   );
 }
 
-export function CapabilityCategoryPage({ actions = {}, capabilitySnapshot, categoryId, wechatSnapshot }) {
+export function CapabilityCategoryPage({ actions = {}, capabilitySnapshot, categoryId, qqSnapshot, wechatSnapshot }) {
   const category = categoryFor(categoryId);
   const builtIn = Array.isArray(capabilitySnapshot?.capabilities) ? capabilitySnapshot.capabilities : [];
-  const wechat = capabilitySnapshot ? [createWechatConnectionCapability(wechatSnapshot)] : [];
-  const members = [...builtIn, ...wechat]
+  const connections = capabilitySnapshot ? [createWechatConnectionCapability(wechatSnapshot), createQQConnectionCapability(qqSnapshot)] : [];
+  const members = [...builtIn, ...connections]
     .filter(capabilityVisibleInCatalog)
     .filter((capability) => capabilityCategory(capability) === category.id);
   return (
@@ -401,11 +406,8 @@ function imageGenerationProtocolSelection(value) {
 
 function ImageGenerationSettings({ actions, apiServices, capability, contactsSnapshot }) {
   const settings = savedSettings(capability);
-  const phoneCamera = settings.phoneCamera || {};
-  const phoneSizes = phoneCamera.sizeByShot || {};
-  const phoneReferences = phoneCamera.references || {};
-  const phonePrompt = phoneCamera.prompt || {};
   const configuredAdapter = normalizeImageGenerationAdapter(settings.adapter);
+  const configuredReferenceAdapter = normalizeImageReferenceAdapter(settings.referenceAdapter);
   const [customDialogOpen, setCustomDialogOpen] = useState(false);
   const customAdapters = Array.isArray(settings.customAdapters) ? settings.customAdapters : [];
   const configuredCustomAdapterId = String(settings.customAdapterId || "").trim().toLowerCase();
@@ -417,8 +419,15 @@ function ImageGenerationSettings({ actions, apiServices, capability, contactsSna
       ? `${IMAGE_GENERATION_CUSTOM_PROTOCOL_PREFIX}${configuredCustomAdapterId}`
       : configuredAdapter;
   const [protocol, setProtocol] = useState(configuredProtocol);
+  const [referenceAdapter, setReferenceAdapter] = useState(configuredReferenceAdapter);
   const selectedProtocol = imageGenerationProtocolSelection(protocol);
   const adapter = selectedProtocol.adapter;
+  const connections = Array.isArray(apiServices?.connections) ? apiServices.connections : [];
+  const bindings = apiServices?.bindings && typeof apiServices.bindings === "object" ? apiServices.bindings : {};
+  const selectedConnection = connections.find((connection) => connection.id === bindings["image-workbench"]) || null;
+  const activeCustomAdapter = adapter === "custom-http-image"
+    ? customAdapters.find((protocolItem) => protocolItem.id === selectedProtocol.customAdapterId) || null
+    : null;
   const adapterOptions = IMAGE_GENERATION_ADAPTER_OPTIONS
     .filter((option) => option.value !== "custom-http-image")
     .map((option) => [option.value, option.label]);
@@ -427,10 +436,23 @@ function ImageGenerationSettings({ actions, apiServices, capability, contactsSna
     ...adapterOptions,
     ...customAdapters.map((item) => [`${IMAGE_GENERATION_CUSTOM_PROTOCOL_PREFIX}${item.id}`, item.name]),
   ];
+  const referenceAdapterOptions = imageReferenceAdapterOptions({ imageGenerationAdapter: adapter, connectionType: selectedConnection?.type });
+  const activeReferenceAdapter = referenceAdapterOptions.some(([id]) => id === referenceAdapter) ? referenceAdapter : "none";
+  const referenceCapability = imageReferenceCapability({
+    connection: selectedConnection || {},
+    customImageGenerationAdapter: activeCustomAdapter,
+    imageGenerationAdapter: adapter,
+    referenceImageAdapter: activeReferenceAdapter,
+    referenceImageModel: activeReferenceAdapter === configuredReferenceAdapter ? settings.referenceModel : selectedConnection?.model || "",
+  });
 
   useEffect(() => {
     setProtocol(configuredProtocol);
   }, [configuredProtocol]);
+
+  useEffect(() => {
+    setReferenceAdapter(configuredReferenceAdapter);
+  }, [configuredReferenceAdapter]);
 
   return (
     <>
@@ -447,17 +469,12 @@ function ImageGenerationSettings({ actions, apiServices, capability, contactsSna
               <input name="customAdapterId" type="hidden" value={selectedProtocol.customAdapterId} />
               <small>{unavailableConfiguredProtocol ? "当前自定义协议已不可用，请选择其他协议后保存。" : adapter === "custom-http-image" ? "请求格式保存在所选协议中；API Key 继续使用下方选择的 API 连接。" : imageGenerationAdapterDefinition(adapter)?.detail || "选择图片生成服务使用的请求格式。"}</small>
             </div>
+            <div className="capability-form-field image-vision-protocol-field">
+              <span>参考图适配器</span>
+              <ChoiceSelect name="referenceAdapter" onChange={setReferenceAdapter} options={referenceAdapterOptions} value={activeReferenceAdapter} />
+              <small>{referenceCapability.supported ? `将按“${referenceCapability.adapterLabel}”向模型“${referenceCapability.model}”发送参考图；请先以服务商文档确认该模型支持这种格式。保存后会锁定这个模型名，模型或协议变更时会自动禁用参考图。` : referenceCapability.reason}</small>
+            </div>
             <ApiBinding actions={actions} apiServices={apiServices} bindingId="image-generation" connectionFilter={(connection) => imageGenerationAdapterSupportsConnection(adapter, connection.type)} />
-          </FormGrid>
-        </SettingSurface>
-        <SettingSurface description="作为图像生成的专用画面预设，使用同一套请求协议、API 与联系人开关。" eyebrow="手机拍照式图片" title="画面预设">
-          <FormGrid>
-            <FormField label="后置画面尺寸"><input defaultValue={phoneSizes.rear || "1536x1024"} maxLength="20" name="rearSize" placeholder="1536x1024" /></FormField>
-            <FormField label="自拍画面尺寸"><input defaultValue={phoneSizes.selfie || "1024x1536"} maxLength="20" name="selfieSize" placeholder="1024x1536" /></FormField>
-            <FormField label="镜前画面尺寸"><input defaultValue={phoneSizes.mirror || "1024x1536"} maxLength="20" name="mirrorSize" placeholder="1024x1536" /></FormField>
-            <FormField label="最多参考图"><input defaultValue={phoneReferences.maxImages ?? 8} max="16" min="1" name="maxImages" type="number" /></FormField>
-            <FormField className="capability-form-field--wide" label="画面前置提示"><textarea defaultValue={phonePrompt.prefix || ""} maxLength="12000" name="promptPrefix" /></FormField>
-            <FormField className="capability-form-field--wide" label="画面补充提示"><textarea defaultValue={phonePrompt.suffix || ""} maxLength="12000" name="promptSuffix" /></FormField>
           </FormGrid>
         </SettingSurface>
       </CapabilitySettingsForm>
@@ -1221,6 +1238,44 @@ function AgentJournalSettings({ actions, capability, contactsSnapshot }) {
   );
 }
 
+function MailAgentSkillDialog({ actions, onClose, open, skill }) {
+  const [saving, setSaving] = useState(false);
+  const [feedback, setFeedback] = useState("");
+  const editing = Boolean(skill?.id);
+  const close = () => { if (!saving) onClose?.(); };
+  const save = async (event) => {
+    event.preventDefault();
+    if (saving || typeof actions.saveSettings !== "function") return;
+    setSaving(true);
+    setFeedback("");
+    try {
+      const result = await actions.saveSettings("mail-bridge", formValue(event.currentTarget));
+      if (result?.ok) onClose?.();
+      else setFeedback(result?.error?.message || "邮件业务 Skill 没有保存，请检查填写内容。 ");
+    } catch (error) {
+      setFeedback(error?.message || "邮件业务 Skill 没有保存，请稍后重试。 ");
+    } finally {
+      setSaving(false);
+    }
+  };
+  return (
+    <CreateStudioDialog ariaLabel={editing ? "编辑邮件业务 Skill" : "新增邮件业务 Skill"} className="mail-bridge-config-dialog" onClose={close} open={open}>
+      <SettingsDialogHeader onClose={close} title={editing ? "编辑邮件业务 Skill" : "新增邮件业务 Skill"}>邮件业务</SettingsDialogHeader>
+      <div className="voice-settings-copy"><p>这项 Skill 会出现在 Agent 的技能目录中：它先告诉 Agent 什么时候需要发邮件、发什么主题；发送方式则由“邮箱通道” Skill 提供。</p></div>
+      {feedback ? <div className="voice-settings-copy"><p>{feedback}</p></div> : null}
+      <form className="mail-bridge-config-form" onSubmit={save}>
+        <input defaultValue={skill?.id || ""} name="mailSkillId" type="hidden" />
+        <FormGrid>
+          <FormField hint="例如：查岗、日报、提醒。这个名称会直接显示在 Agent 的技能目录中。" label="Skill 名称"><input autoFocus defaultValue={skill?.name || ""} disabled={saving} maxLength="100" name="mailSkillName" required /></FormField>
+          <FormField hint="例如：查岗。Agent 发这类邮件时会使用这个主题。" label="邮件主题"><input defaultValue={skill?.subject || ""} disabled={saving} maxLength="200" name="mailSkillSubject" required /></FormField>
+          <FormField className="capability-form-field--wide" hint="写清这项 Skill 在什么情况下使用、要让收件方做什么；不要写邮箱地址或服务器参数。" label="何时使用"><textarea defaultValue={skill?.description || ""} disabled={saving} maxLength="4000" name="mailSkillDescription" required /></FormField>
+        </FormGrid>
+        <footer className="mail-bridge-config-form__actions"><Button disabled={saving} onClick={close} type="button" variant="secondary">取消</Button><Button disabled={saving} type="submit">{saving ? "正在保存…" : editing ? "保存修改" : "新增邮件 Skill"}</Button></footer>
+      </form>
+    </CreateStudioDialog>
+  );
+}
+
 function MailBridgeConfigDialog({ actions, capability, onClose, open }) {
   const [saving, setSaving] = useState(false);
   const [feedback, setFeedback] = useState("");
@@ -1245,23 +1300,28 @@ function MailBridgeConfigDialog({ actions, capability, onClose, open }) {
   return (
     <CreateStudioDialog ariaLabel="配置邮箱通道" className="mail-bridge-config-dialog" onClose={close} open={open}>
       <SettingsDialogHeader onClose={close} title="配置邮箱通道">邮箱通道</SettingsDialogHeader>
-      <div className="voice-settings-copy"><p>填写用于发送和接收邮件的邮箱。收件方可以是任何外部自动化或邮箱；授权码不写进页面或配置快照：请先把它放到操作系统环境变量，再在这里填写变量名。</p></div>
+      <div className="voice-settings-copy"><p>这里仅设置本机用于收发的邮箱。Agent 要发什么类型的邮件、使用什么主题，请在“邮件业务 Skill”中设置；授权码不会写进页面或能力快照。</p></div>
       {feedback ? <div className="voice-settings-copy"><p>{feedback}</p></div> : null}
       <form className="mail-bridge-config-form" onSubmit={save}>
         <div className="capability-form-grid-react">
-          <FormField label="SMTP 服务器"><input defaultValue={configuration.smtpHost || "smtp.163.com"} maxLength="320" name="smtpHost" required /></FormField>
-          <FormField label="SMTP 端口"><input defaultValue={configuration.smtpPort ?? 465} max="65535" min="1" name="smtpPort" required type="number" /></FormField>
           <FormField label="发件邮箱"><input defaultValue={configuration.sender || ""} maxLength="320" name="sender" required type="email" /></FormField>
-          <FormField label="默认收件邮箱"><input defaultValue={configuration.recipient || ""} maxLength="320" name="recipient" required type="email" /></FormField>
-          <FormField label="IMAP 服务器"><input defaultValue={configuration.imapHost || "imap.163.com"} maxLength="320" name="imapHost" required /></FormField>
-          <FormField label="IMAP 端口"><input defaultValue={configuration.imapPort ?? 993} max="65535" min="1" name="imapPort" required type="number" /></FormField>
-          <FormField label="收信邮箱账号"><input defaultValue={configuration.username || ""} maxLength="320" name="username" required type="email" /></FormField>
-          <FormField label="收件箱"><input defaultValue={configuration.mailbox || "INBOX"} maxLength="160" name="mailbox" required /></FormField>
-          <FormField className="capability-form-field--wide" hint="每行一个地址；只有这些地址发来的邮件会按下面的主题路由交给 Agent。" label="允许的邮件发件人"><textarea defaultValue={allowedSenders} maxLength="9600" name="allowedSenders" required /></FormField>
+          <FormField hint="Agent 发出的邮件都会投递到这个地址。" label="投递收件邮箱"><input defaultValue={configuration.recipient || ""} maxLength="320" name="recipient" required type="email" /></FormField>
+          <FormField label="收信邮箱"><input defaultValue={configuration.username || ""} maxLength="320" name="username" required type="email" /></FormField>
+          <FormField hint="只有这个主题的邮件会作为回信投递给已勾选的联系人。" label="接收回信的主题"><input defaultValue={configuration.feedbackSubject || "Suzu"} maxLength="200" name="feedbackSubject" required /></FormField>
+          <FormField className="capability-form-field--wide" hint="每行一个地址；只有这些地址发来的邮件会被当作回信。" label="允许接收回信的发件人"><textarea defaultValue={allowedSenders} maxLength="9600" name="allowedSenders" required /></FormField>
           <FormField className="capability-form-field--wide" hint="例如 SUZU_MAIL_PASSWORD。实际授权码只由本机进程从这个环境变量读取。" label="邮箱授权码环境变量"><input defaultValue={configuration.passwordEnv || "SUZU_MAIL_PASSWORD"} maxLength="128" name="passwordEnv" required /></FormField>
-          <FormField label="邮件主题路由"><input defaultValue={configuration.routeSubject || "Suzu"} maxLength="200" name="routeSubject" required /></FormField>
-          <FormField className="capability-form-field--wide" hint="可用变量：{{content}}、{{subject}}、{{from}}、{{receivedAt}}、{{attachments}}。" label="交给 Agent 的邮件提示词"><textarea defaultValue={configuration.routePrompt || "这是收到的一封邮件（{{subject}}，来自 {{from}}，{{receivedAt}}）：\n{{content}}\n{{attachments}}"} maxLength="12000" name="routePrompt" required /></FormField>
         </div>
+        <details className="mail-bridge-config-form__advanced">
+          <summary>高级服务器设置</summary>
+          <p>常见邮箱可保持默认值；只有邮箱服务商提供了不同服务器或端口时才需要修改。</p>
+          <FormGrid>
+            <FormField label="发信服务器"><input defaultValue={configuration.smtpHost || "smtp.163.com"} maxLength="320" name="smtpHost" required /></FormField>
+            <FormField label="发信端口"><input defaultValue={configuration.smtpPort ?? 465} max="65535" min="1" name="smtpPort" required type="number" /></FormField>
+            <FormField label="收信服务器"><input defaultValue={configuration.imapHost || "imap.163.com"} maxLength="320" name="imapHost" required /></FormField>
+            <FormField label="收信端口"><input defaultValue={configuration.imapPort ?? 993} max="65535" min="1" name="imapPort" required type="number" /></FormField>
+            <FormField className="capability-form-field--wide" label="收件箱名称"><input defaultValue={configuration.mailbox || "INBOX"} maxLength="160" name="mailbox" required /></FormField>
+          </FormGrid>
+        </details>
         <footer className="mail-bridge-config-form__actions"><Button disabled={saving} onClick={close} type="button" variant="secondary">取消</Button><Button disabled={saving} type="submit">{saving ? "正在保存…" : "保存邮箱通道"}</Button></footer>
       </form>
     </CreateStudioDialog>
@@ -1270,14 +1330,37 @@ function MailBridgeConfigDialog({ actions, capability, onClose, open }) {
 
 function MailBridgeSettings({ actions, capability, contactsSnapshot }) {
   const [configOpen, setConfigOpen] = useState(false);
+  const [skillDraft, setSkillDraft] = useState(null);
+  const [removingSkillId, setRemovingSkillId] = useState("");
+  const [feedback, setFeedback] = useState("");
   const settings = savedSettings(capability);
-  const status = settings.saved
-    ? "全局邮箱通道已保存。软件运行时会读取授权码环境变量，并把符合主题路由的邮件直接投递到下方勾选的联系人。"
-    : "先配置全局邮箱通道，再选择要接收路由邮件的联系人。";
+  const configuration = settings.configuration || {};
+  const agentSkills = Array.isArray(configuration.agentSkills) ? configuration.agentSkills : [];
+  const connectionStatus = settings.saved
+    ? "邮箱连接已保存。软件会从本机环境变量读取授权码。"
+    : "还没有完成邮箱连接；先配置连接后才能实际收发邮件。";
+  const removeSkill = async (skill) => {
+    if (!skill?.id || removingSkillId || typeof actions.saveSettings !== "function") return;
+    setRemovingSkillId(skill.id);
+    setFeedback("");
+    try {
+      const result = await actions.saveSettings("mail-bridge", { removeMailSkillId: skill.id });
+      if (!result?.ok) setFeedback(result?.error?.message || "邮件业务 Skill 没有删除，请稍后重试。 ");
+    } catch (error) {
+      setFeedback(error?.message || "邮件业务 Skill 没有删除，请稍后重试。 ");
+    } finally {
+      setRemovingSkillId("");
+    }
+  };
   return (
     <>
-      <SettingSurface action={<Button onClick={() => setConfigOpen(true)} type="button" variant="secondary">配置邮箱通道</Button>} description={status} eyebrow="MAIL BRIDGE" title="本地邮件收发" />
-      <ContactDeliverySettings actions={actions} capability={capability} description="可以同时勾选多个联系人；一封符合主题路由的邮件会分别排进所有已勾选联系人的对话。" contactsSnapshot={contactsSnapshot} />
+      <SettingSurface action={<Button onClick={() => setSkillDraft({})} type="button">新增邮件 Skill</Button>} description="每条业务 Skill 都会出现在 Agent 的技能目录中。Agent 先读它，知道何时发哪封邮件；再读取邮箱通道，按指定主题投递。" eyebrow="MAIL SKILLS" title="邮件业务 Skill">
+        {feedback ? <div className="voice-settings-copy"><p>{feedback}</p></div> : null}
+        {agentSkills.length ? <div className="mail-agent-skill-list">{agentSkills.map((skill) => <article className="mail-agent-skill" key={skill.id}><div className="mail-agent-skill__copy"><strong>{skill.name}</strong><p>{skill.description}</p><small>{`邮件主题：${skill.subject}`}</small></div><div className="mail-agent-skill__actions"><Button disabled={Boolean(removingSkillId)} onClick={() => setSkillDraft(skill)} type="button" variant="secondary">编辑</Button><Button disabled={Boolean(removingSkillId)} onClick={() => removeSkill(skill)} type="button" variant="danger">{removingSkillId === skill.id ? "正在删除…" : "删除"}</Button></div></article>)}</div> : <Empty description="新增一条业务动作，例如“查岗”。它会告诉 Agent 何时发信，以及该用什么主题。" title="还没有邮件业务 Skill" />}
+      </SettingSurface>
+      <SettingSurface action={<Button onClick={() => setConfigOpen(true)} type="button" variant="secondary">配置邮箱连接</Button>} description={connectionStatus} eyebrow="MAIL CONNECTION" title="本地邮箱收发" />
+      <ContactDeliverySettings actions={actions} capability={capability} description="勾选后，对应联系人可以使用这里的邮件业务 Skill，也会接收符合回信设置的邮件；可以同时选择多个联系人。" contactsSnapshot={contactsSnapshot} />
+      <MailAgentSkillDialog actions={actions} key={skillDraft?.id || "new"} onClose={() => setSkillDraft(null)} open={skillDraft !== null} skill={skillDraft} />
       <MailBridgeConfigDialog actions={actions} capability={capability} onClose={() => setConfigOpen(false)} open={configOpen} />
     </>
   );
@@ -1303,12 +1386,76 @@ function WechatSettings({ actions, wechatSnapshot }) {
   );
 }
 
+function qqBotStatusLabel(bot) {
+  if (!bot?.configured) return "尚未配置机器人";
+  if (bot.status === "connected") return "机器人已连接";
+  if (bot.status === "connecting") return "正在连接机器人";
+  if (bot.status === "attention") return "机器人需要处理";
+  return "机器人设置已保存";
+}
+
+function QQSettings({ actions, qqSnapshot }) {
+  const settings = qqConnectionSettings(qqSnapshot);
+  const bot = settings.bot;
+  const [appId, setAppId] = useState(bot.appId || "");
+  const [clientSecret, setClientSecret] = useState("");
+  const [error, setError] = useState("");
+  const [saving, setSaving] = useState(false);
+  useEffect(() => {
+    setAppId(bot.appId || "");
+  }, [bot.appId]);
+  const saveBot = async (event) => {
+    event.preventDefault();
+    if (saving || typeof actions.configureQqBot !== "function") return;
+    setSaving(true);
+    setError("");
+    try {
+      await actions.configureQqBot({ appId, clientSecret });
+      setClientSecret("");
+    } catch (nextError) {
+      setError(nextError?.message || "QQ 机器人设置没有保存。 ");
+    } finally {
+      setSaving(false);
+    }
+  };
+  return (
+    <section className="capability-settings-stack">
+      <SettingSurface description="这台设备通过一个 QQ 机器人接收和发送私聊消息。软件已预置机器人时无需填写；使用自己的机器人时，凭证会以系统加密方式保留在本机。" eyebrow="QQ BOT" title="QQ 机器人">
+        <Status label={qqBotStatusLabel(bot)} tone={bot.status === "connected" ? "success" : bot.configured ? "muted" : "warning"} />
+        {bot.lastError ? <p className="capability-settings-note">{bot.lastError}</p> : null}
+        <form className="capability-settings-form-react" onSubmit={saveBot}>
+          <FormGrid>
+            <FormField className="capability-form-field--wide" hint="在 QQ 开放平台创建机器人的接入信息中查看。" label="AppID"><input autoComplete="off" disabled={saving} maxLength="128" onChange={(event) => setAppId(event.target.value)} required value={appId} /></FormField>
+            <FormField className="capability-form-field--wide" hint={bot.configured ? "留空会保留当前 AppSecret。" : "仅保存在本机的系统加密存储中。"} label="AppSecret"><input autoComplete="new-password" disabled={saving} maxLength="500" onChange={(event) => setClientSecret(event.target.value)} placeholder={bot.configured ? "已保存" : "填写 AppSecret"} required={!bot.configured} type="password" value={clientSecret} /></FormField>
+            <p className="capability-form-note">连接联系人时，请前往「对话」，打开想连接的联系人设置，在「QQ 连接」中生成并复制绑定码，再用 QQ 将绑定码发送给机器人即可。</p>
+          </FormGrid>
+          {error ? <p className="capability-settings-note">{error}</p> : null}
+          <footer className="capability-settings-form-react__footer"><Button disabled={saving} type="submit" variant="secondary">{saving ? "正在保存…" : "保存机器人"}</Button></footer>
+        </form>
+      </SettingSurface>
+      <SettingSurface description="选择已连接 QQ 要接收的消息类型。联系人从 QQ 发来消息时，回复只会回到 QQ。" eyebrow="QQ" title="投送到 QQ 的内容">
+        <div className="capability-delivery-grid">
+          {QQ_DELIVERY_OPTIONS.map(([key, label, description]) => <AsyncSwitchRow checked={settings.delivery[key] === true} description={description} key={key} label={label} onChange={(enabled) => actions.saveQqSettings?.({ delivery: { ...settings.delivery, [key]: enabled } })} />)}
+        </div>
+      </SettingSurface>
+      <SettingSurface description="一段回复需要投递为多条 QQ 消息时，按此方式决定拆分位置。" eyebrow="MESSAGE FORMAT" title="回复分段方式">
+        <FormGrid>
+          <FormField hint="空行分段会保留同一段内的完整内容；句子分段会按句号、问号和感叹号分别投递。" label="分段方式">
+            <ChoiceSelect name="qqTextSegmentation" onChange={(textSegmentation) => actions.saveQqSettings?.({ textSegmentation })} options={QQ_TEXT_SEGMENTATION_OPTIONS} value={settings.textSegmentation} />
+          </FormField>
+        </FormGrid>
+      </SettingSurface>
+    </section>
+  );
+}
+
 function GenericCapabilitySettings() {
   return <SettingSurface description="当前没有需要单独调整的选项。" eyebrow="能力资料" title="这项能力已准备好" />;
 }
 
-function CapabilitySettings({ actions, apiServices, capability, contactsSnapshot, wechatSnapshot }) {
+function CapabilitySettings({ actions, apiServices, capability, contactsSnapshot, qqSnapshot, wechatSnapshot }) {
   if (capability.id === "wechat-connection") return <WechatSettings actions={actions} wechatSnapshot={wechatSnapshot} />;
+  if (capability.id === "qq-connection") return <QQSettings actions={actions} qqSnapshot={qqSnapshot} />;
   if (capability.id === "image-generation") return <ImageGenerationSettings actions={actions} apiServices={apiServices} capability={capability} contactsSnapshot={contactsSnapshot} />;
   if (capability.id === "voice-message") return <VoiceMessageSettings actions={actions} apiServices={apiServices} capability={capability} contactsSnapshot={contactsSnapshot} />;
   if (capability.id === "image-vision") return <ImageVisionSettings actions={actions} apiServices={apiServices} capability={capability} contactsSnapshot={contactsSnapshot} />;
@@ -1326,6 +1473,7 @@ export function CapabilityDetailPage({
   capability,
   categoryId,
   contactsSnapshot,
+  qqSnapshot,
   wechatSnapshot,
 }) {
   const category = categoryFor(categoryId);
@@ -1335,14 +1483,14 @@ export function CapabilityDetailPage({
   const detailAction = CONTACT_SCOPED_CAPABILITY_IDS.has(capability.id)
       ? back
       : <div className="capability-detail-header-actions"><CapabilityHeaderToggle actions={actions} capability={capability} />{back}</div>;
-  if (capability.id === "wechat-connection") {
+  if (["wechat-connection", "qq-connection"].includes(capability.id)) {
     return (
       <PageScaffold
         canvasClassName="page-canvas--stack"
         className="capabilities-react-page capabilities-react-page--inner"
         header={<PageHeader action={back} eyebrow={"CAPABILITIES / " + category.label} subtitle={subtitle} title={title} />}
       >
-        <WechatSettings actions={actions} wechatSnapshot={wechatSnapshot} />
+        {capability.id === "qq-connection" ? <QQSettings actions={actions} qqSnapshot={qqSnapshot} /> : <WechatSettings actions={actions} wechatSnapshot={wechatSnapshot} />}
       </PageScaffold>
     );
   }
@@ -1352,7 +1500,7 @@ export function CapabilityDetailPage({
       className="capabilities-react-page capabilities-react-page--inner"
       header={<PageHeader action={detailAction} eyebrow={"CAPABILITIES / " + category.label} subtitle={subtitle} title={title} />}
     >
-      <CapabilitySettings actions={actions} apiServices={apiServices} capability={capability} contactsSnapshot={contactsSnapshot} wechatSnapshot={wechatSnapshot} />
+      <CapabilitySettings actions={actions} apiServices={apiServices} capability={capability} contactsSnapshot={contactsSnapshot} qqSnapshot={qqSnapshot} wechatSnapshot={wechatSnapshot} />
     </PageScaffold>
   );
 }

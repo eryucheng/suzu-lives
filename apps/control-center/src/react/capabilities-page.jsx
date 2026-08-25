@@ -1,6 +1,6 @@
 import { Empty, GlassPanel, PageHeader, Status } from "suzu-design-system";
 
-import { capabilityCategory, capabilityOverview, createWechatConnectionCapability } from "../features/capabilities/overview.mjs";
+import { capabilityCategory, capabilityOverview, createQQConnectionCapability, createWechatConnectionCapability } from "../features/capabilities/overview.mjs";
 import { CapabilityCategoryPage, CapabilityDetailPage, ExternalCapabilitiesPage } from "./capability-detail-page.jsx";
 import { PageScaffold } from "./page-scaffold.jsx";
 
@@ -106,6 +106,7 @@ export function CapabilitiesPage({ actions = {}, snapshot = {} }) {
   const overview = capabilityOverview({
     capabilitySnapshot,
     wechatSnapshot: snapshot.wechatSnapshot,
+    qqSnapshot: snapshot.qqSnapshot,
   });
   const route = snapshot.page || "overview";
   const categoryId = overview.categories.some((category) => category.id === snapshot.categoryId)
@@ -116,13 +117,14 @@ export function CapabilitiesPage({ actions = {}, snapshot = {} }) {
     return <ExternalCapabilitiesPage actions={actions} externalSnapshot={snapshot.externalCapabilities} />;
   }
   if (route === "category") {
-    return <CapabilityCategoryPage actions={actions} capabilitySnapshot={capabilitySnapshot} categoryId={categoryId} wechatSnapshot={snapshot.wechatSnapshot} />;
+    return <CapabilityCategoryPage actions={actions} capabilitySnapshot={capabilitySnapshot} categoryId={categoryId} qqSnapshot={snapshot.qqSnapshot} wechatSnapshot={snapshot.wechatSnapshot} />;
   }
   if (route === "detail") {
     const capability = overview.capabilities.find((item) => item.id === snapshot.selectedId && capabilityCategory(item) === categoryId)
       || overview.capabilities.find((item) => item.id === snapshot.selectedId)
       || overview.capabilities.find((item) => capabilityCategory(item) === categoryId)
-      || createWechatConnectionCapability(snapshot.wechatSnapshot);
+      || createWechatConnectionCapability(snapshot.wechatSnapshot)
+      || createQQConnectionCapability(snapshot.qqSnapshot);
     return (
       <CapabilityDetailPage
         actions={actions}
@@ -130,6 +132,7 @@ export function CapabilitiesPage({ actions = {}, snapshot = {} }) {
         capability={capability}
         categoryId={capabilityCategory(capability)}
         contactsSnapshot={snapshot.contactsSnapshot}
+        qqSnapshot={snapshot.qqSnapshot}
         wechatSnapshot={snapshot.wechatSnapshot}
       />
     );

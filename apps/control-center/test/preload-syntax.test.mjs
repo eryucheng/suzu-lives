@@ -77,6 +77,8 @@ test("Electron preload exposes the memory bridge", async () => {
   assert.equal(typeof bridge?.conversation?.voiceInput?.stop, "function");
   assert.equal(typeof bridge?.conversation?.renameContact, "function");
   assert.equal(typeof bridge?.conversation?.copyMediaFile, "function");
+  assert.equal(typeof bridge?.conversation?.copyMessageText, "function");
+  assert.equal(typeof bridge?.conversation?.copyMediaImage, "function");
   assert.equal(typeof bridge?.conversation?.updateContactPresentation, "function");
   assert.equal(typeof bridge?.conversation?.updateContactApprovalMode, "undefined");
   assert.equal(typeof bridge?.conversation?.updateContactLongTermMemoryEnabled, "function");
@@ -85,12 +87,23 @@ test("Electron preload exposes the memory bridge", async () => {
   assert.equal(typeof bridge?.conversation?.emojiStickers?.snapshot, "function");
   assert.equal(typeof bridge?.conversation?.emojiStickers?.select, "function");
   assert.equal(typeof bridge?.conversation?.emojiStickers?.add, "function");
+  assert.equal(typeof bridge?.conversation?.emojiStickers?.complete, "function");
+  assert.equal(typeof bridge?.conversation?.emojiStickers?.discardSelection, "function");
+  assert.equal(typeof bridge?.conversation?.emojiStickers?.update, "function");
+  assert.equal(typeof bridge?.conversation?.emojiStickers?.remove, "function");
   assert.equal(typeof bridge?.conversation?.emojiStickers?.send, "function");
   assert.equal(typeof bridge?.agentRuntime?.snapshot, "function");
   assert.equal(typeof bridge?.conversationCompactor?.snapshot, "function");
   assert.equal(typeof bridge?.capabilities?.companionTargets, "function");
   assert.equal(typeof bridge?.wechat?.begin, "function");
   assert.equal(typeof bridge?.wechat?.saveSettings, "function");
+  assert.equal(typeof bridge?.qq?.snapshot, "function");
+  assert.equal(typeof bridge?.qq?.begin, "function");
+  assert.equal(typeof bridge?.qq?.configure, "function");
+  assert.equal(typeof bridge?.qq?.saveSettings, "function");
+  assert.equal(typeof bridge?.qq?.setContactEnabled, "function");
+  assert.equal(typeof bridge?.qq?.disconnect, "function");
+  assert.equal(typeof bridge?.qq?.onEvent, "function");
   assert.equal(typeof bridge?.voiceDesign?.saveContactVoice, "function");
   assert.equal(typeof bridge?.externalCapabilities?.importManifest, "function");
   assert.equal(typeof bridge?.externalCapabilities?.setEnabled, "function");
@@ -134,6 +147,12 @@ test("Electron preload exposes the memory bridge", async () => {
   await bridge.conversation.copyMediaFile({ fileUrl: "file:///D:/Temp/report.txt" });
   assert.equal(calls.at(-1).channel, "conversation:copy-media-file");
   assert.deepEqual(JSON.parse(JSON.stringify(calls.at(-1).args[0])), { fileUrl: "file:///D:/Temp/report.txt" });
+  await bridge.conversation.copyMessageText({ text: "复制这段文字" });
+  assert.equal(calls.at(-1).channel, "conversation:copy-message-text");
+  assert.deepEqual(JSON.parse(JSON.stringify(calls.at(-1).args[0])), { text: "复制这段文字" });
+  await bridge.conversation.copyMediaImage({ fileUrl: "file:///D:/Temp/image.png" });
+  assert.equal(calls.at(-1).channel, "conversation:copy-media-image");
+  assert.deepEqual(JSON.parse(JSON.stringify(calls.at(-1).args[0])), { fileUrl: "file:///D:/Temp/image.png" });
   await bridge.conversation.updateContactPresentation({ id: "contact-suzu", pinned: true });
   assert.equal(calls.at(-1).channel, "conversation:update-contact-presentation");
   assert.deepEqual(JSON.parse(JSON.stringify(calls.at(-1).args[0])), { id: "contact-suzu", pinned: true });
@@ -153,14 +172,26 @@ test("Electron preload exposes the memory bridge", async () => {
   await bridge.conversation.emojiStickers.snapshot();
   await bridge.conversation.emojiStickers.select();
   await bridge.conversation.emojiStickers.add({ selectionToken: "selected-sticker" });
+  await bridge.conversation.emojiStickers.complete({ id: "sticker-1" });
+  await bridge.conversation.emojiStickers.discardSelection({ selectionToken: "discarded-sticker" });
+  await bridge.conversation.emojiStickers.update({ id: "sticker-1", metadata: { name: "开心" } });
+  await bridge.conversation.emojiStickers.remove({ confirmed: true, id: "sticker-2" });
   await bridge.conversation.emojiStickers.send({ id: "sticker-1" });
-  assert.deepEqual(calls.slice(-4).map((call) => call.channel), [
+  assert.deepEqual(calls.slice(-8).map((call) => call.channel), [
     "conversation:emoji-stickers",
     "conversation:select-emoji-sticker",
     "conversation:add-emoji-sticker",
+    "conversation:complete-emoji-sticker",
+    "conversation:discard-emoji-sticker-selection",
+    "conversation:update-emoji-sticker",
+    "conversation:remove-emoji-sticker",
     "conversation:send-emoji-sticker",
   ]);
-  assert.deepEqual(JSON.parse(JSON.stringify(calls.at(-2).args[0])), { selectionToken: "selected-sticker" });
+  assert.deepEqual(JSON.parse(JSON.stringify(calls.at(-6).args[0])), { selectionToken: "selected-sticker" });
+  assert.deepEqual(JSON.parse(JSON.stringify(calls.at(-5).args[0])), { id: "sticker-1" });
+  assert.deepEqual(JSON.parse(JSON.stringify(calls.at(-4).args[0])), { selectionToken: "discarded-sticker" });
+  assert.deepEqual(JSON.parse(JSON.stringify(calls.at(-3).args[0])), { id: "sticker-1", metadata: { name: "开心" } });
+  assert.deepEqual(JSON.parse(JSON.stringify(calls.at(-2).args[0])), { confirmed: true, id: "sticker-2" });
   assert.deepEqual(JSON.parse(JSON.stringify(calls.at(-1).args[0])), { id: "sticker-1" });
   await bridge.memory.reviewOverview({ reviewStates: ["pending"] });
   await bridge.memory.reviewProposal("relation", "review-1");
@@ -243,4 +274,19 @@ test("Electron preload exposes the memory bridge", async () => {
   ]);
   assert.deepEqual(JSON.parse(JSON.stringify(calls.at(-2).args[0])), { inputId: "voice-input-1" });
   assert.deepEqual(JSON.parse(JSON.stringify(calls.at(-1).args[0])), { inputId: "voice-input-1" });
+  await bridge.qq.snapshot({ contactId: "contact-suzu" });
+  await bridge.qq.begin({ contactId: "contact-suzu" });
+  await bridge.qq.configure({ appId: "qq-app", clientSecret: "qq-secret" });
+  await bridge.qq.saveSettings({ textSegmentation: "sentence" });
+  await bridge.qq.setContactEnabled({ contactId: "contact-suzu", enabled: true });
+  await bridge.qq.disconnect({ contactId: "contact-suzu", confirmed: true });
+  assert.deepEqual(calls.slice(-6).map((call) => call.channel), [
+    "qq:snapshot",
+    "qq:begin",
+    "qq:configure",
+    "qq:save-settings",
+    "qq:set-contact-enabled",
+    "qq:disconnect",
+  ]);
+  assert.deepEqual(JSON.parse(JSON.stringify(calls.at(-1).args[0])), { contactId: "contact-suzu", confirmed: true });
 });

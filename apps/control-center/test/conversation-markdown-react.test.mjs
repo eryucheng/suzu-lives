@@ -17,7 +17,7 @@ test("chat renders structured Markdown while the composer keeps its plain-text m
 
   assert.match(page, /import ReactMarkdown from "react-markdown";/);
   assert.match(page, /import remarkGfm from "remark-gfm";/);
-  assert.match(page, /import \{ hasMarkdownFormatting, shouldSubmitConversationOnEnter \} from "\.\.\/features\/conversation\/index\.mjs";/);
+  assert.match(page, /import \{ groupConversationToolActivityRows, hasMarkdownFormatting, shouldSubmitConversationOnEnter \} from "\.\.\/features\/conversation\/index\.mjs";/);
   assert.match(page, /function ConversationMarkdown\(\{ onOpenExternal, text \}\)/);
   assert.match(page, /remarkPlugins=\{\[remarkGfm\]\}/);
   assert.match(page, /function ConversationRenderedText\(\{ onOpenExternal, text \}\)/);

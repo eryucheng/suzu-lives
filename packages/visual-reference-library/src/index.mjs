@@ -280,12 +280,20 @@ async function commit(libraryRoot, manifest, { copies = [], deletions = [] } = {
   } finally { await fs.rm(stage, { recursive: true, force: true }); }
 }
 
-function snapshot(manifest) {
+function snapshot(manifest, { includePaths = false, libraryRoot = "" } = {}) {
   const assetSets = new Map(Object.keys(manifest.assets).map((id) => [id, []]));
   for (const [id, value] of Object.entries(manifest.sets)) for (const assetId of value.assets) assetSets.get(assetId)?.push(id);
   return {
     status: Object.keys(manifest.assets).length ? "ready" : "empty",
-    assets: Object.entries(manifest.assets).map(([id, value]) => ({ id, role: value.role, description: value.description, preserve: value.preserve, ignore: value.ignore, sets: assetSets.get(id) || [] })),
+    assets: Object.entries(manifest.assets).map(([id, value]) => ({
+      id,
+      role: value.role,
+      description: value.description,
+      preserve: value.preserve,
+      ignore: value.ignore,
+      sets: assetSets.get(id) || [],
+      ...(includePaths ? { path: safeAssetPath(libraryRoot, value.path) } : {}),
+    })),
     sets: Object.entries(manifest.sets).map(([id, value]) => ({ id, description: value.description, assets: value.assets })),
   };
 }
@@ -296,7 +304,13 @@ export function createVisualReferenceLibrary({ libraryRoot }) {
   const manifestPath = () => path.join(root, "manifest.json");
   return {
     root,
-    async snapshot() { try { return snapshot(await readManifest(root)); } catch (error) { return { status: "invalid", assets: [], sets: [], message: error.message }; } },
+    async snapshot({ includePaths = false } = {}) {
+      try {
+        return snapshot(await readManifest(root), { includePaths: includePaths === true, libraryRoot: root });
+      } catch (error) {
+        return { status: "invalid", assets: [], sets: [], message: error.message };
+      }
+    },
     async assetPath(id) { const manifest = await readManifest(root); const asset = manifest.assets[validateId(id, "资料 ID")]; if (!asset) throw new VisualReferenceError("找不到该资料。"); return safeAssetPath(root, asset.path); },
     async add({ source, id, role: assetRole, description, preserve, ignore, sets = [] } = {}) {
       const manifest = await readManifest(root);

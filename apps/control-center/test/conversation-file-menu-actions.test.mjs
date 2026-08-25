@@ -74,7 +74,7 @@ test("file context menu delegates copy and reveal through the scoped conversatio
   }
 });
 
-test("message context menu hides the selected message after confirmation", async () => {
+test("message context menu copies text and images before hiding the selected message", async () => {
   const priorWindow = globalThis.window;
   const calls = [];
   let currentSnapshot = {
@@ -86,7 +86,10 @@ test("message context menu hides the selected message after confirmation", async
       id: "assistant-42",
       kind: "assistant",
       lineNumber: 42,
-      blocks: [{ kind: "text", text: "这条回复可以删除。" }],
+      blocks: [
+        { kind: "text", text: "这条回复可以删除。" },
+        { fileName: "reply.png", fileUrl: "file:///D:/Temp/reply.png", kind: "media", mediaKind: "image" },
+      ],
       timestamp: "2026-08-23T12:00:00.000Z",
     }],
     projectRoot: "D:/suzu-data/contacts/suzu",
@@ -104,8 +107,10 @@ test("message context menu hides the selected message after confirmation", async
   const context = {
     api: {
       conversation: {
+        copyMediaImage: async (value) => { calls.push({ type: "image", value }); },
+        copyMessageText: async (value) => { calls.push({ type: "text", value }); },
         deleteMessage: async (value) => {
-          calls.push(value);
+          calls.push({ type: "delete", value });
           currentSnapshot = {
             ...currentSnapshot,
             messages: [],
@@ -130,6 +135,9 @@ test("message context menu hides the selected message after confirmation", async
 
     actions.openMessageContextMenu(row, { x: 120, y: 160 });
     assert.deepEqual(conversationReactSnapshot(context).messageContextMenu, {
+      canDelete: true,
+      copyText: "这条回复可以删除。",
+      images: [{ fileName: "reply.png", fileUrl: "file:///D:/Temp/reply.png" }],
       kind: "assistant",
       lineNumber: 42,
       messageId: "assistant-42",
@@ -137,12 +145,22 @@ test("message context menu hides the selected message after confirmation", async
       y: 160,
     });
 
+    await actions.copyMessageText(conversationReactSnapshot(context).messageContextMenu);
+    assert.deepEqual(calls, [{ type: "text", value: { text: "这条回复可以删除。" } }]);
+    assert.equal(conversationReactSnapshot(context).notice, "已复制消息。");
+
+    actions.openMessageContextMenu(row, { x: 120, y: 160 });
+    await actions.copyMediaImage(conversationReactSnapshot(context).messageContextMenu.images[0]);
+    assert.deepEqual(calls.at(-1), { type: "image", value: { fileUrl: "file:///D:/Temp/reply.png" } });
+    assert.equal(conversationReactSnapshot(context).notice, "已复制“reply.png”，可直接粘贴。");
+
+    actions.openMessageContextMenu(row, { x: 120, y: 160 });
     await actions.deleteMessage(conversationReactSnapshot(context).messageContextMenu);
-    assert.deepEqual(calls, [{
+    assert.deepEqual(calls.at(-1), { type: "delete", value: {
       confirmed: true,
       lineNumber: 42,
       messageId: "assistant-42",
-    }]);
+    }});
     assert.equal(conversationReactSnapshot(context).messageContextMenu, null);
     assert.equal(conversationReactSnapshot(context).messageRows.filter((item) => item.type === "message").length, 0);
     assert.equal(conversationReactSnapshot(context).notice, "已从聊天记录中隐藏这条消息。");

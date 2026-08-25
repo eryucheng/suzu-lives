@@ -9,6 +9,10 @@ import {
   DEFAULT_IMAGE_GENERATION_ADAPTER,
   resolveImageGenerationAdapter,
 } from "./image-generation-adapters.mjs";
+import {
+  DEFAULT_IMAGE_REFERENCE_ADAPTER,
+  imageReferenceCapability,
+} from "./image-reference-adapters.mjs";
 
 export {
   DEFAULT_IMAGE_GENERATION_ADAPTER,
@@ -20,6 +24,17 @@ export {
   normalizeImageGenerationAdapter,
   resolveImageGenerationAdapter,
 } from "./image-generation-adapters.mjs";
+export {
+  DEFAULT_IMAGE_REFERENCE_ADAPTER,
+  IMAGE_REFERENCE_ADAPTER_OPTIONS,
+  IMAGE_REFERENCE_ADAPTERS,
+  imageReferenceAdapterDefinition,
+  imageReferenceAdapterLabel,
+  imageReferenceAdapterOptions,
+  imageReferenceAdapterSupportsImageGenerationAdapter,
+  imageReferenceCapability,
+  normalizeImageReferenceAdapter,
+} from "./image-reference-adapters.mjs";
 export {
   CUSTOM_IMAGE_GENERATION_ADAPTER_FILE,
   CUSTOM_IMAGE_GENERATION_ADAPTER_SCHEMA_VERSION,
@@ -401,9 +416,23 @@ async function customHttpImage({ connection, input, references, fetchImpl, image
 }
 async function writeRun(root, record) { await fs.mkdir(safeRoot(root), { recursive: true }); await fs.appendFile(safeFile(root, "runs.jsonl"), JSON.stringify(record) + "\n", "utf8"); }
 export async function createCandidates({ root, connection, input: rawInput, references: rawReferences = [], maxReferences = 12, fetchImpl = fetch, imageDownloader = downloadImageUrl, onSuccess = async () => {} }) {
-  const input = validateInput(rawInput); const references = validateReferences(rawReferences, { maxReferences }); if (!clean(connection?.apiKey) && input.backend === "api") throw new ImageWorkbenchError("请先在 设置 → API 为“生图”选择并配置 API。 ");
+  const input = validateInput(rawInput);
+  const references = validateReferences(rawReferences, { maxReferences });
+  const adapter = resolveImageGenerationAdapter(connection?.imageGenerationAdapter ?? DEFAULT_IMAGE_GENERATION_ADAPTER, { connectionType: connection?.type });
+  const referenceCapability = imageReferenceCapability({
+    connection,
+    customImageGenerationAdapter: connection?.customImageGenerationAdapter,
+    imageGenerationAdapter: adapter,
+    referenceImageAdapter: connection?.referenceImageAdapter ?? DEFAULT_IMAGE_REFERENCE_ADAPTER,
+    referenceImageModel: connection?.referenceImageModel,
+  });
+  if (references.length && !referenceCapability.supported) throw new ImageWorkbenchError(referenceCapability.reason);
+  if (references.length > referenceCapability.maxReferences) {
+    throw new ImageWorkbenchError(`模型“${referenceCapability.model}”使用“${referenceCapability.adapterLabel}”时最多可发送 ${referenceCapability.maxReferences} 张参考图；本次选择了 ${references.length} 张。请减少参考图，或改用支持更多参考图的模型适配器。`);
+  }
+  if (!clean(connection?.apiKey) && input.backend === "api") throw new ImageWorkbenchError("请先在 设置 → API 为“生图”选择并配置 API。 ");
   const runId = randomUUID(); const record = { id: runId, createdAt: new Date().toISOString(), prompt: input.prompt, backend: input.backend, size: input.size, countRequested: input.count, references: references.map(({ id, role, description, filename }) => ({ id, role, description, filename })), candidates: [], status: "running", note: "人工候选批次；尚未写入视觉参考库。" }; await writeRun(root, record);
-  try { for (let index = 0; index < input.count; index += 1) { const adapter = resolveImageGenerationAdapter(connection?.imageGenerationAdapter ?? DEFAULT_IMAGE_GENERATION_ADAPTER, { connectionType: connection?.type }); const result = adapter === "dashscope-image" ? await dashscopeImage({ connection, input, references, fetchImpl, imageDownloader }) : adapter === "custom-http-image" ? await customHttpImage({ connection, input, references, fetchImpl, imageDownloader }) : await apiImage({ connection, input, references, fetchImpl, imageDownloader }); const name = "candidate-" + runId + "-" + String(index + 1).padStart(2, "0") + imageExtension(result.image); await fs.writeFile(safeFile(root, name), result.image, { flag: "wx" }); const candidate = { id: runId + "-" + (index + 1), file: name, backend: input.backend, model: result.model, requestId: result.requestId, mode: result.mode, createdAt: new Date().toISOString() }; record.candidates.push(candidate); await onSuccess({ candidate, result, input, referenceCount: references.length }); } record.status = "complete"; }
+  try { for (let index = 0; index < input.count; index += 1) { const result = adapter === "dashscope-image" ? await dashscopeImage({ connection, input, references, fetchImpl, imageDownloader }) : adapter === "custom-http-image" ? await customHttpImage({ connection, input, references, fetchImpl, imageDownloader }) : await apiImage({ connection, input, references, fetchImpl, imageDownloader }); const name = "candidate-" + runId + "-" + String(index + 1).padStart(2, "0") + imageExtension(result.image); await fs.writeFile(safeFile(root, name), result.image, { flag: "wx" }); const candidate = { id: runId + "-" + (index + 1), file: name, backend: input.backend, model: result.model, requestId: result.requestId, mode: result.mode, createdAt: new Date().toISOString() }; record.candidates.push(candidate); await onSuccess({ candidate, result, input, referenceCount: references.length }); } record.status = "complete"; }
   catch (error) { record.status = record.candidates.length ? "partial" : "failed"; record.error = error?.message || String(error); throw error; }
   finally { await writeRun(root, record); }
   return record;

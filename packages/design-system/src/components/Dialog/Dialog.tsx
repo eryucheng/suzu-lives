@@ -1,4 +1,5 @@
 import { useEffect, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import styles from './Dialog.module.css';
 
 /**
@@ -44,7 +45,7 @@ export function Dialog({ open, onClose, title, children, footer, surface = 'glas
 
   if (!open) return null;
 
-  return (
+  const dialog = (
     <div className={styles.overlay} onMouseDown={onClose}>
       <div
         role="dialog"
@@ -71,4 +72,5 @@ export function Dialog({ open, onClose, title, children, footer, surface = 'glas
       </div>
     </div>
   );
+  return typeof document === 'undefined' ? dialog : createPortal(dialog, document.body);
 }

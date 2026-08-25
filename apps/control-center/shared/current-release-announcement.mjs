@@ -2,12 +2,11 @@
 // its version range and copy before packaging a release; it is only presented
 // after an upgrade.
 export const CURRENT_RELEASE_ANNOUNCEMENT = Object.freeze({
-  title: "Suzu Lives v0.2.9 → v0.2.10",
-  summary: "本次更新内容：",
+  title: "Suzu Lives v0.2.10 → v0.3.0",
+  summary: "",
   items: [
-    "优化 Suzu Agent Core 对话流程：发送后可继续输入，修复输入焦点与交互恢复问题。",
-    "联系人默认不使用 Unicode emoji，消息显示和流式回复的稳定性进一步改善。",
-    "API 连接可直接创建 DashScope 原生连接；图片生成请求失败时会给出安全、可定位的响应诊断。",
-    "完善语音、图片、联系人与主动关心等能力的体验和稳定性。",
+    "新增 QQ 联系人连接。绑定后，来自 QQ 的消息会进入对应联系人的对话，回复也会回到 QQ。",
+    "支持导入和管理自定义图片、视频壁纸，可按喜好整理、置顶和切换桌面背景。",
+    "优化聊天与界面体验：图片预览、复制、输入、工具调用展示和整体视觉细节更顺手；同时修复语音输入、通话收尾、时间理解等一批稳定性问题。",
   ],
 });

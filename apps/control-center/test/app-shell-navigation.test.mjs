@@ -116,20 +116,26 @@ test("the top command field stays centered in the whole desktop shell", () => {
   assert.match(shell, /"--shell-command-center-offset":[\s\S]*?effectiveSidebarWidth/u);
 });
 
-test("an incoming unread-message notice stays wide and compact without overflowing a narrow shell", () => {
+test("an incoming unread-message notice is centered in the window and uses its contact identity", () => {
   const styles = readFileSync(resolve(HERE, "..", "src", "react", "app-shell.css"), "utf8");
   const shell = readFileSync(resolve(HERE, "..", "src", "react", "app-shell.jsx"), "utf8");
+  const app = readFileSync(resolve(HERE, "..", "src", "app.mjs"), "utf8");
   const notice = styles.slice(styles.indexOf(".incoming-conversation-notice {"), styles.indexOf(".incoming-voice-call {"));
   const compactRail = styles.slice(styles.indexOf("@media (max-width:1180px)"), styles.indexOf("@media (max-width:820px)"));
 
-  assert.match(notice, /width:min\(480px,calc\(100vw - var\(--shell-sidebar-width\) - 48px\)\);/u);
+  assert.match(notice, /left:50%;/u);
+  assert.match(notice, /width:min\(480px,calc\(100vw - 48px\)\);/u);
   assert.match(notice, /border-radius:14px;/u);
   assert.match(notice, /padding:9px 12px;/u);
   assert.match(notice, /width:34px;[\s\S]*?height:34px;/u);
   assert.match(notice, /-webkit-line-clamp:1;/u);
-  assert.match(compactRail, /width:min\(480px,calc\(100vw - 104px\)\);/u);
+  assert.doesNotMatch(compactRail, /\.incoming-conversation-notice/u);
   assert.match(shell, /incoming-conversation-notice__app-name/u);
+  assert.match(shell, /src=\{notice\.avatar \|\| "\.\/app-icon\.png"\}/u);
   assert.doesNotMatch(shell, /incoming-conversation-notice__sender/u);
+  assert.match(app, /import \{ contactAvatarSource \} from "\.\/core\/contact-avatar\.mjs";/u);
+  assert.match(app, /avatar: contactAvatarSource\(contact, state\.settings\)/u);
+  assert.match(app, /senderName: String\(contact\?\.name \|\| profile\?\.displayName \|\| "Suzu"\)/u);
 });
 
 test("the application chrome is a compact continuous surface above the rounded workspace", () => {

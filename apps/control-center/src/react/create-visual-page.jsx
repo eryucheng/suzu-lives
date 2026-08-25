@@ -74,9 +74,9 @@ function VisualRuns({ onOpenCandidate, runs = [] }) {
   );
 }
 
-function ReferenceTile({ asset, chosen, onSelect, onToggle, preview, selected }) {
+function ReferenceTile({ asset, chosen, onSelect, onToggle, preview, referenceSelectable = true, selected, selectionDisabledReason = "" }) {
   return (
-    <article className={`reference-card${chosen ? " reference-card--chosen" : ""}`}>
+    <article className={`reference-card${chosen ? " reference-card--chosen" : ""}${referenceSelectable ? "" : " reference-card--selection-disabled"}`}>
       <button aria-pressed={selected} className={`reference-tile${selected ? " selected" : ""}`} onClick={onSelect} type="button">
         <div className="reference-preview">
           {preview ? <img alt="" src={preview} /> : <span>缩略图加载中</span>}
@@ -89,11 +89,12 @@ function ReferenceTile({ asset, chosen, onSelect, onToggle, preview, selected })
         </div>
       </button>
       <button
-        aria-label={chosen ? `取消选择“${asset.description}”作为本次参考` : `选择“${asset.description}”作为本次参考`}
+        aria-label={referenceSelectable ? (chosen ? `取消选择“${asset.description}”作为本次参考` : `选择“${asset.description}”作为本次参考`) : `当前不能将“${asset.description}”用作参考图：${selectionDisabledReason}`}
         aria-pressed={chosen}
         className={`reference-select-square${chosen ? " selected" : ""}`}
+        disabled={!referenceSelectable}
         onClick={onToggle}
-        title={chosen ? "取消选择" : "选择作为本次参考"}
+        title={referenceSelectable ? (chosen ? "取消选择" : "选择作为本次参考") : selectionDisabledReason}
         type="button"
       >
         <span aria-hidden="true">{chosen ? "✓" : ""}</span>
@@ -249,6 +250,14 @@ export function CreateVisualPage({ actions = {}, api }) {
   const selectedAssetSets = useMemo(() => selectedAsset ? (references?.sets || []).filter((item) => item.scope === selectedAsset.scope) : [], [references, selectedAsset]);
   const importSets = useMemo(() => (references?.sets || []).filter((item) => item.scope === importScope), [importScope, references]);
   const ready = drawing?.status === "ready";
+  const referenceCapability = drawing?.referenceCapability || {
+    maxReferences: 0,
+    reason: "正在读取当前模型的参考图能力。",
+    supported: false,
+  };
+  const referenceSelectable = referenceCapability.supported === true;
+  const referenceLimit = Number.isInteger(referenceCapability.maxReferences) ? referenceCapability.maxReferences : 0;
+  const referenceDisabledReason = String(referenceCapability.reason || "当前模型没有可用的参考图适配器。请前往“能力 → 图像生成”查看原因并配置。 ");
 
   useEffect(() => {
     if (hasContact) return;
@@ -261,6 +270,10 @@ export function CreateVisualPage({ actions = {}, api }) {
     if (hasContact && importRole === "identity") setImportScope("contact");
   }, [hasContact, importRole]);
 
+  useEffect(() => {
+    if (!referenceSelectable) setSelectedReferences(new Set());
+  }, [referenceSelectable]);
+
   const withReferenceChange = useCallback(async (task, success) => {
     try {
       await task();
@@ -270,6 +283,23 @@ export function CreateVisualPage({ actions = {}, api }) {
       setFeedback(error?.message || String(error));
     }
   }, [reloadReferences]);
+
+  const toggleReference = (referenceId) => {
+    if (!referenceSelectable) {
+      setFeedback(referenceDisabledReason);
+      return;
+    }
+    if (!selectedReferences.has(referenceId) && selectedReferences.size >= referenceLimit) {
+      setFeedback(`当前模型最多可发送 ${referenceLimit} 张参考图。请先取消一张已选参考，或在“能力 → 图像生成”改用支持更多参考图的模型适配器。`);
+      return;
+    }
+    setSelectedReferences((previous) => {
+      const next = new Set(previous);
+      if (next.has(referenceId)) next.delete(referenceId);
+      else next.add(referenceId);
+      return next;
+    });
+  };
 
   const generate = async (event) => {
     event.preventDefault();
@@ -386,7 +416,7 @@ export function CreateVisualPage({ actions = {}, api }) {
           <div className="drawing-head"><div><span className="reference-kicker">开始创作</span><h2>从灵感到候选</h2><p>{ready ? "写下画面方向，挑选参考，再把可比较的候选留在同一处。" : "选择有效项目后，即可开始整理提示词、参考与候选。"}</p></div><Status label={ready ? "可以开始" : "需要项目"} tone={statusTone(drawing?.status)} /></div>
           <form className="voice-form drawing-generate-form" onSubmit={generate}>
             <label className="wide drawing-prompt-field">绘画提示词<textarea disabled={creating} maxLength="4000" name="prompt" placeholder="描述你想看见的画面、氛围与主体。" required /><small>最多 4000 字</small></label>
-            <div className="drawing-reference-summary"><div><span className="reference-kicker">本次参考</span><strong>{selectedReferences.size ? `已选 ${selectedReferences.size} 张参考图` : "还没有选择参考图"}</strong><p>共享资料和当前联系人的专属资料都可选；只会带入本次真正需要的图片。</p></div>{selectedReferences.size ? <button className="quiet-link" onClick={() => setSelectedReferences(new Set())} type="button">清空选择</button> : null}</div>
+            <div className={`drawing-reference-summary${referenceSelectable ? "" : " is-disabled"}`}><div><span className="reference-kicker">本次参考</span><strong>{referenceSelectable ? (selectedReferences.size ? `已选 ${selectedReferences.size} 张参考图` : "还没有选择参考图") : "当前模型已禁用参考图"}</strong><p>{referenceSelectable ? `共享资料和当前联系人的专属资料都可选；当前模型最多发送 ${referenceLimit} 张，只会带入本次真正需要的图片。` : referenceDisabledReason}</p></div>{referenceSelectable && selectedReferences.size ? <button className="quiet-link" onClick={() => setSelectedReferences(new Set())} type="button">清空选择</button> : null}</div>
             <div className="voice-form-actions wide drawing-create-actions"><span className="drawing-engine-state">使用已保存的图像服务</span><button className="primary-button" disabled={!ready || creating}>{creating ? "正在生成…" : "生成图片"}</button></div>
           </form>
         </section>
@@ -398,7 +428,7 @@ export function CreateVisualPage({ actions = {}, api }) {
           <div className="reference-main">
             <section className="reference-collection">
               <div className="reference-filters"><div className="filter-row"><span>资料来源</span>{[["all", "全部"], ...scopeOptions.map((item) => [item.value, item.label])].map(([id, label]) => <button className={`filter-button${referenceScope === id ? " active" : ""}`} key={id} onClick={() => setReferenceScope(id)} type="button">{label}</button>)}</div><div className="filter-row"><span>角色</span>{[["all", "全部"], ...Object.entries(ROLES)].map(([id, label]) => <button className={`filter-button${referenceRole === id ? " active" : ""}`} key={id} onClick={() => setReferenceRole(id)} type="button">{label}</button>)}</div><label className="reference-group-filter">分组<Select className="create-select-react reference-group-filter__select" onChange={setReferenceSet} options={[{ label: "全部分组", value: "all" }, ...(references?.sets || []).map((item) => ({ label: `${item.scopeLabel} · ${item.description}`, value: item.referenceId }))]} value={referenceSet} /></label></div>
-              {references?.status === "invalid" ? <section className="reference-empty reference-error"><h2>资料库暂时无法打开</h2><p>{references.message || "请稍后重试，或检查资料库设置。"}</p></section> : !references ? <section className="reference-empty"><h2>正在读取视觉参考库</h2><p>请稍候，资料会显示在这里。</p></section> : assets.length ? <div className="reference-grid">{assets.map((asset) => <ReferenceTile asset={asset} chosen={selectedReferences.has(asset.referenceId)} key={asset.referenceId} onSelect={() => setSelectedAssetId(asset.referenceId)} onToggle={() => setSelectedReferences((previous) => { const next = new Set(previous); if (next.has(asset.referenceId)) next.delete(asset.referenceId); else next.add(asset.referenceId); return next; })} preview={thumbnails[asset.referenceId]} selected={selectedAssetId === asset.referenceId} />)}</div> : <section className="reference-empty"><h2>{references.assets?.length ? "没有匹配的参考资料" : "资料库还是空的"}</h2><p>{references.assets?.length ? "调整资料来源、角色或分组筛选，或从本机添加图片。" : "从本机添加第一张图片，建立这次创作的起点。"}</p></section>}
+              {references?.status === "invalid" ? <section className="reference-empty reference-error"><h2>资料库暂时无法打开</h2><p>{references.message || "请稍后重试，或检查资料库设置。"}</p></section> : !references ? <section className="reference-empty"><h2>正在读取视觉参考库</h2><p>请稍候，资料会显示在这里。</p></section> : assets.length ? <div className="reference-grid">{assets.map((asset) => <ReferenceTile asset={asset} chosen={selectedReferences.has(asset.referenceId)} key={asset.referenceId} onSelect={() => setSelectedAssetId(asset.referenceId)} onToggle={() => toggleReference(asset.referenceId)} preview={thumbnails[asset.referenceId]} referenceSelectable={referenceSelectable} selected={selectedAssetId === asset.referenceId} selectionDisabledReason={referenceDisabledReason} />)}</div> : <section className="reference-empty"><h2>{references.assets?.length ? "没有匹配的参考资料" : "资料库还是空的"}</h2><p>{references.assets?.length ? "调整资料来源、角色或分组筛选，或从本机添加图片。" : "从本机添加第一张图片，建立这次创作的起点。"}</p></section>}
             </section>
             <ReferenceInspector asset={selectedAsset} onRemove={removeReference} onSave={saveReference} sets={selectedAssetSets} />
           </div>

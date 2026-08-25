@@ -10,6 +10,7 @@ import { createExternalCapabilitiesIpcService, registerExternalCapabilitiesIpc }
 import { registerConversationIpc } from "./conversation-ipc.mjs";
 import { registerSoftwareAssistantIpc } from "./software-assistant-ipc.mjs";
 import { registerWechatIpc } from "./wechat-ipc.mjs";
+import { registerQQIpc } from "./qq-ipc.mjs";
 import { createConnectionsService, registerConnectionsIpc } from "./connections-ipc.mjs";
 import { registerLedgerIpc } from "./ledger-ipc.mjs";
 import { registerImageWorkbenchIpc } from "./image-workbench-ipc.mjs";
@@ -29,6 +30,7 @@ import { createAgentVoiceCallCapabilityAdapter } from "../services/agent-voice-c
 import { eraseContactAgentConversation } from "../services/agent-contact-cleanup.mjs";
 import { createTodayCalendarService } from "../services/today-calendar.mjs";
 import { createWeChatLinkService } from "../services/wechat-link.mjs";
+import { createQQLinkService } from "../services/qq-link.mjs";
 import { createMailFeedbackLinkService } from "../services/mail-feedback-link.mjs";
 import { createContactProjectsService } from "../services/contact-projects.mjs";
 import {
@@ -149,6 +151,7 @@ export function registerIpcHandlers({ app, appUpdateService = null, dataStorageS
   let removeContactAssociations = async () => undefined;
   let removeScheduledContactTasks = async () => ({ removed: 0 });
   let wechatService = null;
+  let qqService = null;
   const contactProjectsService = createContactProjectsService({
     settingsService,
     dataRoot,
@@ -286,6 +289,7 @@ export function registerIpcHandlers({ app, appUpdateService = null, dataStorageS
     capabilityRegistry,
     capabilityRuntime,
     memoryRuntime: memoryService,
+    nativeImage,
     settingsService,
     shell,
     initializeContactCapabilities: async (contact) => {
@@ -345,6 +349,9 @@ export function registerIpcHandlers({ app, appUpdateService = null, dataStorageS
     await todayCalendarService.removeContact({ contactId });
     if (typeof wechatService?.removeContact === "function") {
       await wechatService.removeContact({ contactId });
+    }
+    if (typeof qqService?.removeContact === "function") {
+      await qqService.removeContact({ contactId });
     }
   };
   mailFeedbackService = createMailFeedbackLinkService({
@@ -667,6 +674,10 @@ export function registerIpcHandlers({ app, appUpdateService = null, dataStorageS
             kind: "schedule",
             scheduleSource,
             requestId,
+            // Proactive contact is product-owned broadcast delivery. The Agent
+            // only produces the reply; each connected transport decides how
+            // to deliver it from this internal route.
+            deliveryRoute: { mode: "proactive" },
             deliverToWechat: true,
             outputPolicy: "external",
           });
@@ -771,6 +782,13 @@ export function registerIpcHandlers({ app, appUpdateService = null, dataStorageS
     reader: conversation.reader,
   });
   registerWechatIpc({ app, ipcMain: rendererIpcMain, wechatService });
+  qqService = createQQLinkService({
+    chat: conversation.chat,
+    dataRoot,
+    reader: conversation.reader,
+    safeStorage,
+  });
+  registerQQIpc({ app, ipcMain: rendererIpcMain, qqService });
   const scheduleMemoryRecovery = () => {
     if (memoryRecovery || memoryRecoveryTimer) return;
     // Database recovery can touch every contact. Give the shell time to stay
@@ -797,6 +815,7 @@ export function registerIpcHandlers({ app, appUpdateService = null, dataStorageS
         .catch(() => undefined),
       mailFeedbackService.start().catch(() => undefined),
       wechatService.start().catch(() => undefined),
+      qqService.start().catch(() => undefined),
     ]).then(() => undefined);
     scheduleMemoryRecovery();
     return backgroundStartup;

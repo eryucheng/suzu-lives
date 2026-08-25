@@ -9,7 +9,7 @@ const CONTACT_ID_PATTERN = /^contact-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9
 const AGENT_ID_PATTERN = /^[a-z0-9][a-z0-9_-]{0,127}$/iu;
 
 const SUZU_DATA_ENTRIES = new Set([
-  "SUZU.md", "agent-runtime", "agents", "automation", "blob_storage", "capabilities", "connections", "contacts", "diagnostics", "external-capabilities", "settings.json", "software-assistant", "voice-message", "wechat-link",
+  "SUZU.md", "agent-runtime", "agents", "appearance", "automation", "blob_storage", "capabilities", "connections", "contacts", "diagnostics", "external-capabilities", "qq-link", "settings.json", "software-assistant", "voice-message", "wechat-link",
 ]);
 const ELECTRON_PROFILE_ENTRIES = new Set([
   "Cache", "Code Cache", "DawnGraphiteCache", "DawnWebGPUCache", "Dictionaries", "GPUCache", "Local Storage", "Network", "Session Storage", "Shared Dictionary", "SharedStorage", "DevToolsActivePort", "DIPS", "Local State", "Preferences",

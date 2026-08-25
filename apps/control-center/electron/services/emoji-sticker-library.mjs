@@ -3,6 +3,8 @@ import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 
+import { normalizeEmojiStickerMetadata } from "./emoji-sticker-metadata.mjs";
+
 export const EMOJI_STICKER_LIBRARY_DIRECTORY = "emoji-stickers";
 export const EMOJI_STICKER_EXTENSIONS = Object.freeze([".png", ".jpg", ".jpeg", ".webp", ".gif"]);
 export const EMOJI_STICKER_DIALOG_FILTER = Object.freeze({
@@ -13,6 +15,7 @@ export const EMOJI_STICKER_DIALOG_FILTER = Object.freeze({
 const ASSETS_DIRECTORY = "assets";
 const MANIFEST_FILE = "manifest.json";
 const MAX_STICKER_BYTES = 10 * 1024 * 1024;
+const MANIFEST_VERSION = 3;
 const STICKER_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
 
 export class EmojiStickerError extends Error {}
@@ -42,6 +45,15 @@ function mimeTypeFor(extension) {
     ".png": "image/png",
     ".webp": "image/webp",
   }[extension] || "image/png";
+}
+
+function extensionForMimeType(value) {
+  return {
+    "image/gif": ".gif",
+    "image/jpeg": ".jpg",
+    "image/png": ".png",
+    "image/webp": ".webp",
+  }[clean(value).toLowerCase()] || "";
 }
 
 function imageSignatureMatches(buffer, extension) {
@@ -76,7 +88,7 @@ function safeAssetPath(libraryRoot, relativePath) {
 }
 
 function emptyManifest() {
-  return { version: 1, stickers: [] };
+  return { version: MANIFEST_VERSION, stickers: [] };
 }
 
 function normalizeId(value) {
@@ -121,8 +133,40 @@ export async function inspectEmojiSticker(sourcePath, { fsOps = fs } = {}) {
   };
 }
 
+export function inspectEmojiStickerData(value, { fileName = "表情包", mimeType = "" } = {}) {
+  let data;
+  try {
+    data = Buffer.isBuffer(value) ? Buffer.from(value) : Buffer.from(value || []);
+  } catch {
+    throw new EmojiStickerError("表情包图片数据无效。");
+  }
+  if (data.length < 12 || data.length > MAX_STICKER_BYTES) {
+    throw new EmojiStickerError(`表情包必须是 12 B 到 ${MAX_STICKER_BYTES >> 20} MiB 的图片。`);
+  }
+  const declaredExtension = extensionForMimeType(mimeType);
+  const nameExtension = path.extname(clean(fileName)).toLowerCase();
+  const extension = declaredExtension || normalizedExtension(fileName);
+  if (!imageSignatureMatches(data.subarray(0, 16), extension)) {
+    throw new EmojiStickerError("表情包图片类型与内容不匹配。");
+  }
+  if (declaredExtension && nameExtension && EMOJI_STICKER_EXTENSIONS.includes(nameExtension)
+    && mimeTypeFor(nameExtension) !== mimeTypeFor(declaredExtension)) {
+    throw new EmojiStickerError("表情包文件名与图片类型不匹配。");
+  }
+  const originalName = safeFileName(fileName, `表情包${extension}`);
+  const stem = path.basename(originalName, path.extname(originalName)) || "表情包";
+  return {
+    data,
+    extension,
+    fileName: safeFileName(`${stem}${extension}`, `表情包${extension}`),
+    mimeType: mimeTypeFor(extension),
+    size: data.length,
+  };
+}
+
 async function validateManifest(value, libraryRoot, { fsOps = fs, requireFiles = true } = {}) {
-  if (!value || typeof value !== "object" || Array.isArray(value) || value.version !== 1 || !Array.isArray(value.stickers)) {
+  if (!value || typeof value !== "object" || Array.isArray(value)
+    || ![1, 2, MANIFEST_VERSION].includes(value.version) || !Array.isArray(value.stickers)) {
     throw new EmojiStickerError("表情包收藏清单格式无效。");
   }
   const seenIds = new Set();
@@ -151,12 +195,13 @@ async function validateManifest(value, libraryRoot, { fsOps = fs, requireFiles =
       createdAt,
       fileName,
       id,
+      metadata: normalizeEmojiStickerMetadata(raw.metadata),
       mimeType: mimeTypeFor(extension),
       path: path.relative(path.resolve(libraryRoot), target).split(path.sep).join("/"),
       size,
     });
   }
-  return { version: 1, stickers };
+  return { version: MANIFEST_VERSION, stickers };
 }
 
 async function readManifest(libraryRoot, { fsOps = fs } = {}) {
@@ -230,9 +275,12 @@ export function createEmojiStickerLibrary({ libraryRoot, fsOps = fs } = {}) {
       const item = await asset(id);
       return { ...item, data: await fsOps.readFile(item.path) };
     },
-    async add({ source } = {}) {
+    async add({ data = null, fileName = "", metadata = {}, mimeType = "", source = "" } = {}) {
       const current = await readManifest(root, { fsOps });
-      const image = await inspectEmojiSticker(source, { fsOps });
+      const fromData = data !== null && data !== undefined;
+      const image = fromData
+        ? inspectEmojiStickerData(data, { fileName, mimeType })
+        : await inspectEmojiSticker(source, { fsOps });
       const id = randomUUID();
       const relative = `${ASSETS_DIRECTORY}/${id}${image.extension}`;
       const target = safeAssetPath(root, relative);
@@ -241,11 +289,12 @@ export function createEmojiStickerLibrary({ libraryRoot, fsOps = fs } = {}) {
       await fsOps.mkdir(path.dirname(target), { recursive: true });
       const temporary = path.join(path.dirname(target), `.${id}-${randomUUID()}.tmp`);
       const next = {
-        version: 1,
+        version: MANIFEST_VERSION,
         stickers: [...current.stickers, {
           createdAt: new Date().toISOString(),
           fileName: image.fileName,
           id,
+          metadata: normalizeEmojiStickerMetadata(metadata),
           mimeType: image.mimeType,
           path: relative,
           size: image.size,
@@ -253,7 +302,8 @@ export function createEmojiStickerLibrary({ libraryRoot, fsOps = fs } = {}) {
       };
       let copied = false;
       try {
-        await fsOps.copyFile(image.source, temporary, fsConstants.COPYFILE_EXCL);
+        if (fromData) await fsOps.writeFile(temporary, image.data, { flag: "wx" });
+        else await fsOps.copyFile(image.source, temporary, fsConstants.COPYFILE_EXCL);
         await fsOps.rename(temporary, target);
         copied = true;
         await writeManifestAtomic(root, next, { fsOps });
@@ -264,7 +314,33 @@ export function createEmojiStickerLibrary({ libraryRoot, fsOps = fs } = {}) {
       } finally {
         await fsOps.rm(temporary, { force: true }).catch(() => undefined);
       }
-      return snapshot();
+      return { ...(await snapshot()), addedId: id };
+    },
+    async update(id, metadata = {}) {
+      const current = await readManifest(root, { fsOps });
+      const stickerId = normalizeId(id);
+      const index = current.stickers.findIndex((item) => item.id === stickerId);
+      if (index < 0) throw new EmojiStickerError("找不到这张收藏表情包。");
+      const stickers = [...current.stickers];
+      stickers[index] = {
+        ...stickers[index],
+        metadata: normalizeEmojiStickerMetadata(metadata),
+      };
+      await writeManifestAtomic(root, { version: MANIFEST_VERSION, stickers }, { fsOps });
+      return { ...(await snapshot()), updatedId: stickerId };
+    },
+    async remove(id) {
+      const current = await readManifest(root, { fsOps });
+      const stickerId = normalizeId(id);
+      const item = current.stickers.find((value) => value.id === stickerId);
+      if (!item) throw new EmojiStickerError("找不到这张收藏表情包。");
+      const target = safeAssetPath(root, item.path);
+      await writeManifestAtomic(root, {
+        version: MANIFEST_VERSION,
+        stickers: current.stickers.filter((value) => value.id !== stickerId),
+      }, { fsOps });
+      await fsOps.rm(target, { force: true }).catch(() => undefined);
+      return { ...(await snapshot()), removedId: stickerId };
     },
   };
 }

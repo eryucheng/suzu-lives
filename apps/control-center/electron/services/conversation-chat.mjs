@@ -14,7 +14,12 @@ import {
   capabilitySkillCatalog,
   capabilitySkillForName,
 } from "./agent-capability-skills.mjs";
+import { imageGenerationVisualReferenceSkillDetail } from "./agent-image-generation-skill.mjs";
 import { createAgentUsageLedger } from "./agent-usage-ledger.mjs";
+import {
+  mailBridgeAgentBusinessSkills,
+  readMailBridgeAgentSkills,
+} from "./mail-bridge-agent-settings.mjs";
 import { isProactiveContactTurnSource } from "./proactive-contact-maintenance.mjs";
 import { SUZU_SOFTWARE_ASSISTANT_SESSION_ID } from "./software-assistant-service.mjs";
 
@@ -67,6 +72,55 @@ function clean(value) {
 
 function plainObject(value) {
   return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+}
+
+function optionalNonNegativeInteger(value) {
+  if (value === null || value === undefined || value === "") return null;
+  const numeric = Number(value);
+  return Number.isSafeInteger(numeric) && numeric >= 0 ? numeric : null;
+}
+
+function optionalFiniteNumber(value) {
+  if (value === null || value === undefined || value === "") return null;
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : null;
+}
+
+// This is product-owned transport metadata. It deliberately stays outside the
+// Agent input, skills, and transcript so an Agent never has to decide where a
+// reply should go. A route is attached only to the renderer/transport event
+// stream that is derived from the originating turn.
+function normalizeDeliveryRoute(value) {
+  const input = plainObject(value);
+  const mode = clean(input.mode);
+  if (mode === "proactive") return { mode };
+  if (mode !== "reply") return null;
+  const channel = clean(input.channel).toLowerCase();
+  const connectionId = clean(input.connectionId).slice(0, 160);
+  if (!new Set(["wechat", "qq"]).has(channel) || !connectionId) return null;
+  const replyMessageId = clean(input.replyMessageId).slice(0, 700);
+  return {
+    mode,
+    channel,
+    connectionId,
+    ...(channel === "qq" && replyMessageId ? { replyMessageId } : {}),
+  };
+}
+
+function mergedCapabilitySkills(capabilitySkills, additionalSkills) {
+  const skills = new Map();
+  for (const candidate of [...(Array.isArray(capabilitySkills) ? capabilitySkills : []), ...(Array.isArray(additionalSkills) ? additionalSkills : [])]) {
+    const name = clean(candidate?.name);
+    const description = clean(candidate?.description);
+    if (!name || !description || skills.has(name)) continue;
+    skills.set(name, Object.freeze({ name, description }));
+  }
+  return Object.freeze([...skills.values()].sort((left, right) => left.name.localeCompare(right.name, "en")));
+}
+
+function mailBusinessSkillForName(skills, name) {
+  const requestedName = clean(name);
+  return (Array.isArray(skills) ? skills : []).find((skill) => clean(skill?.name) === requestedName) || null;
 }
 
 function isProactiveContactTurn(turn) {
@@ -562,6 +616,54 @@ export function createConversationChatService({
       : actions;
   };
 
+  const mailBusinessSkillsForActions = async (actions) => {
+    if (!Array.isArray(actions) || !actions.some((action) => clean(action?.capabilityId) === "mail-bridge")) {
+      return [];
+    }
+    try {
+      const settings = settingsService.load();
+      const response = typeof settingsService.response === "function"
+        ? settingsService.response(settings)
+        : settings;
+      const dataRoot = clean(response?.dataRoot);
+      if (!dataRoot || !path.isAbsolute(dataRoot)) return [];
+      const skills = await readMailBridgeAgentSkills({
+        dataRoot: path.resolve(dataRoot),
+        fsOps,
+      });
+      return mailBridgeAgentBusinessSkills(skills);
+    } catch {
+      // Business mail Skills are optional metadata. A missing or unreadable
+      // configuration must not make the capability catalog unavailable.
+      return [];
+    }
+  };
+
+  const imageGenerationSkillDetailsForTurn = async (actions, turn, skillName) => {
+    if (clean(skillName) !== "suzu-image-generation"
+      || !Array.isArray(actions)
+      || !actions.some((action) => clean(action?.capabilityId) === "image-generation")) {
+      return {};
+    }
+    try {
+      const settings = settingsService.load();
+      const response = typeof settingsService.response === "function"
+        ? settingsService.response(settings)
+        : settings;
+      const dataRoot = clean(response?.dataRoot);
+      if (!dataRoot || !path.isAbsolute(dataRoot)) return {};
+      const content = await imageGenerationVisualReferenceSkillDetail({
+        dataRoot: path.resolve(dataRoot),
+        projectRoot: turn?.projectRoot,
+      });
+      return content ? { "image-generation": content } : {};
+    } catch {
+      // This detail is optional. A missing visual library must not make image
+      // generation or a normal conversation unavailable.
+      return {};
+    }
+  };
+
   const lifecyclePayloadForRuntimeSession = (sessionId, { turnId = "", ...extra } = {}) => {
     const turn = turnForRuntimeSession(sessionId, turnId);
     if (turn) return lifecycleTurnPayload(turn, extra);
@@ -651,10 +753,28 @@ export function createConversationChatService({
     // External transports must never need to infer the safe default. Every
     // event explicitly says whether the originating turn may leave Suzu.
     deliverToWechat: turn?.deliverToWechat === true,
+    ...(normalizeDeliveryRoute(turn?.deliveryRoute) ? { deliveryRoute: normalizeDeliveryRoute(turn.deliveryRoute) } : {}),
     ...(clean(turn?.scheduleSource) ? { scheduleSource: clean(turn.scheduleSource) } : {}),
   });
 
-  const emitReply = (turn, type, done = false) => {
+  // Agent Core already gives every runtime event a monotonic session sequence.
+  // Keep that identity on UI-facing events: a wall-clock receipt timestamp
+  // cannot faithfully order text, a tool call, and more text from one turn.
+  const runtimeTimelineMetadata = (value = {}) => {
+    const source = plainObject(value);
+    const coreSequence = optionalNonNegativeInteger(source.coreSequence);
+    const coreTime = optionalFiniteNumber(source.coreTime);
+    const coreStep = optionalNonNegativeInteger(source.step);
+    const callId = clean(source.callId);
+    return {
+      ...(coreSequence === null ? {} : { coreSequence }),
+      ...(coreTime === null ? {} : { coreTime }),
+      ...(coreStep === null ? {} : { coreStep }),
+      ...(callId ? { callId } : {}),
+    };
+  };
+
+  const emitReply = (turn, type, done = false, runtimeData = {}) => {
     if (turn.outputPolicy === "silent") return;
     const content = done ? turn.text : completedConversationReplyPrefix(turn.text);
     if (!content || suppressInternalTaskOutput(turn, content)) return;
@@ -674,6 +794,7 @@ export function createConversationChatService({
       done,
       ...(done ? { assistantMessageCount: turn.assistantMessageCount || 1 } : {}),
       ...eventPresentation(turn),
+      ...runtimeTimelineMetadata(runtimeData),
       timestamp: new Date().toISOString(),
     });
   };
@@ -723,7 +844,12 @@ export function createConversationChatService({
     });
   };
 
-  const emitTool = (turn, { phase = "completed", toolName = "", content = "" } = {}) => {
+  const emitTool = (turn, {
+    phase = "completed",
+    toolName = "",
+    content = "",
+    runtimeData = {},
+  } = {}) => {
     if (turn.outputPolicy === "silent") return;
     const text = clean(content);
     if (!text) return;
@@ -737,13 +863,14 @@ export function createConversationChatService({
       toolName: clean(toolName) || "Suzu 工具",
       content: text,
       ...eventPresentation(turn),
+      ...runtimeTimelineMetadata(runtimeData),
       timestamp: new Date().toISOString(),
     });
   };
 
   let pumpSession = () => undefined;
 
-  const finishTurn = async (turn, { error = "", interrupted = false } = {}) => {
+  const finishTurn = async (turn, { error = "", interrupted = false, runtimeData = {} } = {}) => {
     if (!turn || turn.finished) return;
     turn.finished = true;
     activeTurns.delete(turn.key);
@@ -773,6 +900,7 @@ export function createConversationChatService({
         kind: turn.kind,
         message: turn.interruptMessage || "已停止当前 Agent 任务。",
         ...eventPresentation(turn),
+        ...runtimeTimelineMetadata(runtimeData),
         timestamp: new Date().toISOString(),
       });
     } else if (error) {
@@ -784,6 +912,7 @@ export function createConversationChatService({
         kind: turn.kind,
         message: error,
         ...eventPresentation(turn),
+        ...runtimeTimelineMetadata(runtimeData),
         timestamp: new Date().toISOString(),
       });
     } else {
@@ -794,6 +923,7 @@ export function createConversationChatService({
         projectRoot: turn.projectRoot,
         kind: turn.kind,
         ...eventPresentation(turn),
+        ...runtimeTimelineMetadata(runtimeData),
         timestamp: new Date().toISOString(),
       });
     }
@@ -883,7 +1013,13 @@ export function createConversationChatService({
         let result = { skills: [] };
         if (turn) {
           try {
-            result = { skills: capabilitySkillCatalog(await availableCapabilityActionsForTurn(turn, { coreTurn, step })) };
+            const actions = await availableCapabilityActionsForTurn(turn, { coreTurn, step });
+            result = {
+              skills: mergedCapabilitySkills(
+                capabilitySkillCatalog(actions),
+                await mailBusinessSkillsForActions(actions),
+              ),
+            };
           } catch {
             // A product Skill is optional. A normal reply must remain available
             // if an adapter's local configuration cannot be read.
@@ -896,11 +1032,13 @@ export function createConversationChatService({
         let result = { skill: null };
         if (turn) {
           try {
+            const actions = await availableCapabilityActionsForTurn(turn, { coreTurn, step });
+            const mailBusinessSkills = await mailBusinessSkillsForActions(actions);
             result = {
-              skill: capabilitySkillForName(
-                await availableCapabilityActionsForTurn(turn, { coreTurn, step }),
-                clean(data.name),
-              ),
+              skill: mailBusinessSkillForName(mailBusinessSkills, data.name)
+                || capabilitySkillForName(actions, clean(data.name), {
+                  detailsByCapability: await imageGenerationSkillDetailsForTurn(actions, turn, data.name),
+                }),
             };
           } catch {
             // The native skill tool will report an unavailable Skill only to
@@ -1131,7 +1269,7 @@ export function createConversationChatService({
       dispatchLifecycle("AssistantDelta", lifecycleTurnPayload(turn, {
         delta: bounded(String(source.text || "")),
       }));
-      if (!isInternalTaskTurn(turn)) emitReply(turn, "reply-stream");
+      if (!isInternalTaskTurn(turn)) emitReply(turn, "reply-stream", false, source.data);
       return;
     }
     if (type === "assistant-completed") {
@@ -1144,22 +1282,28 @@ export function createConversationChatService({
       turn.text = isInternalTaskTurn(turn)
         ? bounded(turn.finalText)
         : mergeFullText(turn.text, source.text);
-      if (turn.text && deliversFinalReplyToLocalChat(turn)) emitReply(turn, "reply", true);
+      if (turn.text && deliversFinalReplyToLocalChat(turn)) emitReply(turn, "reply", true, source.data);
       emitAgentReply(turn);
       emitInternalResult(turn);
-      void finishTurn(turn);
+      void finishTurn(turn, { runtimeData: source.data });
       return;
     }
     if (type === "turn-cancelled") {
-      void finishTurn(turn, { interrupted: true });
+      void finishTurn(turn, { interrupted: true, runtimeData: source.data });
       return;
     }
     if (type === "turn-failed") {
-      void finishTurn(turn, { error: clean(source.error) || "Agent Core 没有完成这次回复。" });
+      void finishTurn(turn, {
+        error: clean(source.error) || "Agent Core 没有完成这次回复。",
+        runtimeData: source.data,
+      });
       return;
     }
     if (type === "runtime-unavailable") {
-      void finishTurn(turn, { error: clean(source.error) || "Agent Core 暂时不可用。" });
+      void finishTurn(turn, {
+        error: clean(source.error) || "Agent Core 暂时不可用。",
+        runtimeData: source.data,
+      });
       return;
     }
     if (type === "tool-started") {
@@ -1174,6 +1318,7 @@ export function createConversationChatService({
         phase: "started",
         toolName,
         content: `工具调用：${toolName}${preview ? `\n${preview}` : ""}`,
+        runtimeData: source.data,
       });
       return;
     }
@@ -1195,6 +1340,7 @@ export function createConversationChatService({
         phase: type === "tool-failed" ? "failed" : "completed",
         toolName,
         content: `工具结果${type === "tool-failed" ? "（错误）" : ""}：${toolName}${suffix}`,
+        runtimeData: source.data,
       });
       return;
     }
@@ -1310,6 +1456,7 @@ export function createConversationChatService({
       suppressExternalOutput: false,
       displayAsSystem: request.displayAsSystem === true,
       deliverToWechat: request.deliverToWechat === true,
+      deliveryRoute: normalizeDeliveryRoute(request.deliveryRoute),
       outputPolicy: request.outputPolicy,
       resultChannel: request.resultChannel,
       taskContext: request.taskContext,
@@ -1425,6 +1572,7 @@ export function createConversationChatService({
     scheduleSource = "",
     displayAsSystem = false,
     deliverToWechat = false,
+    deliveryRoute = null,
     outputPolicy = "external",
     resultChannel = "",
     requestQueue = false,
@@ -1521,6 +1669,7 @@ export function createConversationChatService({
       mediaSource: clean(mediaSource),
       displayAsSystem: displayAsSystem === true,
       deliverToWechat: deliverToWechat === true,
+      deliveryRoute: normalizeDeliveryRoute(deliveryRoute),
       key: turnKey(session.id, session.projectRoot),
       kind,
       memoryOccurredAt: new Date().toISOString(),
@@ -1590,12 +1739,12 @@ export function createConversationChatService({
   };
 
   const send = ({ content, media = [], mediaSource = "", memoryText = "", queued = false } = {}) => (
-    enqueue({ content, media, mediaSource, memoryText, deliverToWechat: false, requestQueue: queued })
+    enqueue({ content, media, mediaSource, memoryText, deliverToWechat: false, deliveryRoute: null, requestQueue: queued })
   );
-  const sendToSession = ({ content, contactId = "", sessionId, projectRoot, hasTranscript = false, kind = "message", callDirection = "", media = [], mediaSource = "", memoryText = "", requestId = "", scheduleSource = "", displayAsSystem = false, deliverToWechat = false, queued = false } = {}) => (
-    enqueue({ content, contactId, kind, callDirection, media, mediaSource, memoryText, requestId, scheduleSource, displayAsSystem, deliverToWechat, requestQueue: queued, session: { sessionId, projectRoot, hasTranscript } })
+  const sendToSession = ({ content, contactId = "", sessionId, projectRoot, hasTranscript = false, kind = "message", callDirection = "", media = [], mediaSource = "", memoryText = "", requestId = "", scheduleSource = "", displayAsSystem = false, deliverToWechat = false, deliveryRoute = null, queued = false } = {}) => (
+    enqueue({ content, contactId, kind, callDirection, media, mediaSource, memoryText, requestId, scheduleSource, displayAsSystem, deliverToWechat, deliveryRoute, requestQueue: queued, session: { sessionId, projectRoot, hasTranscript } })
   );
-  const sendTaskToSession = ({ taskContext, contactId = "", sessionId, projectRoot, hasTranscript = false, kind = "schedule", requestId = "", scheduleSource = "", deliverToWechat = false, outputPolicy = "external", resultChannel = "", queued = false } = {}) => (
+  const sendTaskToSession = ({ taskContext, contactId = "", sessionId, projectRoot, hasTranscript = false, kind = "schedule", requestId = "", scheduleSource = "", deliverToWechat = false, deliveryRoute = null, outputPolicy = "external", resultChannel = "", queued = false } = {}) => (
     enqueue({
       content: "",
       taskContext,
@@ -1604,6 +1753,7 @@ export function createConversationChatService({
       requestId,
       scheduleSource,
       deliverToWechat,
+      deliveryRoute,
       outputPolicy,
       resultChannel,
       requestQueue: queued,

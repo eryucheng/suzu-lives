@@ -14,11 +14,12 @@ description: 当用户想编辑已有联系人的资料、头像、审批模式�
 用户希望从网上为联系人找头像时，直接沿用下面的短路径：
 
 1. 确认目标联系人和形象要求；用户已经给出 `contactId` 时保留该 ID。
-2. 使用当前可用的联网搜索能力缩小检索词，优先选择来源明确、主体居中、接近方形且无水印的头像或半身图。图片采用 PNG、JPEG 或 WebP，文件不超过 2 MB。
+2. 使用当前可用的联网搜索能力缩小检索词，优先选择来源明确、人物主体清晰、构图适合裁剪且无水印的头像或半身图。图片不必接近方形；采用 PNG、JPEG 或 WebP，文件不超过 2 MB。
 3. 形象存在明显不同的候选时，给出 2 至 4 个候选及来源供用户选择；用户已经指定图片或候选唯一时直接继续。
 4. 把选定图片下载到本机，取得绝对路径。
-5. 调用 `suzu_software_action`：`action` 使用 `set-contact-avatar`，`input` 使用 `{ "contactId": "联系人 ID", "avatarPath": "图片绝对路径" }`。只有联系人名称时，先用 `contactName` 代替 `contactId`。
-6. 工具返回 `needs-confirmation` 时，把候选 `contactId` 交给用户确认，再用选定 ID 重试；返回 `completed` 后，最终只汇报图片来源与保存结果。
+5. 设置前，使用本机可用的图像处理方式另存一张裁后的正方形图片：以人物面部或上半身为中心取正方形区域，保留比例且不拉伸；原图保持不动。人物位置不清楚时，先用可用的图片理解能力确认，仍无法判断则请用户确认裁剪位置或换图。裁后文件仍须为 PNG、JPEG 或 WebP，且不超过 2 MB。
+6. 调用 `suzu_software_action`：`action` 使用 `set-contact-avatar`，`input` 使用 `{ "contactId": "联系人 ID", "avatarPath": "裁后图片的绝对路径" }`。只有联系人名称时，先用 `contactName` 代替 `contactId`。
+7. 工具返回 `needs-confirmation` 时，把候选 `contactId` 交给用户确认，再用选定 ID 重试；返回 `completed` 后，最终只汇报图片来源、已裁成正方形和保存结果。
 
 用户提供的是本机图片时，取得它的绝对路径后从第 5 步开始执行。
 

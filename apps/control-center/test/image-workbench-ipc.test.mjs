@@ -4,13 +4,17 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { configuredImageWorkbenchConnection } from "../electron/ipc/image-workbench-ipc.mjs";
+import { configuredImageWorkbenchConnection, imageWorkbenchReferenceCapability } from "../electron/ipc/image-workbench-ipc.mjs";
 
 test("image workbench applies the protocol selected for image generation", async () => {
   const dataRoot = await fs.mkdtemp(path.join(os.tmpdir(), "suzu-image-workbench-protocol-"));
   const configDirectory = path.join(dataRoot, "capabilities", "image-generation");
   await fs.mkdir(configDirectory, { recursive: true });
-  await fs.writeFile(path.join(configDirectory, "config.json"), JSON.stringify({ adapter: "dashscope-image" }));
+  await fs.writeFile(path.join(configDirectory, "config.json"), JSON.stringify({
+    adapter: "dashscope-image",
+    reference_adapter: "dashscope-multimodal",
+    reference_model: "wan2.7-image",
+  }));
 
   const connection = await configuredImageWorkbenchConnection({
     dataRoot,
@@ -18,4 +22,12 @@ test("image workbench applies the protocol selected for image generation", async
   });
 
   assert.equal(connection.imageGenerationAdapter, "dashscope-image");
+  assert.equal(connection.referenceImageAdapter, "dashscope-multimodal");
+  assert.equal(connection.referenceImageModel, "wan2.7-image");
+  const referenceCapability = await imageWorkbenchReferenceCapability({
+    dataRoot,
+    connection: { apiKey: "fixture-key", baseUrl: "https://dashscope.example.test/api/v1", model: "wan2.7-image", type: "generic-api" },
+  });
+  assert.equal(referenceCapability.supported, true);
+  assert.equal(referenceCapability.maxReferences, 9);
 });

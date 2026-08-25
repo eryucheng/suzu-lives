@@ -34,7 +34,7 @@ test("conversation scrollbar appears only around transcript scrolling activity",
   assert.match(page, /loadOlderHistoryAtTop\(list\);/u);
   assert.match(page, /const olderHistoryAnchor = olderHistoryViewportAnchorRef\.current;[\s\S]*?!snapshot\.history\?\.loadingOlder[\s\S]*?restoreConversationViewportAnchor\(list, olderHistoryAnchor\)/u);
   assert.doesNotMatch(page, /scrollTop <= 48/u);
-  assert.match(page, /export function ConversationMessageList\([^)]*rows[^)]*\) \{[\s\S]*?return rows\.map\(/u);
+  assert.match(page, /export function ConversationMessageList\([^)]*rows[^)]*\) \{[\s\S]*?return groupConversationToolActivityRows\(rows\)\.map\(/u);
   assert.doesNotMatch(page, /useVirtualizer|conversation-virtual-list/u);
   assert.match(styles, /\.content--conversation \.conversation-transcript \{[\s\S]*?display: grid;[\s\S]*?grid-template-rows: minmax\(0, 1fr\);/u);
   assert.match(styles, /\.content--conversation \.conversation-list \{[\s\S]*?display: flex;[\s\S]*?overflow-x: hidden;[\s\S]*?overflow-y: auto;[\s\S]*?scrollbar-width: none;/u);

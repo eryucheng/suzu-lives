@@ -55,9 +55,9 @@
   config:
     timeoutMs: 5000
 
-# A private bridge for product-maintained structured work such as extracting
-# long-term memory after a reply.  It calls the current Agent Core model inside
-# this process, so its credential never has to be copied into a second client.
+# A private bridge for product-owned one-shot structured inference, including
+# memory extraction and future classification tasks. It calls the current
+# Agent Core model without adding a chat turn or exposing model credentials.
 - id: structured-generator
   name: '@suzu-lives/suzu-agent-runtime/structured-generator'
   config:

@@ -267,7 +267,7 @@ export const CAPABILITY_DEFINITIONS = freezeArray([
         agentAction: {
           id: "generate",
           name: "生成图片",
-          description: "生成或编辑一张图片。普通图片的 input 必须包含 { prompt: " + '"图片提示词"' + " }；可选 size、outputDirectory，以及最多 16 个 references: [{ role: \"identity\" | \"location\" | \"object\" | \"style\", path: \"本机绝对图片路径\" }]。需要手机拍照式画面时，使用 { stylePreset: \"phone-camera\", shot: \"rear\" | \"selfie\" | \"mirror\", scene: \"画面中可见的场景\" }，可选 size、outputDirectory 和 references: [{ scope: \"contact\" | \"shared\", id: \"视觉资料或资料组 ID\" }]。成功后图片会自动投放到当前聊天；已绑定微信的会话会自动转发。",
+          description: "普通图片：{ prompt, references?: [{ role: \"identity\" | \"location\" | \"object\" | \"style\", path: \"图片绝对路径\" }] }。用户要求参考当前聊天图片时，将附件路径填入 references。手机照片：{ stylePreset: \"phone-camera\", shot: \"rear\" | \"selfie\" | \"mirror\", scene: \"画面内容\", references?: [{ scope: \"contact\" | \"shared\", id: \"资料或分组 ID\" }] }。自拍或镜前照自动附带该联系人的 identity 参考图。",
           outputDelivery: { kind: "image", pathField: "path" },
         },
       },
@@ -366,6 +366,7 @@ export const CAPABILITY_DEFINITIONS = freezeArray([
     name: "语音通话",
     description: "由陪伴 Agent 发起来电，并在合适的时候结束通话。",
     category: "companion",
+    internal: true,
     runtimeStatus: "agent-capability-bridge",
     resources: [
       {
@@ -527,11 +528,11 @@ export const CAPABILITY_DEFINITIONS = freezeArray([
         kind: "runtime",
         driver: "mail-bridge",
         lifecycle: ["install", "sync", "uninstall", "invoke"],
-        agentAction: {
-          id: "send",
-          name: "发送邮件",
-          description: "通过已配置的默认 SMTP 收件邮箱发送一封邮件。input 必须包含 { subject: \"邮件主题\", content: \"邮件正文\" }。收件地址由软件配置决定，不能由模型传入；发送成功仅表示邮件已提交给 SMTP 服务器。",
-        },
+      agentAction: {
+        id: "send",
+        name: "发送邮件",
+        description: "按已读取的邮件业务 Skill 发送一封邮件。input 必须包含 { subject: \"邮件主题\", content: \"邮件正文\" }；主题须与该 Skill 指定的主题一致。收件地址由软件配置决定，不能由模型传入；发送成功仅表示邮件已提交给 SMTP 服务器。",
+      },
       },
       { id: "feedback-link", kind: "runtime", driver: "mail-feedback-link", lifecycle: ["sync"] },
     ],

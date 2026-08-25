@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
@@ -12,7 +11,9 @@ import { createCapabilityRegistry, createCapabilityRuntime } from "../electron/s
 import { createAgentCapabilityAdapters } from "../electron/services/agent-capability-adapters.mjs";
 
 async function temporaryDirectory(prefix) {
-  return fs.mkdtemp(path.join(os.tmpdir(), prefix));
+  const root = process.env.SUZU_LIVES_TEST_TEMP || "D:\\Temp";
+  await fs.mkdir(root, { recursive: true });
+  return fs.mkdtemp(path.join(root, prefix));
 }
 
 function contactFixture(root) {
@@ -35,6 +36,16 @@ test("Agent capability adapters reuse product-owned executors with the active co
   const root = await temporaryDirectory("suzu-agent-capability-adapters-");
   const dataRoot = path.join(root, "data");
   const contact = contactFixture(root);
+  const mailConfigPath = path.join(dataRoot, "automation", "mail-bridge", "config.json");
+  await fs.mkdir(path.dirname(mailConfigPath), { recursive: true });
+  await fs.writeFile(mailConfigPath, JSON.stringify({
+    agentSkills: [{
+      id: "rule-reminder",
+      name: "提醒",
+      description: "把明确的提醒事项投递到外部邮箱。",
+      subject: "提醒",
+    }],
+  }), "utf8");
   const calls = [];
   const adapters = createAgentCapabilityAdapters({
     connectionsService: {
@@ -145,6 +156,10 @@ test("Agent capability adapters reuse product-owned executors with the active co
   assert.deepEqual(byType.get("phone-camera").options.refs, [{ scope: "contact", id: "person.main" }]);
   assert.equal(calls.filter((entry) => entry.type === "usage").length, 1);
   assert.equal(calls.find((entry) => entry.type === "usage").value.capabilityId, "image-generation");
+  await assert.rejects(
+    () => adapters["mail-bridge"](envelope({ subject: "临时主题", content: "不应发送" })),
+    /没有对应的邮件业务 Skill/u,
+  );
 });
 
 test("a profile-selected voice resolves the API assigned to its own voice service", async () => {

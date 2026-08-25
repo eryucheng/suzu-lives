@@ -950,6 +950,11 @@
   box-shadow: 0 0 0 1px rgba(69, 212, 191, .14), inset 0 1px rgba(255, 255, 255, .055);
 }
 
+.reference-card--selection-disabled .reference-select-square {
+  cursor: not-allowed;
+  opacity: .46;
+}
+
 .reference-select-square {
   position: absolute;
   z-index: 1;
@@ -981,6 +986,11 @@
   box-shadow: 0 0 0 3px rgba(69, 212, 191, .14), 0 5px 13px rgba(0, 0, 0, .28);
 }
 
+.reference-select-square:disabled {
+  cursor: not-allowed;
+  transform: none;
+}
+
 .reference-select-square:focus-visible {
   outline: 2px solid color-mix(in srgb, var(--accent) 82%, transparent);
   outline-offset: 3px;
@@ -996,6 +1006,11 @@
   border-radius: 12px;
   background: linear-gradient(110deg, rgba(69, 212, 191, .06), rgba(139, 130, 255, .035));
   padding: 11px 12px;
+}
+
+.drawing-reference-summary.is-disabled {
+  border-color: color-mix(in srgb, var(--danger, #e07171) 35%, var(--line));
+  background: linear-gradient(110deg, rgba(224, 113, 113, .08), rgba(139, 130, 255, .035));
 }
 
 .drawing-reference-summary > div {
@@ -1768,4 +1783,476 @@
 
 .create-react-dialog > .voice-form-actions {
   padding: 0 18px 18px;
+}
+
+#createStickerReactRoot {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
+}
+
+.create-sticker-react-page {
+  container-type: inline-size;
+}
+
+.sticker-workbench-feedback {
+  margin-bottom: 12px;
+  border: 1px solid color-mix(in srgb, var(--accent2) 34%, var(--line));
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--accent2) 9%, var(--panel));
+  color: var(--accent2);
+  padding: 10px 13px;
+  font-size: 12px;
+}
+
+.sticker-workbench-feedback.is-error {
+  border-color: color-mix(in srgb, var(--danger) 42%, var(--line));
+  background: color-mix(in srgb, var(--danger) 9%, var(--panel));
+  color: var(--danger);
+}
+
+.sticker-workbench {
+  display: grid;
+  min-width: 0;
+  min-height: 640px;
+  grid-template-columns: minmax(250px, .28fr) minmax(0, 1fr);
+  align-items: stretch;
+  gap: 16px;
+}
+
+.sticker-library-rail,
+.sticker-editor-panel {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--accent) 18%, var(--line));
+  border-radius: 18px;
+  background:
+    radial-gradient(circle at 100% 0, color-mix(in srgb, var(--accent) 8%, transparent), transparent 30%),
+    color-mix(in srgb, var(--panel) 96%, transparent);
+  box-shadow: var(--page-static-card-shadow);
+}
+
+.sticker-library-rail {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+}
+
+.sticker-library-rail > header,
+.sticker-editor-heading,
+.sticker-crop-dialog > header,
+.sticker-crop-dialog > footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.sticker-library-rail > header {
+  border-bottom: 1px solid var(--line);
+  padding: 17px;
+}
+
+.sticker-library-rail h2,
+.sticker-editor-heading h2,
+.sticker-crop-dialog h2,
+.sticker-editor-empty h2 {
+  margin: 4px 0 0;
+  font-size: 17px;
+}
+
+.sticker-add-button,
+.sticker-close-button {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--line));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--accent) 9%, var(--panel));
+  color: var(--accent);
+  cursor: pointer;
+  font: 20px/1 sans-serif;
+}
+
+.sticker-add-button:hover,
+.sticker-close-button:hover {
+  border-color: color-mix(in srgb, var(--accent2) 48%, var(--line));
+  color: var(--text);
+}
+
+.sticker-library-grid {
+  display: grid;
+  min-height: 0;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-content: start;
+  gap: 9px;
+  overflow: auto;
+  padding: 12px;
+}
+
+.sticker-library-item {
+  display: grid;
+  min-width: 0;
+  gap: 7px;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  padding: 7px;
+  text-align: left;
+}
+
+.sticker-library-item:hover {
+  border-color: color-mix(in srgb, var(--accent2) 24%, var(--line));
+  background: color-mix(in srgb, var(--accent2) 6%, transparent);
+}
+
+.sticker-library-item.is-selected {
+  border-color: color-mix(in srgb, var(--accent) 44%, var(--line));
+  background: color-mix(in srgb, var(--accent) 11%, var(--panel));
+  box-shadow: inset 0 1px rgba(255, 255, 255, .045);
+}
+
+.sticker-library-item > img {
+  width: 100%;
+  aspect-ratio: 1;
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--panel-soft) 80%, transparent);
+  object-fit: cover;
+}
+
+.sticker-library-item > span {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.sticker-library-item strong,
+.sticker-library-item small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sticker-library-item strong {
+  font-size: 11px;
+}
+
+.sticker-library-item small {
+  color: var(--muted2);
+  font-size: 9px;
+}
+
+.sticker-library-empty,
+.sticker-editor-empty {
+  display: grid;
+  flex: 1;
+  place-content: center;
+  justify-items: center;
+  padding: 28px;
+  text-align: center;
+}
+
+.sticker-library-empty > span,
+.sticker-editor-empty > span {
+  display: grid;
+  width: 48px;
+  height: 48px;
+  place-items: center;
+  border: 1px solid color-mix(in srgb, var(--accent) 32%, var(--line));
+  border-radius: 15px;
+  background: color-mix(in srgb, var(--accent) 9%, transparent);
+  color: var(--accent);
+  font-size: 22px;
+}
+
+.sticker-library-empty strong {
+  margin-top: 14px;
+  font-size: 13px;
+}
+
+.sticker-library-empty p,
+.sticker-editor-empty p {
+  max-width: 360px;
+  margin: 8px 0 17px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.65;
+}
+
+.sticker-editor-panel {
+  display: grid;
+  min-height: 0;
+  grid-template-columns: minmax(190px, .3fr) minmax(420px, .7fr);
+}
+
+.sticker-editor-preview {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  border-right: 1px solid var(--line);
+  background: color-mix(in srgb, var(--panel-soft) 66%, transparent);
+  padding: 24px;
+}
+
+.sticker-editor-preview > div {
+  width: min(100%, 260px);
+  overflow: hidden;
+  aspect-ratio: 1;
+  border: 1px solid color-mix(in srgb, var(--accent2) 22%, var(--line));
+  border-radius: 18px;
+  background:
+    linear-gradient(45deg, color-mix(in srgb, var(--line) 30%, transparent) 25%, transparent 25%) 0 0 / 20px 20px,
+    linear-gradient(-45deg, color-mix(in srgb, var(--line) 30%, transparent) 25%, transparent 25%) 0 10px / 20px 20px,
+    var(--panel);
+  box-shadow: 0 18px 42px rgba(0, 0, 0, .18);
+}
+
+.sticker-editor-preview img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.sticker-editor-preview p {
+  max-width: 260px;
+  margin: 13px 0 0;
+  color: var(--muted2);
+  font-size: 10px;
+  line-height: 1.55;
+  text-align: center;
+}
+
+.sticker-metadata-form {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  overflow: auto;
+  padding: 22px;
+}
+
+.sticker-editor-heading {
+  align-items: flex-start;
+}
+
+.sticker-form-note {
+  margin: 8px 0 17px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.sticker-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 13px;
+}
+
+.sticker-form-field {
+  display: grid;
+  min-width: 0;
+  align-content: start;
+  gap: 6px;
+}
+
+.sticker-form-field--wide {
+  grid-column: 1 / -1;
+}
+
+.sticker-form-field > span:first-child {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 650;
+}
+
+.sticker-form-field input,
+.sticker-form-field textarea,
+.sticker-form-field select {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  outline: 0;
+  background: color-mix(in srgb, var(--panel-soft) 72%, transparent);
+  color: var(--text);
+  font: inherit;
+  padding: 9px 10px;
+}
+
+.sticker-form-field textarea {
+  resize: vertical;
+  line-height: 1.5;
+}
+
+.sticker-form-field input:focus,
+.sticker-form-field textarea:focus,
+.sticker-form-field select:focus {
+  border-color: color-mix(in srgb, var(--accent) 60%, var(--line));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.sticker-form-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: auto;
+  padding-top: 22px;
+}
+
+.sticker-form-actions > div {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.sticker-danger-button {
+  min-height: 35px;
+  border: 1px solid color-mix(in srgb, var(--danger) 38%, var(--line));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--danger) 7%, transparent);
+  color: var(--danger);
+  cursor: pointer;
+  padding: 0 11px;
+}
+
+.sticker-crop-backdrop {
+  position: fixed;
+  z-index: 110;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: rgba(6, 8, 18, .68);
+  backdrop-filter: blur(7px);
+  padding: 16px;
+}
+
+.page-canvas--fill > .sticker-workbench-feedback {
+  flex: 0 0 auto;
+}
+
+.page-canvas--fill > .sticker-workbench {
+  flex: 1 0 auto;
+}
+
+.page-canvas--fill > .sticker-crop-backdrop {
+  flex: none;
+}
+
+.sticker-crop-dialog {
+  display: grid;
+  width: min(470px, calc(100vw - 32px));
+  gap: 14px;
+  border: 1px solid color-mix(in srgb, var(--accent) 32%, var(--line));
+  border-radius: 18px;
+  background:
+    radial-gradient(circle at 96% 0, color-mix(in srgb, var(--accent) 15%, transparent), transparent 32%),
+    var(--panel);
+  box-shadow: 0 28px 72px rgba(0, 0, 0, .42), inset 0 1px rgba(255, 255, 255, .055);
+  color: var(--text);
+  padding: 19px;
+}
+
+.sticker-crop-dialog > header span {
+  color: var(--accent2);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 1.2px;
+}
+
+.sticker-crop-dialog > p {
+  margin: -3px 0 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.sticker-crop-stage {
+  position: relative;
+  justify-self: center;
+  width: min(340px, calc(100vw - 86px));
+  overflow: hidden;
+  aspect-ratio: 1;
+  border-radius: 13px;
+  background: #0b0e14;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+
+.sticker-crop-stage.is-dragging {
+  cursor: grabbing;
+}
+
+.sticker-crop-stage img {
+  position: absolute;
+  top: 0;
+  left: 0;
+  max-width: none;
+  pointer-events: none;
+  user-select: none;
+}
+
+.sticker-crop-frame {
+  position: absolute;
+  z-index: 1;
+  inset: 0;
+  border: 2px solid rgba(255, 255, 255, .88);
+  border-radius: 13px;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .48);
+  pointer-events: none;
+}
+
+.sticker-crop-zoom {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) 42px;
+  align-items: center;
+  gap: 10px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.sticker-crop-zoom input {
+  min-width: 0;
+  accent-color: var(--accent);
+}
+
+.sticker-crop-zoom output {
+  color: var(--muted2);
+  font-size: 10px;
+}
+
+@container (max-width: 1080px) {
+  .sticker-editor-panel {
+    grid-template-columns: minmax(150px, .28fr) minmax(390px, .72fr);
+  }
+
+  .sticker-form-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .sticker-form-field--wide {
+    grid-column: auto;
+  }
+}
+
+@container (max-width: 820px) {
+  .sticker-workbench {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .sticker-library-rail {
+    display: none;
+  }
+
+  .sticker-editor-panel {
+    grid-template-columns: minmax(170px, .32fr) minmax(360px, .68fr);
+  }
 }

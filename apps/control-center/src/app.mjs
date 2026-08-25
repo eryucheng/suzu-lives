@@ -12,15 +12,18 @@ import {
   normalizeSuzuNavigationView,
   resolveSuzuRelationshipPage,
 } from "./core/chat-first.mjs";
+import { contactAvatarSource } from "./core/contact-avatar.mjs";
 import { getAgentProfile, getIdentity } from "./core/identity.mjs";
 import { getSuzuSearchItem } from "./core/suzu-search.mjs";
 import { renderAppWorkspace, setGlobalNotice } from "./react/app-shell.jsx";
 import { endActiveConversationCall } from "./react/conversation-call-coordinator.mjs";
+import { PRODUCT_FEATURES } from "../shared/product-features.mjs";
 
 const api = window.suzuConsole;
 const loading = document.querySelector("#loading");
 const loadingText = document.querySelector("#loadingText");
 const shellViews = new Set(["today", "relationships", "plans", "create", "capabilities", "settings"]);
+const createPages = new Set(["overview", "visual", ...(PRODUCT_FEATURES.customEmojiStickers ? ["stickers"] : [])]);
 const CAPABILITY_SETTINGS_LABELS = Object.freeze({
   "image-generation": "图片生成设置",
   "image-vision": "图片理解设置",
@@ -39,10 +42,19 @@ let appUpdateRequest = 0;
 let systemStatusRequest = 0;
 
 document.documentElement.dataset.theme = new URLSearchParams(window.location.search).get("theme") === "dark" ? "dark" : "light";
+document.documentElement.dataset.uiStyle = "classic";
 
 function setLoading(active, text = "正在读取本地状态…") {
-  loading.classList.toggle("hidden", !active);
   loadingText.textContent = text;
+  if (active) {
+    loading.classList.remove("hidden");
+    loading.setAttribute("aria-busy", "true");
+    loading.removeAttribute("aria-hidden");
+    return;
+  }
+  loading.classList.add("hidden");
+  loading.setAttribute("aria-busy", "false");
+  loading.setAttribute("aria-hidden", "true");
 }
 
 function setNotice(message = "") {
@@ -62,9 +74,26 @@ function setNotice(message = "") {
   }, GLOBAL_NOTICE_TIMEOUT_MS);
 }
 
+function currentAppearance() {
+  const requestedStyleId = state.settings?.appearance?.styleId === "wallpaper-glass" ? "wallpaper-glass" : "classic";
+  const wallpaper = state.settings?.appearance?.wallpaper || null;
+  const wallpaperReady = wallpaper?.status === "ready" && Boolean(wallpaper.url);
+  const wallpaperFailed = wallpaperReady && state.wallpaperRuntimeError === wallpaper.url;
+  return {
+    requestedStyleId,
+    styleId: requestedStyleId === "wallpaper-glass" && wallpaperReady && !wallpaperFailed ? "wallpaper-glass" : "classic",
+    wallpaper: wallpaperReady ? wallpaper : null,
+  };
+}
+
+function applyAppearance() {
+  document.documentElement.dataset.uiStyle = currentAppearance().styleId;
+}
+
 function applyTheme() {
   const theme = state.settings?.theme === "dark" ? "dark" : "light";
   document.documentElement.dataset.theme = theme;
+  applyAppearance();
   void api.windowChrome?.applyTheme(theme).catch(() => undefined);
 }
 
@@ -184,7 +213,7 @@ async function setShellSidebarWidth(width) {
 }
 
 function setCreatePage(page) {
-  if (!["overview", "visual"].includes(page)) return;
+  if (!createPages.has(page)) return;
   state.createPage = page;
   render();
 }
@@ -215,7 +244,7 @@ function setCapabilityPage(page, category = "", abilityId = "") {
 }
 
 function setSettingsTab(tab) {
-  state.settingsTab = ["general", "main-model", "api", "data", "privacy"].includes(tab) ? tab : "general";
+  state.settingsTab = ["general", "wallpaper", "main-model", "api", "data", "privacy"].includes(tab) ? tab : "general";
   if (state.settingsTab === "api" && state.view === "settings") void loadApiServices(context);
   if (state.settingsTab === "main-model" && state.view === "settings") void loadAgentRuntimeConfig(context);
   if (state.settingsTab === "privacy") void loadSettingsContacts();
@@ -866,6 +895,175 @@ async function saveWechatSettings(value) {
   render();
 }
 
+async function saveQqSettings(value) {
+  const next = value && typeof value === "object" ? value : {};
+  try {
+    state.qqSnapshot = await api.qq.saveSettings(next);
+    setNotice("QQ 投递设置已保存。 ");
+  } catch (error) {
+    setNotice(error?.message || "无法保存 QQ 投递设置。 ");
+  }
+  render();
+}
+
+async function configureQqBot(value) {
+  const next = value && typeof value === "object" ? value : {};
+  try {
+    state.qqSnapshot = await api.qq.configure(next);
+    setNotice(state.qqSnapshot?.bot?.status === "connected" ? "QQ 机器人已连接。" : "QQ 机器人设置已保存，正在连接。 ");
+    return state.qqSnapshot;
+  } catch (error) {
+    setNotice(error?.message || "无法保存 QQ 机器人设置。 ");
+    throw error;
+  } finally {
+    render();
+  }
+}
+
+async function changeSettingsAppearanceStyle(styleId) {
+  if (!["classic", "wallpaper-glass"].includes(styleId)) return;
+  state.wallpaperRuntimeError = "";
+  state.settings = await api.settings.update({ appearance: { styleId } });
+  applyAppearance();
+  if (styleId === "wallpaper-glass" && currentAppearance().styleId !== "wallpaper-glass") {
+    setNotice("选择一张图片或一个视频后即可启用壁纸玻璃样式。");
+  }
+  render();
+}
+
+async function chooseSettingsWallpaper() {
+  try {
+    const result = await api.settings.chooseWallpaper();
+    if (result?.status !== "selected" || !result.settings) return result;
+    state.wallpaperRuntimeError = "";
+    state.settings = result.settings;
+    applyAppearance();
+    setNotice("自定义壁纸已应用。");
+    render();
+    return result;
+  } catch (error) {
+    setNotice(`无法应用壁纸：${error?.message || error}`);
+    return null;
+  }
+}
+
+async function selectSettingsWallpaperSource(sourceType) {
+  try {
+    return await api.settings.selectWallpaperSource(sourceType);
+  } catch (error) {
+    setNotice(`无法选择壁纸来源：${error?.message || error}`);
+    throw error;
+  }
+}
+
+async function discardSettingsWallpaperSource(selectionId) {
+  if (!selectionId || typeof api.settings?.discardWallpaperSource !== "function") return null;
+  return api.settings.discardWallpaperSource(selectionId).catch(() => null);
+}
+
+async function importSettingsWallpaper(value) {
+  try {
+    const result = await api.settings.importWallpaper(value);
+    if (!result?.settings) return result;
+    state.wallpaperRuntimeError = "";
+    state.settings = result.settings;
+    applyAppearance();
+    const name = String(result.wallpaper?.name || value?.name || "这张壁纸");
+    setNotice(result.applied ? `“${name}”已加入壁纸库并应用。` : `“${name}”已加入壁纸库，当前格式已完成识别。`);
+    render();
+    return result;
+  } catch (error) {
+    setNotice(`无法导入壁纸：${error?.message || error}`);
+    throw error;
+  }
+}
+
+async function selectSettingsWallpaper(folderName) {
+  try {
+    const result = await api.settings.selectWallpaper(folderName);
+    if (!result?.settings) return result;
+    state.wallpaperRuntimeError = "";
+    state.settings = result.settings;
+    applyAppearance();
+    setNotice(`已应用“${result.wallpaper?.name || folderName}”。`);
+    render();
+    return result;
+  } catch (error) {
+    setNotice(`无法应用壁纸：${error?.message || error}`);
+    throw error;
+  }
+}
+
+async function updateSettingsWallpaper(value) {
+  try {
+    const result = await api.settings.updateWallpaper(value);
+    if (!result?.settings) return result;
+    state.wallpaperRuntimeError = "";
+    state.settings = result.settings;
+    applyAppearance();
+    setNotice(`已更新“${result.wallpaper?.name || value?.name || value?.folderName}”。`);
+    render();
+    return result;
+  } catch (error) {
+    setNotice(`无法更新壁纸：${error?.message || error}`);
+    throw error;
+  }
+}
+
+async function removeSettingsWallpaper(folderName) {
+  try {
+    const selectedFolder = String(state.settings?.appearance?.wallpaper?.folderName || "");
+    const removingActive = state.settings?.appearance?.styleId === "wallpaper-glass"
+      && selectedFolder.toLocaleLowerCase() === String(folderName || "").toLocaleLowerCase();
+    if (removingActive) {
+      const cleared = await api.settings.clearWallpaper();
+      if (cleared?.settings) {
+        state.settings = cleared.settings;
+        state.wallpaperRuntimeError = "";
+        applyAppearance();
+        render();
+        await new Promise((resolve) => window.requestAnimationFrame(() => window.requestAnimationFrame(resolve)));
+      }
+    }
+    const result = await api.settings.removeWallpaper(folderName);
+    if (!result?.settings) return result;
+    state.wallpaperRuntimeError = "";
+    state.settings = result.settings;
+    applyAppearance();
+    setNotice(`已从壁纸库删除“${result.removed || folderName}”。`);
+    render();
+    return result;
+  } catch (error) {
+    setNotice(`无法删除壁纸：${error?.message || error}`);
+    throw error;
+  }
+}
+
+async function clearSettingsWallpaper() {
+  try {
+    const result = await api.settings.clearWallpaper();
+    if (!result?.settings) return result;
+    state.wallpaperRuntimeError = "";
+    state.settings = result.settings;
+    applyAppearance();
+    setNotice("已停用壁纸并恢复经典样式，壁纸仍保留在壁纸库中。");
+    render();
+    return result;
+  } catch (error) {
+    setNotice(`无法清除壁纸：${error?.message || error}`);
+    return null;
+  }
+}
+
+function reportWallpaperError(url) {
+  const wallpaperUrl = String(url || "");
+  if (!wallpaperUrl || wallpaperUrl !== state.settings?.appearance?.wallpaper?.url) return;
+  state.wallpaperRuntimeError = wallpaperUrl;
+  applyAppearance();
+  setNotice("壁纸文件暂时无法显示，已切换到经典样式。");
+  render();
+}
+
 async function selectCapabilityApiBinding(bindingId, connectionId) {
   try {
     state.apiServices = await api.connections.bindNamedApiConnection(bindingId, connectionId);
@@ -995,9 +1193,10 @@ async function showIncomingConversationNotice(event) {
   const preview = String(event.content).replace(/\s+/gu, " ").trim().slice(0, 160);
   if (!preview) return;
   state.incomingConversationNotice = {
+    avatar: contactAvatarSource(contact, state.settings),
     contactId,
     preview,
-    senderName: String(profile?.displayName || "Suzu").trim() || "Suzu",
+    senderName: String(contact?.name || profile?.displayName || "Suzu").trim() || "Suzu",
   };
   if (incomingConversationNoticeTimeout) window.clearTimeout(incomingConversationNoticeTimeout);
   incomingConversationNoticeTimeout = window.setTimeout(() => {
@@ -1546,11 +1745,19 @@ function routeForCurrentView() {
         props: { actions: { returnToOverview: () => setCreatePage("overview") }, api },
       };
     }
+    if (PRODUCT_FEATURES.customEmojiStickers && state.createPage === "stickers") {
+      return {
+        kind: "create-stickers",
+        props: { actions: { returnToOverview: () => setCreatePage("overview") }, api },
+      };
+    }
     return {
       kind: "create",
       props: {
         actions: {
+          openSpace: (page) => setCreatePage(page),
           openVisual: () => setCreatePage("visual"),
+          ...(PRODUCT_FEATURES.customEmojiStickers ? { openStickers: () => setCreatePage("stickers") } : {}),
         },
       },
     };
@@ -1585,6 +1792,8 @@ function routeForCurrentView() {
           },
           voiceDesign: api.voiceDesign,
           saveWechatSettings,
+          saveQqSettings,
+          configureQqBot,
           selectApiBinding: selectCapabilityApiBinding,
           importExternal: importExternalCapability,
           setExternalEnabled: setExternalCapabilityEnabled,
@@ -1599,6 +1808,7 @@ function routeForCurrentView() {
           selectedId: state.capabilitySelectedId,
           contactsSnapshot: state.companionContacts,
           wechatSnapshot: state.wechatSnapshot,
+          qqSnapshot: state.qqSnapshot,
         },
       },
     };
@@ -1609,8 +1819,17 @@ function routeForCurrentView() {
       kind: "settings",
       props: {
         actions: {
+          changeAppearanceStyle: changeSettingsAppearanceStyle,
           changeDataLocation: changeSettingsDataLocation,
           changeTheme: changeSettingsTheme,
+          chooseWallpaper: chooseSettingsWallpaper,
+          clearWallpaper: clearSettingsWallpaper,
+          discardWallpaperSource: discardSettingsWallpaperSource,
+          importWallpaper: importSettingsWallpaper,
+          removeWallpaper: removeSettingsWallpaper,
+          selectWallpaper: selectSettingsWallpaper,
+          selectWallpaperSource: selectSettingsWallpaperSource,
+          updateWallpaper: updateSettingsWallpaper,
           checkForUpdate: checkAppUpdate,
           checkSystemStatus,
           downloadUpdate: downloadAppUpdate,
@@ -1798,8 +2017,9 @@ function routeForCurrentView() {
 
 function buildWorkspace() {
   return {
-    actions: { acknowledgeReleaseAnnouncement, answerIncomingVoiceCall, declineIncomingVoiceCall, navigate: setView, openSuzuSearchItem, setShellSidebarWidth },
+    actions: { acknowledgeReleaseAnnouncement, answerIncomingVoiceCall, declineIncomingVoiceCall, navigate: setView, openSuzuSearchItem, reportWallpaperError, setShellSidebarWidth },
     activeView: state.view,
+    appearance: currentAppearance(),
     contentClassName: contentClassName(),
     conversationUnread: state.conversationUnread,
     incomingConversationNotice: state.incomingConversationNotice,

@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
+import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -14,11 +15,15 @@ import { registerSuzuAgentHooks } from "../services/agent-hook-registry.mjs";
 import {
   createEmojiStickerLibrary,
   EMOJI_STICKER_DIALOG_FILTER,
+  inspectEmojiStickerData,
   resolveEmojiStickerLibraryRoot,
 } from "../services/emoji-sticker-library.mjs";
+import { normalizeEmojiStickerMetadata } from "../services/emoji-sticker-metadata.mjs";
+import { completeEmojiStickerMetadata } from "../services/emoji-sticker-tagging.mjs";
 import { createConversationSessionSettingsService } from "../services/conversation-session-settings.mjs";
 import { createRealtimeVoiceCallService } from "../services/realtime-voice-call.mjs";
 import { createConversationVoiceInputService } from "../services/conversation-voice-input.mjs";
+import { PRODUCT_FEATURES } from "../../shared/product-features.mjs";
 
 const STICKER_SELECTION_TTL_MS = 10 * 60 * 1_000;
 const ATTACHMENT_SELECTION_TTL_MS = 10 * 60 * 1_000;
@@ -43,6 +48,18 @@ function clean(value) {
 
 function plainObject(value) {
   return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+}
+
+function croppedEmojiStickerImage(value, selection) {
+  const source = plainObject(value);
+  if (source.data === undefined || source.data === null) {
+    throw new Error("缺少裁剪后的表情包图片。");
+  }
+  const croppedName = `${path.basename(selection.fileName, path.extname(selection.fileName)) || "表情包"}.webp`;
+  return inspectEmojiStickerData(source.data, {
+    fileName: croppedName,
+    mimeType: clean(source.mimeType) || "image/webp",
+  });
 }
 
 function contactSettingsValue(value) {
@@ -167,6 +184,12 @@ function localAttachmentPath(value) {
   return filePath;
 }
 
+function clipboardTextValue(value) {
+  const text = String(plainObject(value).text ?? "");
+  if (!text.trim()) throw new Error("没有可复制的消息内容。");
+  return text;
+}
+
 function clipboardImageData(value) {
   if (Buffer.isBuffer(value)) return Buffer.from(value);
   if (value instanceof Uint8Array) return Buffer.from(value);
@@ -227,6 +250,7 @@ export function registerConversationIpc({
   getMainWindow,
   ipcMain,
   memoryRuntime = null,
+  nativeImage = null,
   settingsService,
   shell,
   initializeContactCapabilities = null,
@@ -323,6 +347,10 @@ export function registerConversationIpc({
     const snapshot = providedSnapshot || await stickerLibrary().snapshot();
     return {
       status: snapshot.status,
+      ...(clean(snapshot.addedId) ? { addedId: clean(snapshot.addedId) } : {}),
+      ...(clean(snapshot.removedId) ? { removedId: clean(snapshot.removedId) } : {}),
+      ...(clean(snapshot.updatedId) ? { updatedId: clean(snapshot.updatedId) } : {}),
+      ...(snapshot.tagging ? { tagging: snapshot.tagging } : {}),
       ...(clean(snapshot.message) ? { message: clean(snapshot.message) } : {}),
       items: (Array.isArray(snapshot.items) ? snapshot.items : []).flatMap((item) => {
         try {
@@ -331,6 +359,7 @@ export function registerConversationIpc({
             fileName: clean(item.fileName),
             fileUrl: pathToFileURL(item.path).toString(),
             id: clean(item.id),
+            metadata: normalizeEmojiStickerMetadata(item.metadata),
             mimeType: clean(item.mimeType),
             size: Number(item.size) || 0,
           }];
@@ -341,7 +370,14 @@ export function registerConversationIpc({
     };
   };
   const stickerSelections = new Map();
+  const discardExpiredStickerSelections = () => {
+    const now = Date.now();
+    for (const [token, selection] of stickerSelections) {
+      if (selection.expiresAt < now) stickerSelections.delete(token);
+    }
+  };
   const consumeStickerSelection = (value) => {
+    discardExpiredStickerSelections();
     const token = clean(value?.selectionToken);
     const selection = stickerSelections.get(token);
     if (!selection || selection.expiresAt < Date.now()) {
@@ -349,6 +385,9 @@ export function registerConversationIpc({
       throw new Error("所选表情包已失效，请重新选择。");
     }
     return { selection, token };
+  };
+  const registerStickerIpcHandler = (channel, handler) => {
+    if (PRODUCT_FEATURES.customEmojiStickers) ipcMain.handle(channel, handler);
   };
   const attachmentSelections = new Map();
   const discardExpiredAttachmentSelections = () => {
@@ -477,12 +516,13 @@ export function registerConversationIpc({
     for (const token of tokens) attachmentSelections.delete(clean(token));
     return { discarded: true };
   });
-  ipcMain.handle("conversation:emoji-stickers", async (event) => {
+  registerStickerIpcHandler("conversation:emoji-stickers", async (event) => {
     sender = event.sender;
     return stickerSnapshot();
   });
-  ipcMain.handle("conversation:select-emoji-sticker", async (event) => {
+  registerStickerIpcHandler("conversation:select-emoji-sticker", async (event) => {
     sender = event.sender;
+    discardExpiredStickerSelections();
     if (typeof dialog?.showOpenDialog !== "function") throw new Error("当前环境无法选择本地表情包。");
     const result = await dialog.showOpenDialog(getMainWindow?.(), {
       title: "添加收藏表情包",
@@ -494,26 +534,127 @@ export function registerConversationIpc({
     const selectionToken = randomUUID();
     stickerSelections.set(selectionToken, {
       expiresAt: Date.now() + STICKER_SELECTION_TTL_MS,
+      fileName: inspected.fileName,
+      mimeType: inspected.mimeType,
       source: inspected.source,
     });
     return {
       canceled: false,
       fileName: inspected.fileName,
+      fileUrl: pathToFileURL(inspected.source).toString(),
       mimeType: inspected.mimeType,
+      previewDataUrl: `data:${inspected.mimeType};base64,${(await fs.readFile(inspected.source)).toString("base64")}`,
       selectionToken,
       size: inspected.size,
     };
   });
-  ipcMain.handle("conversation:add-emoji-sticker", async (event, value) => {
+  registerStickerIpcHandler("conversation:add-emoji-sticker", async (event, value) => {
     sender = event.sender;
     const { selection, token } = consumeStickerSelection(value);
+    let saved = false;
     try {
-      return stickerSnapshot(await stickerLibrary().add({ source: selection.source }));
+      const source = plainObject(value);
+      const hasCroppedData = source.data !== undefined && source.data !== null;
+      let image;
+      if (hasCroppedData) {
+        image = croppedEmojiStickerImage(source, selection);
+      } else {
+        const inspected = await stickerLibrary().inspect(selection.source);
+        image = {
+          data: await fs.readFile(inspected.source),
+          extension: inspected.extension,
+          fileName: inspected.fileName,
+          mimeType: inspected.mimeType,
+          size: inspected.size,
+        };
+      }
+      let metadata = normalizeEmojiStickerMetadata(source.metadata);
+      let tagging = { status: "not-needed" };
+      if (source.autoCompletionAttempted !== true) {
+        try {
+          const completed = await completeEmojiStickerMetadata({
+            data: image.data,
+            fileName: image.fileName,
+            metadata,
+            mimeType: image.mimeType,
+            runtime: agentRuntime,
+          });
+          metadata = completed.metadata;
+          tagging = { status: completed.inferred ? "completed" : "not-needed" };
+        } catch (error) {
+          tagging = {
+            message: clean(error?.message) || "表情包已保存，自动信息可稍后重新生成。",
+            status: "failed",
+          };
+        }
+      }
+      const added = await stickerLibrary().add({
+        data: image.data,
+        fileName: image.fileName,
+        metadata,
+        mimeType: image.mimeType,
+      });
+      saved = true;
+      return stickerSnapshot({ ...added, tagging });
     } finally {
-      stickerSelections.delete(token);
+      if (saved) stickerSelections.delete(token);
     }
   });
-  ipcMain.handle("conversation:send-emoji-sticker", async (event, value) => {
+  registerStickerIpcHandler("conversation:complete-emoji-sticker", async (event, value) => {
+    sender = event.sender;
+    const source = plainObject(value);
+    const metadata = normalizeEmojiStickerMetadata(source.metadata);
+    const selectionToken = clean(source.selectionToken);
+    if (selectionToken) {
+      const { selection } = consumeStickerSelection(source);
+      const image = croppedEmojiStickerImage(source, selection);
+      const completed = await completeEmojiStickerMetadata({
+        data: image.data,
+        fileName: image.fileName,
+        metadata,
+        mimeType: image.mimeType,
+        runtime: agentRuntime,
+      });
+      return {
+        metadata: completed.metadata,
+        tagging: { status: completed.inferred ? "completed" : "not-needed" },
+      };
+    }
+    const library = stickerLibrary();
+    const sticker = await library.read(clean(source.id));
+    const completed = await completeEmojiStickerMetadata({
+      data: sticker.data,
+      fileName: sticker.fileName,
+      metadata,
+      mimeType: sticker.mimeType,
+      runtime: agentRuntime,
+    });
+    const next = completed.inferred
+      ? await library.update(sticker.id, completed.metadata)
+      : await library.snapshot();
+    return stickerSnapshot({
+      ...next,
+      tagging: { status: completed.inferred ? "completed" : "not-needed" },
+    });
+  });
+  registerStickerIpcHandler("conversation:discard-emoji-sticker-selection", (event, value) => {
+    sender = event.sender;
+    const selectionToken = clean(value?.selectionToken);
+    if (selectionToken) stickerSelections.delete(selectionToken);
+    return { discarded: true };
+  });
+  registerStickerIpcHandler("conversation:update-emoji-sticker", async (event, value) => {
+    sender = event.sender;
+    const source = plainObject(value);
+    return stickerSnapshot(await stickerLibrary().update(clean(source.id), source.metadata));
+  });
+  registerStickerIpcHandler("conversation:remove-emoji-sticker", async (event, value) => {
+    sender = event.sender;
+    const source = plainObject(value);
+    if (source.confirmed !== true) throw new Error("删除表情包前需要确认。 ");
+    return stickerSnapshot(await stickerLibrary().remove(clean(source.id)));
+  });
+  registerStickerIpcHandler("conversation:send-emoji-sticker", async (event, value) => {
     sender = event.sender;
     const sticker = await stickerLibrary().read(clean(value?.id));
     return chat.send({
@@ -558,6 +699,23 @@ export function registerConversationIpc({
     const writeFiles = clipboard?._writeFilesForTesting;
     if (typeof writeFiles !== "function") throw new Error("当前运行环境无法复制本地文件。 ");
     writeFiles.call(clipboard, [filePath]);
+    return { copied: true };
+  });
+  ipcMain.handle("conversation:copy-message-text", async (event, value) => {
+    sender = event.sender;
+    if (typeof clipboard?.writeText !== "function") throw new Error("当前运行环境无法复制文字。");
+    clipboard.writeText(clipboardTextValue(value));
+    return { copied: true };
+  });
+  ipcMain.handle("conversation:copy-media-image", async (event, value) => {
+    sender = event.sender;
+    const filePath = localAttachmentPath(value);
+    if (typeof nativeImage?.createFromPath !== "function" || typeof clipboard?.writeImage !== "function") {
+      throw new Error("当前运行环境无法复制图片。");
+    }
+    const image = nativeImage.createFromPath(filePath);
+    if (!image || typeof image.isEmpty !== "function" || image.isEmpty()) throw new Error("无法读取这张图片。 ");
+    clipboard.writeImage(image);
     return { copied: true };
   });
   ipcMain.handle("conversation:create", async (event) => {

@@ -27,6 +27,7 @@ async function fixture(t) {
   await writeJson(path.join(dataRoot, "settings.json"), { theme: "light", identity: {} });
   await fs.writeFile(path.join(dataRoot, "SUZU.md"), "# 全局 Suzu 设定\n", "utf8");
   await fs.mkdir(path.join(dataRoot, "agents", AGENT_ID), { recursive: true });
+  await fs.mkdir(path.join(dataRoot, "appearance", "wallpapers"), { recursive: true });
   await fs.mkdir(path.join(dataRoot, "capabilities", "image-generation"), { recursive: true });
   await fs.mkdir(path.join(dataRoot, "software-assistant", "workspace"), { recursive: true });
   await fs.writeFile(path.join(dataRoot, "outside-data.txt"), "outside", "utf8");
@@ -65,6 +66,7 @@ test("system status audits Suzu and Agent Core files", async (t) => {
   assert.equal(itemById(snapshot, "contact:my-manual-project")?.ownership, "external");
   assert.equal(itemById(snapshot, `contact:${CONTACT_ID}:instructions`)?.title, "SUZU.md");
   assert.equal(itemById(snapshot, "data-root:global-instructions")?.ownership, "managed");
+  assert.equal(itemById(snapshot, "data-root:appearance")?.ownership, "managed");
   assert.equal(itemById(snapshot, "data-root:software-assistant")?.ownership, "managed");
   assert.equal(itemById(snapshot, "agent-core:credentials")?.title, "Suzu 本机模型凭据（内容不显示）");
   assert.equal(itemById(snapshot, "agent-core:instruction-bridge")?.ownership, "managed");

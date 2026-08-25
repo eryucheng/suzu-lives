@@ -9,6 +9,7 @@ import { createCandidates, downloadImageUrl, readRuns } from "../src/index.mjs";
 const credential = () => String.fromCharCode(120, 121, 122);
 const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl+jh0AAAAASUVORK5CYII=", "base64");
 const api = { baseUrl: "https://example.test/v1", model: "image-model", apiKey: credential() };
+const referenceApi = { ...api, referenceImageAdapter: "openai-images-edit", referenceImageModel: "image-model" };
 const input = { prompt: "一幅测试图", backend: "api", count: 1, size: "1024x1024" };
 async function root() { return fs.mkdtemp(path.join(os.tmpdir(), "suzu-images-")); }
 function jsonResponse(value, status = 200) { return new Response(JSON.stringify(value), { status, headers: { "content-type": "application/json" } }); }
@@ -110,21 +111,36 @@ test("custom image protocol resolves its saved request template and image result
 
 test("API references use the edit endpoint and role-aware multipart request", async () => {
   let target = "";
-  await createCandidates({ root: await root(), connection: api, input: { ...input, prompt: "参考测试" }, references: [{ id: "ref-a", role: "identity", description: "人物", filename: "ref.png", mime: "image/png", data: png }], fetchImpl: async (url, options) => { target = url; assert.equal(options.body instanceof FormData, true); assert.match(String(options.body.get("prompt")), /Reference image roles/); return jsonResponse({ data: [{ b64_json: png.toString("base64") }] }); } });
+  await createCandidates({ root: await root(), connection: referenceApi, input: { ...input, prompt: "参考测试" }, references: [{ id: "ref-a", role: "identity", description: "人物", filename: "ref.png", mime: "image/png", data: png }], fetchImpl: async (url, options) => { target = url; assert.equal(options.body instanceof FormData, true); assert.match(String(options.body.get("prompt")), /Reference image roles/); return jsonResponse({ data: [{ b64_json: png.toString("base64") }] }); } });
   assert.equal(target.endsWith("/images/edits"), true);
+});
+
+test("references are rejected with a detailed reason before the model request when no adapter is confirmed", async () => {
+  let requests = 0;
+  await assert.rejects(
+    () => createCandidates({
+      root: root(),
+      connection: api,
+      input,
+      references: [{ id: "ref-a", role: "identity", filename: "ref.png", mime: "image/png", data: png }],
+      fetchImpl: async () => { requests += 1; return jsonResponse({}); },
+    }),
+    /模型“image-model”尚未配置参考图适配器.*普通文生图仍可使用/u,
+  );
+  assert.equal(requests, 0);
 });
 
 test("drawing keeps its default 12-reference limit unless a caller explicitly requests a bounded override", async () => {
   const references = Array.from({ length: 13 }, (_, index) => ({ id: "ref-" + index, role: "identity", filename: "ref.png", mime: "image/png", data: png }));
   await assert.rejects(() => createCandidates({ root: root(), connection: api, input, references, fetchImpl: async () => jsonResponse({ data: [{ b64_json: png.toString("base64") }] }) }), /参考图数量无效/u);
   const fullSet = Array.from({ length: 16 }, (_, index) => ({ id: "ref-" + index, role: "identity", filename: "ref.png", mime: "image/png", data: png }));
-  const run = await createCandidates({ root: await root(), connection: api, input, references: fullSet, maxReferences: 16, fetchImpl: async () => jsonResponse({ data: [{ b64_json: png.toString("base64") }] }) });
+  const run = await createCandidates({ root: await root(), connection: referenceApi, input, references: fullSet, maxReferences: 16, fetchImpl: async () => jsonResponse({ data: [{ b64_json: png.toString("base64") }] }) });
   assert.equal(run.status, "complete"); assert.equal(run.references.length, 16);
 });
 
 test("API preserves generation and edit extra request bodies", async () => {
   let generation; let edit;
-  const connection = { ...api, extraBody: { provider_flag: true }, editExtraBody: { edit_flag: "yes" } };
+  const connection = { ...referenceApi, extraBody: { provider_flag: true }, editExtraBody: { edit_flag: "yes" } };
   await createCandidates({ root: await root(), connection, input, fetchImpl: async (_url, options) => { generation = JSON.parse(options.body); return jsonResponse({ data: [{ b64_json: png.toString("base64") }] }); } });
   await createCandidates({ root: await root(), connection, input, references: [{ id: "ref", role: "style", description: "风格", filename: "ref.png", mime: "image/png", data: png }], fetchImpl: async (_url, options) => { edit = options.body; return jsonResponse({ data: [{ b64_json: png.toString("base64") }] }); } });
   assert.equal(generation.provider_flag, true); assert.equal(edit.get("edit_flag"), "yes"); assert.equal(edit.has("provider_flag"), false);

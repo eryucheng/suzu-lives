@@ -1,15 +1,20 @@
 <!doctype html>
-<html lang="zh-CN" data-theme="light">
+<html lang="zh-CN" data-theme="light" data-ui-style="classic">
   <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'__SUZU_DEV_INLINE_STYLE__; img-src 'self' data: file:; media-src 'self' blob: data: file:; connect-src 'self' http://127.0.0.1:5173 ws://127.0.0.1:5173">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'__SUZU_DEV_INLINE_STYLE__; img-src 'self' blob: data: file:; media-src 'self' blob: data: file:; connect-src 'self' http://127.0.0.1:5173 ws://127.0.0.1:5173">
+    <script src="./startup-theme.js"></script>
+    <link rel="stylesheet" href="./styles/startup-loading.css">
     <title>Suzu Lives</title>
   </head>
   <body>
     <div id="app"></div>
 
-    <div id="loading" class="loading-overlay hidden"><div class="loader"></div><div id="loadingText">正在读取本地状态…</div></div>
+    <div id="loading" class="loading-overlay" role="status" aria-atomic="true" aria-busy="true" aria-live="polite">
+      <div class="loader" aria-hidden="true"></div>
+      <div id="loadingText" class="startup-status">正在读取本地状态…</div>
+    </div>
     <script type="module" src="./main.jsx"></script>
   </body>
 </html>

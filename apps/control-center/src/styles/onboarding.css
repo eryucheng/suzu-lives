@@ -1,6 +1,6 @@
 .onboarding-overlay {
   position: fixed;
-  z-index: 70;
+  z-index: var(--z-onboarding, 70);
   inset: 0;
   display: grid;
   place-items: center;
@@ -170,6 +170,17 @@
   border: 1px solid color-mix(in srgb, var(--accent2) 23%, var(--line));
   border-radius: 10px;
   background: color-mix(in srgb, var(--accent2) 6%, transparent);
+}
+
+:root[data-ui-style="wallpaper-glass"] .onboarding-overlay {
+  background: var(--surface-overlay-scrim);
+}
+
+:root[data-ui-style="wallpaper-glass"] .onboarding-dialog {
+  border-color: var(--surface-border);
+  background: var(--surface-dialog);
+  -webkit-backdrop-filter: var(--surface-overlay-backdrop);
+  backdrop-filter: var(--surface-overlay-backdrop);
 }
 
 .onboarding-model-input-capability {

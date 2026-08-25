@@ -29,6 +29,7 @@ const MAX_WECHAT_INBOUND_MEDIA_ITEMS = 24;
 
 export const DEFAULT_WECHAT_DELIVERY = Object.freeze({
   agent: true,
+  proactive: true,
   attachments: false,
   permissions: true,
   tools: false,
@@ -58,8 +59,26 @@ function publicAgentReply(value, { scheduled = false } = {}) {
   return REASONING_TAG.test(visible) || /^NO_REPLY$/iu.test(visible) ? "" : visible;
 }
 
+function deliveryRoute(value) {
+  const input = plainObject(value);
+  const mode = clean(input.mode);
+  if (mode === "proactive") return { mode };
+  if (mode !== "reply") return null;
+  const channel = clean(input.channel).toLowerCase();
+  const connectionId = clean(input.connectionId);
+  return channel && connectionId ? { mode, channel, connectionId } : null;
+}
+
 function isWechatEligibleEvent(event = {}) {
-  if (event.deliverToWechat !== true || event.displayAsSystem === true) return false;
+  if (event.displayAsSystem === true) return false;
+  const route = deliveryRoute(event.deliveryRoute);
+  if (route) {
+    if (route.mode === "reply") return route.channel === "wechat";
+    return event.kind === "schedule" && clean(event.scheduleSource) === "proactive-contact";
+  }
+  // Retain already persisted / in-flight WeChat turns while the generic
+  // delivery route rolls out. New channel turns always supply a route.
+  if (event.deliverToWechat !== true) return false;
   if (event.kind !== "schedule") return true;
   return ["proactive-contact", "agent-schedule"].includes(clean(event.scheduleSource));
 }
@@ -995,6 +1014,7 @@ export function createWeChatLinkService({
           projectRoot: session.projectRoot,
           hasTranscript: session.hasTranscript === true,
           kind: "message",
+          deliveryRoute: { mode: "reply", channel: "wechat", connectionId: link.id },
           deliverToWechat: true,
           requestId,
         };
@@ -1290,7 +1310,15 @@ export function createWeChatLinkService({
     void (async () => {
       const contactId = await reader.contactIdForSession({ sessionId: event.sessionId, projectRoot });
       if (!contactId) return;
-      const links = publicStore.links.filter((link) => link.contactId === contactId && link.enabled !== false);
+      const route = deliveryRoute(event.deliveryRoute);
+      const isProactiveContact = route?.mode === "proactive"
+        || (event.kind === "schedule" && clean(event.scheduleSource) === "proactive-contact");
+      if (isProactiveContact && publicStore.delivery.proactive !== true) return;
+      const links = publicStore.links.filter((link) => (
+        link.contactId === contactId
+        && link.enabled !== false
+        && (route?.mode !== "reply" || route.connectionId === link.id)
+      ));
       if (!links.length) return;
       const requestId = clean(event.requestId);
       const clearsTyping = requestId && ["agent-reply", "agent-media", "turn-complete", "turn-stopped", "error"].includes(event.type);

@@ -1,5 +1,7 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 
 import {
   legacyStableAgentId,
@@ -9,6 +11,11 @@ import {
 import { createPriceCatalog, sanitizeCustomPriceModels, sanitizePriceRevisions } from "@suzu-lives/cost-ledger";
 import { createContactProjectsService } from "../services/contact-projects.mjs";
 import { createSystemStatusService } from "../services/system-status.mjs";
+import {
+  createWallpaperLibrary,
+  normalizeWallpaperName,
+  resolveWallpaperLibraryRoot,
+} from "../services/wallpaper-library.mjs";
 
 const DEFAULT_SETTINGS = Object.freeze({
   contactsRoot: "",
@@ -21,6 +28,7 @@ const DEFAULT_SETTINGS = Object.freeze({
   conversationRosterWidth: 246,
   shellSidebarWidth: 240,
   theme: "light",
+  appearance: { styleId: "classic", wallpaper: null },
   agentId: "",
   customPriceModels: [],
   priceRevisions: [],
@@ -33,11 +41,32 @@ const DEFAULT_SETTINGS = Object.freeze({
   conversationPreferences: { attachments: true, dynamicContext: false, tools: true, thinking: true, system: true, tokens: true, timeDisplay: "center" },
 });
 
+const APPEARANCE_STYLE_IDS = new Set(["classic", "wallpaper-glass"]);
+const WALLPAPER_KIND_BY_EXTENSION = new Map([
+  [".jpg", "image"],
+  [".jpeg", "image"],
+  [".png", "image"],
+  [".webp", "image"],
+  [".mp4", "video"],
+  [".webm", "video"],
+]);
+const MANAGED_WALLPAPER_FILE_PATTERN = /^wallpaper-[a-f0-9-]+\.(?:jpe?g|png|webp|mp4|webm)$/iu;
+
 const MAX_AVATAR_DATA_URL_LENGTH = 2_800_000;
 const AVATAR_DATA_URL_PATTERN = /^data:image\/(?:png|jpeg|webp);base64,[a-z0-9+/]+={0,2}$/iu;
 
 function clean(value) {
   return String(value ?? "").trim();
+}
+
+function removeFileQuietly(filePath) {
+  if (!filePath) return;
+  try {
+    fs.rmSync(filePath, { force: true });
+  } catch {
+    // A video may still be releasing its file handle on Windows. The new
+    // durable wallpaper selection must remain successful in that case.
+  }
 }
 
 function externalUrl(value) {
@@ -191,6 +220,31 @@ export function normalizeOnboardingMultimodalCompleted(value) {
   return value === true;
 }
 
+export function normalizeAppearance(value = {}) {
+  const source = value && typeof value === "object" && !Array.isArray(value) ? value : {};
+  const styleId = APPEARANCE_STYLE_IDS.has(source.styleId) ? source.styleId : "classic";
+  const candidate = source.wallpaper && typeof source.wallpaper === "object" && !Array.isArray(source.wallpaper)
+    ? source.wallpaper
+    : null;
+  let folderName = "";
+  try {
+    folderName = candidate?.folderName ? normalizeWallpaperName(candidate.folderName) : "";
+  } catch {
+    folderName = "";
+  }
+  if (folderName) return { styleId, wallpaper: { folderName } };
+  const fileName = String(candidate?.fileName || "").trim();
+  const extension = path.extname(fileName).toLowerCase();
+  const expectedKind = WALLPAPER_KIND_BY_EXTENSION.get(extension) || "";
+  const wallpaper = fileName
+    && fileName === path.basename(fileName)
+    && MANAGED_WALLPAPER_FILE_PATTERN.test(fileName)
+    && candidate?.kind === expectedKind
+    ? { kind: expectedKind, fileName }
+    : null;
+  return { styleId, wallpaper };
+}
+
 function readJson(filePath, fallback = {}) {
   try {
     return JSON.parse(fs.readFileSync(filePath, "utf8").replace(/^\uFEFF/u, ""));
@@ -222,6 +276,7 @@ function normalizeSettings(value = {}) {
     conversationRosterWidth: normalizeConversationRosterWidth(value.conversationRosterWidth),
     shellSidebarWidth: normalizeShellSidebarWidth(value.shellSidebarWidth),
     theme: value.theme === "dark" ? "dark" : "light",
+    appearance: normalizeAppearance(value.appearance),
     agentId: stableAgentId(projectRoot),
     customPriceModels,
     priceRevisions: sanitizePriceRevisions(value.priceRevisions, priceCatalog),
@@ -247,6 +302,11 @@ function safePatch(value, current = {}) {
   if (Object.hasOwn(value, "conversationRosterWidth")) patch.conversationRosterWidth = normalizeConversationRosterWidth(value.conversationRosterWidth);
   if (Object.hasOwn(value, "shellSidebarWidth")) patch.shellSidebarWidth = normalizeShellSidebarWidth(value.shellSidebarWidth);
   if (Object.hasOwn(value, "theme")) patch.theme = value.theme === "light" ? "light" : "dark";
+  if (Object.hasOwn(value, "appearance")) {
+    const currentAppearance = normalizeAppearance(current.appearance);
+    const requestedAppearance = normalizeAppearance({ styleId: value.appearance?.styleId });
+    patch.appearance = { ...currentAppearance, styleId: requestedAppearance.styleId };
+  }
   if (Object.hasOwn(value, "customPriceModels")) patch.customPriceModels = customPriceModels;
   if (Object.hasOwn(value, "priceRevisions")) patch.priceRevisions = sanitizePriceRevisions(value.priceRevisions, priceCatalog);
   if (Object.hasOwn(value, "identity")) patch.identity = normalizeIdentity(value.identity);
@@ -256,6 +316,63 @@ function safePatch(value, current = {}) {
 
 export function createSettingsService({ app, dataStorageService = null }) {
   const settingsPath = () => path.join(app.getPath("userData"), "settings.json");
+  const legacyWallpaperDirectory = () => path.join(app.getPath("userData"), "appearance", "wallpaper");
+  const wallpaperLibrary = createWallpaperLibrary({ root: resolveWallpaperLibraryRoot(app.getPath("userData")) });
+  const wallpaperDirectory = () => wallpaperLibrary.root;
+  const wallpaperPath = (wallpaper) => {
+    const normalized = normalizeAppearance({ wallpaper }).wallpaper;
+    if (!normalized) return "";
+    if (normalized.folderName) {
+      const item = wallpaperLibrary.resolve(normalized.folderName);
+      if (!item?.entryFile) return "";
+      const directory = path.resolve(wallpaperLibrary.root, item.folderName);
+      const candidate = path.resolve(directory, ...item.entryFile.split("/"));
+      return candidate.startsWith(`${directory}${path.sep}`) ? candidate : "";
+    }
+    const directory = path.resolve(legacyWallpaperDirectory());
+    const candidate = path.resolve(directory, normalized.fileName);
+    return candidate.startsWith(`${directory}${path.sep}`) ? candidate : "";
+  };
+  const appearanceResponse = (appearance) => {
+    const normalized = normalizeAppearance(appearance);
+    const library = wallpaperLibrary.snapshot();
+    const base = { ...normalized, wallpaperDirectory: library.path, wallpapers: library.items };
+    if (!normalized.wallpaper) return base;
+    if (normalized.wallpaper.folderName) {
+      const key = normalized.wallpaper.folderName.toLocaleLowerCase("zh-CN");
+      const item = library.items.find((candidate) => candidate.folderName.toLocaleLowerCase("zh-CN") === key) || null;
+      return {
+        ...base,
+        wallpaper: item || {
+          entryFile: "",
+          folderName: normalized.wallpaper.folderName,
+          kind: "unknown",
+          message: "壁纸文件夹不存在。",
+          name: normalized.wallpaper.folderName,
+          previewUrl: "",
+          sourceType: "folder",
+          status: "missing",
+          url: "",
+        },
+      };
+    }
+    const targetPath = wallpaperPath(normalized.wallpaper);
+    let ready = false;
+    try {
+      ready = Boolean(targetPath) && fs.statSync(targetPath).isFile();
+    } catch {
+      ready = false;
+    }
+    return {
+      ...base,
+      wallpaper: {
+        ...normalized.wallpaper,
+        name: "原有壁纸",
+        status: ready ? "ready" : "missing",
+        url: ready ? pathToFileURL(targetPath).href : "",
+      },
+    };
+  };
   const hasStoredSettings = () => {
     try {
       return fs.existsSync(settingsPath());
@@ -291,14 +408,60 @@ export function createSettingsService({ app, dataStorageService = null }) {
     const current = load();
     return save({ ...current, ...safePatch(patch, current) });
   };
+  const migrateLegacyWallpaper = async (settings = load()) => {
+    const appearance = normalizeAppearance(settings.appearance);
+    if (!appearance.wallpaper?.fileName) return settings;
+    const source = wallpaperPath(appearance.wallpaper);
+    try {
+      if (!source || !fs.statSync(source).isFile()) return settings;
+    } catch {
+      return settings;
+    }
+
+    let imported = null;
+    try {
+      imported = await wallpaperLibrary.importSource({
+        name: wallpaperLibrary.availableName("原有壁纸"),
+        source,
+        sourceType: "file",
+      });
+      const migrated = save({
+        ...settings,
+        appearance: { styleId: appearance.styleId, wallpaper: { folderName: imported.folderName } },
+      });
+      removeFileQuietly(source);
+      try {
+        fs.rmdirSync(legacyWallpaperDirectory());
+      } catch {
+        // The old directory can remain when another legacy file is present.
+      }
+      return migrated;
+    } catch {
+      if (imported?.folderName) await wallpaperLibrary.remove(imported.folderName).catch(() => undefined);
+      return settings;
+    }
+  };
   const response = (settings = load()) => ({
     ...settings,
+    appearance: appearanceResponse(settings.appearance),
     settingsPath: settingsPath(),
     dataRoot: localDataRoot(),
     dataStorage: dataStorageService?.snapshot?.() || { dataRoot: localDataRoot(), previousDataRoot: "", migration: { status: "idle" } },
     usageLedgerPath: usageLedgerPath(settings),
   });
-  return { hasStoredSettings, load, response, save, safePatch, update, usageLedgerPath };
+  return {
+    hasStoredSettings,
+    load,
+    migrateLegacyWallpaper,
+    response,
+    save,
+    safePatch,
+    update,
+    usageLedgerPath,
+    wallpaperDirectory,
+    wallpaperLibrary,
+    wallpaperPath,
+  };
 }
 
 export function registerSettingsIpc({ app, appUpdateService = null, contactProjectsService = null, dataStorageService, dialog, getMainWindow, ipcMain, onMemoryRecallEnabledChanged = null, releaseAnnouncementService = null, shell, settingsService, systemStatusService = null }) {
@@ -317,6 +480,22 @@ export function registerSettingsIpc({ app, appUpdateService = null, contactProje
     acknowledge: () => ({ announcement: null, pending: false, version: "" }),
     status: () => ({ announcement: null, pending: false, version: "" }),
   };
+  const wallpaperLibrary = settingsService.wallpaperLibrary || null;
+  const wallpaperSourceSelections = new Map();
+  const requireWallpaperLibrary = () => {
+    if (!wallpaperLibrary) throw new Error("当前版本没有初始化壁纸库。");
+    return wallpaperLibrary;
+  };
+  const pruneWallpaperSourceSelections = () => {
+    const expiresBefore = Date.now() - 20 * 60 * 1_000;
+    for (const [selectionId, selection] of wallpaperSourceSelections) {
+      if (selection.createdAt < expiresBefore) wallpaperSourceSelections.delete(selectionId);
+    }
+  };
+  const activateWallpaper = (item, current = settingsService.load()) => settingsService.save({
+    ...current,
+    appearance: { styleId: "wallpaper-glass", wallpaper: { folderName: item.folderName } },
+  });
   ipcMain.handle("settings:get", async () => {
     // A new installation has no materialized contacts path. Materialize the
     // product-owned default before returning the first settings snapshot, so
@@ -325,7 +504,10 @@ export function registerSettingsIpc({ app, appUpdateService = null, contactProje
     if (!clean(settingsService.load()?.contactsRoot) && typeof contacts.snapshot === "function") {
       contactSnapshot = await contacts.snapshot();
     }
-    const settings = await migrateLegacyContactIdentityProfiles({ contactSnapshot, contacts, settingsService });
+    let settings = await migrateLegacyContactIdentityProfiles({ contactSnapshot, contacts, settingsService });
+    if (typeof settingsService.migrateLegacyWallpaper === "function") {
+      settings = await settingsService.migrateLegacyWallpaper(settings);
+    }
     return settingsService.response(settings);
   });
   ipcMain.handle("settings:release-announcement-status", () => announcementService.status());
@@ -358,6 +540,131 @@ export function registerSettingsIpc({ app, appUpdateService = null, contactProje
       ...settingsService.response(settings),
       ...(ownerProfileTitleSync ? { ownerProfileTitleSync } : {}),
     };
+  });
+  ipcMain.handle("settings:select-wallpaper-source", async (_event, sourceType) => {
+    const requestedType = sourceType === "directory" ? "directory" : "file";
+    const result = await dialog.showOpenDialog(getMainWindow(), {
+      title: requestedType === "directory" ? "选择一个 Wallpaper Engine 壁纸文件夹" : "选择图片或视频壁纸",
+      properties: requestedType === "directory" ? ["openDirectory"] : ["openFile"],
+      ...(requestedType === "file" ? {
+        filters: [
+          { name: "图片和视频", extensions: ["jpg", "jpeg", "png", "webp", "mp4", "webm"] },
+          { name: "图片", extensions: ["jpg", "jpeg", "png", "webp"] },
+          { name: "视频", extensions: ["mp4", "webm"] },
+        ],
+      } : {}),
+    });
+    if (result.canceled || !result.filePaths?.[0]) return { status: "canceled" };
+    const source = requireWallpaperLibrary().inspectSource(result.filePaths[0], requestedType);
+    pruneWallpaperSourceSelections();
+    const selectionId = randomUUID();
+    wallpaperSourceSelections.set(selectionId, { ...source, createdAt: Date.now() });
+    return {
+      source: {
+        detectedKind: source.detectedKind,
+        detectedStatus: source.detectedStatus,
+        selectionId,
+        sourceLabel: source.sourceLabel,
+        sourceType: source.sourceType,
+        suggestedName: source.suggestedName,
+      },
+      status: "selected",
+    };
+  });
+  ipcMain.handle("settings:discard-wallpaper-source", (_event, selectionId) => {
+    const removed = wallpaperSourceSelections.delete(clean(selectionId));
+    return { status: removed ? "discarded" : "missing" };
+  });
+  ipcMain.handle("settings:import-wallpaper", async (_event, value = {}) => {
+    pruneWallpaperSourceSelections();
+    const selectionId = clean(value?.selectionId);
+    const selection = wallpaperSourceSelections.get(selectionId);
+    if (!selection) throw new Error("壁纸来源选择已失效，请重新选择。");
+    const library = requireWallpaperLibrary();
+    const item = await library.importSource({ name: value?.name, source: selection.source, sourceType: selection.sourceType });
+    let settings = settingsService.load();
+    try {
+      if (item.status === "ready") settings = activateWallpaper(item, settings);
+    } catch (error) {
+      await library.remove(item.folderName).catch(() => undefined);
+      throw error;
+    }
+    wallpaperSourceSelections.delete(selectionId);
+    return {
+      applied: item.status === "ready",
+      settings: settingsService.response(settings),
+      status: "imported",
+      wallpaper: item,
+    };
+  });
+  ipcMain.handle("settings:select-wallpaper", (_event, folderName) => {
+    const item = requireWallpaperLibrary().resolve(folderName);
+    if (!item) throw new Error("找不到这张壁纸。");
+    if (item.status !== "ready") throw new Error(item.message || "当前还不能播放这张壁纸。");
+    const settings = activateWallpaper(item);
+    return { settings: settingsService.response(settings), status: "selected", wallpaper: item };
+  });
+  ipcMain.handle("settings:update-wallpaper", async (_event, value = {}) => {
+    const library = requireWallpaperLibrary();
+    const previous = library.resolve(value?.folderName);
+    if (!previous) throw new Error("找不到这张壁纸。");
+    const current = settingsService.load();
+    const appearance = normalizeAppearance(current.appearance);
+    const selectedFolderName = appearance.wallpaper?.folderName || "";
+    const updatingSelected = selectedFolderName.toLocaleLowerCase("zh-CN") === previous.folderName.toLocaleLowerCase("zh-CN");
+    const updated = await library.update(previous.folderName, { name: value?.name, pinned: value?.pinned === true });
+    let settings = current;
+    try {
+      if (updatingSelected && selectedFolderName !== updated.wallpaper.folderName) {
+        settings = settingsService.save({
+          ...current,
+          appearance: { styleId: appearance.styleId, wallpaper: { folderName: updated.wallpaper.folderName } },
+        });
+      }
+    } catch (error) {
+      await library.update(updated.wallpaper.folderName, { name: previous.folderName, pinned: previous.pinned }).catch(() => undefined);
+      throw error;
+    }
+    return {
+      previousFolderName: updated.previousFolderName,
+      settings: settingsService.response(settings),
+      status: "updated",
+      wallpaper: updated.wallpaper,
+    };
+  });
+  ipcMain.handle("settings:remove-wallpaper", async (_event, folderName) => {
+    const library = requireWallpaperLibrary();
+    const current = settingsService.load();
+    const selected = normalizeAppearance(current.appearance).wallpaper?.folderName || "";
+    const item = library.resolve(folderName);
+    if (!item) throw new Error("找不到这张壁纸。");
+    await library.remove(item.folderName);
+    const removingSelected = selected.toLocaleLowerCase("zh-CN") === item.folderName.toLocaleLowerCase("zh-CN");
+    const settings = removingSelected
+      ? settingsService.save({ ...current, appearance: { styleId: "classic", wallpaper: null } })
+      : current;
+    return { removed: item.folderName, settings: settingsService.response(settings), status: "removed" };
+  });
+  ipcMain.handle("settings:choose-wallpaper", async () => {
+    const result = await dialog.showOpenDialog(getMainWindow(), {
+      title: "选择图片或视频壁纸",
+      properties: ["openFile"],
+      filters: [{ name: "图片和视频", extensions: ["jpg", "jpeg", "png", "webp", "mp4", "webm"] }],
+    });
+    if (result.canceled || !result.filePaths?.[0]) return { status: "canceled", settings: settingsService.response() };
+    const library = requireWallpaperLibrary();
+    const source = library.inspectSource(result.filePaths[0], "file");
+    const item = await library.importSource({ name: source.suggestedName, source: source.source, sourceType: "file" });
+    const settings = activateWallpaper(item);
+    return { status: "selected", settings: settingsService.response(settings), wallpaper: item };
+  });
+  ipcMain.handle("settings:clear-wallpaper", () => {
+    const current = settingsService.load();
+    const settings = settingsService.save({
+      ...current,
+      appearance: { styleId: "classic", wallpaper: null },
+    });
+    return { status: "cleared", settings: settingsService.response(settings) };
   });
   ipcMain.handle("settings:change-data-location", async () => {
     if (!dataStorageService) throw new Error("当前版本不支持更换数据位置。");

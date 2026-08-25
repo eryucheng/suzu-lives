@@ -2,9 +2,11 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
+import { PRODUCT_FEATURES } from "../shared/product-features.mjs";
 import { CREATE_SPACES } from "../src/features/create/overview.mjs";
 
-test("create overview keeps the visual workbench as the only real creation subspace", () => {
+test("create overview exposes the active creation workbenches", () => {
+  assert.equal(PRODUCT_FEATURES.customEmojiStickers, false);
   assert.deepEqual(
     CREATE_SPACES.map(({ id, title }) => ({ id, title })),
     [
@@ -12,8 +14,24 @@ test("create overview keeps the visual workbench as the only real creation subsp
     ],
   );
   assert.equal(CREATE_SPACES.length, 1);
-  assert.ok(CREATE_SPACES.every((space) => space.label === "进入创作" && space.detail));
+  assert.ok(CREATE_SPACES.every((space) => space.label && space.detail));
   assert.ok(CREATE_SPACES.every((space) => !space.title.includes("视频")));
+});
+
+test("sticker workbench keeps square crop, editable information, and one-shot completion in one React page", async () => {
+  const stickers = await readFile(new URL("../src/react/create-sticker-page.jsx", import.meta.url), "utf8");
+  assert.match(stickers, /createSquareAvatarCrop/u);
+  assert.match(stickers, /avatarCropSourceRect/u);
+  assert.match(stickers, /AVATAR_CROP_OUTPUT_SIZE/u);
+  assert.match(stickers, /emojiStickers/u);
+  assert.match(stickers, /裁剪后会自动生成名称、画面说明和检索词/u);
+  assert.match(stickers, /stickers\.complete/u);
+  assert.doesNotMatch(stickers, /表达意图/u);
+  assert.doesNotMatch(stickers, /主要情绪/u);
+  assert.doesNotMatch(stickers, /sticker-tag-suggestions/u);
+  assert.match(stickers, /requestSubmit/u);
+  assert.match(stickers, /const zoom = event\.currentTarget\.value;\s*setWorkingCrop\(\(current\) => setAvatarCropZoom\(current, zoom\)\);/u);
+  assert.doesNotMatch(stickers, /setWorkingCrop\(\(current\) => setAvatarCropZoom\(current, event\.currentTarget\.value\)\)/u);
 });
 
 test("visual workbench keeps its real image and visual-reference flows in the React page", async () => {
@@ -21,6 +39,8 @@ test("visual workbench keeps its real image and visual-reference flows in the Re
   assert.match(visual, /PageHeader/u);
   assert.match(visual, /绘画提示词/u);
   assert.match(visual, /本次参考/u);
+  assert.match(visual, /referenceCapability/u);
+  assert.match(visual, /当前模型已禁用参考图/u);
   assert.match(visual, /候选结果/u);
   assert.match(visual, /api\.imageWorkbench\.generate/u);
   assert.match(visual, /api\.imageWorkbench\.thumbnail/u);

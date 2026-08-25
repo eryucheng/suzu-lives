@@ -5,16 +5,18 @@ import { resolveAgentDataRoot, resolveSuzuLivesDataRoot } from "@suzu-lives/agen
 import { appendUsageEvent } from "@suzu-lives/cost-ledger";
 import {
   createCandidates,
+  DEFAULT_IMAGE_REFERENCE_ADAPTER,
   findCustomImageGenerationAdapter,
   ImageWorkbenchError,
   normalizeImageGenerationAdapter,
+  normalizeImageReferenceAdapter,
 } from "@suzu-lives/image-workbench";
 import { inspectImage } from "@suzu-lives/visual-reference-library";
 
 export class AgentImageGenerationError extends Error {}
 
 export const REFERENCE_ROLES = Object.freeze(["identity", "location", "object", "style"]);
-const DEFAULT_CONFIG = Object.freeze({ adapter: "auto", customAdapterId: "", outputDirectory: "image-generation" });
+const DEFAULT_CONFIG = Object.freeze({ adapter: "auto", customAdapterId: "", outputDirectory: "image-generation", referenceAdapter: DEFAULT_IMAGE_REFERENCE_ADAPTER, referenceModel: "" });
 
 function clean(value) { return String(value ?? "").trim(); }
 function plainObject(value) { return value && typeof value === "object" && !Array.isArray(value) ? value : {}; }
@@ -60,7 +62,9 @@ export function normalizeAgentImageConfig(value = {}) {
   const source = plainObject(value);
   const adapter = normalizeImageGenerationAdapter(source.adapter, { fallback: DEFAULT_CONFIG.adapter });
   const customAdapterId = adapter === "custom-http-image" ? clean(source.custom_adapter_id ?? source.customAdapterId).toLowerCase() : "";
-  const output = plainObject(source.output); return { adapter, customAdapterId, outputDirectory: clean(output.directory ?? source.outputDirectory) || DEFAULT_CONFIG.outputDirectory };
+  const referenceAdapter = normalizeImageReferenceAdapter(source.reference_adapter ?? source.referenceAdapter, { fallback: DEFAULT_CONFIG.referenceAdapter });
+  const referenceModel = referenceAdapter === DEFAULT_IMAGE_REFERENCE_ADAPTER ? "" : clean(source.reference_model ?? source.referenceModel);
+  const output = plainObject(source.output); return { adapter, customAdapterId, outputDirectory: clean(output.directory ?? source.outputDirectory) || DEFAULT_CONFIG.outputDirectory, referenceAdapter, referenceModel };
 }
 
 export async function loadAgentImageConfig({ dataRoot, configPath = "" } = {}) {
@@ -97,6 +101,8 @@ function configuredImageConnection({ connection, config, dataRoot }) {
   return {
     ...selected,
     imageGenerationAdapter: adapter,
+    referenceImageAdapter: config?.referenceAdapter || DEFAULT_CONFIG.referenceAdapter,
+    referenceImageModel: config?.referenceModel || "",
     ...(customImageGenerationAdapter ? { customImageGenerationAdapter } : {}),
   };
 }

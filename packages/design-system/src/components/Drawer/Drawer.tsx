@@ -1,4 +1,5 @@
 import { useEffect, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import styles from './Drawer.module.css';
 
 export type DrawerPlacement = 'left' | 'right';
@@ -43,7 +44,7 @@ export function Drawer({
     placement === 'left' ? styles['placement-left'] : styles['placement-right'],
   ].join(' ');
 
-  return (
+  const drawer = (
     <div className={styles.overlay} onMouseDown={onClose}>
       <aside
         role="dialog"
@@ -67,4 +68,5 @@ export function Drawer({
       </aside>
     </div>
   );
+  return typeof document === 'undefined' ? drawer : createPortal(drawer, document.body);
 }

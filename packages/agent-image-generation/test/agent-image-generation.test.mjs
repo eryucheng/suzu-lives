@@ -20,6 +20,13 @@ test("generation flags retain prompt and references while rejecting retired exte
 
 test("API edit keeps role prompts, writes only the Agent data root, and appends the unified ledger", async () => {
   const values = await fixture(); let request;
+  const configDirectory = path.join(values.dataRoot, "capabilities", "image-generation");
+  await fs.mkdir(configDirectory, { recursive: true });
+  await fs.writeFile(path.join(configDirectory, "config.json"), JSON.stringify({
+    adapter: "openai-images",
+    reference_adapter: "openai-images-edit",
+    reference_model: "fixture",
+  }));
   const result = await runAgentImageGeneration({ agentRoot: values.agentRoot, agentId: "fixture", dataRoot: values.dataRoot, options: { prompt: "一张角色参考图", refs: ["identity=" + values.reference], out: "agent-output" }, connectionResolver: async () => ({ provider: "fixture", baseUrl: "https://images.example.test/v1", model: "fixture", apiKey: "key" }), fetchImpl: async (_url, options) => { request = options.body; return jsonResponse({ model: "fixture", id: "request-a", data: [{ b64_json: png.toString("base64") }] }); } });
   assert.equal(result.status, "ok"); assert.match(result.path, /agents[\\/]fixture[\\/]agent-output/u); assert.equal(await fs.stat(result.path).then((value) => value.isFile()), true); assert.match(request.get("prompt"), /role=identity/u);
   const events = (await fs.readFile(path.join(values.agentRoot, "cost-ledger", "events.jsonl"), "utf8")).trim().split("\n").map((line) => JSON.parse(line)); assert.equal(events.length, 1); assert.equal(events[0].feature, "image-edit"); assert.equal(events[0].metadata.referenceCount, 1);

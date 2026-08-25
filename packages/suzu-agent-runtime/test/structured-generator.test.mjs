@@ -55,6 +55,7 @@ test("structured generator calls the live Agent Core model route and returns par
       provider: "agent-core",
       providerId: "deepseek",
       schemaName: "long-term-memory-extraction-v1",
+      taskId: "structured-generation",
     },
   });
   assert.equal(Number.isFinite(result.durationMs) && result.durationMs >= 0, true);
@@ -69,6 +70,81 @@ test("structured generator calls the live Agent Core model route and returns par
   assert.match(calls[0].system, /JSON Schema/u);
 });
 
+test("structured generator accepts a one-shot task with text and image content", async () => {
+  const transport = createTransport();
+  const calls = [];
+  const session = {
+    requestHeader: () => ({ config: { provider: "deepseek", model: "deepseek-v4-flash" } }),
+  };
+  const ctx = {
+    sessions: new Map([["session-transient", session]]),
+    llm: {
+      async *stream(options) {
+        calls.push(options);
+        yield { type: "block-start", index: 0, blockType: "text" };
+        yield { type: "text-delta", index: 0, text: '{"intent":["赞同"]}' };
+        yield { type: "block-end", index: 0, block: { type: "text", text: '{"intent":["赞同"]}' } };
+        yield { type: "finish", reason: { kind: "stop" } };
+      },
+    },
+  };
+  const bridge = createSuzuStructuredGenerator({ transport });
+  bridge.apply(ctx);
+  const image = Buffer.from([0x89, 0x50, 0x4e, 0x47]).toString("base64");
+
+  const result = await transport.handlers.get("StructuredGenerate")({
+    sessionId: "session-transient",
+    taskId: "sticker.tag.v1",
+    systemPrompt: "识别聊天表情包的语义。",
+    content: [
+      { type: "text", text: "为这张表情包生成标签。" },
+      { type: "image", mediaType: "image/png", data: `data:image/png;base64,${image}`, name: "sticker.png" },
+    ],
+    schema: { type: "object", required: ["intent"] },
+    schemaName: "sticker-tag-v1",
+  });
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.output, { intent: ["赞同"] });
+  assert.equal(result.metadata.taskId, "sticker.tag.v1");
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].tools.length, 0);
+  assert.equal(calls[0].temperature, 0);
+  assert.equal(Object.hasOwn(calls[0], "sessionId"), false);
+  assert.deepEqual(calls[0].messages[0].content, [
+    { type: "text", text: "为这张表情包生成标签。" },
+    { type: "image", mediaType: "image/png", data: image, name: "sticker.png" },
+  ]);
+  assert.equal(calls[0].messages[0].source.summary, "Suzu transient inference: sticker.tag.v1");
+});
+
+test("structured generator rejects invalid image content before calling a model", async () => {
+  const transport = createTransport();
+  let calls = 0;
+  const ctx = {
+    sessions: new Map([["session-transient", {
+      requestHeader: () => ({ config: { provider: "deepseek", model: "deepseek-v4-flash" } }),
+    }]]),
+    llm: {
+      async *stream() {
+        calls += 1;
+      },
+    },
+  };
+  const bridge = createSuzuStructuredGenerator({ transport });
+  bridge.apply(ctx);
+
+  const result = await transport.handlers.get("StructuredGenerate")({
+    sessionId: "session-transient",
+    content: [{ type: "image", mediaType: "image/png", data: "not-base64" }],
+    schema: { type: "object" },
+  });
+
+  assert.equal(result.ok, false);
+  assert.match(result.error.message, /Base64/u);
+  assert.equal(calls, 0);
+});
+
 test("structured generator fails as data when the target Agent Core session is unavailable", async () => {
   const transport = createTransport();
   const bridge = createSuzuStructuredGenerator({ transport });
@@ -81,5 +157,5 @@ test("structured generator fails as data when the target Agent Core session is u
     schema: { type: "object" },
   });
   assert.equal(result.ok, false);
-  assert.match(result.error.message, /会话不可用/u);
+  assert.match(result.error.message, /模型路由不可用/u);
 });
