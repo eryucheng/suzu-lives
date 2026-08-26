@@ -1,0 +1,45 @@
+name: Refresh latest installer alias
+
+run-name: Refresh latest installer alias
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  refresh:
+    if: github.repository == 'eryucheng/suzu-lives'
+    name: Copy the latest installer to the stable download name
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Download and re-upload the latest installer
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          repository="$GITHUB_REPOSITORY"
+          release_tag="$(gh release view --repo "$repository" --json tagName --jq '.tagName')"
+          download_root="$RUNNER_TEMP/suzu-lives-latest-installer"
+          mkdir -p "$download_root"
+
+          gh release download "$release_tag" \
+            --repo "$repository" \
+            --pattern 'Suzu-Lives-[0-9]*-win-x64.exe' \
+            --dir "$download_root"
+
+          mapfile -t installers < <(find "$download_root" -maxdepth 1 -type f -name 'Suzu-Lives-[0-9]*-win-x64.exe' -print)
+          if [[ ${#installers[@]} -ne 1 ]]; then
+            echo "Expected exactly one versioned Windows installer, found ${#installers[@]}." >&2
+            exit 1
+          fi
+
+          stable_installer="$download_root/Suzu-Lives-latest-win-x64.exe"
+          cp "${installers[0]}" "$stable_installer"
+          gh release upload "$release_tag" "$stable_installer" \
+            --repo "$repository" \
+            --clobber
