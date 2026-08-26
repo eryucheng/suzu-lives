@@ -12,7 +12,7 @@ async function temporaryRoot() {
   return fs.mkdtemp(path.join(root, "suzu-ledger-ipc-"));
 }
 
-test("ledger IPC scans suzu助手 beside every named contact", async (t) => {
+test("ledger IPC scans suzu助手 beside every visible named contact", async (t) => {
   const root = await temporaryRoot();
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   const dataRoot = path.join(root, "Suzu Lives");
@@ -31,13 +31,23 @@ test("ledger IPC scans suzu助手 beside every named contact", async (t) => {
   registerLedgerIpc({
     contactProjectsService: {
       snapshot: async () => ({
-        contacts: [{
-          agentId: "contact-agent",
-          id: "contact-friend",
-          name: "小林",
-          projectRoot: contactRoot,
-          sessionId: "contact-session",
-        }],
+        contacts: [
+          {
+            agentId: "contact-agent",
+            id: "contact-friend",
+            name: "小林",
+            projectRoot: contactRoot,
+            sessionId: "contact-session",
+          },
+          {
+            agentId: "hidden-agent",
+            hidden: true,
+            id: "contact-hidden",
+            name: "隐私联系人",
+            projectRoot: path.join(root, "contacts", "hidden"),
+            sessionId: "hidden-session",
+          },
+        ],
       }),
     },
     ipcMain: { handle: (channel, handler) => handlers.set(channel, handler) },

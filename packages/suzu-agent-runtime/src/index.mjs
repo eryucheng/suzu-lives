@@ -5,6 +5,12 @@ import { formatErrorForDisplay } from "./error-detail.mjs";
 
 export { SuzuAgentRuntimeError };
 export {
+  SYSTEM_MESSAGE_PLACEMENTS,
+  createSystemMessage,
+  createSystemMessageInjection,
+  projectSystemMessageInjections,
+} from "./system-message.mjs";
+export {
   DEFAULT_SUZU_AGENT_PERMISSION_MODE,
   SUZU_AGENT_PERMISSION_MODES,
   isSuzuAgentPermissionMode,

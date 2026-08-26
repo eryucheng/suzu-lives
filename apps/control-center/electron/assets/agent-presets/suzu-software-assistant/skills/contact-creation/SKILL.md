@@ -33,4 +33,4 @@ description: 当用户想新建联系人，并希望同时准备角色人设或�
 
 只创建联系人时，`input` 只传入 `name`。工具返回 `completed` 后，联系人、独立工作区与默认能力已经准备好；包含 `personaContent` 时，人设会写入 `persona.md` 并纳入该联系人的相处设定。随后说明创建结果，并打开“对话”。
 
-用户还要求配置头像时，创建完成后使用返回的 `contactId`，继续加载 `contact-and-relationship` 中的 `set-contact-avatar` 流程。
+用户还要求配置二次元角色头像时，创建完成后使用返回的 `contactId`，继续加载 `contact-and-relationship` 中从萌娘百科查找、裁剪并设置头像的流程。

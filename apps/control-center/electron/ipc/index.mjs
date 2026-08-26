@@ -27,12 +27,22 @@ import { createCapabilityAccessPolicy } from "../services/capability-access-poli
 import { createCapabilityRegistry, createCapabilityRuntime } from "../services/capability-registry.mjs";
 import { createAgentCapabilityAdapters } from "../services/agent-capability-adapters.mjs";
 import { createAgentVoiceCallCapabilityAdapter } from "../services/agent-voice-call-capability.mjs";
+import { createEmojiStickerAgentCapabilityAdapter } from "../services/emoji-sticker-agent-capability.mjs";
+import {
+  createBuiltinEmojiStickerLibrary,
+  resolveBuiltinEmojiStickerAssetsRoot,
+} from "../services/builtin-emoji-sticker-library.mjs";
+import { createEmojiStickerCatalog } from "../services/emoji-sticker-catalog.mjs";
+import {
+  createEmojiStickerLibrary,
+  resolveEmojiStickerLibraryRoot,
+} from "../services/emoji-sticker-library.mjs";
 import { eraseContactAgentConversation } from "../services/agent-contact-cleanup.mjs";
 import { createTodayCalendarService } from "../services/today-calendar.mjs";
 import { createWeChatLinkService } from "../services/wechat-link.mjs";
 import { createQQLinkService } from "../services/qq-link.mjs";
 import { createMailFeedbackLinkService } from "../services/mail-feedback-link.mjs";
-import { createContactProjectsService } from "../services/contact-projects.mjs";
+import { createContactProjectsService, visibleContactProjectsSnapshot } from "../services/contact-projects.mjs";
 import {
   createSoftwareAssistantService,
   softwareAssistantUsageSubject,
@@ -46,9 +56,10 @@ import {
   isProactiveContactTask,
   isRetiredProactiveContactTask,
   maintainProactiveContactChecks,
-  proactiveContactNextCheckDelay,
   proactiveContactScopeKey,
+  proactiveContactTaskPurpose,
   proactiveContactTaskPrompt,
+  proactiveContactTimingDecision,
   proactiveContactTimingTaskPrompt,
   PROACTIVE_CONTACT_INITIAL_DELAY,
   PROACTIVE_CONTACT_RECOVERY_DELAY,
@@ -147,6 +158,15 @@ function agentJournalTaskPrompt(date) {
 export function registerIpcHandlers({ app, appUpdateService = null, dataStorageService, getMainWindow, releaseAnnouncementService = null, settingsService }) {
   const rendererIpcMain = withDetailedIpcErrors(ipcMain);
   const dataRoot = settingsService.response(settingsService.load()).dataRoot;
+  const builtinEmojiStickerLibrary = createBuiltinEmojiStickerLibrary({
+    assetsRoot: resolveBuiltinEmojiStickerAssetsRoot(app.getAppPath()),
+  });
+  const emojiStickerCatalog = createEmojiStickerCatalog({
+    builtinLibrary: builtinEmojiStickerLibrary,
+    customLibrary: () => createEmojiStickerLibrary({
+      libraryRoot: resolveEmojiStickerLibraryRoot(settingsService.response(settingsService.load()).dataRoot),
+    }),
+  });
   const softwareAssistantSubject = softwareAssistantUsageSubject(dataRoot);
   let removeContactAssociations = async () => undefined;
   let removeScheduledContactTasks = async () => ({ removed: 0 });
@@ -202,11 +222,22 @@ export function registerIpcHandlers({ app, appUpdateService = null, dataStorageS
     },
     settingsService,
   });
+  const emojiStickerAgentCapability = createEmojiStickerAgentCapabilityAdapter({
+    catalog: emojiStickerCatalog,
+    deliver: (request) => {
+      const delivery = conversation?.attachmentService;
+      if (typeof delivery?.deliver !== "function") {
+        throw new Error("表情暂时无法投放到聊天。");
+      }
+      return delivery.deliver(request);
+    },
+  });
   capabilityRuntime = createCapabilityRuntime({
     canInvoke: ({ capability, action, context }) => capabilityAccessPolicy.canInvoke({ capability, action, context }),
     registry: capabilityRegistry,
     adapters: {
       ...agentCapabilityAdapters,
+      "emoji-sticker": emojiStickerAgentCapability,
       "agent-journal-schedule": () => requestAgentJournalScheduleSync(),
       "agent-journal-storage": ({ context }) => agentJournalService.removeContact({ contactId: clean(context.contactId) }),
       "conversation-attachment": ({ context }) => {
@@ -290,6 +321,7 @@ export function registerIpcHandlers({ app, appUpdateService = null, dataStorageS
     capabilityRuntime,
     memoryRuntime: memoryService,
     nativeImage,
+    emojiStickerCatalog,
     settingsService,
     shell,
     initializeContactCapabilities: async (contact) => {
@@ -304,7 +336,11 @@ export function registerIpcHandlers({ app, appUpdateService = null, dataStorageS
   memoryService.setStructuredGenerationRuntime(conversation.agentRuntime);
   const softwareAssistantService = createSoftwareAssistantService({
     applicationPath: typeof app?.getAppPath === "function" ? app.getAppPath() : "",
-    contactSnapshot: () => contactProjectsService.snapshot(),
+    contactSnapshot: () => (
+      typeof contactProjectsService.visibleSnapshot === "function"
+        ? contactProjectsService.visibleSnapshot()
+        : contactProjectsService.snapshot().then(visibleContactProjectsSnapshot)
+    ),
     createContact: (value) => conversation.reader.createContact(value),
     dataRoot,
     runtime: conversation.agentRuntime,
@@ -361,7 +397,9 @@ export function registerIpcHandlers({ app, appUpdateService = null, dataStorageS
     packaged: app.isPackaged,
   });
   const scheduleSnapshot = async () => {
-    const contactSnapshot = await contactProjectsService.snapshot();
+    const contactSnapshot = typeof contactProjectsService.visibleSnapshot === "function"
+      ? await contactProjectsService.visibleSnapshot()
+      : visibleContactProjectsSnapshot(await contactProjectsService.snapshot());
     const contacts = (Array.isArray(contactSnapshot?.contacts) ? contactSnapshot.contacts : [])
       .flatMap((contact) => {
         const id = clean(contact?.id);
@@ -369,6 +407,10 @@ export function registerIpcHandlers({ app, appUpdateService = null, dataStorageS
         return id && name ? [{ id, name }] : [];
       });
     const contactById = new Map(contacts.map((contact) => [contact.id, contact]));
+    const isVisibleConversationTask = (task) => (
+      task?.target?.type !== "conversation"
+      || contactById.has(clean(task?.target?.contactId))
+    );
     const isInternalCompactor = (task) => (
       task?.source === "system"
       && task.target?.type === "operation"
@@ -405,10 +447,10 @@ export function registerIpcHandlers({ app, appUpdateService = null, dataStorageS
         : summary;
     };
     const tasks = storedTasks
-      .filter((task) => !isInternalCompactor(task))
+      .filter((task) => !isInternalCompactor(task) && isVisibleConversationTask(task))
       .map(presentStoredTask);
     const history = storedHistory
-      .filter((entry) => !isInternalCompactor(entry?.task))
+      .filter((entry) => !isInternalCompactor(entry?.task) && isVisibleConversationTask(entry?.task))
       .map((entry) => ({ ...entry, task: presentTask(entry.task) }));
     return {
       contacts: contacts.map(({ id, name }) => ({ id, name })),
@@ -602,9 +644,14 @@ export function registerIpcHandlers({ app, appUpdateService = null, dataStorageS
         return;
       }
       if (event.type === "turn-complete" && request.phase === "timing") {
-        const delay = proactiveContactNextCheckDelay(request.content);
-        if (delay) {
-          await scheduleNextProactiveContactCheck({ dataRoot, contactId: request.contactId, delay });
+        const decision = proactiveContactTimingDecision(request.content);
+        if (decision) {
+          await scheduleNextProactiveContactCheck({
+            dataRoot,
+            contactId: request.contactId,
+            delay: decision.delay,
+            nextCheckPurpose: decision.nextCheckPurpose,
+          });
           return;
         }
       }
@@ -665,7 +712,9 @@ export function registerIpcHandlers({ app, appUpdateService = null, dataStorageS
           const result = await conversation.chat.sendTaskToSession({
             taskContext: {
               id: task.id,
-              text: proactiveContactTaskPrompt(),
+              text: proactiveContactTaskPrompt({
+                nextCheckPurpose: proactiveContactTaskPurpose(task),
+              }),
             },
             contactId,
             sessionId: target.id,

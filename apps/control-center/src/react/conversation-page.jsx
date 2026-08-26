@@ -6,7 +6,7 @@ import { Picker } from "emoji-mart";
 import ReactMarkdown from "react-markdown";
 import { createPortal } from "react-dom";
 import remarkGfm from "remark-gfm";
-import { Select } from "suzu-design-system";
+import { Button, Dialog, Select } from "suzu-design-system";
 
 import { PRODUCT_FEATURES } from "../../shared/product-features.mjs";
 import { releasePointerCapture } from "../core/pointer-capture.mjs";
@@ -234,6 +234,9 @@ function ConversationIcon({ name }) {
   if (name === "favorite") {
     return <svg {...common}><path d="M12 20s-7.1-4.4-8.6-8.6C2.2 8.1 4.1 5.5 7.1 5.5c1.8 0 3.5.9 4.9 2.6 1.4-1.7 3.1-2.6 4.9-2.6 3 0 4.9 2.6 3.7 5.9C19.1 15.6 12 20 12 20Z" /></svg>;
   }
+  if (name === "builtin") {
+    return <svg {...common}><path d="m12 3 1.7 5.2L19 10l-5.3 1.8L12 17l-1.7-5.2L5 10l5.3-1.8L12 3Z" /><path d="m18.2 15.2.7 2.1 2.1.7-2.1.7-.7 2.1-.7-2.1-2.1-.7 2.1-.7.7-2.1Z" /></svg>;
+  }
   if (name === "plus") {
     return <svg {...common}><path d="M12 5v14M5 12h14" /></svg>;
   }
@@ -377,11 +380,34 @@ function stickerErrorMessage(error) {
 
 function ConversationEmojiPicker({ actions }) {
   const [tab, setTab] = useState("collection");
+  const [builtinStickers, setBuiltinStickers] = useState([]);
   const [stickers, setStickers] = useState([]);
+  const [loadingBuiltinStickers, setLoadingBuiltinStickers] = useState(true);
   const [loadingStickers, setLoadingStickers] = useState(true);
   const [addingSticker, setAddingSticker] = useState(false);
   const [sendingStickerId, setSendingStickerId] = useState("");
   const [stickerError, setStickerError] = useState("");
+
+  useEffect(() => {
+    if (!PRODUCT_FEATURES.builtinEmojiStickers) {
+      setLoadingBuiltinStickers(false);
+      return undefined;
+    }
+    let current = true;
+    void (async () => {
+      try {
+        const snapshot = await actions.loadBuiltinEmojiStickers?.();
+        if (!current || !snapshot || snapshot.status === "unavailable") return;
+        if (snapshot.status === "invalid") throw new Error(snapshot.message || "内置表情无法读取。");
+        setBuiltinStickers(Array.isArray(snapshot.items) ? snapshot.items : []);
+      } catch (error) {
+        if (current) setStickerError(stickerErrorMessage(error));
+      } finally {
+        if (current) setLoadingBuiltinStickers(false);
+      }
+    })();
+    return () => { current = false; };
+  }, []);
 
   useEffect(() => {
     if (!PRODUCT_FEATURES.customEmojiStickers) {
@@ -420,12 +446,13 @@ function ConversationEmojiPicker({ actions }) {
     }
   };
 
-  const sendSticker = async (id) => {
+  const sendSticker = async (sticker) => {
+    const id = String(sticker?.id || "").trim();
     if (!id || sendingStickerId) return;
     setSendingStickerId(id);
     setStickerError("");
     try {
-      await actions.sendEmojiSticker?.(id);
+      await actions.sendEmojiSticker?.(sticker);
     } catch (error) {
       setStickerError(stickerErrorMessage(error));
     } finally {
@@ -441,7 +468,28 @@ function ConversationEmojiPicker({ actions }) {
   return (
     <section aria-label="表情选择器" className="conversation-emoji-panel conversation-emoji-picker">
       <div className="conversation-emoji-picker__body">
-        {PRODUCT_FEATURES.customEmojiStickers && tab === "favorites" ? (
+        {PRODUCT_FEATURES.builtinEmojiStickers && tab === "builtin" ? (
+          <div aria-label="内置表情" className="conversation-sticker-favorites is-builtin" role="tabpanel">
+            <div className="conversation-sticker-favorites__grid">
+              {builtinStickers.map((sticker) => {
+                const name = sticker.metadata?.name || sticker.fileName || "内置表情";
+                return (
+                  <button
+                    aria-label={`发送内置表情 ${name}`}
+                    className="conversation-sticker-favorites__item"
+                    disabled={Boolean(sendingStickerId)}
+                    key={sticker.id}
+                    onClick={() => { void sendSticker(sticker); }}
+                    title={name}
+                    type="button"
+                  ><img alt="" src={sticker.fileUrl} /></button>
+                );
+              })}
+            </div>
+            {!loadingBuiltinStickers && !builtinStickers.length ? <p className="conversation-sticker-favorites__empty">内置表情暂时无法显示。</p> : null}
+            <p className="conversation-sticker-favorites__hint">Suzu 内置表情随软件提供，可直接发送。</p>
+          </div>
+        ) : PRODUCT_FEATURES.customEmojiStickers && tab === "favorites" ? (
           <div aria-label="收藏表情包" className="conversation-sticker-favorites" role="tabpanel">
             <div className="conversation-sticker-favorites__grid">
               <button
@@ -452,27 +500,31 @@ function ConversationEmojiPicker({ actions }) {
                 title="添加收藏表情包"
                 type="button"
               ><ConversationIcon name="plus" /></button>
-              {stickers.map((sticker) => (
-                <button
-                  aria-label={`发送表情包 ${sticker.fileName || "未命名表情包"}`}
-                  className="conversation-sticker-favorites__item"
-                  disabled={Boolean(sendingStickerId)}
-                  key={sticker.id}
-                  onClick={() => { void sendSticker(sticker.id); }}
-                  title={sticker.fileName || "收藏表情包"}
-                  type="button"
-                ><img alt="" src={sticker.fileUrl} /></button>
-              ))}
+              {stickers.map((sticker) => {
+                const name = sticker.metadata?.name || sticker.fileName || "收藏表情包";
+                return (
+                  <button
+                    aria-label={`发送收藏表情 ${name}`}
+                    className="conversation-sticker-favorites__item"
+                    disabled={Boolean(sendingStickerId)}
+                    key={sticker.id}
+                    onClick={() => { void sendSticker(sticker); }}
+                    title={name}
+                    type="button"
+                  ><img alt="" src={sticker.fileUrl} /></button>
+                );
+              })}
             </div>
             {!loadingStickers && !stickers.length ? <p className="conversation-sticker-favorites__empty">收藏的表情包会显示在这里。</p> : null}
             <p className="conversation-sticker-favorites__hint">支持 PNG、JPG、WebP、GIF；发送时会标记为表情包。</p>
           </div>
         ) : <EmojiMartContent mode={tab} onSelect={actions.insertEmoji} />}
       </div>
-      {PRODUCT_FEATURES.customEmojiStickers && stickerError ? <p className="conversation-emoji-picker__error" role="status">{stickerError}</p> : null}
-      <nav aria-label="表情选择器分类" className={`conversation-emoji-picker__tabs${PRODUCT_FEATURES.customEmojiStickers ? "" : " is-compact"}`} role="tablist">
+      {(PRODUCT_FEATURES.builtinEmojiStickers || PRODUCT_FEATURES.customEmojiStickers) && stickerError ? <p className="conversation-emoji-picker__error" role="status">{stickerError}</p> : null}
+      <nav aria-label="表情选择器分类" className={`conversation-emoji-picker__tabs is-${2 + Number(PRODUCT_FEATURES.builtinEmojiStickers) + Number(PRODUCT_FEATURES.customEmojiStickers)}`} role="tablist">
         <button aria-label="搜索表情" aria-selected={tab === "search"} className={tab === "search" ? "is-active" : ""} onClick={() => selectTab("search")} role="tab" title="搜索表情" type="button"><ConversationIcon name="search" /></button>
         <button aria-label="全部表情" aria-selected={tab === "collection"} className={tab === "collection" ? "is-active" : ""} onClick={() => selectTab("collection")} role="tab" title="全部表情" type="button"><ConversationIcon name="emoji" /></button>
+        {PRODUCT_FEATURES.builtinEmojiStickers ? <button aria-label="内置表情" aria-selected={tab === "builtin"} className={tab === "builtin" ? "is-active" : ""} onClick={() => selectTab("builtin")} role="tab" title="内置表情" type="button"><ConversationIcon name="builtin" /></button> : null}
         {PRODUCT_FEATURES.customEmojiStickers ? <button aria-label="收藏表情包" aria-selected={tab === "favorites"} className={tab === "favorites" ? "is-active" : ""} onClick={() => selectTab("favorites")} role="tab" title="收藏表情包" type="button"><ConversationIcon name="favorite" /></button> : null}
       </nav>
     </section>
@@ -1240,9 +1292,26 @@ function ConversationCallDialing({ call, onEnd }) {
   return <section aria-label={`${status}${call.contactName}`} className="conversation-call-dialing" onClick={(event) => event.stopPropagation()}><div className="conversation-call-dialing__screen"><div className="conversation-call-dialing__content"><span className="conversation-call-dialing__avatar"><PersonAvatar avatar={call.avatar} fallback={call.contactName} /></span><strong>{call.contactName}</strong><span aria-live="polite" className="conversation-call-dialing__status">{status}<span aria-hidden="true" className="conversation-call-dialing__dots">…</span></span><p>{detail}</p></div><button aria-label="取消语音通话" className="conversation-call-dialing__hangup" disabled={call.ending} onClick={() => { void onEnd(); }} type="button"><ConversationIcon name="phone" /><span>{call.ending ? "正在挂断" : "挂断"}</span></button></div></section>;
 }
 
+function ConversationConfirmationDialog({ actions, confirmation }) {
+  if (!confirmation) return null;
+  return <Dialog
+    footer={<><Button autoFocus onClick={actions.cancelConfirmation} variant="secondary">{confirmation.cancelLabel}</Button><Button onClick={actions.confirmConfirmation} variant="danger">{confirmation.confirmLabel}</Button></>}
+    onClose={actions.cancelConfirmation}
+    open
+    surface="solid"
+    title={confirmation.title}
+  >
+    <div className="conversation-confirmation-dialog__copy">
+      <p>{confirmation.message}</p>
+      {confirmation.detail ? <p className="conversation-confirmation-dialog__detail">{confirmation.detail}</p> : null}
+    </div>
+  </Dialog>;
+}
+
 function ConversationOverlays({ actions, overlays }) {
   const active = overlays || {};
   const layer = <div className="content--conversation conversation-portal-layer">
+    <ConversationConfirmationDialog actions={actions} confirmation={active.confirmation} />
     <ContactCreateDialog actions={actions} open={active.contactCreate} />
     <ContactRenameDialog actions={actions} contact={active.contactRename} />
     <WechatQrDialog actions={actions} qr={active.wechatQr} />

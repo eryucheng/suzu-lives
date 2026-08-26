@@ -44,9 +44,22 @@ test("capability registry is the single source for catalog, contact config clean
   assert.equal(registry.isContactScoped("time-awareness"), false);
   assert.equal(registry.catalog().some((entry) => entry.id === "memory-recall"), false);
   assert.equal(registry.catalog().some((entry) => entry.id === "conversation-attachment"), false);
+  assert.equal(registry.catalog().some((entry) => entry.id === "emoji-sticker"), false);
   assert.equal(registry.catalog().some((entry) => entry.id === "schedule"), false);
   assert.equal(registry.catalog().some((entry) => entry.id === "voice-call"), false);
   assert.equal(registry.get("voice-call")?.internal, true);
+  const stickerActions = registry.agentActions({ capabilityId: "emoji-sticker" });
+  assert.deepEqual(stickerActions.map((action) => action.action), ["recommend", "search", "send"]);
+  assert.equal(registry.get("emoji-sticker")?.internal, true);
+  assert.equal(registry.runtimeStatus("emoji-sticker"), "agent-capability-bridge");
+  assert.equal(stickerActions.some((action) => /当前联系人/u.test(action.actionDescription)), false);
+  assert.match(stickerActions.find((action) => action.action === "recommend").actionDescription, /没有候选时.*search/u);
+  assert.match(stickerActions.find((action) => action.action === "recommend").actionDescription, /categoryName/u);
+  assert.match(stickerActions.find((action) => action.action === "search").actionDescription, /名称、画面说明和关键词/u);
+  const stickerSendDescription = stickerActions.find((action) => action.action === "send").actionDescription;
+  assert.match(stickerSendDescription, /附件交付也由这条发送链路完成/u);
+  assert.match(stickerSendDescription, /若还有独立的对话内容就自然接着说/u);
+  assert.match(stickerSendDescription, /本轮表达完整时直接完成/u);
   assert.deepEqual(registry.agentActions({ capabilityId: "schedule" }).map((action) => ({
     capabilityId: action.capabilityId,
     action: action.action,
@@ -190,7 +203,7 @@ test("automation task context is mounted as a one-turn dynamic Hook, not a conta
   assert.equal(block.kind, "automation-task");
   assert.equal(block.display.transcript, false);
   assert.equal(block.metadata.outputPolicy, "silent");
-  assert.match(block.text, /不是用户发来的新消息/u);
+  assert.equal(block.text, "整理本轮内部检查。");
 });
 
 test("capability registry rejects a malformed resource before it can create a stray integration", () => {

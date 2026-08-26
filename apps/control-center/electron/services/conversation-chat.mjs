@@ -177,6 +177,7 @@ function agentMediaReceipt(value) {
         path: resolved,
         fileName: path.basename(clean(entry.fileName) || path.basename(resolved)),
         size,
+        ...(clean(entry.mediaSource).toLowerCase() === "sticker" ? { mediaSource: "sticker" } : {}),
       }];
     });
   return media.length ? {

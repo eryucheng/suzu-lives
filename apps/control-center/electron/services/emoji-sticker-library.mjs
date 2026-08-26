@@ -14,14 +14,27 @@ export const EMOJI_STICKER_DIALOG_FILTER = Object.freeze({
 
 const ASSETS_DIRECTORY = "assets";
 const MANIFEST_FILE = "manifest.json";
+const MIN_STICKER_BYTES = 12;
 const MAX_STICKER_BYTES = 10 * 1024 * 1024;
 const MANIFEST_VERSION = 3;
+const OPERATION_TAILS = new Map();
 const STICKER_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
 
 export class EmojiStickerError extends Error {}
 
 function clean(value) {
   return String(value ?? "").trim();
+}
+
+function enqueueLibraryOperation(key, operation) {
+  const previous = OPERATION_TAILS.get(key) || Promise.resolve();
+  const result = previous.then(operation);
+  const tail = result.then(() => undefined, () => undefined);
+  OPERATION_TAILS.set(key, tail);
+  void tail.then(() => {
+    if (OPERATION_TAILS.get(key) === tail) OPERATION_TAILS.delete(key);
+  });
+  return result;
 }
 
 function isWithin(root, target) {
@@ -106,7 +119,7 @@ async function fileExists(fsOps, target) {
   }
 }
 
-export async function inspectEmojiSticker(sourcePath, { fsOps = fs } = {}) {
+async function inspectEmojiStickerFile(sourcePath, { fsOps = fs, maxBytes = Number.POSITIVE_INFINITY } = {}) {
   const rawSource = clean(sourcePath);
   if (!rawSource) throw new EmojiStickerError("缺少表情包图片。 ");
   const source = path.resolve(rawSource);
@@ -117,10 +130,24 @@ export async function inspectEmojiSticker(sourcePath, { fsOps = fs } = {}) {
   } catch {
     throw new EmojiStickerError("所选表情包文件不存在或无法读取。");
   }
-  if (!stat.isFile() || stat.size < 12 || stat.size > MAX_STICKER_BYTES) {
-    throw new EmojiStickerError(`表情包必须是 12 B 到 ${MAX_STICKER_BYTES >> 20} MiB 的图片。`);
+  if (!stat.isFile() || stat.size < MIN_STICKER_BYTES) {
+    throw new EmojiStickerError(`表情包必须是至少 ${MIN_STICKER_BYTES} B 的图片。`);
   }
-  const header = (await fsOps.readFile(source)).subarray(0, 16);
+  if (stat.size > maxBytes) {
+    throw new EmojiStickerError(`最终表情包不能超过 ${maxBytes >> 20} MiB。`);
+  }
+  let handle;
+  let header;
+  try {
+    handle = await fsOps.open(source, "r");
+    const buffer = Buffer.alloc(16);
+    const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+    header = buffer.subarray(0, bytesRead);
+  } catch {
+    throw new EmojiStickerError("所选表情包文件不存在或无法读取。");
+  } finally {
+    await handle?.close().catch(() => undefined);
+  }
   if (!imageSignatureMatches(header, extension)) {
     throw new EmojiStickerError("文件扩展名与表情包图片内容不匹配。");
   }
@@ -133,6 +160,10 @@ export async function inspectEmojiSticker(sourcePath, { fsOps = fs } = {}) {
   };
 }
 
+export async function inspectEmojiSticker(sourcePath, { fsOps = fs } = {}) {
+  return inspectEmojiStickerFile(sourcePath, { fsOps });
+}
+
 export function inspectEmojiStickerData(value, { fileName = "表情包", mimeType = "" } = {}) {
   let data;
   try {
@@ -140,8 +171,8 @@ export function inspectEmojiStickerData(value, { fileName = "表情包", mimeTyp
   } catch {
     throw new EmojiStickerError("表情包图片数据无效。");
   }
-  if (data.length < 12 || data.length > MAX_STICKER_BYTES) {
-    throw new EmojiStickerError(`表情包必须是 12 B 到 ${MAX_STICKER_BYTES >> 20} MiB 的图片。`);
+  if (data.length < MIN_STICKER_BYTES || data.length > MAX_STICKER_BYTES) {
+    throw new EmojiStickerError(`表情包必须是 ${MIN_STICKER_BYTES} B 到 ${MAX_STICKER_BYTES >> 20} MiB 的图片。`);
   }
   const declaredExtension = extensionForMimeType(mimeType);
   const nameExtension = path.extname(clean(fileName)).toLowerCase();
@@ -186,9 +217,9 @@ async function validateManifest(value, libraryRoot, { fsOps = fs, requireFiles =
     const createdAt = clean(raw.createdAt);
     if (!createdAt || !Number.isFinite(Date.parse(createdAt))) throw new EmojiStickerError("表情包收藏时间无效。");
     let size = Number(raw.size);
-    if (!Number.isSafeInteger(size) || size < 12 || size > MAX_STICKER_BYTES) throw new EmojiStickerError("表情包收藏大小无效。");
+    if (!Number.isSafeInteger(size) || size < MIN_STICKER_BYTES || size > MAX_STICKER_BYTES) throw new EmojiStickerError("表情包收藏大小无效。");
     if (requireFiles) {
-      const inspected = await inspectEmojiSticker(target, { fsOps });
+      const inspected = await inspectEmojiStickerFile(target, { fsOps, maxBytes: MAX_STICKER_BYTES });
       size = inspected.size;
     }
     stickers.push({
@@ -239,8 +270,10 @@ export function createEmojiStickerLibrary({ libraryRoot, fsOps = fs } = {}) {
   const rawRoot = clean(libraryRoot);
   if (!rawRoot) throw new EmojiStickerError("缺少表情包收藏目录。");
   const root = path.resolve(rawRoot);
+  const operationKey = process.platform === "win32" ? root.toLowerCase() : root;
+  const enqueueOperation = (operation) => enqueueLibraryOperation(operationKey, operation);
 
-  const snapshot = async () => {
+  const snapshotNow = async () => {
     try {
       const manifest = await readManifest(root, { fsOps });
       return {
@@ -256,31 +289,31 @@ export function createEmojiStickerLibrary({ libraryRoot, fsOps = fs } = {}) {
     }
   };
 
-  const asset = async (id) => {
+  const assetNow = async (id) => {
     const manifest = await readManifest(root, { fsOps });
     const stickerId = normalizeId(id);
     const item = manifest.stickers.find((value) => value.id === stickerId);
     if (!item) throw new EmojiStickerError("找不到这张收藏表情包。");
     const target = safeAssetPath(root, item.path);
-    const inspected = await inspectEmojiSticker(target, { fsOps });
+    const inspected = await inspectEmojiStickerFile(target, { fsOps, maxBytes: MAX_STICKER_BYTES });
     return { ...item, mimeType: inspected.mimeType, path: target, size: inspected.size };
   };
 
   return {
     root,
     inspect: (source) => inspectEmojiSticker(source, { fsOps }),
-    snapshot,
-    asset,
-    async read(id) {
-      const item = await asset(id);
+    snapshot: () => enqueueOperation(snapshotNow),
+    asset: (id) => enqueueOperation(() => assetNow(id)),
+    read: (id) => enqueueOperation(async () => {
+      const item = await assetNow(id);
       return { ...item, data: await fsOps.readFile(item.path) };
-    },
-    async add({ data = null, fileName = "", metadata = {}, mimeType = "", source = "" } = {}) {
+    }),
+    add: ({ data = null, fileName = "", metadata = {}, mimeType = "", source = "" } = {}) => enqueueOperation(async () => {
       const current = await readManifest(root, { fsOps });
       const fromData = data !== null && data !== undefined;
       const image = fromData
         ? inspectEmojiStickerData(data, { fileName, mimeType })
-        : await inspectEmojiSticker(source, { fsOps });
+        : await inspectEmojiStickerFile(source, { fsOps, maxBytes: MAX_STICKER_BYTES });
       const id = randomUUID();
       const relative = `${ASSETS_DIRECTORY}/${id}${image.extension}`;
       const target = safeAssetPath(root, relative);
@@ -314,9 +347,9 @@ export function createEmojiStickerLibrary({ libraryRoot, fsOps = fs } = {}) {
       } finally {
         await fsOps.rm(temporary, { force: true }).catch(() => undefined);
       }
-      return { ...(await snapshot()), addedId: id };
-    },
-    async update(id, metadata = {}) {
+      return { ...(await snapshotNow()), addedId: id };
+    }),
+    update: (id, metadata = {}) => enqueueOperation(async () => {
       const current = await readManifest(root, { fsOps });
       const stickerId = normalizeId(id);
       const index = current.stickers.findIndex((item) => item.id === stickerId);
@@ -327,9 +360,9 @@ export function createEmojiStickerLibrary({ libraryRoot, fsOps = fs } = {}) {
         metadata: normalizeEmojiStickerMetadata(metadata),
       };
       await writeManifestAtomic(root, { version: MANIFEST_VERSION, stickers }, { fsOps });
-      return { ...(await snapshot()), updatedId: stickerId };
-    },
-    async remove(id) {
+      return { ...(await snapshotNow()), updatedId: stickerId };
+    }),
+    remove: (id) => enqueueOperation(async () => {
       const current = await readManifest(root, { fsOps });
       const stickerId = normalizeId(id);
       const item = current.stickers.find((value) => value.id === stickerId);
@@ -340,7 +373,7 @@ export function createEmojiStickerLibrary({ libraryRoot, fsOps = fs } = {}) {
         stickers: current.stickers.filter((value) => value.id !== stickerId),
       }, { fsOps });
       await fsOps.rm(target, { force: true }).catch(() => undefined);
-      return { ...(await snapshot()), removedId: stickerId };
-    },
+      return { ...(await snapshotNow()), removedId: stickerId };
+    }),
   };
 }

@@ -591,7 +591,8 @@ async function loadSettingsContacts() {
   state.settingsContactsLoading = true;
   if (state.view === "settings" && state.settingsTab === "privacy") render();
   try {
-    const snapshot = await api.conversation?.snapshot?.();
+    if (typeof api.settings?.hiddenContacts !== "function") throw new Error("当前版本无法读取隐藏联系人。");
+    const snapshot = await api.settings.hiddenContacts();
     if (request !== settingsContactsRequest) return;
     state.settingsContacts = {
       contacts: Array.isArray(snapshot?.contacts) ? snapshot.contacts : [],
@@ -620,7 +621,8 @@ async function restoreHiddenContact(id) {
     .find((item) => String(item?.id || "").trim() === contactId) || null;
   const name = String(contact?.name || "这位联系人").trim() || "这位联系人";
   try {
-    const snapshot = await api.conversation.updateContactPresentation({ id: contactId, hidden: false });
+    await api.conversation.updateContactPresentation({ id: contactId, hidden: false });
+    const snapshot = await api.settings.hiddenContacts();
     if (request !== settingsContactsRequest) return;
     state.settingsContacts = {
       contacts: Array.isArray(snapshot?.contacts) ? snapshot.contacts : [],
@@ -1164,9 +1166,11 @@ async function showIncomingConversationNotice(event) {
   const conversationOpen = conversationInterfaceIsOpen();
   let contact = null;
   let activeContactId = "";
+  let contactCatalogLoaded = false;
   if (contactId && typeof api.conversation?.snapshot === "function") {
     try {
       const snapshot = await api.conversation.snapshot();
+      contactCatalogLoaded = true;
       const contacts = Array.isArray(snapshot?.contacts) ? snapshot.contacts : [];
       contact = contacts.find((item) => String(item?.id || "").trim() === contactId) || null;
       activeContactId = String(snapshot?.activeContact?.id || "").trim();
@@ -1174,6 +1178,7 @@ async function showIncomingConversationNotice(event) {
       // A notification remains useful even if the contact list is momentarily unavailable.
     }
   }
+  if (contactCatalogLoaded && contactId && !contact) return;
   const shouldMarkUnread = !conversationOpen || !contactId || contactId !== activeContactId;
   if (shouldMarkUnread) {
     state.conversationUnread = true;

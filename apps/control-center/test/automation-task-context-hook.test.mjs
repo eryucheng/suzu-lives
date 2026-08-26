@@ -17,4 +17,11 @@ test("automation task context keeps the originating turn kind for presentation",
     taskId: "hangup-task",
     turnKind: "call-ended",
   });
+  assert.equal(context?.text, "【通话已结束】");
+  assert.deepEqual(context?.display, {
+    category: "automation",
+    context: true,
+    label: "自动任务",
+    transcript: false,
+  });
 });

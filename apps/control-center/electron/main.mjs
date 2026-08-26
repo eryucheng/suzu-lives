@@ -24,6 +24,7 @@ const WINDOW_CHROME_HEIGHT = 64;
 const DEV_RENDERER_URL = String(process.env.SUZU_LIVES_RENDERER_URL || "").trim();
 const DEV_RENDERER_HOST = "127.0.0.1";
 const LEGACY_MIGRATION_MODE = process.argv.includes("--legacy-migration");
+const HEADLESS_MODE = process.env.SUZU_LIVES_HEADLESS === "1";
 
 // Keep Electron's own profile alongside Suzu's settings and operational data.
 // The separate Roaming locator only records this root so a later launch can find it.
@@ -136,7 +137,7 @@ function createWindow(settingsService) {
   const developmentUrl = rendererUrl(startupTheme);
   if (developmentUrl) mainWindow.loadURL(developmentUrl);
   else mainWindow.loadFile(path.join(RENDERER_ROOT, "index.html"), { query: { theme: startupTheme } });
-  mainWindow.once("ready-to-show", () => mainWindow?.show());
+  if (!HEADLESS_MODE) mainWindow.once("ready-to-show", () => mainWindow?.show());
   mainWindow.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   mainWindow.webContents.on("will-navigate", (event) => event.preventDefault());
   mainWindow.on("maximize", () => sendWindowControlState(mainWindow));
@@ -175,7 +176,7 @@ function createLegacyMigrationWindow() {
   const developmentUrl = legacyMigrationRendererUrl();
   if (developmentUrl) mainWindow.loadURL(developmentUrl);
   else mainWindow.loadFile(path.join(RENDERER_ROOT, "legacy-migration.html"));
-  mainWindow.once("ready-to-show", () => mainWindow?.show());
+  if (!HEADLESS_MODE) mainWindow.once("ready-to-show", () => mainWindow?.show());
   mainWindow.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   mainWindow.webContents.on("will-navigate", (event) => event.preventDefault());
   mainWindow.on("closed", () => {

@@ -18,6 +18,7 @@ import {
   inspectEmojiStickerData,
   resolveEmojiStickerLibraryRoot,
 } from "../services/emoji-sticker-library.mjs";
+import { createEmojiStickerCatalog } from "../services/emoji-sticker-catalog.mjs";
 import { normalizeEmojiStickerMetadata } from "../services/emoji-sticker-metadata.mjs";
 import { completeEmojiStickerMetadata } from "../services/emoji-sticker-tagging.mjs";
 import { createConversationSessionSettingsService } from "../services/conversation-session-settings.mjs";
@@ -247,6 +248,7 @@ export function registerConversationIpc({
   contactProjectsService = null,
   connectionsService,
   dialog,
+  emojiStickerCatalog = null,
   getMainWindow,
   ipcMain,
   memoryRuntime = null,
@@ -343,6 +345,7 @@ export function registerConversationIpc({
   const stickerLibrary = () => createEmojiStickerLibrary({
     libraryRoot: resolveEmojiStickerLibraryRoot(settingsService.response(settingsService.load()).dataRoot),
   });
+  const stickerCatalog = emojiStickerCatalog || createEmojiStickerCatalog({ customLibrary: stickerLibrary });
   const stickerSnapshot = async (providedSnapshot = null) => {
     const snapshot = providedSnapshot || await stickerLibrary().snapshot();
     return {
@@ -355,6 +358,10 @@ export function registerConversationIpc({
       items: (Array.isArray(snapshot.items) ? snapshot.items : []).flatMap((item) => {
         try {
           return [{
+            builtIn: item.builtIn === true,
+            category: clean(item.category),
+            categoryId: clean(item.categoryId),
+            categoryName: clean(item.categoryName),
             createdAt: clean(item.createdAt),
             fileName: clean(item.fileName),
             fileUrl: pathToFileURL(item.path).toString(),
@@ -388,6 +395,12 @@ export function registerConversationIpc({
   };
   const registerStickerIpcHandler = (channel, handler) => {
     if (PRODUCT_FEATURES.customEmojiStickers) ipcMain.handle(channel, handler);
+  };
+  const registerBuiltinStickerIpcHandler = (channel, handler) => {
+    if (PRODUCT_FEATURES.builtinEmojiStickers) ipcMain.handle(channel, handler);
+  };
+  const registerStickerSendIpcHandler = (channel, handler) => {
+    if (PRODUCT_FEATURES.builtinEmojiStickers || PRODUCT_FEATURES.customEmojiStickers) ipcMain.handle(channel, handler);
   };
   const attachmentSelections = new Map();
   const discardExpiredAttachmentSelections = () => {
@@ -520,6 +533,10 @@ export function registerConversationIpc({
     sender = event.sender;
     return stickerSnapshot();
   });
+  registerBuiltinStickerIpcHandler("conversation:builtin-emoji-stickers", async (event) => {
+    sender = event.sender;
+    return stickerSnapshot(await stickerCatalog.builtins());
+  });
   registerStickerIpcHandler("conversation:select-emoji-sticker", async (event) => {
     sender = event.sender;
     discardExpiredStickerSelections();
@@ -543,7 +560,6 @@ export function registerConversationIpc({
       fileName: inspected.fileName,
       fileUrl: pathToFileURL(inspected.source).toString(),
       mimeType: inspected.mimeType,
-      previewDataUrl: `data:${inspected.mimeType};base64,${(await fs.readFile(inspected.source)).toString("base64")}`,
       selectionToken,
       size: inspected.size,
     };
@@ -568,34 +584,14 @@ export function registerConversationIpc({
           size: inspected.size,
         };
       }
-      let metadata = normalizeEmojiStickerMetadata(source.metadata);
-      let tagging = { status: "not-needed" };
-      if (source.autoCompletionAttempted !== true) {
-        try {
-          const completed = await completeEmojiStickerMetadata({
-            data: image.data,
-            fileName: image.fileName,
-            metadata,
-            mimeType: image.mimeType,
-            runtime: agentRuntime,
-          });
-          metadata = completed.metadata;
-          tagging = { status: completed.inferred ? "completed" : "not-needed" };
-        } catch (error) {
-          tagging = {
-            message: clean(error?.message) || "表情包已保存，自动信息可稍后重新生成。",
-            status: "failed",
-          };
-        }
-      }
       const added = await stickerLibrary().add({
         data: image.data,
         fileName: image.fileName,
-        metadata,
+        metadata: normalizeEmojiStickerMetadata(source.metadata),
         mimeType: image.mimeType,
       });
       saved = true;
-      return stickerSnapshot({ ...added, tagging });
+      return stickerSnapshot(added);
     } finally {
       if (saved) stickerSelections.delete(token);
     }
@@ -654,9 +650,10 @@ export function registerConversationIpc({
     if (source.confirmed !== true) throw new Error("删除表情包前需要确认。 ");
     return stickerSnapshot(await stickerLibrary().remove(clean(source.id)));
   });
-  registerStickerIpcHandler("conversation:send-emoji-sticker", async (event, value) => {
+  registerStickerSendIpcHandler("conversation:send-emoji-sticker", async (event, value) => {
     sender = event.sender;
-    const sticker = await stickerLibrary().read(clean(value?.id));
+    const sticker = await stickerCatalog.read(clean(value?.id));
+    const stickerName = normalizeEmojiStickerMetadata(sticker.metadata).name || sticker.fileName;
     return chat.send({
       content: "",
       media: [{
@@ -667,7 +664,7 @@ export function registerConversationIpc({
         path: sticker.path,
       }],
       mediaSource: "sticker",
-      memoryText: `用户发送了一个表情包：${sticker.fileName}`,
+      memoryText: `用户发送了一个表情：${stickerName}`,
     });
   });
   ipcMain.handle("conversation:search", (_event, query) => reader.search(query));

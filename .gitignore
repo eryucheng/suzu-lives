@@ -56,3 +56,8 @@ credentials/
 *.local.json
 *.local.yaml
 *.local.yml
+
+# Download site workspace
+/website/
+/scripts/package-cloudflare-download-site.ps1
+/output/cloudflare-download-site/

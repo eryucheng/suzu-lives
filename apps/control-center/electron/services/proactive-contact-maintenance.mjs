@@ -9,6 +9,9 @@ export const PROACTIVE_CONTACT_TIMING_TURN_SOURCE = "proactive-contact-timing";
 export const PROACTIVE_CONTACT_MIN_DELAY_MINUTES = 15;
 export const PROACTIVE_CONTACT_MAX_DELAY_MINUTES = 720;
 
+const PROACTIVE_CONTACT_NEXT_CHECK_PURPOSE_LABEL = "下次检查时想关注：";
+const PROACTIVE_CONTACT_MAX_NEXT_CHECK_PURPOSE_LENGTH = 300;
+
 const RETIRED_PROACTIVE_TASKS = new Map([
   ["链式主动关心", new Set([
     "运行主动关心 A：判断此刻是否适合联系对方。",
@@ -20,6 +23,29 @@ const RETIRED_PROACTIVE_TASKS = new Map([
 ]);
 function clean(value) {
   return String(value ?? "").trim();
+}
+
+function nextCheckPurpose(value) {
+  if (typeof value !== "string") return "";
+  const purpose = value.trim().replace(/\s+/gu, " ");
+  if (!purpose || purpose.length > PROACTIVE_CONTACT_MAX_NEXT_CHECK_PURPOSE_LENGTH) return "";
+  return purpose;
+}
+
+function storedProactiveContactPrompt(value = "") {
+  const purpose = nextCheckPurpose(value);
+  return purpose
+    ? `${PROACTIVE_CONTACT_TASK_PROMPT}\n${PROACTIVE_CONTACT_NEXT_CHECK_PURPOSE_LABEL}${purpose}`
+    : PROACTIVE_CONTACT_TASK_PROMPT;
+}
+
+export function proactiveContactTaskPurpose(task) {
+  const prompt = clean(task?.target?.prompt);
+  const prefix = `${PROACTIVE_CONTACT_TASK_PROMPT}\n${PROACTIVE_CONTACT_NEXT_CHECK_PURPOSE_LABEL}`;
+  if (!prompt.startsWith(prefix)) return "";
+  const source = prompt.slice(prefix.length);
+  const purpose = nextCheckPurpose(source);
+  return purpose === source ? purpose : "";
 }
 
 export function isProactiveContactTurnSource(value) {
@@ -81,10 +107,11 @@ export function isActiveProactiveContactTask(task, scope) {
 }
 
 export function isProactiveContactTask(task, scope) {
+  const prompt = clean(task?.target?.prompt);
   return hasProactiveTaskShape(task, scope)
     && task?.source === "system"
     && clean(task?.description) === PROACTIVE_CONTACT_DESCRIPTION
-    && clean(task?.target?.prompt) === PROACTIVE_CONTACT_TASK_PROMPT;
+    && (prompt === PROACTIVE_CONTACT_TASK_PROMPT || Boolean(proactiveContactTaskPurpose(task)));
 }
 
 export function isRetiredProactiveContactTask(task, scope) {
@@ -107,9 +134,11 @@ function delayUntilTask(task, { now, fallback }) {
   return `${Math.max(1, Math.ceil((dueAt - current) / 60_000))}m`;
 }
 
-export function proactiveContactTaskPrompt() {
+export function proactiveContactTaskPrompt({ nextCheckPurpose: purposeSource = "" } = {}) {
+  const purpose = nextCheckPurpose(purposeSource);
   return [
     "【主动关心 A】",
+    ...(purpose ? [`你上次安排这次检查时，想关注的是：${purpose}`] : []),
     "依据当前时间和最近的互动频率，判断现在是否主动联系对方。",
     "要联系就发消息；否则输出 NO_REPLY。",
   ].join("\n");
@@ -117,30 +146,48 @@ export function proactiveContactTaskPrompt() {
 
 export function proactiveContactTimingTaskPrompt() {
   return [
-    "【主动关心 B】",
-    "任务：提供下一次检查间隔。",
-    "参考：当前时间、最近互动和相处节奏。",
-    `结果格式：{\"delayMinutes\": <${PROACTIVE_CONTACT_MIN_DELAY_MINUTES}–${PROACTIVE_CONTACT_MAX_DELAY_MINUTES} 的整数>}。`,
-    "软件会依据这个值创建下一次主动关心任务。",
-    '{"delayMinutes":42}',
+    "【安排下一次主动关心】",
+    "请安排下一次再来看看对方的时间，并留下一句到时想关注什么。",
+    "时间到了，软件会把这句关注点和届时最新的聊天一起交给你，再由你判断是否适合主动发消息。",
+    "请按照你们最近的互动和相处节奏选择间隔：互动正频繁、对方可能需要陪伴时，可以早点再看；刚聊完、对方在忙或正在休息时，可以晚些再看。",
+    `只返回一个 JSON 对象：delayMinutes 是 ${PROACTIVE_CONTACT_MIN_DELAY_MINUTES}–${PROACTIVE_CONTACT_MAX_DELAY_MINUTES} 的整数；nextCheckPurpose 用一句简短的话写清楚那时为什么要再看看对方。`,
   ].join("\n");
 }
 
-export function proactiveContactNextCheckDelay(value) {
+function parsedTimingDecision(value) {
   const text = clean(value);
-  if (!text) return "";
+  if (!text) return null;
   let decision;
-  try { decision = JSON.parse(text); } catch { return ""; }
-  const delayMinutes = decision?.delayMinutes;
-  if (!Number.isSafeInteger(delayMinutes)) return "";
-  if (delayMinutes < PROACTIVE_CONTACT_MIN_DELAY_MINUTES || delayMinutes > PROACTIVE_CONTACT_MAX_DELAY_MINUTES) return "";
-  return `${delayMinutes}m`;
+  try { decision = JSON.parse(text); } catch { return null; }
+  if (!decision || typeof decision !== "object" || Array.isArray(decision)) return null;
+  const delayMinutes = decision.delayMinutes;
+  if (!Number.isSafeInteger(delayMinutes)) return null;
+  if (delayMinutes < PROACTIVE_CONTACT_MIN_DELAY_MINUTES || delayMinutes > PROACTIVE_CONTACT_MAX_DELAY_MINUTES) return null;
+  return { decision, delayMinutes };
+}
+
+export function proactiveContactTimingDecision(value) {
+  const parsed = parsedTimingDecision(value);
+  if (!parsed) return null;
+  const purpose = nextCheckPurpose(parsed.decision.nextCheckPurpose);
+  if (!purpose) return null;
+  return Object.freeze({
+    delay: `${parsed.delayMinutes}m`,
+    delayMinutes: parsed.delayMinutes,
+    nextCheckPurpose: purpose,
+  });
+}
+
+export function proactiveContactNextCheckDelay(value) {
+  const parsed = parsedTimingDecision(value);
+  return parsed ? `${parsed.delayMinutes}m` : "";
 }
 
 export async function createProactiveContactTask({
   dataRoot,
   contactId,
   delay = PROACTIVE_CONTACT_INITIAL_DELAY,
+  nextCheckPurpose: purpose = "",
   now = new Date(),
 } = {}) {
   const id = proactiveContactScopeKey({ contactId });
@@ -148,7 +195,7 @@ export async function createProactiveContactTask({
   return createScheduleTask({
     dataRoot,
     delay: clean(delay) || PROACTIVE_CONTACT_INITIAL_DELAY,
-    prompt: PROACTIVE_CONTACT_TASK_PROMPT,
+    prompt: storedProactiveContactPrompt(purpose),
     contactId: id,
     description: PROACTIVE_CONTACT_DESCRIPTION,
     source: "system",
@@ -164,6 +211,7 @@ export async function scheduleNextProactiveContactCheck({
   dataRoot,
   contactId,
   delay = PROACTIVE_CONTACT_RECOVERY_DELAY,
+  nextCheckPurpose: purpose = "",
   now = new Date(),
 } = {}) {
   const id = proactiveContactScopeKey({ contactId });
@@ -171,7 +219,13 @@ export async function scheduleNextProactiveContactCheck({
   const scope = { contactId: id };
   const existing = await listScheduleTasks({ dataRoot });
   const active = existing.filter((task) => isProactiveContactTask(task, scope));
-  const next = await createProactiveContactTask({ dataRoot, contactId: id, delay, now });
+  const next = await createProactiveContactTask({
+    dataRoot,
+    contactId: id,
+    delay,
+    nextCheckPurpose: purpose,
+    now,
+  });
   await Promise.all(active.map((task) => removeScheduleTask({ dataRoot, id: clean(task?.id) })));
   return next;
 }
@@ -204,6 +258,7 @@ async function normalizeCurrentProactiveContactTasks({ dataRoot, existing, targe
       dataRoot,
       contactId: target.contactId,
       delay: delayUntilTask(preferred, { now, fallback: fallbackDelay }),
+      nextCheckPurpose: proactiveContactTaskPurpose(preferred),
       now,
     }));
   }

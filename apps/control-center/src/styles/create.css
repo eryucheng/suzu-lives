@@ -1985,33 +1985,34 @@
 }
 
 .sticker-editor-panel {
-  display: grid;
+  display: flex;
   min-height: 0;
-  grid-template-columns: minmax(190px, .3fr) minmax(420px, .7fr);
+  flex-direction: column;
 }
 
 .sticker-editor-preview {
   display: flex;
   min-width: 0;
-  flex-direction: column;
+  flex: 0 0 auto;
   align-items: center;
-  justify-content: center;
-  border-right: 1px solid var(--line);
+  gap: 18px;
+  border-bottom: 1px solid var(--line);
   background: color-mix(in srgb, var(--panel-soft) 66%, transparent);
-  padding: 24px;
+  padding: 20px 22px;
 }
 
-.sticker-editor-preview > div {
-  width: min(100%, 260px);
+.sticker-editor-preview-image {
+  width: 132px;
+  flex: 0 0 auto;
   overflow: hidden;
   aspect-ratio: 1;
   border: 1px solid color-mix(in srgb, var(--accent2) 22%, var(--line));
-  border-radius: 18px;
+  border-radius: 15px;
   background:
     linear-gradient(45deg, color-mix(in srgb, var(--line) 30%, transparent) 25%, transparent 25%) 0 0 / 20px 20px,
     linear-gradient(-45deg, color-mix(in srgb, var(--line) 30%, transparent) 25%, transparent 25%) 0 10px / 20px 20px,
     var(--panel);
-  box-shadow: 0 18px 42px rgba(0, 0, 0, .18);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, .16);
 }
 
 .sticker-editor-preview img {
@@ -2020,19 +2021,33 @@
   object-fit: cover;
 }
 
+.sticker-editor-preview-copy {
+  display: grid;
+  min-width: 0;
+  align-content: center;
+  gap: 6px;
+}
+
+.sticker-editor-preview-copy strong {
+  overflow: hidden;
+  font-size: 16px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .sticker-editor-preview p {
-  max-width: 260px;
-  margin: 13px 0 0;
+  max-width: 520px;
+  margin: 0;
   color: var(--muted2);
   font-size: 10px;
   line-height: 1.55;
-  text-align: center;
 }
 
 .sticker-metadata-form {
   display: flex;
   min-width: 0;
   min-height: 0;
+  flex: 1 1 auto;
   flex-direction: column;
   overflow: auto;
   padding: 22px;
@@ -2230,10 +2245,6 @@
 }
 
 @container (max-width: 1080px) {
-  .sticker-editor-panel {
-    grid-template-columns: minmax(150px, .28fr) minmax(390px, .72fr);
-  }
-
   .sticker-form-grid {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -2245,14 +2256,34 @@
 
 @container (max-width: 820px) {
   .sticker-workbench {
+    grid-template-columns: minmax(210px, .34fr) minmax(0, .66fr);
+    gap: 12px;
+  }
+
+  .sticker-library-grid {
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .sticker-library-rail {
-    display: none;
+  .sticker-editor-preview {
+    align-items: flex-start;
+    gap: 14px;
+    padding: 18px;
   }
 
-  .sticker-editor-panel {
-    grid-template-columns: minmax(170px, .32fr) minmax(360px, .68fr);
+  .sticker-editor-preview-image {
+    width: 104px;
+  }
+
+  .sticker-form-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .sticker-form-actions > div {
+    flex-wrap: wrap;
+  }
+
+  .sticker-form-actions > div:last-child {
+    justify-content: flex-end;
   }
 }

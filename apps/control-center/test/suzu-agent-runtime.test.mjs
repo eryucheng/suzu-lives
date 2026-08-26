@@ -714,12 +714,13 @@ test("Suzu software assistant preset is refreshed as a fixed product composition
   assert.match(contactCreationSkill, /^---\r?\nname: contact-creation\r?\n/u);
   assert.match(contactCreationSkill, /action.*create-contact/u);
   assert.match(contactCreationSkill, /personaContent/u);
-  assert.match(contactCreationSkill, /contactId.*set-contact-avatar/u);
+  assert.match(contactCreationSkill, /contactId.*萌娘百科/u);
   assert.match(contactSkill, /persona\.md.*Agent 自己的人格/u);
   assert.match(contactSkill, /user\.md.*用户本人的资料/u);
+  assert.match(contactSkill, /action.*lookup-contact-avatar/u);
+  assert.match(contactSkill, /默认只使用萌娘百科/u);
   assert.match(contactSkill, /action.*set-contact-avatar/u);
   assert.match(contactSkill, /avatarPath/u);
-  assert.match(contactSkill, /图片不必接近方形/u);
   assert.match(contactSkill, /裁后的正方形图片/u);
   assert.match(contactSkill, /保留比例且不拉伸/u);
   assert.match(contactSkill, /needs-confirmation.*contactId/u);

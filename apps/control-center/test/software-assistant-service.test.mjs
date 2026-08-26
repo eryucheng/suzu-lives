@@ -677,6 +677,89 @@ test("software assistant creates a contact through the product contact and relat
   service.dispose();
 });
 
+test("software assistant fetches a known character avatar preview only from Moegirlpedia", async (t) => {
+  const root = await temporaryRoot();
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const dataRoot = path.join(root, "Suzu Lives");
+  const avatarBytes = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=", "base64");
+  const thumbnailUrl = "https://storage.moegirl.org.cn/moegirl/commons/makima-preview.png";
+  const fetchCalls = [];
+  const fake = createFakeRuntime();
+  const service = createSoftwareAssistantService({
+    dataRoot,
+    runtime: fake.runtime,
+    settingsService: createSettings().service,
+    fetchImpl: async (url) => {
+      const requestUrl = String(url);
+      fetchCalls.push(requestUrl);
+      if (requestUrl.startsWith("https://zh.moegirl.org.cn/api.php?")) {
+        return {
+          ok: true,
+          async json() {
+            return {
+              query: {
+                pages: [{
+                  index: 1,
+                  title: "玛奇玛",
+                  fullurl: "https://zh.moegirl.org.cn/%E7%8E%9B%E5%A5%87%E7%8E%9B",
+                  thumbnail: { source: thumbnailUrl },
+                }],
+              },
+            };
+          },
+        };
+      }
+      if (requestUrl === thumbnailUrl) {
+        return {
+          ok: true,
+          headers: { get(name) { return String(name).toLocaleLowerCase() === "content-length" ? String(avatarBytes.length) : null; } },
+          async arrayBuffer() {
+            return avatarBytes.buffer.slice(avatarBytes.byteOffset, avatarBytes.byteOffset + avatarBytes.byteLength);
+          },
+        };
+      }
+      throw new Error(`不应访问的地址：${requestUrl}`);
+    },
+  });
+
+  fake.emit({
+    type: "lifecycle-request",
+    requestId: "lookup-makima-avatar",
+    lifecycleEvent: "SoftwareAssistantAction",
+    data: {
+      sessionId: SUZU_SOFTWARE_ASSISTANT_SESSION_ID,
+      action: "lookup-contact-avatar",
+      input: { query: "玛奇玛" },
+    },
+  });
+  await waitFor(() => responseById(fake.calls, "lookup-makima-avatar"), "萌娘百科头像检索响应");
+
+  const result = responseById(fake.calls, "lookup-makima-avatar").result;
+  assert.equal(result.status, "completed");
+  assert.equal(result.content, "已从萌娘百科找到“玛奇玛”的头像预览。");
+  assert.deepEqual({
+    source: result.data.source,
+    title: result.data.title,
+    sourceUrl: result.data.sourceUrl,
+    mimeType: result.data.mimeType,
+  }, {
+    source: "萌娘百科",
+    title: "玛奇玛",
+    sourceUrl: "https://zh.moegirl.org.cn/%E7%8E%9B%E5%A5%87%E7%8E%9B",
+    mimeType: "image/png",
+  });
+  assert.equal(path.dirname(result.data.avatarPath), path.join(dataRoot, "software-assistant", "workspace", "avatar-previews"));
+  assert.deepEqual(await fs.readFile(result.data.avatarPath), avatarBytes);
+  assert.equal(fetchCalls.length, 2);
+  const apiUrl = new URL(fetchCalls[0]);
+  assert.equal(apiUrl.origin, "https://zh.moegirl.org.cn");
+  assert.equal(apiUrl.pathname, "/api.php");
+  assert.equal(apiUrl.searchParams.get("generator"), "search");
+  assert.equal(apiUrl.searchParams.get("gsrsearch"), "玛奇玛");
+  assert.equal(fetchCalls[1], thumbnailUrl);
+  service.dispose();
+});
+
 test("software assistant saves a downloaded image as the uniquely named contact avatar", async (t) => {
   const root = await temporaryRoot();
   t.after(() => fs.rm(root, { recursive: true, force: true }));

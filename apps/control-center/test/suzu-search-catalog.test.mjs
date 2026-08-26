@@ -24,8 +24,8 @@ test("product destination catalog keeps active relationship tools and the creati
   assert.equal(searchSuzuSearchItems("压缩")[0]?.id, "conversation-compactor");
   assert.equal(searchSuzuSearchItems("微信").length, 0);
   assert.equal(searchSuzuSearchItems("图片生成")[0]?.id, "create");
-  assert.equal(searchSuzuSearchItems("表情包工作台").length, 0);
-  assert.equal(getSuzuSearchItem("sticker-workbench"), null);
+  assert.equal(searchSuzuSearchItems("表情包工作台")[0]?.id, "sticker-workbench");
+  assert.deepEqual(getSuzuSearchItem("sticker-workbench")?.target, { view: "create", createPage: "stickers" });
   assert.equal(searchSuzuSearchItems("长期记忆")[0]?.id, "memory");
   assert.equal(searchSuzuSearchItems("计划")[0]?.id, "plans");
 });

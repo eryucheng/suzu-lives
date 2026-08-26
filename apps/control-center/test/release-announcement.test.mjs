@@ -104,13 +104,13 @@ test("an empty current announcement never creates a popup", () => {
   assert.equal(normalizeReleaseAnnouncement({}), null);
 });
 
-test("the v0.3 release announcement describes the public companion updates", () => {
+test("the v0.3.1 release announcement describes the companion update", () => {
   const text = [CURRENT_RELEASE_ANNOUNCEMENT.title, CURRENT_RELEASE_ANNOUNCEMENT.summary, ...CURRENT_RELEASE_ANNOUNCEMENT.items].join("\n");
 
-  assert.equal(CURRENT_RELEASE_ANNOUNCEMENT.title, "Suzu Lives v0.2.10 → v0.3.0");
-  assert.match(text, /QQ 联系人连接/u);
-  assert.match(text, /自定义图片、视频壁纸/u);
+  assert.equal(CURRENT_RELEASE_ANNOUNCEMENT.title, "Suzu Lives v0.3.0 → v0.3.1");
+  assert.match(text, /Suzu 内置表情/u);
+  assert.match(text, /联系人隐私/u);
+  assert.match(text, /优化稳定性/u);
   assert.equal(CURRENT_RELEASE_ANNOUNCEMENT.items.length, 3);
-  assert.doesNotMatch(text, /表情包/u);
   assert.doesNotMatch(text, /\bDSH\b|\bAgent Core\b/u);
 });

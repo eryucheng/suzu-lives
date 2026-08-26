@@ -510,6 +510,20 @@ export function registerSettingsIpc({ app, appUpdateService = null, contactProje
     }
     return settingsService.response(settings);
   });
+  ipcMain.handle("settings:hidden-contacts", async () => {
+    if (typeof contacts.snapshot !== "function") return { status: "unavailable", contacts: [] };
+    const snapshot = await contacts.snapshot();
+    return {
+      status: clean(snapshot?.status) || "needs-root",
+      contacts: (Array.isArray(snapshot?.contacts) ? snapshot.contacts : [])
+        .filter((contact) => contact?.hidden === true)
+        .flatMap((contact) => {
+          const id = clean(contact?.id);
+          if (!id) return [];
+          return [{ id, name: clean(contact?.name) || "未命名联系人", hidden: true }];
+        }),
+    };
+  });
   ipcMain.handle("settings:release-announcement-status", () => announcementService.status());
   ipcMain.handle("settings:acknowledge-release-announcement", () => announcementService.acknowledge());
   ipcMain.handle("settings:app-update-status", () => updateService.status());

@@ -129,6 +129,7 @@ test("contact voice configuration lists every contact and writes the selected cu
   const dataRoot = await fs.mkdtemp(path.join(os.tmpdir(), "suzu-contact-voice-library-data-"));
   const source = { id: "contact-source", name: "Suzu", agentId: "agent-source-contact" };
   const target = { id: "contact-target", name: "小林", agentId: "agent-target-contact" };
+  const hidden = { hidden: true, id: "contact-hidden", name: "隐私联系人", agentId: "agent-hidden-contact" };
   const targetRoot = resolveAgentDataRoot({ dataRoot, agentId: target.agentId });
   const settings = { agentId: "", projectRoot: "" };
   const handlers = new Map();
@@ -148,7 +149,7 @@ test("contact voice configuration lists every contact and writes the selected cu
     connectionsService: {
       resolveNamedApiConnection: async () => selectedVoiceConnection,
     },
-    contactProjectsService: { snapshot: async () => ({ contacts: [source, target] }) },
+    contactProjectsService: { snapshot: async () => ({ contacts: [source, target, hidden] }) },
   });
 
   const initial = await handlers.get("voice-design:snapshot")();

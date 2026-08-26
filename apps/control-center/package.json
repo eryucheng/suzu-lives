@@ -1,6 +1,6 @@
 {
   "name": "suzu-lives-console",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "private": true,
   "author": "儿玉诚也",
   "description": "Local desktop control center for Suzu Lives.",
@@ -101,6 +101,7 @@
       "assets/**/*",
       "electron/**/*",
       "renderer/**/*",
+      "resources/**/*",
       "shared/**/*",
       "src/**/*",
       "!node_modules/@suzu-lives/suzu-agent-runtime/scripts/**/*",

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { createSuzuStructuredGenerator } from "../src/structured-generator.mjs";
+import { createSuzuStructuredGenerator, inject } from "../src/structured-generator.mjs";
 
 function createTransport() {
   const handlers = new Map();
@@ -13,6 +13,10 @@ function createTransport() {
     },
   };
 }
+
+test("structured generator declares the Agent Core services it reads", () => {
+  assert.deepEqual(inject, ["sessions", "llm", "agents"]);
+});
 
 test("structured generator calls the live Agent Core model route and returns parsed JSON without exposing credentials", async () => {
   const transport = createTransport();
@@ -116,6 +120,39 @@ test("structured generator accepts a one-shot task with text and image content",
     { type: "image", mediaType: "image/png", data: image, name: "sticker.png" },
   ]);
   assert.equal(calls[0].messages[0].source.summary, "Suzu transient inference: sticker.tag.v1");
+});
+
+test("structured generator uses the live Agent route before a fresh session has a request header", async () => {
+  const transport = createTransport();
+  const calls = [];
+  const ctx = {
+    sessions: new Map([["session-fresh", { requestHeader: () => undefined }]]),
+    agents: new Map([["session-fresh", {
+      options: { provider: "openai-compatible", model: "vision-model" },
+    }]]),
+    llm: {
+      async *stream(options) {
+        calls.push(options);
+        yield { type: "block-start", index: 0, blockType: "text" };
+        yield { type: "text-delta", index: 0, text: '{"name":"猫猫大笑"}' };
+        yield { type: "block-end", index: 0, block: { type: "text", text: '{"name":"猫猫大笑"}' } };
+        yield { type: "finish", reason: { kind: "stop" } };
+      },
+    },
+  };
+  const bridge = createSuzuStructuredGenerator({ transport });
+  bridge.apply(ctx);
+
+  const result = await transport.handlers.get("StructuredGenerate")({
+    sessionId: "session-fresh",
+    input: "识别这张表情包。",
+    schema: { type: "object", required: ["name"] },
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.model, "vision-model");
+  assert.equal(calls[0].provider, "openai-compatible");
+  assert.equal(calls[0].model, "vision-model");
 });
 
 test("structured generator rejects invalid image content before calling a model", async () => {

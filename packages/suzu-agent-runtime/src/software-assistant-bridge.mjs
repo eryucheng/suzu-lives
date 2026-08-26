@@ -103,11 +103,11 @@ export function createSuzuSoftwareAssistantBridge({
         action: {
           type: "string",
           required: true,
-          description: "准确的已登记动作 ID：navigate、set-theme、create-contact 或 set-contact-avatar。",
+          description: "准确的已登记动作 ID：navigate、set-theme、create-contact、lookup-contact-avatar 或 set-contact-avatar。",
         },
         input: {
           type: "json",
-          description: "动作所需的 JSON 输入。navigate 使用 { destinationId }，set-theme 使用 { theme: \"light\" | \"dark\" }，create-contact 使用 { name, personaContent? }，set-contact-avatar 使用 { contactId? 或 contactName?, avatarPath }。",
+          description: "动作所需的 JSON 输入。navigate 使用 { destinationId }，set-theme 使用 { theme: \"light\" | \"dark\" }，create-contact 使用 { name, personaContent? }，lookup-contact-avatar 使用 { query } 或已确认候选的 { title } 并从萌娘百科保存头像预览，set-contact-avatar 使用 { contactId? 或 contactName?, avatarPath }。",
         },
       },
       output: {
@@ -147,7 +147,9 @@ export function createSuzuSoftwareAssistantBridge({
       },
       presentCall: (args) => ({
         card: "generic",
-        title: `Suzu Lives：${clean(args?.action) || "软件操作"}`,
+        title: clean(args?.action) === "lookup-contact-avatar"
+          ? "从萌娘百科查找头像"
+          : `Suzu Lives：${clean(args?.action) || "软件操作"}`,
         kind: "other",
         rawInput: args?.input === undefined ? "" : args.input,
       }),

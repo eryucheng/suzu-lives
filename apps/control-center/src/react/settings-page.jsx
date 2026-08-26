@@ -565,7 +565,7 @@ function PrivacySettings({ contactsSnapshot, loading, onRestoreContact, pending 
         <div className="settings-card__copy">
           <span className="settings-card__eyebrow">PRIVACY</span>
           <h2>隐藏联系人</h2>
-          <p>隐藏后，对话页会收起这位联系人及其当前会话；消息、主动关心、记忆和其他资料都不会被删除或停用。</p>
+          <p>隐藏后，各功能页面会收起这位联系人及相关内容；这里保留恢复入口，已有消息、主动关心、记忆和其他资料继续保留。</p>
         </div>
         {loading ? <p className="settings-privacy-card__status">正在读取隐藏联系人…</p> : null}
         {!loading && error ? <p className="settings-privacy-card__status is-error">无法读取隐藏联系人：{error}</p> : null}
@@ -576,7 +576,7 @@ function PrivacySettings({ contactsSnapshot, loading, onRestoreContact, pending 
               const name = cleanText(contact?.name) || "未命名联系人";
               return (
                 <div className="settings-privacy-contact" key={id || name}>
-                  <div><strong>{name}</strong><span>已从对话页隐藏</span></div>
+                  <div><strong>{name}</strong><span>已从功能页面隐藏</span></div>
                   <Button className="settings-action-button" disabled={Boolean(pending) || !id} onClick={() => onRestoreContact(id)} size="md" variant="secondary">显示联系人</Button>
                 </div>
               );

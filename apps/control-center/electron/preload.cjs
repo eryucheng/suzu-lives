@@ -18,6 +18,7 @@ contextBridge.exposeInMainWorld("suzuConsole", {
   },
   settings: {
     get: () => ipcRenderer.invoke("settings:get"),
+    hiddenContacts: () => ipcRenderer.invoke("settings:hidden-contacts"),
     releaseAnnouncementStatus: () => ipcRenderer.invoke("settings:release-announcement-status"),
     acknowledgeReleaseAnnouncement: () => ipcRenderer.invoke("settings:acknowledge-release-announcement"),
     appUpdateStatus: () => ipcRenderer.invoke("settings:app-update-status"),
@@ -100,6 +101,7 @@ contextBridge.exposeInMainWorld("suzuConsole", {
       discard: (value) => ipcRenderer.invoke("conversation:discard-attachments", value),
     },
     emojiStickers: {
+      builtins: () => ipcRenderer.invoke("conversation:builtin-emoji-stickers"),
       snapshot: () => ipcRenderer.invoke("conversation:emoji-stickers"),
       select: () => ipcRenderer.invoke("conversation:select-emoji-sticker"),
       add: (value) => ipcRenderer.invoke("conversation:add-emoji-sticker", value),

@@ -202,6 +202,23 @@ test("contact presentation state is persisted by ID and deletion removes only th
   assert.equal(settings.projectRoot, second.activeContact.projectRoot);
 });
 
+test("removing the active contact selects a visible remaining contact", async () => {
+  const contactsRoot = await temporaryDirectory("suzu-contact-active-delete-");
+  let settings = { contactsRoot, projectRoot: "", preferredContactId: "" };
+  const service = createContactProjectsService({
+    settingsService: { load: () => settings, save: (next) => { settings = next; return settings; } },
+  });
+  const first = await service.create({ name: "保留联系人" });
+  const second = await service.create({ name: "待删除联系人" });
+
+  assert.equal(second.activeContact.id, second.contacts.find((contact) => contact.name === "待删除联系人")?.id);
+  const removed = await service.remove({ id: second.activeContact.id, confirmed: true });
+
+  assert.equal(removed.activeContact?.id, first.activeContact.id);
+  assert.equal(settings.projectRoot, first.activeContact.projectRoot);
+  assert.deepEqual(removed.contacts.map((contact) => contact.id), [first.activeContact.id]);
+});
+
 test("hiding the active contact leaves its conversation and repairs stale hidden selections", async () => {
   const contactsRoot = await temporaryDirectory("suzu-contact-hidden-selection-");
   let settings = { contactsRoot, projectRoot: "", preferredContactId: "" };
@@ -214,17 +231,30 @@ test("hiding the active contact leaves its conversation and repairs stale hidden
   const switched = await service.updatePresentation({ id: second.activeContact.id, hidden: true });
   assert.equal(switched.activeContact?.id, first.activeContact.id);
   assert.equal(settings.projectRoot, first.activeContact.projectRoot);
+  assert.deepEqual(switched.contacts.map((contact) => contact.id), [second.activeContact.id, first.activeContact.id]);
+  const firstVisible = await service.visibleSnapshot();
+  assert.deepEqual(firstVisible.contacts.map((contact) => contact.id), [first.activeContact.id]);
+  assert.equal(firstVisible.hiddenContactCount, 1);
+  assert.equal(firstVisible.activeContact?.id, first.activeContact.id);
+  assert.equal(firstVisible.preferredContact?.id, first.activeContact.id);
   await assert.rejects(service.select({ id: second.activeContact.id }), /设置 > 隐私/u);
 
   const empty = await service.updatePresentation({ id: first.activeContact.id, hidden: true });
   assert.equal(empty.activeContact, null);
   assert.equal(settings.projectRoot, "");
+  assert.equal(empty.contacts.length, 2);
+  const noneVisible = await service.visibleSnapshot();
+  assert.deepEqual(noneVisible.contacts, []);
+  assert.equal(noneVisible.hiddenContactCount, 2);
+  assert.equal(noneVisible.activeContact, null);
+  assert.equal(noneVisible.preferredContact, null);
 
   await service.updatePresentation({ id: second.activeContact.id, hidden: false });
   settings = { ...settings, projectRoot: first.activeContact.projectRoot };
   const repaired = await service.snapshot();
   assert.equal(repaired.activeContact?.id, second.activeContact.id);
   assert.equal(settings.projectRoot, second.activeContact.projectRoot);
+  assert.deepEqual((await service.visibleSnapshot()).contacts.map((contact) => contact.id), [second.activeContact.id]);
 });
 
 test("unread counts reject the former boolean flag", async () => {

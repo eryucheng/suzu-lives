@@ -29,6 +29,7 @@ const viewState = {
   busySessions: new Set(),
   transientSystemMessages: [],
   composerFocusRequest: 0,
+  confirmation: null,
   contactCreateOpen: false,
   contactContextMenu: null,
   contactRenameOpen: false,
@@ -83,6 +84,8 @@ const viewState = {
   qqBindingOpen: false,
   qqUnsubscribe: null,
 };
+
+let pendingConfirmationResolve = null;
 
 const TRANSCRIPT_MATCH_GRACE_MS = 5_000;
 const MAX_COMPOSER_ATTACHMENTS = 24;
@@ -955,6 +958,35 @@ function messageLineNumber(message) {
   return Number.isSafeInteger(lineNumber) && lineNumber > 0 ? lineNumber : 0;
 }
 
+function pendingMessageIdForDurableUserMessage(message) {
+  if (clean(message?.kind) !== "user") return "";
+  const lineNumber = messageLineNumber(message);
+  const messageId = clean(message?.messageId);
+  const source = (Array.isArray(currentPayload()?.messages) ? currentPayload().messages : [])
+    .find((item) => (
+      messageLineNumber(item) === lineNumber
+      && (!messageId || messageSourceId(item) === messageId)
+    ));
+  if (!source) return "";
+  const sessionId = clean(viewState.snapshot?.activeSessionId);
+  const sourceTimestamp = Date.parse(source.timestamp);
+  const candidates = viewState.pending
+    .filter((item) => (
+      clean(item?.sessionId) === sessionId
+      && messageMatches([source], "user", item?.content, item?.timestamp, item?.media)
+    ))
+    .map((item, index) => ({
+      id: clean(item?.id),
+      index,
+      distance: Number.isFinite(sourceTimestamp) && Number.isFinite(Date.parse(item?.timestamp))
+        ? Math.abs(sourceTimestamp - Date.parse(item.timestamp))
+        : Number.POSITIVE_INFINITY,
+    }))
+    .filter((item) => item.id)
+    .sort((left, right) => left.distance - right.distance || left.index - right.index);
+  return candidates[0]?.id || "";
+}
+
 function imageMediaItem(value, message) {
   const url = clean(value?.fileUrl);
   if (value?.kind !== "media" || !["image", "sticker"].includes(value?.mediaKind) || !url) return null;
@@ -1183,6 +1215,41 @@ function scheduleScrollToLatest() {
 
 function focusComposer() {
   viewState.composerFocusRequest += 1;
+}
+
+function conversationConfirmationSnapshot() {
+  const confirmation = viewState.confirmation;
+  if (!confirmation) return null;
+  return {
+    cancelLabel: clean(confirmation.cancelLabel) || "取消",
+    confirmLabel: clean(confirmation.confirmLabel) || "确认",
+    detail: clean(confirmation.detail),
+    message: clean(confirmation.message),
+    title: clean(confirmation.title) || "请确认",
+  };
+}
+
+function settleConversationConfirmation(accepted) {
+  const resolve = pendingConfirmationResolve;
+  pendingConfirmationResolve = null;
+  viewState.confirmation = null;
+  resolve?.(accepted === true);
+  return Boolean(resolve);
+}
+
+function requestConversationConfirmation(context, confirmation) {
+  settleConversationConfirmation(false);
+  return new Promise((resolve) => {
+    pendingConfirmationResolve = resolve;
+    viewState.confirmation = {
+      cancelLabel: clean(confirmation?.cancelLabel) || "取消",
+      confirmLabel: clean(confirmation?.confirmLabel) || "确认",
+      detail: clean(confirmation?.detail),
+      message: clean(confirmation?.message),
+      title: clean(confirmation?.title) || "请确认",
+    };
+    context.render();
+  });
 }
 
 function focusSearchInput() {
@@ -1563,6 +1630,10 @@ export function conversationReactSnapshot(context) {
     };
   });
   const contactRows = allContactRows.filter((contact) => !contact.hidden);
+  const hiddenContactCount = Math.max(
+    Number.isSafeInteger(snapshot.hiddenContactCount) ? snapshot.hiddenContactCount : 0,
+    allContactRows.length - contactRows.length,
+  );
   const contextMenuState = viewState.contactContextMenu;
   const contextMenuContact = contactRows.find((contact) => contact.id === clean(contextMenuState?.contactId)) || null;
   const contactContextMenu = contextMenuContact
@@ -1592,7 +1663,7 @@ export function conversationReactSnapshot(context) {
     : [{
       text: contactRows.length
         ? "请选择左侧联系人开始对话。"
-        : contacts.length
+        : hiddenContactCount > 0
           ? "联系人已隐藏。可在“设置 > 隐私”中恢复。"
           : hasContactsRoot
             ? "新建联系人后即可开始对话。"
@@ -1653,6 +1724,7 @@ export function conversationReactSnapshot(context) {
     notice: viewState.notice,
     overlays: {
       avatarCrop: activeContact ? avatarCropSnapshot() : null,
+      confirmation: conversationConfirmationSnapshot(),
       contactCreate: viewState.contactCreateOpen,
       contactRename: activeContact ? contactRenameSnapshot() : null,
       mediaPreview: activeContact ? mediaPreviewSnapshot() : null,
@@ -2232,6 +2304,7 @@ export function startConversationPolling(context) {
 
 export function stopConversationPolling() {
   invalidateConversationLoads();
+  settleConversationConfirmation(false);
   clearReplyReveals();
   viewState.livePresentationOrder = 0;
   if (viewState.timer) window.clearInterval(viewState.timer);
@@ -2253,10 +2326,12 @@ export function stopConversationPolling() {
 
 export function dismissConversationOverlays(target = viewState) {
   const state = target && typeof target === "object" ? target : viewState;
-  const open = Boolean(state.contactCreateOpen || state.contactContextMenu || state.contactRenameOpen || state.fileContextMenu || state.messageContextMenu || state.menuOpen || state.searchOpen || state.settingsOpen || state.emojiOpen || state.wechatQrOpen || state.qqBindingOpen || state.mediaPreview || state.avatarCrop);
+  const confirmationOpen = Boolean(state.confirmation);
+  const open = Boolean(confirmationOpen || state.contactCreateOpen || state.contactContextMenu || state.contactRenameOpen || state.fileContextMenu || state.messageContextMenu || state.menuOpen || state.searchOpen || state.settingsOpen || state.emojiOpen || state.wechatQrOpen || state.qqBindingOpen || state.mediaPreview || state.avatarCrop);
   state.contactCreateOpen = false;
   state.contactContextMenu = null;
   state.contactRenameOpen = false;
+  state.confirmation = null;
   state.fileContextMenu = null;
   state.messageContextMenu = null;
   state.menuOpen = false;
@@ -2267,6 +2342,7 @@ export function dismissConversationOverlays(target = viewState) {
   state.qqBindingOpen = false;
   state.mediaPreview = null;
   state.avatarCrop = null;
+  if (confirmationOpen && state === viewState) settleConversationConfirmation(false);
   return open;
 }
 
@@ -2366,7 +2442,6 @@ async function sendMessage(context) {
     releaseComposerAttachmentPreviews(selectedAttachments);
     viewState.attachments = [];
     if (pending.sessionId) viewState.busySessions.add(pending.sessionId);
-    if (command.action === "steer") viewState.notice = clean(result?.message);
     viewState.sending = false;
     scheduleScrollToLatest();
     context.render();
@@ -2594,6 +2669,10 @@ export function createConversationReactActions(context) {
     },
     closeAvatarCrop: () => {
       viewState.avatarCrop = null;
+      context.render();
+    },
+    cancelConfirmation: () => {
+      if (!settleConversationConfirmation(false)) return;
       context.render();
     },
     closeContactCreate: () => {
@@ -2869,11 +2948,18 @@ export function createConversationReactActions(context) {
         || !["user", "assistant", "dynamic-context"].includes(kind)
         || typeof context.api.conversation.deleteMessage !== "function") return;
       viewState.messageContextMenu = null;
-      const confirmed = window.confirm("从聊天记录中隐藏这条消息？\n\n已生成的会话摘要不会修改；若它曾写入长期记忆，对应记忆也会被撤回。");
-      if (!confirmed) {
-        context.render();
-        return;
-      }
+      const confirmed = await requestConversationConfirmation(context, {
+        confirmLabel: "删除消息",
+        detail: "已生成的会话摘要不会修改；若它曾写入长期记忆，对应记忆也会被撤回。",
+        message: "这条消息会从当前聊天记录中隐藏。",
+        title: "删除这条消息？",
+      });
+      if (!confirmed) return;
+      const pendingMessageId = pendingMessageIdForDurableUserMessage({
+        kind,
+        lineNumber,
+        messageId: clean(message?.messageId),
+      });
       viewState.sending = true;
       context.render();
       try {
@@ -2882,6 +2968,9 @@ export function createConversationReactActions(context) {
           lineNumber,
           messageId: kind === "dynamic-context" ? "" : clean(message?.messageId),
         }), { preserveHistory: false }).version ?? null;
+        if (pendingMessageId) {
+          viewState.pending = viewState.pending.filter((item) => clean(item?.id) !== pendingMessageId);
+        }
         resetConversationFocus();
         viewState.error = "";
         viewState.notice = "已从聊天记录中隐藏这条消息。";
@@ -2889,6 +2978,7 @@ export function createConversationReactActions(context) {
         viewState.error = `无法删除消息：${error?.message || error}`;
       } finally {
         viewState.sending = false;
+        focusComposer();
         context.render();
       }
     },
@@ -2920,10 +3010,13 @@ export function createConversationReactActions(context) {
       const name = clean(contact?.name) || "这位联系人";
       const activeContactRemoved = id === clean(viewState.snapshot?.activeContact?.id);
       viewState.contactContextMenu = null;
-      if (!window.confirm(`删除“${name}”及其聊天记录、联系人资料和所有专属数据？包括附件、记忆、自动任务和微信连接；此操作无法恢复。`)) {
-        context.render();
-        return;
-      }
+      const confirmed = await requestConversationConfirmation(context, {
+        confirmLabel: "删除联系人",
+        detail: "包括聊天记录、联系人资料、附件、记忆、自动任务和微信连接。此操作无法恢复。",
+        message: `将删除“${name}”及其所有专属数据。`,
+        title: `删除“${name}”？`,
+      });
+      if (!confirmed) return;
       viewState.sending = true;
       context.render();
       try {
@@ -2931,7 +3024,10 @@ export function createConversationReactActions(context) {
         viewState.lastVersion = applyConversationSnapshot(
           await context.api.conversation.removeContact({ id, confirmed: true }),
         ).version;
-        if (activeContactRemoved) resetConversationForContactChange();
+        if (activeContactRemoved) {
+          resetConversationForContactChange();
+          viewState.draft = "";
+        }
         if (context.api.settings?.get) context.state.settings = await context.api.settings.get();
         viewState.error = "";
         viewState.notice = `已删除“${name}”。`;
@@ -2939,8 +3035,13 @@ export function createConversationReactActions(context) {
         viewState.error = `无法删除联系人：${error?.message || error}`;
       } finally {
         viewState.sending = false;
+        focusComposer();
         context.render();
       }
+    },
+    confirmConfirmation: () => {
+      if (!settleConversationConfirmation(true)) return;
+      context.render();
     },
     renameContact: async (contactId, name) => {
       const id = clean(contactId);
@@ -3442,6 +3543,13 @@ export function createConversationReactActions(context) {
       focusComposer();
       context.render();
     },
+    ...(PRODUCT_FEATURES.builtinEmojiStickers ? {
+      loadBuiltinEmojiStickers: async () => {
+        const stickers = context.api?.conversation?.emojiStickers;
+        if (typeof stickers?.builtins !== "function") return { items: [], status: "unavailable" };
+        return stickers.builtins();
+      },
+    } : {}),
     ...(PRODUCT_FEATURES.customEmojiStickers ? {
       loadEmojiStickers: async () => {
         const stickers = context.api?.conversation?.emojiStickers;
@@ -3454,20 +3562,67 @@ export function createConversationReactActions(context) {
         context.setCreatePage?.("stickers");
         return { canceled: true, navigated: true };
       },
-      sendEmojiSticker: async (id) => {
+    } : {}),
+    ...(PRODUCT_FEATURES.builtinEmojiStickers || PRODUCT_FEATURES.customEmojiStickers ? {
+      sendEmojiSticker: async (value) => {
         const stickers = context.api?.conversation?.emojiStickers;
-        if (typeof stickers?.send !== "function") throw new Error("当前版本无法发送收藏表情包。");
-        const result = await stickers.send({ id: clean(id) });
+        if (typeof stickers?.send !== "function") throw new Error("当前版本无法发送表情。");
+        const sticker = value && typeof value === "object" ? value : { id: value };
+        const id = clean(sticker.id);
+        if (!id) throw new Error("缺少要发送的表情。");
+        const media = {
+          fileName: clean(sticker.fileName) || "表情包",
+          fileUrl: clean(sticker.fileUrl),
+          kind: "image",
+          mediaSource: "sticker",
+          mimeType: clean(sticker.mimeType),
+          size: Number(sticker.size) || 0,
+        };
+        const pending = {
+          accepted: false,
+          animateIn: true,
+          content: "",
+          media: media.fileUrl && media.size > 0 ? [media] : [],
+          id: `pending-sticker-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+          queued: false,
+          queuePosition: 0,
+          requestId: "",
+          sessionId: clean(viewState.snapshot?.activeSessionId),
+          steering: false,
+          timestamp: new Date().toISOString(),
+        };
         viewState.emojiOpen = false;
         viewState.error = "";
         viewState.notice = "";
+        resetConversationFocus();
+        viewState.searchOpen = false;
         reconnectConversationHistoryWindow();
         viewState.shouldStickToLatest = true;
+        viewState.unread = false;
+        viewState.pending.push(pending);
         scheduleScrollToLatest();
         focusComposer();
         context.render();
-        void load(context, true);
-        return result;
+        try {
+          const result = await stickers.send({ id });
+          pending.accepted = true;
+          pending.queued = result?.queued === true;
+          pending.queuePosition = Number(result?.queuePosition) || 0;
+          pending.requestId = clean(result?.requestId);
+          pending.sessionId = clean(result?.sessionId) || pending.sessionId;
+          if (Array.isArray(result?.media) && result.media.length) pending.media = result.media;
+          if (pending.sessionId) viewState.busySessions.add(pending.sessionId);
+          scheduleScrollToLatest();
+          context.render();
+          void load(context, true);
+          return result;
+        } catch (error) {
+          viewState.pending = viewState.pending.filter((item) => item !== pending);
+          viewState.error = `没有发出去：${error?.message || error}`;
+          focusComposer();
+          context.render();
+          throw error;
+        }
       },
     } : {}),
     jumpFromMediaPreview: async ({ lineNumber, messageId } = {}) => {

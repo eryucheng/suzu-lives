@@ -95,6 +95,14 @@ test("semantic surfaces and body portals share the global layer scale", () => {
   assert.match(conversationStyles, /data-ui-style="wallpaper-glass"\] \.content--conversation \.conversation-roster \{[\s\S]*?background: var\(--surface-chat-roster\);/u);
   assert.match(conversationStyles, /conversation-chat-shell \{[\s\S]*?background: transparent;[\s\S]*?box-shadow: none;/u);
   assert.match(conversationStyles, /conversation-bubble \{[\s\S]*?background: var\(--surface-chat-bubble\);/u);
+  const wallpaperMediaOnlyBubble = conversationStyles.match(/:root\[data-ui-style="wallpaper-glass"\] \.content--conversation \.conversation-message\.is-media-only \.conversation-bubble \{[\s\S]*?\}/u)?.[0] || "";
+  assert.match(wallpaperMediaOnlyBubble, /border: 0;/u);
+  assert.match(wallpaperMediaOnlyBubble, /background: transparent;/u);
+  assert.match(wallpaperMediaOnlyBubble, /box-shadow: none;/u);
+  assert.ok(
+    conversationStyles.indexOf(wallpaperMediaOnlyBubble) > conversationStyles.indexOf(':root[data-ui-style="wallpaper-glass"] .content--conversation .conversation-message.user .conversation-bubble'),
+    "the wallpaper media-only reset must follow the outgoing bubble theme rule",
+  );
   assert.match(dialog, /createPortal\(dialog, document\.body\)/u);
   assert.match(drawer, /createPortal\(drawer, document\.body\)/u);
   assert.match(conversation, /createPortal\(layer, document\.body\)/u);

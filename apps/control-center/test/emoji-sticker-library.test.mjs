@@ -50,6 +50,23 @@ test("favorite sticker library rejects a mismatched image extension", async () =
   await assert.rejects(() => inspectEmojiSticker(source), EmojiStickerError);
 });
 
+test("favorite sticker library accepts a source over 10 MiB for cropping while keeping stored originals bounded", async () => {
+  const root = await temporaryDirectory("suzu-sticker-large-source-");
+  const source = path.join(root, "large-source.png");
+  const handle = await fs.open(source, "w");
+  try {
+    await handle.write(PNG_HEADER, 0, PNG_HEADER.length, 0);
+    await handle.truncate(11 * 1024 * 1024);
+  } finally {
+    await handle.close();
+  }
+  const library = createEmojiStickerLibrary({ libraryRoot: resolveEmojiStickerLibraryRoot(root) });
+
+  const inspected = await library.inspect(source);
+  assert.equal(inspected.size, 11 * 1024 * 1024);
+  await assert.rejects(() => library.add({ source }), /最终表情包不能超过 10 MiB/u);
+});
+
 test("favorite sticker library stores cropped bytes with editable semantic metadata", async () => {
   const root = await temporaryDirectory("suzu-sticker-metadata-");
   const libraryRoot = resolveEmojiStickerLibraryRoot(root);
@@ -77,6 +94,22 @@ test("favorite sticker library stores cropped bytes with editable semantic metad
   const removed = await library.remove(added.addedId);
   assert.equal(removed.status, "empty");
   assert.equal(removed.items.length, 0);
+});
+
+test("favorite sticker library serializes concurrent writes without losing stickers", async () => {
+  const root = await temporaryDirectory("suzu-sticker-concurrent-writes-");
+  const libraryRoot = resolveEmojiStickerLibraryRoot(root);
+  const firstLibrary = createEmojiStickerLibrary({ libraryRoot });
+  const secondLibrary = createEmojiStickerLibrary({ libraryRoot });
+
+  await Promise.all([
+    firstLibrary.add({ data: PNG_HEADER, fileName: "第一张.png", mimeType: "image/png", metadata: { name: "第一张" } }),
+    secondLibrary.add({ data: WEBP_HEADER, fileName: "第二张.webp", mimeType: "image/webp", metadata: { name: "第二张" } }),
+  ]);
+
+  const snapshot = await firstLibrary.snapshot();
+  assert.equal(snapshot.items.length, 2);
+  assert.deepEqual(new Set(snapshot.items.map((item) => item.metadata.name)), new Set(["第一张", "第二张"]));
 });
 
 test("favorite sticker library upgrades a version one manifest when metadata is edited", async () => {

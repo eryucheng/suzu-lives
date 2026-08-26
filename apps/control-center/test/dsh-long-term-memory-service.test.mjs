@@ -129,6 +129,11 @@ test("DSH memory service retrieves one cached current-turn context from the exis
   assert.equal(memory.listMemories().total, 1);
   const statusBeforeRecall = await runtime.status({ contactId: contact.id });
   assert.equal(statusBeforeRecall.memories, 1, JSON.stringify(statusBeforeRecall));
+  contact.hidden = true;
+  const hiddenStatus = await runtime.status({ contactId: contact.id });
+  assert.deepEqual(hiddenStatus.contacts, []);
+  assert.equal(hiddenStatus.selectedContact, null);
+  contact.hidden = false;
 
   const first = await runtime.recallForTurn({
     occurredAt: "2026-08-18T09:00:00.000Z",

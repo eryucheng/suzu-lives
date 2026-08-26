@@ -99,7 +99,6 @@ test("message context menu copies text and images before hiding the selected mes
   };
   globalThis.window = {
     clearInterval: () => {},
-    confirm: () => true,
     innerHeight: 768,
     innerWidth: 1366,
     setInterval: () => 1,
@@ -155,7 +154,18 @@ test("message context menu copies text and images before hiding the selected mes
     assert.equal(conversationReactSnapshot(context).notice, "已复制“reply.png”，可直接粘贴。");
 
     actions.openMessageContextMenu(row, { x: 120, y: 160 });
-    await actions.deleteMessage(conversationReactSnapshot(context).messageContextMenu);
+    const focusRequestBeforeDelete = conversationReactSnapshot(context).ui.composerFocusRequest;
+    const deletion = actions.deleteMessage(conversationReactSnapshot(context).messageContextMenu);
+    assert.deepEqual(conversationReactSnapshot(context).overlays.confirmation, {
+      cancelLabel: "取消",
+      confirmLabel: "删除消息",
+      detail: "已生成的会话摘要不会修改；若它曾写入长期记忆，对应记忆也会被撤回。",
+      message: "这条消息会从当前聊天记录中隐藏。",
+      title: "删除这条消息？",
+    });
+    assert.notEqual(calls.at(-1)?.type, "delete");
+    actions.confirmConfirmation();
+    await deletion;
     assert.deepEqual(calls.at(-1), { type: "delete", value: {
       confirmed: true,
       lineNumber: 42,
@@ -164,6 +174,93 @@ test("message context menu copies text and images before hiding the selected mes
     assert.equal(conversationReactSnapshot(context).messageContextMenu, null);
     assert.equal(conversationReactSnapshot(context).messageRows.filter((item) => item.type === "message").length, 0);
     assert.equal(conversationReactSnapshot(context).notice, "已从聊天记录中隐藏这条消息。");
+    assert.equal(conversationReactSnapshot(context).composer.unavailable, false);
+    assert.ok(conversationReactSnapshot(context).ui.composerFocusRequest > focusRequestBeforeDelete);
+  } finally {
+    stopConversationPolling();
+    if (priorWindow === undefined) delete globalThis.window;
+    else globalThis.window = priorWindow;
+  }
+});
+
+test("hiding a newly accepted user message also retires its optimistic row", async () => {
+  const priorWindow = globalThis.window;
+  const contact = { agentId: "agent-pending", id: "contact-pending", name: "Pending" };
+  let currentSnapshot = {
+    activeContact: contact,
+    activeSessionId: "session-pending",
+    contacts: [contact],
+    contactsRoot: "D:/suzu-data/contacts",
+    messages: [],
+    projectRoot: "D:/suzu-data/contacts/pending",
+    sessions: [{ id: "session-pending", title: "Pending" }],
+    status: "ready",
+    version: "pending-delete-before",
+  };
+  globalThis.window = {
+    clearInterval: () => {},
+    innerHeight: 768,
+    innerWidth: 1366,
+    setInterval: () => 1,
+  };
+  const context = {
+    api: {
+      conversation: {
+        deleteMessage: async () => {
+          currentSnapshot = {
+            ...currentSnapshot,
+            deletedEventSequences: [8],
+            messages: [],
+            version: "pending-delete-after",
+          };
+          return currentSnapshot;
+        },
+        onEvent: () => () => {},
+        send: async ({ content }) => {
+          currentSnapshot = {
+            ...currentSnapshot,
+            messages: [{
+              blocks: [{ kind: "text", text: content }],
+              id: "user-pending-8",
+              kind: "user",
+              lineNumber: 8,
+              timestamp: new Date().toISOString(),
+            }],
+            version: "pending-send-accepted",
+          };
+          return { requestId: "request-pending", sessionId: "session-pending" };
+        },
+        snapshot: async () => currentSnapshot,
+      },
+    },
+    render: () => {},
+    state: { settings: {} },
+  };
+
+  try {
+    startConversationPolling(context);
+    await flush();
+    const actions = createConversationReactActions(context);
+    actions.setDraft("刚发送的消息");
+    actions.submitMessage();
+    await flush();
+    await flush();
+
+    const row = conversationReactSnapshot(context).messageRows
+      .find((item) => item.type === "message" && item.kind === "user");
+    assert.equal(row?.blocks?.[0]?.text, "刚发送的消息");
+    actions.openMessageContextMenu(row, { x: 120, y: 160 });
+    const deletion = actions.deleteMessage(conversationReactSnapshot(context).messageContextMenu);
+    actions.confirmConfirmation();
+    await deletion;
+
+    assert.equal(
+      conversationReactSnapshot(context).messageRows.some((item) => (
+        item.type === "message" && item.blocks?.some((block) => block.text === "刚发送的消息")
+      )),
+      false,
+    );
+    assert.equal(conversationReactSnapshot(context).composer.unavailable, false);
   } finally {
     stopConversationPolling();
     if (priorWindow === undefined) delete globalThis.window;

@@ -9,6 +9,20 @@
   flex:1;
 }
 
+.conversation-confirmation-dialog__copy {
+  display:grid;
+  gap:10px;
+}
+
+.conversation-confirmation-dialog__copy p {
+  margin:0;
+}
+
+.conversation-confirmation-dialog__detail {
+  color:var(--text-muted);
+  font-size:13px;
+}
+
 .content--conversation .conversation-audio {
   --conversation-audio-fill:#1c212a;
   --conversation-audio-border:transparent;

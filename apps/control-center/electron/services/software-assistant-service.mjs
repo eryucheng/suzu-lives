@@ -26,6 +26,12 @@ const MAX_MESSAGE_LENGTH = 12_000;
 const MAX_STREAMED_TEXT_LENGTH = 100_000;
 const MAX_AVATAR_DATA_URL_LENGTH = 2_800_000;
 const MAX_AVATAR_FILE_BYTES = 2_000_000;
+const MAX_MOEGIRLPEDIA_QUERY_LENGTH = 120;
+const MOEGIRLPEDIA_API_ORIGIN = "https://zh.moegirl.org.cn";
+const MOEGIRLPEDIA_IMAGE_ORIGIN = "https://storage.moegirl.org.cn";
+const MOEGIRLPEDIA_SEARCH_RESULT_LIMIT = 8;
+const MOEGIRLPEDIA_VISIBLE_CANDIDATE_LIMIT = 4;
+const MOEGIRLPEDIA_REQUEST_TIMEOUT_MS = 6_000;
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
 class SoftwareAssistantServiceError extends Error {
@@ -66,6 +72,120 @@ function avatarMimeType(value) {
     return "image/webp";
   }
   return "";
+}
+
+function avatarFileExtension(mimeType) {
+  if (mimeType === "image/png") return "png";
+  if (mimeType === "image/jpeg") return "jpg";
+  if (mimeType === "image/webp") return "webp";
+  return "";
+}
+
+function normalizedSearchText(value) {
+  return clean(value).replace(/[\s\u3000]+/gu, "").toLocaleLowerCase();
+}
+
+function urlAtOrigin(value, origin) {
+  try {
+    const url = new URL(clean(value));
+    return url.protocol === "https:" && url.origin === origin ? url.toString() : "";
+  } catch {
+    return "";
+  }
+}
+
+function moegirlpediaApiUrl(parameters) {
+  const url = new URL("/api.php", MOEGIRLPEDIA_API_ORIGIN);
+  for (const [name, value] of Object.entries(parameters)) {
+    if (value !== undefined && value !== null && value !== "") url.searchParams.set(name, String(value));
+  }
+  return url.toString();
+}
+
+function moegirlpediaCandidates(value) {
+  const query = plainObject(plainObject(value).query);
+  const pages = Array.isArray(query.pages) ? query.pages : [];
+  return pages
+    .map((entry) => plainObject(entry))
+    .sort((left, right) => Number(left.index ?? Number.MAX_SAFE_INTEGER) - Number(right.index ?? Number.MAX_SAFE_INTEGER))
+    .map((page) => {
+      const title = clean(page.title);
+      const sourceUrl = urlAtOrigin(page.fullurl || page.canonicalurl, MOEGIRLPEDIA_API_ORIGIN);
+      const thumbnail = plainObject(page.thumbnail);
+      const thumbnailUrl = urlAtOrigin(thumbnail.source, MOEGIRLPEDIA_IMAGE_ORIGIN);
+      if (!title || !sourceUrl || !thumbnailUrl) return null;
+      return Object.freeze({ title, sourceUrl, thumbnailUrl });
+    })
+    .filter(Boolean);
+}
+
+async function fetchMoegirlpediaResponse(fetchImpl, url, accept) {
+  if (typeof fetchImpl !== "function") {
+    throw new SoftwareAssistantServiceError("当前版本没有可用的萌娘百科联网接口。", { code: "MOEGIRLPEDIA_FETCH_UNAVAILABLE" });
+  }
+  const signal = typeof globalThis.AbortSignal?.timeout === "function"
+    ? globalThis.AbortSignal.timeout(MOEGIRLPEDIA_REQUEST_TIMEOUT_MS)
+    : undefined;
+  let response;
+  try {
+    response = await fetchImpl(url, {
+      headers: {
+        accept,
+        "user-agent": "Suzu-Lives/0.3 contact-avatar lookup",
+      },
+      ...(signal ? { signal } : {}),
+    });
+  } catch (error) {
+    throw new SoftwareAssistantServiceError("无法连接萌娘百科。", {
+      cause: error,
+      code: "MOEGIRLPEDIA_FETCH_FAILED",
+    });
+  }
+  if (response?.ok !== true) {
+    throw new SoftwareAssistantServiceError("萌娘百科暂时没有返回可用结果。", { code: "MOEGIRLPEDIA_RESPONSE_INVALID" });
+  }
+  return response;
+}
+
+async function fetchMoegirlpediaJson(fetchImpl, url) {
+  const response = await fetchMoegirlpediaResponse(fetchImpl, url, "application/json");
+  try {
+    return await response.json();
+  } catch (error) {
+    throw new SoftwareAssistantServiceError("萌娘百科返回的数据无法读取。", {
+      cause: error,
+      code: "MOEGIRLPEDIA_JSON_INVALID",
+    });
+  }
+}
+
+async function downloadMoegirlpediaThumbnail({ fetchImpl, fsOps, targetDirectory, thumbnailUrl }) {
+  const response = await fetchMoegirlpediaResponse(fetchImpl, thumbnailUrl, "image/avif,image/webp,image/png,image/jpeg");
+  const contentLength = clean(response.headers?.get?.("content-length"));
+  if (contentLength && Number(contentLength) > MAX_AVATAR_FILE_BYTES) {
+    throw new SoftwareAssistantServiceError("萌娘百科返回的头像预览超过 2 MB。", { code: "MOEGIRLPEDIA_THUMBNAIL_TOO_LARGE" });
+  }
+  let bytes;
+  try {
+    bytes = Buffer.from(await response.arrayBuffer());
+  } catch (error) {
+    throw new SoftwareAssistantServiceError("萌娘百科头像预览无法下载。", {
+      cause: error,
+      code: "MOEGIRLPEDIA_THUMBNAIL_READ_FAILED",
+    });
+  }
+  if (bytes.length > MAX_AVATAR_FILE_BYTES) {
+    throw new SoftwareAssistantServiceError("萌娘百科返回的头像预览超过 2 MB。", { code: "MOEGIRLPEDIA_THUMBNAIL_TOO_LARGE" });
+  }
+  const mimeType = avatarMimeType(bytes);
+  const extension = avatarFileExtension(mimeType);
+  if (!extension) {
+    throw new SoftwareAssistantServiceError("萌娘百科返回的头像预览不是受支持的图片格式。", { code: "MOEGIRLPEDIA_THUMBNAIL_INVALID" });
+  }
+  await fsOps.mkdir(targetDirectory, { recursive: true });
+  const avatarPath = path.join(targetDirectory, `moegirlpedia-${randomUUID()}.${extension}`);
+  await fsOps.writeFile(avatarPath, bytes);
+  return { avatarPath, mimeType };
 }
 
 function identityWithAgentAvatar(settings, agentId, avatarDataUrl) {
@@ -192,6 +312,7 @@ export function createSoftwareAssistantService({
   settingsService,
   usageLedger = null,
   fsOps = fs,
+  fetchImpl = globalThis.fetch,
   onEvent = () => {},
 } = {}) {
   if (typeof runtime?.ensureSession !== "function" || typeof runtime?.history !== "function" || typeof runtime?.sendTurn !== "function" || typeof runtime?.cancelTurn !== "function" || typeof runtime?.purgeSession !== "function" || typeof runtime?.respondLifecycleRequest !== "function" || typeof runtime?.subscribe !== "function") {
@@ -338,6 +459,118 @@ export function createSoftwareAssistantService({
         data: { theme },
       };
     }
+    if (action === "lookup-contact-avatar") {
+      const requestedTitle = clean(body.title);
+      const query = clean(body.query) || requestedTitle;
+      if (!query) {
+        return {
+          status: "invalid-request",
+          content: "从萌娘百科查找头像需要提供角色名 query 或已确认的条目 title。",
+          data: null,
+        };
+      }
+      if (query.length > MAX_MOEGIRLPEDIA_QUERY_LENGTH || requestedTitle.length > MAX_MOEGIRLPEDIA_QUERY_LENGTH) {
+        return {
+          status: "invalid-request",
+          content: `萌娘百科角色名不能超过 ${MAX_MOEGIRLPEDIA_QUERY_LENGTH} 个字符。`,
+          data: null,
+        };
+      }
+      if (typeof fsOps?.writeFile !== "function") {
+        return {
+          status: "unavailable",
+          content: "当前版本没有连接头像预览保存功能。",
+          data: null,
+        };
+      }
+
+      let candidates;
+      try {
+        const apiUrl = requestedTitle
+          ? moegirlpediaApiUrl({
+            action: "query",
+            format: "json",
+            formatversion: 2,
+            titles: requestedTitle,
+            prop: "pageimages|info",
+            pithumbsize: 512,
+            inprop: "url",
+          })
+          : moegirlpediaApiUrl({
+            action: "query",
+            format: "json",
+            formatversion: 2,
+            generator: "search",
+            gsrsearch: query,
+            gsrlimit: MOEGIRLPEDIA_SEARCH_RESULT_LIMIT,
+            gsrnamespace: 0,
+            prop: "pageimages|info",
+            pithumbsize: 512,
+            inprop: "url",
+          });
+        candidates = moegirlpediaCandidates(await fetchMoegirlpediaJson(fetchImpl, apiUrl));
+      } catch (error) {
+        return {
+          status: "unavailable",
+          content: `无法从萌娘百科读取角色头像：${errorMessage(error, "网络请求失败。")}`,
+          data: null,
+        };
+      }
+
+      if (!candidates.length) {
+        return {
+          status: "not-found",
+          content: `萌娘百科没有找到“${requestedTitle || query}”的可用头像预览。`,
+          data: null,
+        };
+      }
+
+      let selected = requestedTitle ? candidates[0] : candidates.find((candidate) => (
+        normalizedSearchText(candidate.title) === normalizedSearchText(query)
+      ));
+      if (!selected && candidates.length === 1) selected = candidates[0];
+      if (!selected) {
+        return {
+          status: "needs-confirmation",
+          content: `萌娘百科找到了多个可能的“${query}”；请确认要使用的角色条目。`,
+          data: {
+            source: "萌娘百科",
+            query,
+            candidates: candidates.slice(0, MOEGIRLPEDIA_VISIBLE_CANDIDATE_LIMIT).map((candidate) => ({
+              title: candidate.title,
+              sourceUrl: candidate.sourceUrl,
+            })),
+          },
+        };
+      }
+
+      let downloaded;
+      try {
+        downloaded = await downloadMoegirlpediaThumbnail({
+          fetchImpl,
+          fsOps,
+          targetDirectory: path.join(workspaceDirectory, "avatar-previews"),
+          thumbnailUrl: selected.thumbnailUrl,
+        });
+      } catch (error) {
+        return {
+          status: "failed",
+          content: `萌娘百科头像预览下载失败：${errorMessage(error, "未知错误。")}`,
+          data: null,
+        };
+      }
+      return {
+        status: "completed",
+        content: `已从萌娘百科找到“${selected.title}”的头像预览。`,
+        data: {
+          source: "萌娘百科",
+          title: selected.title,
+          sourceUrl: selected.sourceUrl,
+          avatarPath: downloaded.avatarPath,
+          mimeType: downloaded.mimeType,
+        },
+      };
+    }
     if (action === "set-contact-avatar") {
       const requestedContactId = clean(body.contactId);
       const requestedContactName = clean(body.contactName);
@@ -375,7 +608,8 @@ export function createSoftwareAssistantService({
         };
       }
       const contacts = (Array.isArray(snapshot?.contacts) ? snapshot.contacts : [])
-        .map((contact) => plainObject(contact));
+        .map((contact) => plainObject(contact))
+        .filter((contact) => contact.hidden !== true);
       const matches = requestedContactId
         ? contacts.filter((contact) => clean(contact.id) === requestedContactId)
         : contacts.filter((contact) => clean(contact.name).toLocaleLowerCase() === requestedContactName.toLocaleLowerCase());

@@ -3,6 +3,7 @@ import {
   scanCostLedger,
   warmTodayCostLedger,
 } from "../services/cost-ledger.mjs";
+import { visibleContactProjectsSnapshot } from "../services/contact-projects.mjs";
 
 function clean(value) {
   return String(value ?? "").trim();
@@ -11,7 +12,9 @@ function clean(value) {
 export function registerLedgerIpc({ ipcMain, settingsService, contactProjectsService, usageSubjects = [] }) {
   const resolveLedgerScope = async () => {
     const settings = settingsService.load();
-    const snapshot = await contactProjectsService.snapshot();
+    const snapshot = typeof contactProjectsService.visibleSnapshot === "function"
+      ? await contactProjectsService.visibleSnapshot()
+      : visibleContactProjectsSnapshot(await contactProjectsService.snapshot());
     const contactScopes = (Array.isArray(snapshot?.contacts) ? snapshot.contacts : []).map((contact) => {
       const usageLedgerPath = settingsService.usageLedgerPath({
         ...settings,

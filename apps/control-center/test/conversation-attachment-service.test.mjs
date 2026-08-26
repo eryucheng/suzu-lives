@@ -195,6 +195,25 @@ test("conversation attachment service delivers Agent-created media through the d
   assert.equal(await fs.readFile(report, "utf8"), "这是 Suzu 生成的报告。");
 });
 
+test("Agent sticker delivery preserves its media source in the durable receipt", async () => {
+  const root = await temporaryRoot();
+  const dataRoot = path.join(root, "data");
+  const projectRoot = path.join(root, "contact");
+  const image = path.join(root, "sticker.png");
+  await fs.mkdir(projectRoot, { recursive: true });
+  await fs.writeFile(image, ONE_PIXEL_PNG);
+
+  const receipt = await createConversationAttachmentService({ dataRoot }).deliver({
+    input: { items: [{ kind: "image", path: image }] },
+    mediaSource: "sticker",
+    projectRoot,
+    sessionId: "contact-session",
+  });
+
+  assert.equal(receipt.items[0].mediaSource, "sticker");
+  assert.equal(receipt.items[0].kind, "image");
+});
+
 test("Agent attachment delivery keeps the wider output-image set and validates the actual source extension", async () => {
   const root = await temporaryRoot();
   const dataRoot = path.join(root, "data");

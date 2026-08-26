@@ -52,6 +52,7 @@ import { normalizeTtsAdapter, ttsAdapterLabel } from "@suzu-lives/voice-message/
 import { readVoiceProfiles, readVoiceServices, resolveVoiceProfile } from "@suzu-lives/voice-message/voice-services";
 import { DEFAULT_AGENT_JOURNAL_TIME } from "../services/agent-journal-schedule.mjs";
 import { createCapabilityRegistry } from "../services/capability-registry.mjs";
+import { visibleContactProjectsSnapshot } from "../services/contact-projects.mjs";
 import {
   MAX_MAIL_BRIDGE_AGENT_SKILLS,
   mailBridgeAgentSkills,
@@ -652,7 +653,9 @@ export function createCapabilitiesService({
   };
   const companionTargets = async () => {
     if (!contactProjectsService?.snapshot) return { status: "unavailable", contacts: [] };
-    const snapshot = await contactProjectsService.snapshot();
+    const snapshot = typeof contactProjectsService.visibleSnapshot === "function"
+      ? await contactProjectsService.visibleSnapshot()
+      : visibleContactProjectsSnapshot(await contactProjectsService.snapshot());
     const contacts = Array.isArray(snapshot?.contacts) ? snapshot.contacts : [];
     return {
       status: clean(snapshot?.status) || "needs-root",
@@ -675,7 +678,9 @@ export function createCapabilitiesService({
     const contactId = clean(input.contactId);
     if (!contactId) throw new Error(`请选择要启用${capabilityName}的联系人。 `);
     if (!contactProjectsService?.snapshot) throw new Error("当前软件无法读取联系人项目。 ");
-    const catalog = await contactProjectsService.snapshot();
+    const catalog = typeof contactProjectsService.visibleSnapshot === "function"
+      ? await contactProjectsService.visibleSnapshot()
+      : visibleContactProjectsSnapshot(await contactProjectsService.snapshot());
     const contact = (Array.isArray(catalog?.contacts) ? catalog.contacts : []).find((item) => clean(item?.id) === contactId);
     const projectRoot = absoluteProjectRoot(contact?.projectRoot);
     if (!contact || !COMPANION_CONTACT_ID.test(contactId) || !projectRoot) {

@@ -5,6 +5,7 @@ import {
   capabilitySkillCatalog,
   capabilitySkillForName,
 } from "../electron/services/agent-capability-skills.mjs";
+import { createCapabilityRegistry } from "../electron/services/capability-registry.mjs";
 
 const actions = [
   {
@@ -49,6 +50,23 @@ test("capability Skill loads the matching action contract and no other capabilit
   assert.match(skill.content, /action：`snapshot`/u);
   assert.doesNotMatch(skill.content, /image-generation/u);
   assert.equal(capabilitySkillForName(actions, "suzu-not-enabled"), null);
+});
+
+test("sticker Skill is discoverable without placing contact routing language in its prompt", () => {
+  const stickerActions = createCapabilityRegistry().agentActions({ capabilityId: "emoji-sticker" });
+  assert.deepEqual(capabilitySkillCatalog(stickerActions), [{
+    name: "suzu-emoji-sticker",
+    description: "聊天表情：用内置或收藏表情自然回应聊天；适合用图片表达情绪、态度或玩笑时，读取本 Skill 取得候选并发送。",
+  }]);
+  const skill = capabilitySkillForName(stickerActions, "suzu-emoji-sticker");
+  assert.match(skill.content, /action：`recommend`/u);
+  assert.match(skill.content, /action：`search`/u);
+  assert.match(skill.content, /action：`send`/u);
+  assert.match(skill.content, /categoryName/u);
+  assert.match(skill.content, /若还有独立的对话内容就自然接着说/u);
+  assert.match(skill.content, /本轮表达完整时直接完成/u);
+  assert.doesNotMatch(skill.description, /当前联系人/u);
+  assert.doesNotMatch(skill.content, /当前联系人/u);
 });
 
 test("the generic mail Skill explains how a business mail Skill sends an email", () => {

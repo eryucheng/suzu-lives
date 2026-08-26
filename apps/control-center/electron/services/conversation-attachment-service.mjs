@@ -492,7 +492,7 @@ export function createConversationAttachmentService({ dataRoot, fsOps = fs } = {
    * agent supplies only paths it has already created or inspected; the parent
    * supplies the trusted active session scope and returns cached copies.
    */
-  const deliver = async ({ input = {}, projectRoot, sessionId } = {}) => {
+  const deliver = async ({ input = {}, mediaSource: sourceValue = "", projectRoot, sessionId } = {}) => {
     const requested = plainObject(input);
     const entries = Array.isArray(requested.items) ? requested.items : [];
     if (!entries.length) {
@@ -503,6 +503,7 @@ export function createConversationAttachmentService({ dataRoot, fsOps = fs } = {
     }
     const directory = attachmentDirectory({ dataRoot: root, projectRoot, sessionId });
     await fsOps.mkdir(directory, { recursive: true });
+    const normalizedSource = mediaSource(sourceValue);
     const items = [];
     for (const rawEntry of entries) {
       const entry = plainObject(rawEntry);
@@ -527,6 +528,7 @@ export function createConversationAttachmentService({ dataRoot, fsOps = fs } = {
         mimeType,
         path: target,
         size: source.size,
+        ...(normalizedSource ? { mediaSource: normalizedSource } : {}),
       }));
     }
     return Object.freeze({

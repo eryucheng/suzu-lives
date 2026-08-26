@@ -17,6 +17,30 @@ async function writeConfig(dataRoot, segments, value) {
   return filePath;
 }
 
+test("capability contact pickers omit hidden contacts", async () => {
+  const dataRoot = await temporaryDirectory("suzu-capability-visible-contacts-");
+  const service = createCapabilitiesService({
+    contactProjectsService: {
+      snapshot: async () => ({
+        status: "ready",
+        contacts: [
+          { id: "contact-visible", name: "可见联系人" },
+          { hidden: true, id: "contact-hidden", name: "隐私联系人" },
+        ],
+      }),
+    },
+    settingsService: {
+      load: () => ({ dataRoot }),
+      response: () => ({ dataRoot }),
+    },
+  });
+
+  assert.deepEqual(await service.companionTargets(), {
+    status: "ready",
+    contacts: [{ id: "contact-visible", name: "可见联系人" }],
+  });
+});
+
 test("removing a contact clears it from every contact-scoped capability config", async () => {
   const dataRoot = await temporaryDirectory("suzu-capability-contact-cleanup-");
   const removedId = "contact-delete-me";

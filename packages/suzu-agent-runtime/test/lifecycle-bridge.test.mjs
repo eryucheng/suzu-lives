@@ -73,6 +73,16 @@ function createPublishingSession(ctx, {
     events,
     surface: { nodes: surfaceNodes },
     requestHeader: () => ({ config: { provider, model } }),
+    deriveMessages() {
+      return surfaceNodes
+        .map((sequence) => events[sequence])
+        .map((event) => {
+          if (event?.type === "user/message") return event.data;
+          if (event?.type === "assistant/message" || event?.type === "tool/result") return event.data?.message;
+          return null;
+        })
+        .filter(Boolean);
+    },
     append(type, data, options = {}) {
       assert.equal(publishing, false, "a compatibility repair must not reenter Session.append()");
       const event = {
@@ -303,7 +313,7 @@ test("bridge removes dynamic context from the next model history after a success
   transport.dispose();
 });
 
-test("bridge injects an internal task only for its current turn and removes a silent task surface before the next user turn", async () => {
+test("bridge projects an automatic task at the history tail for its active turn and cleans a silent surface", async () => {
   const channel = createParentChannel((request) => {
     if (request.event === "ContextCollect") return { blocks: [] };
     if (request.event === "DynamicContextCollect") {
@@ -316,17 +326,11 @@ test("bridge injects an internal task only for its current turn and removes a si
     assert.fail(`unexpected bridge request: ${request.event}`);
   });
   const transport = createSuzuAgentLifecycleBridgeTransport({ processRef: channel, requestTimeoutMs: 50 });
-  const created = [];
-  const bridge = createSuzuAgentLifecycleBridge({
-    transport,
-    createMessage(input) {
-      created.push(input);
-      return { ...input, id: `message-${created.length}`, role: "user" };
-    },
-  });
+  const bridge = createSuzuAgentLifecycleBridge({ transport });
   const ctx = createContext();
   bridge.apply(ctx, { timeoutMs: 50 });
   const { events, session, surfaceNodes } = createPublishingSession(ctx, { id: "task-session" });
+  const durableDeriveMessages = session.deriveMessages;
   session.append("turn/start", { turn: 12 });
   session.append("step/start", { turn: 12, step: 1 });
 
@@ -348,15 +352,50 @@ test("bridge injects an internal task only for its current turn and removes a si
     signal: { aborted: false },
   }, async () => ({ kind: "enter", messages: [trigger] }));
 
-  assert.equal(outcome.messages.some((message) => message === trigger), false);
+  assert.equal(outcome.messages.some((message) => message === trigger), true);
   assert.equal(outcome.messages.length, 1);
-  assert.match(created[0].content[0].text, /安排下一次主动关心/u);
-  assert.match(created[0].content[0].text, /不是用户新消息/u);
 
-  const dynamic = session.append("user/message", outcome.messages[0], { surfaceOp: "append" });
-  const reply = session.append("assistant/message", {
+  const taskInput = session.append("user/message", outcome.messages[0], { surfaceOp: "append" });
+  const projected = session.deriveMessages();
+  assert.deepEqual(projected.map((message) => message.role), ["user", "system"]);
+  assert.equal(projected.at(-1).content[0].text, "这是本轮自动任务：安排下一次主动关心。");
+  const toolCall = session.append("assistant/message", {
     turn: 12,
     step: 1,
+    message: {
+      id: "silent-task-tool-call",
+      role: "assistant",
+      content: [{
+        type: "tool-call",
+        id: "task-tool-call",
+        name: "schedule_task",
+        arguments: "{}",
+      }],
+      source: { kind: "model", provider: "deepseek", model: "deepseek-chat" },
+    },
+  }, { surfaceOp: "append" });
+  assert.deepEqual(session.deriveMessages().map((message) => message.role), ["user", "assistant", "system"]);
+  const toolResult = session.append("tool/result", {
+    turn: 12,
+    step: 1,
+    message: {
+      id: "silent-task-tool-result",
+      role: "user",
+      content: [{
+        type: "tool-result",
+        toolCallId: "task-tool-call",
+        content: [{ type: "text", text: "已安排" }],
+      }],
+      source: { kind: "tool", callId: "task-tool-call" },
+    },
+  }, { surfaceOp: "append", sourceEventSeqs: [toolCall.seq] });
+  assert.deepEqual(
+    session.deriveMessages().map((message) => message.role),
+    ["user", "assistant", "user", "system"],
+  );
+  const reply = session.append("assistant/message", {
+    turn: 12,
+    step: 2,
     message: {
       id: "silent-task-reply",
       role: "assistant",
@@ -364,13 +403,16 @@ test("bridge injects an internal task only for its current turn and removes a si
       source: { kind: "model", provider: "deepseek", model: "deepseek-chat" },
     },
   }, { surfaceOp: "append" });
+  assert.equal(session.deriveMessages().at(-1).role, "system");
   session.append("turn/end", { turn: 12, reason: { kind: "completed" } });
+  assert.equal(session.deriveMessages, durableDeriveMessages);
+  assert.equal(session.deriveMessages().some((message) => message.role === "system"), false);
   await flushDeferredSessionWork();
 
   const cleanup = events.at(-1);
   assert.equal(cleanup.type, "user/message");
-  assert.deepEqual(cleanup.surfaceOp, { op: "replace", start: dynamic.seq, end: reply.seq });
-  assert.deepEqual(cleanup.sourceEventSeqs, [dynamic.seq, reply.seq]);
+  assert.deepEqual(cleanup.surfaceOp, { op: "replace", start: taskInput.seq, end: reply.seq });
+  assert.deepEqual(cleanup.sourceEventSeqs, [taskInput.seq, toolCall.seq, toolResult.seq, reply.seq]);
   assert.equal(cleanup.data.source.kind, "plugin");
   assert.equal(cleanup.data.source.plugin, "suzu-lifecycle-bridge");
   assert.equal(cleanup.data.source.form, "task-cleanup");
@@ -407,7 +449,8 @@ test("bridge also removes an external task when its terminal result is NO_REPLY"
     content: [],
     source: { kind: "plugin", plugin: "suzu-lifecycle-bridge", form: "task-trigger", outputPolicy: "external" },
   }] }));
-  const dynamic = session.append("user/message", outcome.messages[0], { surfaceOp: "append" });
+  const taskInput = session.append("user/message", outcome.messages[0], { surfaceOp: "append" });
+  assert.equal(session.deriveMessages().at(-1).role, "system");
   const noReply = session.append("assistant/message", {
     turn: 13,
     step: 1,
@@ -423,8 +466,8 @@ test("bridge also removes an external task when its terminal result is NO_REPLY"
 
   const cleanup = events.at(-1);
   assert.equal(cleanup.data.source.form, "task-cleanup");
-  assert.deepEqual(cleanup.surfaceOp, { op: "replace", start: dynamic.seq, end: noReply.seq });
-  assert.deepEqual(cleanup.sourceEventSeqs, [dynamic.seq, noReply.seq]);
+  assert.deepEqual(cleanup.surfaceOp, { op: "replace", start: taskInput.seq, end: noReply.seq });
+  assert.deepEqual(cleanup.sourceEventSeqs, [taskInput.seq, noReply.seq]);
   assert.deepEqual(surfaceNodes, [cleanup.seq]);
   transport.dispose();
 });

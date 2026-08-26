@@ -6,7 +6,7 @@ import {
 import { createSuzuAgentLifecycleBridgeTransport } from "./lifecycle-bridge.mjs";
 
 export const name = "suzu-structured-generator";
-export const inject = [];
+export const inject = ["sessions", "llm", "agents"];
 
 const DEFAULT_MAX_OUTPUT_TOKENS = 8_192;
 const DEFAULT_TIMEOUT_MS = 120_000;
@@ -156,9 +156,10 @@ function targetForSession(ctx, rawSessionId) {
   const sessionId = clean(rawSessionId);
   const session = ctx?.sessions?.get?.(sessionId);
   if (!session) throw new Error("当前 Agent Core 模型路由不可用，无法执行一次性结构化推理。 ");
-  const config = plainObject(session?.requestHeader?.()).config;
-  const provider = clean(config.provider);
-  const model = clean(config.model);
+  const config = plainObject(plainObject(session?.requestHeader?.()).config);
+  const agentOptions = plainObject(ctx?.agents?.get?.(sessionId)?.options);
+  const provider = clean(config.provider || agentOptions.provider);
+  const model = clean(config.model || agentOptions.model);
   if (!provider || !model) throw new Error("当前 Agent Core 没有可用的一次性结构化推理模型路由。 ");
   return { model, provider, sessionId };
 }

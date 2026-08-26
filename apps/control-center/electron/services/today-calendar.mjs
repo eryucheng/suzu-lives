@@ -2,6 +2,7 @@ import { createHash, randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 
+import { visibleContactProjectsSnapshot } from "./contact-projects.mjs";
 import { publicCalendarEvents } from "./public-calendar-events.mjs";
 
 const EVENT_TYPES = new Set(["纪念日", "生日", "日程", "其他"]);
@@ -170,7 +171,9 @@ function defaultContactId(contactsSnapshot, contacts) {
 }
 
 async function contactCatalog(contactProjectsService) {
-  const contactsSnapshot = await contactProjectsService.snapshot();
+  const contactsSnapshot = typeof contactProjectsService.visibleSnapshot === "function"
+    ? await contactProjectsService.visibleSnapshot()
+    : visibleContactProjectsSnapshot(await contactProjectsService.snapshot());
   const contacts = Array.isArray(contactsSnapshot?.contacts) ? contactsSnapshot.contacts : [];
   return {
     contactsSnapshot,
@@ -225,7 +228,9 @@ export function createTodayCalendarService({ contactProjectsService, settingsSer
     const context = await calendarContext({ contactProjectsService, settingsService });
     const stored = await readCalendar(context.filePath);
     const contacts = context.catalog.contacts.map(publicContactCalendar).filter((contact) => contact.id);
-    const personal = stored.events.map((event) => ownedEvent(context.catalog, event));
+    const personal = stored.events
+      .filter((event) => context.catalog.byId.has(clean(event.contactId)))
+      .map((event) => ownedEvent(context.catalog, event));
     const hasContacts = clean(context.catalog.contactsSnapshot?.status) === "ready" && contacts.length > 0;
     return {
       status: stored.status === "invalid" ? "invalid" : hasContacts ? "ready" : "needs-agent",

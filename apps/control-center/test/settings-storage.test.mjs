@@ -43,6 +43,34 @@ test("the first settings snapshot materializes the managed contacts directory", 
   assert.equal(fs.statSync(contactsRoot).isDirectory(), true);
 });
 
+test("settings exposes only the minimal restore records for hidden contacts", async (t) => {
+  fs.mkdirSync("D:\\Temp", { recursive: true });
+  const userData = fs.mkdtempSync(path.join("D:\\Temp", "suzu-settings-hidden-contacts-"));
+  t.after(() => fs.rmSync(userData, { recursive: true, force: true }));
+  const app = { getPath: () => userData, relaunch: () => {}, exit: () => {} };
+  const settingsService = createSettingsService({ app });
+  const contactProjectsService = createContactProjectsService({ settingsService });
+  await contactProjectsService.create({ name: "公开联系人" });
+  const created = await contactProjectsService.create({ name: "隐私联系人" });
+  await contactProjectsService.updatePresentation({ id: created.activeContact.id, hidden: true });
+  const handlers = new Map();
+  registerSettingsIpc({
+    app,
+    contactProjectsService,
+    dataStorageService: null,
+    dialog: { showOpenDialog: async () => ({ canceled: true }), showMessageBox: async () => ({ response: 1 }) },
+    getMainWindow: () => null,
+    ipcMain: { handle: (name, handler) => handlers.set(name, handler) },
+    shell: { showItemInFolder: () => {}, openPath: () => {} },
+    settingsService,
+  });
+
+  const hidden = await handlers.get("settings:hidden-contacts")();
+  assert.deepEqual(hidden.contacts, [{ id: created.activeContact.id, name: "隐私联系人", hidden: true }]);
+  assert.equal(Object.hasOwn(hidden.contacts[0], "projectRoot"), false);
+  assert.equal(Object.hasOwn(hidden.contacts[0], "sessionId"), false);
+});
+
 test("appearance defaults to classic and accepts only managed wallpaper metadata", () => {
   assert.deepEqual(normalizeAppearance(), { styleId: "classic", wallpaper: null });
   assert.deepEqual(normalizeAppearance({

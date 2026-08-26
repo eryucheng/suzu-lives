@@ -84,6 +84,7 @@ test("Electron preload exposes the memory bridge", async () => {
   assert.equal(typeof bridge?.conversation?.updateContactLongTermMemoryEnabled, "function");
   assert.equal(typeof bridge?.conversation?.removeContact, "function");
   assert.equal(typeof bridge?.conversation?.deleteMessage, "function");
+  assert.equal(typeof bridge?.conversation?.emojiStickers?.builtins, "function");
   assert.equal(typeof bridge?.conversation?.emojiStickers?.snapshot, "function");
   assert.equal(typeof bridge?.conversation?.emojiStickers?.select, "function");
   assert.equal(typeof bridge?.conversation?.emojiStickers?.add, "function");
@@ -169,6 +170,7 @@ test("Electron preload exposes the memory bridge", async () => {
     messageId: "assistant-42",
     confirmed: true,
   });
+  await bridge.conversation.emojiStickers.builtins();
   await bridge.conversation.emojiStickers.snapshot();
   await bridge.conversation.emojiStickers.select();
   await bridge.conversation.emojiStickers.add({ selectionToken: "selected-sticker" });
@@ -177,7 +179,8 @@ test("Electron preload exposes the memory bridge", async () => {
   await bridge.conversation.emojiStickers.update({ id: "sticker-1", metadata: { name: "开心" } });
   await bridge.conversation.emojiStickers.remove({ confirmed: true, id: "sticker-2" });
   await bridge.conversation.emojiStickers.send({ id: "sticker-1" });
-  assert.deepEqual(calls.slice(-8).map((call) => call.channel), [
+  assert.deepEqual(calls.slice(-9).map((call) => call.channel), [
+    "conversation:builtin-emoji-stickers",
     "conversation:emoji-stickers",
     "conversation:select-emoji-sticker",
     "conversation:add-emoji-sticker",
@@ -236,6 +239,7 @@ test("Electron preload exposes the memory bridge", async () => {
   await bridge.appLifecycle.rendererReady();
   assert.equal(calls.at(-1).channel, "app-lifecycle:renderer-ready");
   assert.equal(typeof bridge?.settings?.appUpdateStatus, "function");
+  assert.equal(typeof bridge?.settings?.hiddenContacts, "function");
   assert.equal(typeof bridge?.settings?.releaseAnnouncementStatus, "function");
   assert.equal(typeof bridge?.settings?.acknowledgeReleaseAnnouncement, "function");
   assert.equal(typeof bridge?.settings?.checkForUpdate, "function");
@@ -289,4 +293,6 @@ test("Electron preload exposes the memory bridge", async () => {
     "qq:disconnect",
   ]);
   assert.deepEqual(JSON.parse(JSON.stringify(calls.at(-1).args[0])), { contactId: "contact-suzu", confirmed: true });
+  await bridge.settings.hiddenContacts();
+  assert.equal(calls.at(-1).channel, "settings:hidden-contacts");
 });

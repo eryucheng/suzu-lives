@@ -13,6 +13,7 @@
     "./software-assistant-bridge": "./src/software-assistant-bridge.mjs",
     "./supervisor": "./src/supervisor.mjs",
     "./lifecycle-bridge": "./src/lifecycle-bridge.mjs",
+    "./system-message": "./src/system-message.mjs",
     "./task-trigger": "./src/task-trigger.mjs",
     "./capability-bridge": "./src/capability-bridge.mjs",
     "./capability-skills": "./src/capability-skills.mjs",

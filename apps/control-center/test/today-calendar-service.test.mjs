@@ -106,6 +106,27 @@ test("removing a contact prunes only its calendar entries", async () => {
   assert.deepEqual(stored.events.map((event) => event.contactId), [contacts[1].id]);
 });
 
+test("today hides a contact and its calendar entries while preserving the saved data", async () => {
+  const { contacts, dataRoot, service } = await fixture();
+  await service.saveEvent({ contactId: contacts[0].id, name: "可见日程", date: "2026-08-14", type: "日程", repeat: false, enabled: true });
+  await service.saveEvent({ contactId: contacts[1].id, name: "隐私日程", date: "2026-08-15", type: "日程", repeat: false, enabled: true });
+
+  contacts[1].hidden = true;
+  const hidden = await service.snapshot({ year: 2026 });
+  assert.deepEqual(hidden.contacts, [{ id: contacts[0].id, name: contacts[0].name }]);
+  assert.equal(hidden.events.some((event) => event.contactId === contacts[1].id), false);
+  await assert.rejects(
+    () => service.saveEvent({ contactId: contacts[1].id, name: "隐藏期间新增", date: "2026-08-16", type: "日程" }),
+    /不存在或不可用/u,
+  );
+  const stored = JSON.parse(await fs.readFile(path.join(dataRoot, "calendar", "calendar.local.json"), "utf8"));
+  assert.equal(stored.events.some((event) => event.contactId === contacts[1].id && event.name === "隐私日程"), true);
+
+  contacts[1].hidden = false;
+  const restored = await service.snapshot({ year: 2026 });
+  assert.equal(restored.events.some((event) => event.contactId === contacts[1].id && event.name === "隐私日程"), true);
+});
+
 test("today calendar requires a current contact before creating personal events", async () => {
   const dataRoot = await fs.mkdtemp(path.join(os.tmpdir(), "suzu-calendar-data-"));
   const service = createTodayCalendarService({

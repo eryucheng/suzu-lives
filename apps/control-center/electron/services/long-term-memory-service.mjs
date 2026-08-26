@@ -10,6 +10,8 @@ import {
 } from "@suzu-memory/providers";
 import { createMemoryService as createSuzuMemoryService } from "@suzu-memory/service";
 
+import { visibleContactProjectsSnapshot } from "./contact-projects.mjs";
+
 const HOST_ID = "suzu-lives-control-center";
 const DEFAULT_DASHSCOPE_EMBEDDING_MODEL = "text-embedding-v4";
 const SESSION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
@@ -385,7 +387,9 @@ export function createLongTermMemoryService({
   };
 
   const contactConversationScope = async ({ contactId = "", optional = false } = {}) => {
-    const contactsSnapshot = await contactProjectsService.snapshot();
+    const contactsSnapshot = typeof contactProjectsService.visibleSnapshot === "function"
+      ? await contactProjectsService.visibleSnapshot()
+      : visibleContactProjectsSnapshot(await contactProjectsService.snapshot());
     const contactRows = Array.isArray(contactsSnapshot?.contacts) ? contactsSnapshot.contacts : [];
     const contacts = publicContacts(contactRows);
     const activeContact = publicContact(contactsSnapshot?.activeContact);

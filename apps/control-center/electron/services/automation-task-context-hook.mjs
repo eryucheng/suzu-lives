@@ -51,10 +51,7 @@ export function createAutomationTaskContextHook() {
         ...(turnKind ? { turnKind } : {}),
         outputPolicy,
       }),
-      text: [
-        "这是本轮由软件触发的内部任务，不是用户发来的新消息。",
-        text,
-      ].join("\n\n"),
+      text,
     });
   };
   return Object.freeze({ collect });

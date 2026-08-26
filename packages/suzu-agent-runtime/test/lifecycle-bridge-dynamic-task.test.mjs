@@ -46,6 +46,16 @@ function createPublishingSession(ctx) {
     events,
     surface: { nodes: surfaceNodes },
     requestHeader: () => ({ config: { provider: "deepseek", model: "deepseek-chat" } }),
+    deriveMessages() {
+      return surfaceNodes
+        .map((sequence) => events[sequence])
+        .map((event) => {
+          if (event?.type === "user/message") return event.data;
+          if (event?.type === "assistant/message" || event?.type === "tool/result") return event.data?.message;
+          return null;
+        })
+        .filter(Boolean);
+    },
     append(type, data, options = {}) {
       assert.equal(publishing, false, "cleanup must run after the observed session append");
       const event = {
@@ -87,7 +97,7 @@ async function flushDeferredSessionWork() {
   await Promise.resolve();
 }
 
-test("bridge tracks a dynamic task after Core has removed its empty trigger", async () => {
+test("bridge projects a dynamic task after the current conversation history", async () => {
   const channel = createParentChannel((request) => {
     if (request.event === "ContextCollect") return { blocks: [] };
     if (request.event === "DynamicContextCollect") {
@@ -113,17 +123,30 @@ test("bridge tracks a dynamic task after Core has removed its empty trigger", as
   session.append("turn/start", { turn: 7 });
   session.append("step/start", { turn: 7, step: 1 });
 
-  // This is the real Agent Core timing: it has already removed its empty
-  // task-trigger by the time the lifecycle hook observes the message list.
+  const trigger = {
+    id: "task-trigger",
+    role: "user",
+    content: [],
+    source: {
+      kind: "plugin",
+      plugin: "suzu-lifecycle-bridge",
+      form: "task-trigger",
+      outputPolicy: "external",
+    },
+  };
   const outcome = await ctx.listeners.get("agent/pre-step").callback({
     agent: { id: session.id, session },
     turn: 7,
     step: 1,
     signal: { aborted: false },
-  }, async () => ({ kind: "enter", messages: [] }));
+  }, async () => ({ kind: "enter", messages: [trigger] }));
 
   assert.equal(outcome.messages.length, 1);
-  const dynamic = session.append("user/message", outcome.messages[0], { surfaceOp: "append" });
+  assert.equal(outcome.messages[0], trigger);
+  const taskInput = session.append("user/message", outcome.messages[0], { surfaceOp: "append" });
+  const projected = session.deriveMessages();
+  assert.deepEqual(projected.map((message) => message.role), ["user", "system"]);
+  assert.equal(projected.at(-1).content[0].text, "判断是否主动关心。");
   const noReply = session.append("assistant/message", {
     turn: 7,
     step: 1,
@@ -143,8 +166,8 @@ test("bridge tracks a dynamic task after Core has removed its empty trigger", as
   const cleanup = events.at(-1);
   assert.equal(cleanup.type, "user/message");
   assert.equal(cleanup.data.source.form, "task-cleanup");
-  assert.deepEqual(cleanup.surfaceOp, { op: "replace", start: dynamic.seq, end: noReply.seq });
-  assert.deepEqual(cleanup.sourceEventSeqs, [dynamic.seq, noReply.seq]);
+  assert.deepEqual(cleanup.surfaceOp, { op: "replace", start: taskInput.seq, end: noReply.seq });
+  assert.deepEqual(cleanup.sourceEventSeqs, [taskInput.seq, noReply.seq]);
   assert.deepEqual(surfaceNodes, [cleanup.seq]);
   transport.dispose();
 });

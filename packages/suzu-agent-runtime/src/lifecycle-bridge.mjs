@@ -12,6 +12,12 @@ import {
   isSuzuAgentTaskTrigger,
   normalizeSuzuAgentTaskOutputPolicy,
 } from "./task-trigger.mjs";
+import {
+  SYSTEM_MESSAGE_PLACEMENTS,
+  createSystemMessage as createRuntimeSystemMessage,
+  createSystemMessageInjection,
+  projectSystemMessageInjections,
+} from "./system-message.mjs";
 
 export const name = "suzu-lifecycle-bridge";
 export const inject = [];
@@ -60,6 +66,20 @@ function automationTaskOutputPolicy(blocks) {
     }
   }
   return found ? "external" : "";
+}
+
+function automationTaskBlocks(blocks) {
+  return (Array.isArray(blocks) ? blocks : [])
+    .filter((block) => clean(plainObject(block).kind) === "automation-task");
+}
+
+function nonAutomationTaskBlocks(blocks) {
+  return (Array.isArray(blocks) ? blocks : [])
+    .filter((block) => clean(plainObject(block).kind) !== "automation-task");
+}
+
+function renderAutomationTask(blocks) {
+  return automationTaskBlocks(blocks).map((block) => block.text).join("\n\n");
 }
 
 function hasBoundaryNoReply(value) {
@@ -522,11 +542,13 @@ function contextEventPayload({ agent, session, turn, step, blocks = [], error = 
 export function createSuzuAgentLifecycleBridge({
   createMessage = createUserMessage,
   createResponseMessage = createAssistantMessage,
+  createSystemMessage = createRuntimeSystemMessage,
   isAgentLoopCall = isAgentLoopRequest,
   transport = createSuzuAgentLifecycleBridgeTransport(),
 } = {}) {
   if (typeof createMessage !== "function") throw new TypeError("lifecycle bridge requires createUserMessage().");
   if (typeof createResponseMessage !== "function") throw new TypeError("lifecycle bridge requires createAssistantMessage().");
+  if (typeof createSystemMessage !== "function") throw new TypeError("lifecycle bridge requires createSystemMessage().");
   if (typeof isAgentLoopCall !== "function") throw new TypeError("lifecycle bridge requires isAgentLoopRequest().");
   if (typeof transport?.request !== "function" || typeof transport?.notify !== "function") {
     throw new TypeError("lifecycle bridge requires request() and notify() transport methods.");
@@ -536,6 +558,7 @@ export function createSuzuAgentLifecycleBridge({
   const dynamicRecordsBySession = new Map();
   const knownSessionsById = new Map();
   const silentTaskRecordsBySession = new Map();
+  const automationTurnRecordsBySession = new Map();
   const streamRecordsBySession = new Map();
   const sessionRepairTails = new Map();
 
@@ -646,6 +669,74 @@ export function createSuzuAgentLifecycleBridge({
     if (record) records.delete(turn);
     if (!records.size) silentTaskRecordsBySession.delete(clean(session?.id));
     return record;
+  };
+
+  const automationTurnRecordsFor = (session, { create = false } = {}) => {
+    const id = clean(session?.id);
+    if (!id) return null;
+    const records = automationTurnRecordsBySession.get(id);
+    if (records || !create) return records || null;
+    const created = new Map();
+    automationTurnRecordsBySession.set(id, created);
+    return created;
+  };
+
+  const rememberAutomationTurn = (session, turn, outputPolicy = "external") => {
+    if (!Number.isInteger(turn)) return null;
+    const records = automationTurnRecordsFor(session, { create: true });
+    if (!records) return null;
+    const known = records.get(turn);
+    if (known) return known;
+    const record = {
+      injections: Object.freeze([]),
+      projection: null,
+      session,
+      systemMessage: null,
+      turn,
+    };
+    records.set(turn, record);
+    rememberTask(session, turn, outputPolicy);
+    return record;
+  };
+
+  const automationTurnFor = (session, turn) => {
+    if (!Number.isInteger(turn)) return null;
+    return automationTurnRecordsFor(session)?.get(turn) || null;
+  };
+
+  const takeAutomationTurn = (session, turn) => {
+    const records = automationTurnRecordsFor(session);
+    if (!records || !Number.isInteger(turn)) return null;
+    const record = records.get(turn) || null;
+    record?.projection?.restore?.();
+    records.delete(turn);
+    if (!records.size) automationTurnRecordsBySession.delete(clean(session?.id));
+    return record;
+  };
+
+  const installAutomationProjection = (record) => {
+    const session = record?.session;
+    if (record?.projection || typeof session?.deriveMessages !== "function") return Boolean(record?.projection);
+    const ownDescriptor = Object.getOwnPropertyDescriptor(session, "deriveMessages");
+    const upstream = session.deriveMessages;
+    const projected = function deriveMessagesWithTransientSystemInstructions(...args) {
+      const messages = upstream.apply(this, args);
+      if (automationTurnFor(session, record.turn) !== record) return messages;
+      return projectSystemMessageInjections({ messages }, record.injections).messages;
+    };
+    Object.defineProperty(session, "deriveMessages", {
+      configurable: true,
+      writable: true,
+      value: projected,
+    });
+    record.projection = Object.freeze({
+      restore() {
+        if (session.deriveMessages !== projected) return;
+        if (ownDescriptor) Object.defineProperty(session, "deriveMessages", ownDescriptor);
+        else delete session.deriveMessages;
+      },
+    });
+    return true;
   };
 
   const cleanupMessage = () => createMessage({
@@ -976,6 +1067,7 @@ export function createSuzuAgentLifecycleBridge({
         } else {
           clearStreamRecordsForTurn(session, turn);
         }
+        takeAutomationTurn(session, turn);
         return;
       }
 
@@ -994,6 +1086,12 @@ export function createSuzuAgentLifecycleBridge({
       const key = clean(session?.id);
       if (!key) return;
       dynamicRecordsBySession.set(key, [...activeDynamicRecords(session), record]);
+    });
+
+    ctx.on("agent/inbox/claimed", ({ agent, message, turn }) => {
+      if (!isSuzuAgentTaskTrigger(message)) return;
+      const session = rememberSession(agent?.session);
+      rememberAutomationTurn(session, Number(turn), taskOutputPolicy(message));
     });
 
     ctx.on("agent/pre-step", async ({ agent, turn, step, signal }, next) => {
@@ -1026,11 +1124,9 @@ export function createSuzuAgentLifecycleBridge({
           ? "silent"
           : "external";
         rememberTask(session, turn, outputPolicy);
+        rememberAutomationTurn(session, turn, outputPolicy);
       }
-      // A task trigger only wakes Core. Leaving it in `messages` would append
-      // it to the session as a faux user entry; task text is injected below as
-      // dynamic context for this request alone.
-      const messages = decision.messages.filter((message) => !isSuzuAgentTaskTrigger(message));
+      const messages = [...decision.messages];
       if (blocks.length) {
         try {
           messages.push(...blocks.map((block) => createMessage({
@@ -1062,13 +1158,51 @@ export function createSuzuAgentLifecycleBridge({
           error: dynamicReply.reason || "parent-unavailable",
         }));
       } else {
-        const dynamicBlocks = injectedBlocks(dynamicReply.result);
-        // Real Agent Core removes its empty task trigger from the inbox before
-        // this hook returns. The dynamic automation block is therefore the
-        // durable source of truth for associating the whole turn with its
-        // output policy; relying on decision.messages alone loses that link.
-        const dynamicTaskPolicy = automationTaskOutputPolicy(dynamicBlocks);
-        if (dynamicTaskPolicy) rememberTask(session, turn, dynamicTaskPolicy);
+        const collectedDynamicBlocks = injectedBlocks(dynamicReply.result);
+        const dynamicTaskPolicy = automationTaskOutputPolicy(collectedDynamicBlocks);
+        if (dynamicTaskPolicy) {
+          rememberTask(session, turn, dynamicTaskPolicy);
+          rememberAutomationTurn(session, turn, dynamicTaskPolicy);
+        }
+        const taskBlocks = automationTaskBlocks(collectedDynamicBlocks);
+        const automationTurn = taskBlocks.length
+          ? automationTurnFor(session, turn) || rememberAutomationTurn(session, turn, dynamicTaskPolicy || "external")
+          : null;
+        if (automationTurn && !automationTurn.systemMessage) {
+          try {
+            const text = renderAutomationTask(taskBlocks);
+            automationTurn.systemMessage = createSystemMessage({
+              content: [{ type: "text", text }],
+              source: {
+                kind: "plugin",
+                plugin: name,
+                form: "automation-task",
+                sections: taskBlocks.map(contextSnapshotSection),
+              },
+            });
+            automationTurn.injections = Object.freeze([createSystemMessageInjection({
+              message: automationTurn.systemMessage,
+              placement: SYSTEM_MESSAGE_PLACEMENTS.HISTORY_TAIL,
+            })]);
+            if (!installAutomationProjection(automationTurn)) {
+              throw new TypeError("active session does not expose deriveMessages().");
+            }
+            transport.notify("DynamicContextInjected", contextEventPayload({
+              agent,
+              turn,
+              step,
+              blocks: taskBlocks,
+            }));
+          } catch (error) {
+            transport.notify("DynamicContextInjectionFailed", contextEventPayload({
+              agent,
+              turn,
+              step,
+              error: errorText(error),
+            }));
+          }
+        }
+        const dynamicBlocks = nonAutomationTaskBlocks(collectedDynamicBlocks);
         if (dynamicBlocks.length) {
           try {
             const dynamicMessage = createMessage({
@@ -1097,10 +1231,6 @@ export function createSuzuAgentLifecycleBridge({
         }
       }
 
-      // A task trigger can be removed while one dynamic block is added, leaving
-      // the same array length. Compare the actual sequence instead of using
-      // length as a proxy, otherwise Core would retain the trigger and drop
-      // the dynamic task body.
       const unchanged = messages.length === decision.messages.length
         && messages.every((message, index) => message === decision.messages[index]);
       return unchanged ? decision : { kind: "enter", messages };

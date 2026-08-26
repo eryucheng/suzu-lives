@@ -83,6 +83,8 @@ test("conversation reader never opens history for a hidden active contact", asyn
   const snapshot = await reader.snapshot();
 
   assert.equal(snapshot.activeContact, null);
+  assert.deepEqual(snapshot.contacts, []);
+  assert.equal(snapshot.hiddenContactCount, 1);
   assert.equal(snapshot.projectRoot, "");
   assert.equal(snapshot.activeSessionId, "");
   assert.equal(historyCalls, 0);

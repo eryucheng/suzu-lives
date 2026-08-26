@@ -13,6 +13,7 @@ import {
   setAvatarCropZoom,
 } from "../core/avatar-file.mjs";
 import { releasePointerCapture } from "../core/pointer-capture.mjs";
+import { stickerMetadataFormIsEmpty } from "../features/create/sticker-form.mjs";
 import { PageScaffold } from "./page-scaffold.jsx";
 import { usePointerCaptureRecovery } from "./pointer-capture-recovery.mjs";
 
@@ -208,7 +209,17 @@ function StickerCropDialog({ crop, onCancel, onConfirm }) {
 }
 
 function StickerMetadataForm({ busy, form, mode, needsCompletion, onCancel, onChange, onComplete, onDelete, onSubmit, tagging }) {
+  const empty = stickerMetadataFormIsEmpty(form);
   const title = mode === "new" ? "添加到表情系统" : "编辑表情信息";
+  const submitLabel = tagging
+    ? "正在生成…"
+    : busy
+      ? "正在保存…"
+      : empty
+        ? mode === "new" ? "保存并后台生成" : "生成表情信息"
+        : mode === "new"
+          ? "保存到表情系统"
+          : "保存修改";
   return (
     <form
       className="sticker-metadata-form"
@@ -221,9 +232,9 @@ function StickerMetadataForm({ busy, form, mode, needsCompletion, onCancel, onCh
     >
       <div className="sticker-editor-heading">
         <div><span className="reference-kicker">{mode === "new" ? "NEW STICKER" : "STICKER INFO"}</span><h2>{title}</h2></div>
-        <Status label={tagging ? "正在生成" : mode === "new" ? "回车保存" : "可编辑"} tone={tagging || mode === "new" ? "success" : "muted"} />
+        <Status label={tagging ? "后台生成中" : empty ? mode === "new" ? "回车保存并生成" : "回车生成" : mode === "new" ? "回车保存" : "可编辑"} tone={tagging || empty || mode === "new" ? "success" : "muted"} />
       </div>
-      <p className="sticker-form-note">裁剪后会自动生成名称、画面说明和检索词；你可以直接修改。</p>
+      <p className="sticker-form-note">三项都不填写时按回车，会先保存图片并在后台生成信息，可以立即继续添加下一张；手动填写任一项后按回车会直接保存。</p>
       <div className="sticker-form-grid">
         <label className="sticker-form-field sticker-form-field--wide">
           <span>名称</span>
@@ -243,16 +254,16 @@ function StickerMetadataForm({ busy, form, mode, needsCompletion, onCancel, onCh
           {mode === "edit" ? <button className="sticker-danger-button" disabled={busy} onClick={onDelete} type="button">删除表情包</button> : null}
         </div>
         <div>
-          {mode === "edit" && needsCompletion ? <button className="text-button" disabled={busy} onClick={onComplete} type="button">补全信息</button> : null}
+          {mode === "edit" && needsCompletion && !empty ? <button className="text-button" disabled={busy} onClick={onComplete} type="button">补全信息</button> : null}
           {mode === "new" ? <button className="text-button" disabled={busy} onClick={onCancel} type="button">取消添加</button> : null}
-          <button className="primary-button" disabled={busy} type="submit">{busy ? "正在保存…" : mode === "new" ? "保存到表情系统" : "保存修改"}</button>
+          <button className="primary-button" disabled={busy} type="submit">{submitLabel}</button>
         </div>
       </footer>
     </form>
   );
 }
 
-function StickerLibraryRail({ items, loading, onAdd, onSelect, selectedId }) {
+function StickerLibraryRail({ completingIds, items, loading, onAdd, onSelect, selectedId }) {
   return (
     <aside className="sticker-library-rail">
       <header>
@@ -262,11 +273,12 @@ function StickerLibraryRail({ items, loading, onAdd, onSelect, selectedId }) {
       {items.length ? (
         <div className="sticker-library-grid">
           {items.map((item) => {
+            const completing = completingIds.has(item.id);
             const selected = item.id === selectedId;
             return (
               <button aria-pressed={selected} className={`sticker-library-item${selected ? " is-selected" : ""}`} key={item.id} onClick={() => onSelect(item)} type="button">
                 <img alt="" src={item.fileUrl} />
-                <span><strong>{item.metadata?.name || item.fileName}</strong><small>{item.metadata?.keywords?.slice(0, 2).join(" · ") || "正在整理"}</small></span>
+                <span><strong>{item.metadata?.name || item.fileName}</strong><small>{completing ? "正在后台生成信息" : item.metadata?.keywords?.slice(0, 2).join(" · ") || "尚未填写信息"}</small></span>
               </button>
             );
           })}
@@ -285,6 +297,7 @@ function StickerLibraryRail({ items, loading, onAdd, onSelect, selectedId }) {
 
 export function CreateStickerPage({ actions = {}, api = {} }) {
   const [busy, setBusy] = useState(false);
+  const [completingIds, setCompletingIds] = useState(() => new Set());
   const [crop, setCrop] = useState(null);
   const [draft, setDraft] = useState(null);
   const [error, setError] = useState("");
@@ -293,10 +306,20 @@ export function CreateStickerPage({ actions = {}, api = {} }) {
   const [notice, setNotice] = useState("");
   const [selectedId, setSelectedId] = useState("");
   const [snapshot, setSnapshot] = useState({ items: [], status: "empty" });
-  const [tagging, setTagging] = useState(false);
-  const automaticCompletionIds = useRef(new Set());
-  const completionRequest = useRef(0);
+  const completingIdsRef = useRef(new Set());
+  const draftRef = useRef(draft);
+  const selectedIdRef = useRef(selectedId);
   const stickers = api?.conversation?.emojiStickers;
+  draftRef.current = draft;
+  selectedIdRef.current = selectedId;
+
+  const setCompletionPending = useCallback((id, pending) => {
+    const next = new Set(completingIdsRef.current);
+    if (pending) next.add(id);
+    else next.delete(id);
+    completingIdsRef.current = next;
+    setCompletingIds(next);
+  }, []);
 
   const applySnapshot = useCallback((next, preferredId = "") => {
     const value = next || { items: [], status: "empty" };
@@ -304,6 +327,7 @@ export function CreateStickerPage({ actions = {}, api = {} }) {
     const targetId = clean(preferredId) || clean(selectedId);
     const selected = items.find((item) => item.id === targetId) || items[0] || null;
     setSnapshot(value);
+    selectedIdRef.current = selected?.id || "";
     setSelectedId(selected?.id || "");
     if (!draft) setForm(formFromMetadata(selected?.metadata));
     return selected;
@@ -323,10 +347,13 @@ export function CreateStickerPage({ actions = {}, api = {} }) {
     () => (snapshot.items || []).find((item) => item.id === selectedId) || null,
     [selectedId, snapshot.items],
   );
+  const selectedTagging = Boolean(selectedId && completingIds.has(selectedId));
 
   const changeForm = (field, value) => setForm((current) => ({ ...current, [field]: value }));
   const selectSticker = (item) => {
-    if (busy || tagging) return;
+    if (busy) return;
+    draftRef.current = null;
+    selectedIdRef.current = item.id;
     setDraft(null);
     setSelectedId(item.id);
     setForm(formFromMetadata(item.metadata));
@@ -335,14 +362,15 @@ export function CreateStickerPage({ actions = {}, api = {} }) {
   };
 
   const beginAdd = async () => {
-    if (busy || tagging || typeof stickers?.select !== "function") return;
+    if (busy || typeof stickers?.select !== "function") return;
     setBusy(true);
     setError("");
     setNotice("");
     try {
       const selection = await stickers.select();
       if (selection?.canceled) return;
-      const source = selection.previewDataUrl || selection.fileUrl;
+      const source = clean(selection.fileUrl);
+      if (!source) throw new Error("没有收到所选表情包的本地地址。");
       const dimensions = await loadImageDimensions(source);
       setCrop({
         selection,
@@ -355,84 +383,70 @@ export function CreateStickerPage({ actions = {}, api = {} }) {
     }
   };
 
-  const completeDraft = useCallback(async (nextDraft) => {
-    if (!nextDraft || typeof stickers?.complete !== "function") return;
-    const requestId = ++completionRequest.current;
-    setTagging(true);
-    setError("");
-    setNotice("正在根据图片生成名称、画面说明和检索词…");
-    try {
-      const response = await stickers.complete({
-        data: nextDraft.data,
-        metadata: metadataFromForm(EMPTY_FORM),
-        mimeType: nextDraft.mimeType,
-        selectionToken: nextDraft.selectionToken,
-      });
-      if (completionRequest.current !== requestId) return;
-      if (!response?.metadata) throw new Error("没有收到表情包信息。");
-      setForm(formFromMetadata(response.metadata));
-      setNotice("已自动生成表情信息，可以直接修改后保存。");
-    } catch (reason) {
-      if (completionRequest.current !== requestId) return;
-      setNotice("");
-      setError(`暂时无法自动生成表情信息：${reason?.message || reason}。你仍可直接填写后保存。`);
-    } finally {
-      if (completionRequest.current !== requestId) return;
-      setTagging(false);
-      setDraft((current) => current?.selectionToken === nextDraft.selectionToken
-        ? { ...current, autoCompletionAttempted: true }
-        : current);
-    }
-  }, [stickers]);
-
-  const completeSaved = useCallback(async (item, metadata = item?.metadata, { automatic = false } = {}) => {
-    if (!item || typeof stickers?.complete !== "function") return;
-    const requestId = ++completionRequest.current;
-    setTagging(true);
-    setError("");
-    setNotice(automatic ? "正在补全这张表情包的信息…" : "正在生成名称、画面说明和检索词…");
-    try {
-      const response = await stickers.complete({ id: item.id, metadata });
-      if (completionRequest.current !== requestId) return;
-      const completed = applySnapshot(response, item.id);
+  const applyCompletionSnapshot = useCallback((next, itemId) => {
+    const value = next || { items: [], status: "empty" };
+    const items = Array.isArray(value.items) ? value.items : [];
+    const completed = items.find((item) => item.id === itemId) || null;
+    setSnapshot(value);
+    if (!draftRef.current && selectedIdRef.current === itemId) {
       setForm(formFromMetadata(completed?.metadata));
-      setNotice(automatic ? "已自动补全这张表情包的信息。" : "已补全表情信息，可以继续修改。" );
-    } catch (reason) {
-      if (completionRequest.current !== requestId) return;
-      setNotice("");
-      setError(`暂时无法自动生成表情信息：${reason?.message || reason}。你仍可直接填写后保存。`);
-    } finally {
-      if (completionRequest.current !== requestId) return;
-      setTagging(false);
     }
-  }, [applySnapshot, stickers]);
+    return completed;
+  }, []);
 
-  useEffect(() => {
-    if (draft || busy || tagging || !selected || typeof stickers?.complete !== "function") return;
-    if (!metadataNeedsCompletion(selected.metadata) || automaticCompletionIds.current.has(selected.id)) return;
-    automaticCompletionIds.current.add(selected.id);
-    void completeSaved(selected, selected.metadata, { automatic: true });
-  }, [busy, completeSaved, draft, selected, stickers, tagging]);
+  const completeSaved = useCallback(async (item, metadata = item?.metadata, { background = false } = {}) => {
+    const itemId = clean(item?.id);
+    if (!itemId || completingIdsRef.current.has(itemId)) return;
+    if (typeof stickers?.complete !== "function") {
+      setError("当前版本无法生成表情信息，请先手动填写。");
+      return;
+    }
+    const itemLabel = clean(item?.metadata?.name) || clean(item?.fileName) || "表情包";
+    setCompletionPending(itemId, true);
+    if (!background) {
+      setError("");
+      setNotice("正在生成名称、画面说明和检索词；你可以继续添加其他表情包。");
+    }
+    try {
+      const response = await stickers.complete({ id: itemId, metadata });
+      const completed = applyCompletionSnapshot(response, itemId);
+      const completedLabel = clean(completed?.metadata?.name) || itemLabel;
+      setNotice(`“${completedLabel}”的信息已生成并自动保存。`);
+    } catch (reason) {
+      setError(`“${itemLabel}”暂时无法生成表情信息：${reason?.message || reason}。图片已经保存，可以稍后补全。`);
+    } finally {
+      setCompletionPending(itemId, false);
+    }
+  }, [applyCompletionSnapshot, setCompletionPending, stickers]);
 
   const confirmCrop = (image, value) => {
     try {
       const output = squareStickerFromElement(image, value);
       if (draft?.selectionToken) void stickers.discardSelection?.({ selectionToken: draft.selectionToken }).catch(() => undefined);
       const nextDraft = { ...output, selectionToken: crop.selection.selectionToken };
+      draftRef.current = nextDraft;
+      selectedIdRef.current = "";
       setDraft(nextDraft);
       setCrop(null);
       setSelectedId("");
       setForm({ ...EMPTY_FORM });
       setError("");
-      void completeDraft(nextDraft);
+      setNotice("");
     } catch (reason) {
       setError(`无法裁剪表情包：${reason?.message || reason}`);
     }
   };
 
   const submit = async () => {
-    if (busy || tagging) return;
+    if (busy || selectedTagging) return;
+    const metadata = metadataFromForm(form);
+    const empty = stickerMetadataFormIsEmpty(form);
+    if (!draft && empty) {
+      if (selected) await completeSaved(selected, metadata);
+      return;
+    }
     const savingDraft = draft;
+    const generateAfterSave = Boolean(savingDraft && empty);
     setBusy(true);
     setError("");
     setNotice("");
@@ -440,22 +454,26 @@ export function CreateStickerPage({ actions = {}, api = {} }) {
       let response;
       if (savingDraft) {
         response = await stickers.add({
-          autoCompletionAttempted: savingDraft.autoCompletionAttempted === true,
           data: savingDraft.data,
-          metadata: metadataFromForm(form),
+          metadata,
           mimeType: savingDraft.mimeType,
           selectionToken: savingDraft.selectionToken,
         });
       } else if (selected) {
-        response = await stickers.update({ id: selected.id, metadata: metadataFromForm(form) });
+        response = await stickers.update({ id: selected.id, metadata });
       } else {
         return;
       }
       const selectedAfterSave = applySnapshot(response, response.addedId || response.updatedId);
+      draftRef.current = null;
       setDraft(null);
       setForm(formFromMetadata(selectedAfterSave?.metadata));
-      if (response.tagging?.status === "failed") setNotice(`表情包已保存；${response.tagging.message}`);
-      else setNotice(savingDraft ? "表情包已保存。" : "表情信息已更新。");
+      if (generateAfterSave && selectedAfterSave) {
+        setNotice("表情包已保存，正在后台生成信息；现在可以继续添加下一张。");
+        void completeSaved(selectedAfterSave, selectedAfterSave.metadata, { background: true });
+      } else {
+        setNotice(savingDraft ? "表情包已保存。" : "表情信息已更新。");
+      }
     } catch (reason) {
       setError(`无法保存表情包：${reason?.message || reason}`);
     } finally {
@@ -464,7 +482,7 @@ export function CreateStickerPage({ actions = {}, api = {} }) {
   };
 
   const removeSelected = async () => {
-    if (!selected || busy || tagging || !window.confirm(`确定删除“${selected.metadata?.name || selected.fileName}”吗？`)) return;
+    if (!selected || busy || selectedTagging || !window.confirm(`确定删除“${selected.metadata?.name || selected.fileName}”吗？`)) return;
     setBusy(true);
     setError("");
     try {
@@ -489,7 +507,7 @@ export function CreateStickerPage({ actions = {}, api = {} }) {
       className="create-sticker-react-page"
       header={(
         <PageHeader
-          action={<div className="create-subpage-actions"><button className="secondary-button" onClick={actions.returnToOverview} type="button">返回创造</button><button className="primary-button" disabled={busy || tagging} onClick={() => { void beginAdd(); }} type="button">添加表情包</button></div>}
+          action={<div className="create-subpage-actions"><button className="secondary-button" onClick={actions.returnToOverview} type="button">返回创造</button><button className="primary-button" disabled={busy} onClick={() => { void beginAdd(); }} type="button">添加表情包</button></div>}
           eyebrow="CREATE / STICKERS"
           subtitle="整理自定义表情的图片、说明与检索词，让聊天与 Agent 共用同一套表情系统。"
           title="表情包工作台"
@@ -499,16 +517,20 @@ export function CreateStickerPage({ actions = {}, api = {} }) {
       {error ? <div className="sticker-workbench-feedback is-error" role="alert">{error}</div> : null}
       {notice ? <div className="sticker-workbench-feedback" role="status">{notice}</div> : null}
       <div className="sticker-workbench">
-        <StickerLibraryRail items={snapshot.items || []} loading={loading || busy || tagging} onAdd={() => { void beginAdd(); }} onSelect={selectSticker} selectedId={selectedId} />
+        <StickerLibraryRail completingIds={completingIds} items={snapshot.items || []} loading={loading || busy} onAdd={() => { void beginAdd(); }} onSelect={selectSticker} selectedId={selectedId} />
         <main className="sticker-editor-panel">
           {preview ? (
             <>
               <div className="sticker-editor-preview">
-                <div><img alt={draft ? "新表情包预览" : selected?.metadata?.name || selected?.fileName || "表情包预览"} src={preview} /></div>
-                <p>{draft ? tagging ? "正在根据图片生成表情信息…" : "已完成正方形裁剪，可以直接修改后保存。" : selected?.fileName}</p>
+                <div className="sticker-editor-preview-image"><img alt={draft ? "新表情包预览" : selected?.metadata?.name || selected?.fileName || "表情包预览"} src={preview} /></div>
+                <div className="sticker-editor-preview-copy">
+                  <span className="reference-kicker">{draft ? "NEW STICKER" : "SELECTED STICKER"}</span>
+                  <strong>{clean(form.name) || (draft ? "新表情包" : selected?.fileName || "当前表情包")}</strong>
+                  <p>{draft ? "已完成正方形裁剪；全部留空按回车会保存并在后台生成，可以立即继续添加下一张。" : selectedTagging ? "正在后台生成信息；你可以继续添加其他表情包。" : selected?.fileName}</p>
+                </div>
               </div>
               <StickerMetadataForm
-                busy={busy || tagging}
+                busy={busy || selectedTagging}
                 form={form}
                 mode={mode}
                 needsCompletion={metadataNeedsCompletion(form)}
@@ -523,15 +545,15 @@ export function CreateStickerPage({ actions = {}, api = {} }) {
                 onComplete={() => { if (selected) void completeSaved(selected, metadataFromForm(form)); }}
                 onDelete={() => { void removeSelected(); }}
                 onSubmit={submit}
-                tagging={tagging}
+                tagging={selectedTagging}
               />
             </>
           ) : (
             <div className="sticker-editor-empty">
               <span aria-hidden="true">＋</span>
               <h2>添加一张表情包</h2>
-              <p>选择本机图片后先裁成正方形，系统会自动生成可编辑的信息。</p>
-              <button className="primary-button" disabled={busy || tagging} onClick={() => { void beginAdd(); }} type="button">选择图片</button>
+              <p>选择本机图片并裁成正方形后，可以手动填写；全部留空按回车会保存并在后台生成信息。</p>
+              <button className="primary-button" disabled={busy} onClick={() => { void beginAdd(); }} type="button">选择图片</button>
             </div>
           )}
         </main>

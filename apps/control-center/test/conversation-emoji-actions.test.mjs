@@ -66,9 +66,84 @@ test("conversation actions follow the active product feature catalog", () => {
     state: { settings: {} },
   };
   const actions = createConversationReactActions(context);
-  assert.equal(Object.hasOwn(actions, "loadEmojiStickers"), false);
-  assert.equal(Object.hasOwn(actions, "addEmojiSticker"), false);
-  assert.equal(Object.hasOwn(actions, "sendEmojiSticker"), false);
+  assert.equal(Object.hasOwn(actions, "loadBuiltinEmojiStickers"), true);
+  assert.equal(Object.hasOwn(actions, "loadEmojiStickers"), true);
+  assert.equal(Object.hasOwn(actions, "addEmojiSticker"), true);
+  assert.equal(Object.hasOwn(actions, "sendEmojiSticker"), true);
+});
+
+test("sending a sticker projects it immediately while the Agent turn is still running", async () => {
+  const priorWindow = globalThis.window;
+  let releaseSend;
+  const sendCalls = [];
+  const sendResult = new Promise((resolve) => { releaseSend = resolve; });
+  globalThis.window = {
+    clearInterval: () => {},
+    setInterval: () => 1,
+  };
+  const snapshot = {
+    activeContact: { agentId: "agent-sticker", id: "contact-sticker", name: "贴纸测试" },
+    activeSessionId: "session-sticker-optimistic",
+    contacts: [{ agentId: "agent-sticker", id: "contact-sticker", name: "贴纸测试" }],
+    contactsRoot: "D:/suzu-data/contacts",
+    messages: [],
+    projectRoot: "D:/suzu-data/contacts/sticker",
+    sessions: [{ id: "session-sticker-optimistic", title: "贴纸测试" }],
+    status: "ready",
+    version: "sticker-optimistic",
+  };
+  const context = {
+    api: {
+      conversation: {
+        emojiStickers: {
+          send: async (value) => {
+            sendCalls.push(value);
+            return sendResult;
+          },
+        },
+        onEvent: () => () => {},
+        snapshot: async () => snapshot,
+      },
+    },
+    render: () => {},
+    state: { settings: { conversationPreferences: {} } },
+  };
+  const sticker = {
+    fileName: "smug.png",
+    fileUrl: "file:///D:/suzu-data/stickers/smug.png",
+    id: "builtin:suzu:smug",
+    mimeType: "image/png",
+    size: 1024,
+  };
+
+  try {
+    startConversationPolling(context);
+    await flush();
+    const actions = createConversationReactActions(context);
+    actions.toggleEmoji();
+    const sending = actions.sendEmojiSticker(sticker);
+
+    const immediate = conversationReactSnapshot(context);
+    const row = immediate.messageRows.find((item) => item.type === "message" && item.kind === "user");
+    assert.equal(immediate.composer.emojiOpen, false);
+    assert.deepEqual(sendCalls, [{ id: "builtin:suzu:smug" }]);
+    assert.equal(row?.live, true);
+    assert.equal(row?.mediaOnly, true);
+    assert.equal(row?.blocks[0]?.mediaKind, "sticker");
+    assert.equal(row?.blocks[0]?.preview?.url, sticker.fileUrl);
+
+    releaseSend({
+      accepted: true,
+      media: [{ ...sticker, kind: "image", mediaSource: "sticker" }],
+      requestId: "request-sticker",
+      sessionId: snapshot.activeSessionId,
+    });
+    await sending;
+  } finally {
+    stopConversationPolling();
+    if (priorWindow === undefined) delete globalThis.window;
+    else globalThis.window = priorWindow;
+  }
 });
 
 test("composer image and file selections remain renderer tokens until the message is sent", async () => {

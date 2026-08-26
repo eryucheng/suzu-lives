@@ -521,9 +521,9 @@ test("companion header substitutes the contact note only during a real thinking 
 });
 
 test("conversation overlays close together when the user clicks away or presses Escape", () => {
-  const state = { avatarCrop: { source: "data:image/png;base64,avatar" }, contactCreateOpen: true, contactContextMenu: { contactId: "contact-test" }, contactRenameOpen: true, emojiOpen: true, fileContextMenu: { fileUrl: "file:///C:/temp/report.txt" }, mediaPreview: { url: "file:///C:/temp/image.png" }, menuOpen: true, messageContextMenu: { lineNumber: 42 }, qqBindingOpen: true, searchOpen: false, settingsOpen: true, wechatQrOpen: true };
+  const state = { avatarCrop: { source: "data:image/png;base64,avatar" }, confirmation: { title: "请确认" }, contactCreateOpen: true, contactContextMenu: { contactId: "contact-test" }, contactRenameOpen: true, emojiOpen: true, fileContextMenu: { fileUrl: "file:///C:/temp/report.txt" }, mediaPreview: { url: "file:///C:/temp/image.png" }, menuOpen: true, messageContextMenu: { lineNumber: 42 }, qqBindingOpen: true, searchOpen: false, settingsOpen: true, wechatQrOpen: true };
   assert.equal(dismissConversationOverlays(state), true);
-  assert.deepEqual(state, { avatarCrop: null, contactCreateOpen: false, contactContextMenu: null, contactRenameOpen: false, emojiOpen: false, fileContextMenu: null, mediaPreview: null, menuOpen: false, messageContextMenu: null, qqBindingOpen: false, searchOpen: false, settingsOpen: false, wechatQrOpen: false });
+  assert.deepEqual(state, { avatarCrop: null, confirmation: null, contactCreateOpen: false, contactContextMenu: null, contactRenameOpen: false, emojiOpen: false, fileContextMenu: null, mediaPreview: null, menuOpen: false, messageContextMenu: null, qqBindingOpen: false, searchOpen: false, settingsOpen: false, wechatQrOpen: false });
   assert.equal(dismissConversationOverlays(state), false);
 });
 
@@ -541,6 +541,65 @@ test("Suzu exposes stop and queue while retaining compatible steer parsing witho
     action: "notice",
     message: "可用的 Suzu 命令：/suzu stop 停止；/suzu queue <内容> 排队发送。普通消息会优先处理。",
   });
+});
+
+test("successful steer reaches the active turn without showing a delivery notice", async () => {
+  const priorWindow = globalThis.window;
+  let steerInput = null;
+  const contact = { agentId: "agent-steer", id: "contact-steer", name: "引导测试" };
+  globalThis.window = {
+    clearInterval: () => {},
+    setInterval: () => 1,
+  };
+  const snapshot = {
+    activeContact: contact,
+    activeSessionId: "session-steer",
+    contacts: [contact],
+    contactsRoot: "D:/suzu-data/contacts",
+    messages: [],
+    projectRoot: "D:/suzu-data/contacts/steer",
+    sessions: [{ id: "session-steer", title: "引导测试" }],
+    status: "ready",
+    version: "steer-notice-test",
+  };
+  const context = {
+    api: {
+      conversation: {
+        onEvent: () => () => {},
+        snapshot: async () => snapshot,
+        steer: async (input) => {
+          steerInput = input;
+          return {
+            delivered: true,
+            message: "引导已送达。",
+            requestId: "request-steer",
+            sessionId: snapshot.activeSessionId,
+          };
+        },
+      },
+    },
+    render: () => {},
+    state: { settings: { conversationPreferences: {} } },
+  };
+
+  try {
+    startConversationPolling(context);
+    await flush();
+    const actions = createConversationReactActions(context);
+    actions.setDraft("/suzu steer 直接继续");
+    actions.submitMessage();
+    await flush();
+    await flush();
+
+    const view = conversationReactSnapshot(context);
+    assert.deepEqual(steerInput, { content: "直接继续" });
+    assert.equal(view.notice, "");
+    assert.equal(view.error, "");
+  } finally {
+    stopConversationPolling();
+    if (priorWindow === undefined) delete globalThis.window;
+    else globalThis.window = priorWindow;
+  }
 });
 
 test("Markdown replies wait for completion and stay in one coherent chat bubble", () => {

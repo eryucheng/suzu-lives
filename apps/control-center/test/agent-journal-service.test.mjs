@@ -55,6 +55,30 @@ test("Agent journal keeps local calendar dates and rejects invalid ones", () => 
   assert.equal(localJournalDate(new Date(2026, 7, 18, 23, 59)), "2026-08-18");
 });
 
+test("Agent journal keeps writing for a hidden contact without listing it in the journal page", async () => {
+  const dataRoot = await temporaryDirectory("suzu-agent-journal-hidden-contact-");
+  const visible = { agentId: "agent-journal-visible", id: "contact-agent-journal-visible", name: "可见联系人" };
+  const hidden = { agentId: "agent-journal-hidden", id: "contact-agent-journal-hidden", name: "隐私联系人" };
+  const contacts = [visible, hidden];
+  const service = createAgentJournalService({
+    contactProjectsService: { snapshot: async () => ({ activeContact: visible, contacts, preferredContact: visible }) },
+    settingsService: {
+      load: () => ({ dataRoot }),
+      response: () => ({ dataRoot }),
+    },
+  });
+
+  hidden.hidden = true;
+  assert.deepEqual((await service.snapshot({ contactId: hidden.id })).contacts.map((contact) => contact.id), [visible.id]);
+  const recorded = await service.record({ contactId: hidden.id, content: "隐藏后仍由后台写入。", date: "2026-08-18" });
+  assert.equal(recorded.saved, true);
+
+  hidden.hidden = false;
+  const restored = await service.snapshot({ contactId: hidden.id });
+  assert.equal(restored.selectedContactId, hidden.id);
+  assert.equal(restored.entries[0]?.content, "隐藏后仍由后台写入。");
+});
+
 test("a completed journal turn cannot recreate data for a deleted contact", async () => {
   const dataRoot = await temporaryDirectory("suzu-agent-journal-removed-contact-");
   const contactId = "contact-agent-journal-removed";

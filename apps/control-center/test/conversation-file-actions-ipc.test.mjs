@@ -35,6 +35,7 @@ function registerFileActionHandlers({ clipboard, nativeImage = null, shell }) {
 test("conversation IPC surface follows the active product feature catalog", () => {
   const handlers = registerFileActionHandlers({ clipboard: {}, shell: {} });
   for (const channel of [
+    "conversation:builtin-emoji-stickers",
     "conversation:emoji-stickers",
     "conversation:select-emoji-sticker",
     "conversation:add-emoji-sticker",
@@ -43,7 +44,7 @@ test("conversation IPC surface follows the active product feature catalog", () =
     "conversation:remove-emoji-sticker",
     "conversation:send-emoji-sticker",
   ]) {
-    assert.equal(handlers.has(channel), false);
+    assert.equal(handlers.has(channel), true);
   }
 });
 

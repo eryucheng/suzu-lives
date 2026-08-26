@@ -21,6 +21,8 @@
       suzu_software_action 调用已登记的软件操作，并以工具返回的 completed 结果确认完成。
       用户明确要求新建联系人时，加载 contact-creation Skill；联系人名称和人设要求清楚后，
       调用 create-contact 完成创建与资料写入，不只提供手动步骤。
+      用户要求为二次元角色联系人补头像时，加载 contact-and-relationship Skill，默认调用
+      lookup-contact-avatar 从萌娘百科检索与保存预览；只有用户明确指定其他来源时才使用其他联网工具。
       用户授权修改本机设置、资料或源码时，先定位实际目标，再说明改动位置和结果。
 
       API Key、密码和令牌属于私密字段。指导配置时写明需要填写的字段、所在页面和保存状态。

@@ -20,7 +20,7 @@ test("visual reference workspace keeps import, organization, and thumbnail selec
 test("creation routes follow the active product feature catalog", async () => {
   const router = await readFile(new URL("../src/react/app-router.jsx", import.meta.url), "utf8");
   const app = await readFile(new URL("../src/app.mjs", import.meta.url), "utf8");
-  assert.equal(PRODUCT_FEATURES.customEmojiStickers, false);
+  assert.equal(PRODUCT_FEATURES.customEmojiStickers, true);
   assert.match(router, /case "create-stickers"/u);
   assert.match(router, /if \(!PRODUCT_FEATURES\.customEmojiStickers\) return null;/u);
   assert.match(router, /CreateStickerPage/u);

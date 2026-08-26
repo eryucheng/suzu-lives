@@ -1,6 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
+import { visibleContactProjectsSnapshot } from "./contact-projects.mjs";
+
 const CONTACT_ID = /^contact-[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
 const JOURNAL_DATE = /^\d{4}-\d{2}-\d{2}$/u;
 const MAX_CONTENT_LENGTH = 24_000;
@@ -174,15 +176,19 @@ export function createAgentJournalService({
     return next;
   };
 
-  const contacts = async () => {
-    const snapshot = await contactProjectsService.snapshot();
+  const contacts = async ({ visibleOnly = false } = {}) => {
+    const snapshot = visibleOnly
+      ? (typeof contactProjectsService.visibleSnapshot === "function"
+          ? await contactProjectsService.visibleSnapshot()
+          : visibleContactProjectsSnapshot(await contactProjectsService.snapshot()))
+      : await contactProjectsService.snapshot();
     return (Array.isArray(snapshot?.contacts) ? snapshot.contacts : [])
       .map(publicContact)
       .filter(Boolean);
   };
 
   const snapshot = async ({ contactId = "" } = {}) => {
-    const catalog = await contacts();
+    const catalog = await contacts({ visibleOnly: true });
     const requested = validContactId(contactId);
     const selected = catalog.find((contact) => contact.id === requested) || catalog[0] || null;
     if (!selected) return { contacts: [], entries: [], selectedContact: null, selectedContactId: "", status: "ready" };

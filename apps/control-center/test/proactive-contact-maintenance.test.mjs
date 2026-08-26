@@ -11,7 +11,9 @@ import {
   isProactiveContactTask,
   maintainProactiveContactChecks,
   proactiveContactNextCheckDelay,
+  proactiveContactTaskPurpose,
   proactiveContactTaskPrompt,
+  proactiveContactTimingDecision,
   proactiveContactTimingTaskPrompt,
   PROACTIVE_CONTACT_DESCRIPTION,
   PROACTIVE_CONTACT_INITIAL_DELAY,
@@ -183,11 +185,28 @@ test("the host writes the next contact check from Suzu's validated timing decisi
     now,
   });
 
-  const delay = proactiveContactNextCheckDelay('{"delayMinutes":150}');
-  assert.equal(delay, "150m");
-  const next = await scheduleNextProactiveContactCheck({ dataRoot, contactId, delay, now });
+  const decision = proactiveContactTimingDecision(JSON.stringify({
+    delayMinutes: 150,
+    nextCheckPurpose: "等对方忙完后，看看是否适合问问今天过得怎么样。",
+  }));
+  assert.deepEqual(decision, {
+    delay: "150m",
+    delayMinutes: 150,
+    nextCheckPurpose: "等对方忙完后，看看是否适合问问今天过得怎么样。",
+  });
+  const next = await scheduleNextProactiveContactCheck({
+    dataRoot,
+    contactId,
+    delay: decision.delay,
+    nextCheckPurpose: decision.nextCheckPurpose,
+    now,
+  });
   assert.notEqual(next.id, initial.id);
-  assert.equal(next.target.prompt, PROACTIVE_CONTACT_TASK_PROMPT);
+  assert.equal(next.target.prompt, [
+    PROACTIVE_CONTACT_TASK_PROMPT,
+    "下次检查时想关注：等对方忙完后，看看是否适合问问今天过得怎么样。",
+  ].join("\n"));
+  assert.equal(proactiveContactTaskPurpose(next), decision.nextCheckPurpose);
   assert.equal(next.dueAt, "2026-08-10T04:30:00.000Z");
   assert.equal((await listScheduleTasks({ dataRoot })).length, 1);
   assert.equal(isActiveProactiveContactTask((await listScheduleTasks({ dataRoot }))[0], { contactId }), true);
@@ -198,7 +217,13 @@ test("maintenance keeps one current check after an interrupted duplicate write",
   const contactId = "contact-duplicate";
   const now = new Date("2026-08-10T10:00:00+08:00");
   await createProactiveContactTask({ dataRoot, contactId, delay: "2h", now });
-  await createProactiveContactTask({ dataRoot, contactId, delay: "1d", now: new Date("2026-08-10T10:00:01+08:00") });
+  await createProactiveContactTask({
+    dataRoot,
+    contactId,
+    delay: "1d",
+    nextCheckPurpose: "明天再看看对方有没有休息好。",
+    now: new Date("2026-08-10T10:00:01+08:00"),
+  });
 
   const repaired = await maintainProactiveContactChecks({
     dataRoot,
@@ -207,7 +232,7 @@ test("maintenance keeps one current check after an interrupted duplicate write",
   });
 
   assert.equal(repaired.length, 1);
-  assert.equal(repaired[0].target.prompt, PROACTIVE_CONTACT_TASK_PROMPT);
+  assert.equal(proactiveContactTaskPurpose(repaired[0]), "明天再看看对方有没有休息好。");
   assert.equal(repaired[0].dueAt, "2026-08-11T02:00:02.000Z");
   assert.equal((await listScheduleTasks({ dataRoot })).filter((task) => isActiveProactiveContactTask(task, { contactId })).length, 1);
 });
@@ -220,19 +245,34 @@ test("the contact prompt defines the contact decision", () => {
     "依据当前时间和最近的互动频率，判断现在是否主动联系对方。",
     "要联系就发消息；否则输出 NO_REPLY。",
   ].join("\n"));
+  assert.equal(proactiveContactTaskPrompt({ nextCheckPurpose: "看看对方有没有休息好。" }), [
+    "【主动关心 A】",
+    "你上次安排这次检查时，想关注的是：看看对方有没有休息好。",
+    "依据当前时间和最近的互动频率，判断现在是否主动联系对方。",
+    "要联系就发消息；否则输出 NO_REPLY。",
+  ].join("\n"));
 });
 
-test("the timing prompt defines the next-delay JSON", () => {
+test("the timing prompt keeps the next check's time and purpose together", () => {
   const prompt = proactiveContactTimingTaskPrompt();
 
   assert.equal(prompt, [
-    "【主动关心 B】",
-    "任务：提供下一次检查间隔。",
-    "参考：当前时间、最近互动和相处节奏。",
-    "结果格式：{\"delayMinutes\": <15–720 的整数>}。",
-    "软件会依据这个值创建下一次主动关心任务。",
-    '{"delayMinutes":42}',
+    "【安排下一次主动关心】",
+    "请安排下一次再来看看对方的时间，并留下一句到时想关注什么。",
+    "时间到了，软件会把这句关注点和届时最新的聊天一起交给你，再由你判断是否适合主动发消息。",
+    "请按照你们最近的互动和相处节奏选择间隔：互动正频繁、对方可能需要陪伴时，可以早点再看；刚聊完、对方在忙或正在休息时，可以晚些再看。",
+    "只返回一个 JSON 对象：delayMinutes 是 15–720 的整数；nextCheckPurpose 用一句简短的话写清楚那时为什么要再看看对方。",
   ].join("\n"));
+  assert.deepEqual(proactiveContactTimingDecision(JSON.stringify({
+    delayMinutes: 90,
+    nextCheckPurpose: "晚一点看看对方是不是忙完了。",
+  })), {
+    delay: "90m",
+    delayMinutes: 90,
+    nextCheckPurpose: "晚一点看看对方是不是忙完了。",
+  });
+  assert.equal(proactiveContactTimingDecision('{"delayMinutes":90}'), null);
+  assert.equal(proactiveContactTimingDecision('{"delayMinutes":90,"nextCheckPurpose":""}'), null);
   assert.equal(proactiveContactNextCheckDelay('{"delayMinutes":15}'), "15m");
   assert.equal(proactiveContactNextCheckDelay('{"delayMinutes":720}'), "720m");
   assert.equal(proactiveContactNextCheckDelay('{"delayMinutes":14}'), "");

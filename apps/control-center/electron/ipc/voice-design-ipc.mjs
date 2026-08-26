@@ -4,6 +4,7 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 
 import { resolveAgentDataRoot } from "@suzu-lives/agent-registry";
+import { visibleContactProjectsSnapshot } from "../services/contact-projects.mjs";
 import {
   CUSTOM_TTS_ADAPTER_SCHEMA_VERSION,
   MAX_CUSTOM_TTS_ADAPTERS,
@@ -111,7 +112,7 @@ function publicContacts(value) {
     const id = clean(source.id);
     const agentId = clean(source.agentId);
     const name = clean(source.name) || "未命名联系人";
-    if (!id || !agentId || contacts.some((contact) => contact.id === id)) continue;
+    if (source.hidden === true || !id || !agentId || contacts.some((contact) => contact.id === id)) continue;
     contacts.push({ id, agentId, name });
   }
   return contacts;
@@ -119,7 +120,10 @@ function publicContacts(value) {
 async function contactsFor(contactProjectsService) {
   if (!contactProjectsService?.snapshot) return [];
   try {
-    return publicContacts((await contactProjectsService.snapshot())?.contacts);
+    const snapshot = typeof contactProjectsService.visibleSnapshot === "function"
+      ? await contactProjectsService.visibleSnapshot()
+      : visibleContactProjectsSnapshot(await contactProjectsService.snapshot());
+    return publicContacts(snapshot?.contacts);
   } catch {
     return [];
   }

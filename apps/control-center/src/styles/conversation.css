@@ -3249,13 +3249,17 @@
 
 .content--conversation .conversation-emoji-picker__tabs {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(4, 1fr);
   min-height: 50px;
   border-top: 1px solid rgba(255, 255, 255, .1);
   background: #181b21;
 }
 
-.content--conversation .conversation-emoji-picker__tabs.is-compact {
+.content--conversation .conversation-emoji-picker__tabs.is-3 {
+  grid-template-columns: repeat(3, 1fr);
+}
+
+.content--conversation .conversation-emoji-picker__tabs.is-2 {
   grid-template-columns: repeat(2, 1fr);
 }
 
@@ -3932,6 +3936,10 @@
   color: #197445;
 }
 
+.content--conversation .conversation-sticker-favorites.is-builtin {
+  grid-template-rows: minmax(0, 1fr) auto;
+}
+
 :root[data-theme="light"] .content--conversation .conversation-qq-binding-dialog__code {
   border-color: #bde8cc;
   background: #f4fcf7;
@@ -4302,6 +4310,12 @@
 :root[data-ui-style="wallpaper-glass"] .content--conversation .conversation-message.user .conversation-bubble {
   border-color: rgba(144, 255, 205, .34);
   background: var(--surface-chat-bubble-user);
+}
+
+:root[data-ui-style="wallpaper-glass"] .content--conversation .conversation-message.is-media-only .conversation-bubble {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
 }
 
 :root[data-ui-style="wallpaper-glass"] .content--conversation .conversation-message.system .conversation-bubble,

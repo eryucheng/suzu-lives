@@ -8,6 +8,7 @@ import {
   conversationMediaUnderstandingContext,
 } from "./conversation-attachment-service.mjs";
 import { createConversationMessageDeletionStore } from "./conversation-message-deletion-store.mjs";
+import { visibleContactProjectsSnapshot } from "./contact-projects.mjs";
 import { PROACTIVE_CONTACT_TURN_SOURCE } from "./proactive-contact-maintenance.mjs";
 
 const MAX_MESSAGES = 500;
@@ -434,8 +435,9 @@ function mediaBlockFromManifest(value, { source = "" } = {}) {
   if (!new Set(["image", "audio", "file"]).has(kind) || !filePath) {
     return null;
   }
-  const normalizedSource = new Set(["mail", "sticker", "wechat"]).has(clean(source).toLowerCase())
-    ? clean(source).toLowerCase()
+  const requestedSource = clean(item.mediaSource || source).toLowerCase();
+  const normalizedSource = new Set(["mail", "sticker", "wechat"]).has(requestedSource)
+    ? requestedSource
     : "";
   const fileName = path.basename(clean(item.fileName) || path.basename(filePath)).slice(0, 180) || path.basename(filePath);
   return {
@@ -1230,10 +1232,15 @@ export function createConversationReader({
   const usageReconciliationTasksBySession = new Map();
 
   const contactsSnapshot = async () => contactProjectsService.snapshot();
+  const visibleContactsSnapshot = async () => (
+    typeof contactProjectsService.visibleSnapshot === "function"
+      ? contactProjectsService.visibleSnapshot()
+      : visibleContactProjectsSnapshot(await contactsSnapshot())
+  );
 
   const activeCatalog = async () => {
     const settings = settingsService.load();
-    const contacts = await contactsSnapshot();
+    const contacts = await visibleContactsSnapshot();
     const sourceContacts = Array.isArray(contacts.contacts) ? contacts.contacts : [];
     const requestedActiveId = clean(plainObject(contacts.activeContact).id);
     // The selected entry must still belong to the current catalog. A stale
@@ -1251,6 +1258,9 @@ export function createConversationReader({
       contacts: sourceContacts.map(publicContact).filter(Boolean),
       contactsRoot: clean(contacts.contactsRoot),
       activeContact: active ? publicContact(active) : null,
+      hiddenContactCount: Number.isSafeInteger(contacts.hiddenContactCount) && contacts.hiddenContactCount > 0
+        ? contacts.hiddenContactCount
+        : 0,
       preferredContactId: clean(contacts.preferredContact?.id),
       projectRoot,
       sessionId,
@@ -1580,6 +1590,7 @@ export function createConversationReader({
       contactsRoot: current.contactsRoot,
       contacts: current.contacts,
       activeContact: current.activeContact,
+      hiddenContactCount: current.hiddenContactCount,
       preferredContactId: current.preferredContactId,
       projectRoot: current.projectRoot,
       projectDir: current.projectRoot,
@@ -1783,7 +1794,7 @@ export function createConversationReader({
   };
 
   const compactorSnapshot = async () => {
-    const contacts = await contactsSnapshot();
+    const contacts = await visibleContactsSnapshot();
     return {
       status: clean(contacts.status) || "missing",
       activeContact: publicContact(contacts.activeContact),

@@ -251,6 +251,49 @@ const CONTACT_SCOPE_FIELDS = Object.freeze(["enabledContactIds", "knownContactId
  */
 export const CAPABILITY_DEFINITIONS = freezeArray([
   defineCapability({
+    id: "emoji-sticker",
+    name: "聊天表情",
+    description: "用内置或收藏表情自然回应聊天；适合用图片表达情绪、态度或玩笑时，读取本 Skill 取得候选并发送。",
+    category: "companion",
+    internal: true,
+    runtimeStatus: "agent-capability-bridge",
+    resources: [
+      {
+        id: "agent-recommend",
+        kind: "runtime",
+        driver: "emoji-sticker",
+        lifecycle: ["invoke"],
+        agentAction: {
+          id: "recommend",
+          name: "推荐表情",
+          description: "根据想表达的意思从内置表情和收藏表情中推荐候选，不会直接发送。input 必须包含 { intent: \"想表达的情绪、态度或语气\" }；可选 context 和 limit（1-10）。一次调用返回 matched 或 suggested 后，从现有候选的 categoryName、name、description 和 keywords 中选出最合适的 ID 并进入 send；没有候选时再用一个短词调用 search。",
+        },
+      },
+      {
+        id: "agent-search",
+        kind: "runtime",
+        driver: "emoji-sticker",
+        lifecycle: ["invoke"],
+        agentAction: {
+          id: "search",
+          name: "检索表情",
+          description: "按名称、画面说明和关键词检索内置表情及收藏表情，不会直接发送。input 必须包含 { query: \"检索词\" }；可选 limit（1-10）。结果会标明所属分类；空结果时最多换一个同义短词再试一次。",
+        },
+      },
+      {
+        id: "agent-send",
+        kind: "runtime",
+        driver: "emoji-sticker",
+        lifecycle: ["invoke"],
+        agentAction: {
+          id: "send",
+          name: "发送表情",
+          description: "发送已经从 recommend 或 search 结果中选定的一张表情。input 必须包含 { id: \"候选 ID\" }。内置和收藏候选共用这条发送链路；成功后，表情已经作为可见消息进入聊天，附件交付也由这条发送链路完成。发送后，若还有独立的对话内容就自然接着说；本轮表达完整时直接完成。",
+        },
+      },
+    ],
+  }),
+  defineCapability({
     id: "image-generation",
     name: "图像生成",
     description: "生成、编辑图片，并可结合视觉参考。",

@@ -33,7 +33,10 @@ test("software assistant bridge exposes only product state and registered action
   assert.match(tools.get("suzu_software_status").description, /读取当前 Suzu Lives 软件状态/u);
   assert.match(tools.get("suzu_software_action").description, /执行一项已登记的 Suzu Lives 软件动作/u);
   assert.match(tools.get("suzu_software_action").parameters.properties.action.description, /set-contact-avatar/u);
+  assert.match(tools.get("suzu_software_action").parameters.properties.action.description, /lookup-contact-avatar/u);
   assert.match(tools.get("suzu_software_action").parameters.properties.input.description, /avatarPath/u);
+  assert.match(tools.get("suzu_software_action").parameters.properties.input.description, /萌娘百科/u);
+  assert.equal(tools.get("suzu_software_action").presentCall({ action: "lookup-contact-avatar", input: { query: "玛奇玛" } }).title, "从萌娘百科查找头像");
   assert.deepEqual(await tools.get("suzu_software_status").execute({}, EXECUTION), { content: "当前外观：浅色主题。" });
   assert.deepEqual(await tools.get("suzu_software_action").execute({ action: "set-theme", input: { theme: "dark" } }, EXECUTION), {
     status: "completed",

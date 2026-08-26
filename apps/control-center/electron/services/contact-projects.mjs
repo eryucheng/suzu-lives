@@ -225,6 +225,23 @@ function visibleFallbackContact(contacts, preferredContactId = "") {
   return visible.find((contact) => contact.id === clean(preferredContactId)) || visible[0] || null;
 }
 
+export function visibleContactProjectsSnapshot(value = {}) {
+  const snapshot = value && typeof value === "object" && !Array.isArray(value) ? value : {};
+  const contacts = Array.isArray(snapshot.contacts) ? snapshot.contacts : [];
+  const visibleContacts = contacts.filter((contact) => contact?.hidden !== true);
+  const visibleIds = new Set(visibleContacts.map((contact) => clean(contact?.id)).filter(Boolean));
+  const activeContact = visibleIds.has(clean(snapshot.activeContact?.id)) ? snapshot.activeContact : null;
+  const preferredContact = visibleContacts.find((contact) => clean(contact?.id) === clean(snapshot.preferredContact?.id))
+    || firstCreatedContact(visibleContacts);
+  return {
+    ...snapshot,
+    contacts: visibleContacts,
+    activeContact,
+    preferredContact,
+    hiddenContactCount: Math.max(0, contacts.length - visibleContacts.length),
+  };
+}
+
 async function writeTextAtomic(fsOps, target, value) {
   await fsOps.mkdir(path.dirname(target), { recursive: true });
   const temporary = `${target}.suzu-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}.tmp`;
@@ -459,6 +476,8 @@ export function createContactProjectsService({
     return { status: "ready", contactsRoot: root, contacts, activeContact, preferredContact };
   };
 
+  const visibleSnapshot = async () => visibleContactProjectsSnapshot(await snapshot());
+
   const select = async ({ id } = {}) => {
     const root = await contactsRoot();
     const contact = await contactAt(fsOps, root, id);
@@ -635,11 +654,17 @@ export function createContactProjectsService({
     const settings = settingsService.load();
     const activeContactRemoved = Boolean(clean(settings.projectRoot)) && samePath(settings.projectRoot, contact.projectRoot);
     const preferredContactRemoved = clean(settings.preferredContactId) === contact.id;
-    const remainingContacts = preferredContactRemoved ? await list(root) : [];
+    const remainingContacts = activeContactRemoved || preferredContactRemoved ? await list(root) : [];
+    const preferredContactId = preferredContactRemoved
+      ? clean(firstCreatedContact(remainingContacts)?.id)
+      : clean(settings.preferredContactId);
+    const replacementContact = activeContactRemoved
+      ? visibleFallbackContact(remainingContacts, preferredContactId)
+      : null;
     settingsService.save({
       ...settings,
-      projectRoot: activeContactRemoved ? "" : clean(settings.projectRoot),
-      preferredContactId: preferredContactRemoved ? clean(firstCreatedContact(remainingContacts)?.id) : clean(settings.preferredContactId),
+      projectRoot: activeContactRemoved ? clean(replacementContact?.projectRoot) : clean(settings.projectRoot),
+      preferredContactId,
     });
     return snapshot();
   };
@@ -709,6 +734,7 @@ export function createContactProjectsService({
     select,
     setPreferred,
     snapshot,
+    visibleSnapshot,
     syncContactProjectSettings,
     syncOwnerProfileTitle,
     updateLongTermMemoryEnabled,
