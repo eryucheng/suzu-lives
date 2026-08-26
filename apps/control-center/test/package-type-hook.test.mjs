@@ -88,10 +88,19 @@ test("desktop packaging uses Suzu Lives as its public product name", async () =>
   assert.equal(manifest.build?.win?.artifactName, "Suzu-Lives-${version}-win-${arch}.${ext}");
 });
 
-test("the release workflow matches the current public installer name", async () => {
+test("the release workflow publishes versioned and stable public installer names", async () => {
   const workflow = await fs.readFile(new URL("../../../.github/workflows/release-windows.yml", import.meta.url), "utf8");
   assert.match(workflow, /Suzu-Lives-\*-win-x64\.exe/u);
+  assert.match(workflow, /Suzu-Lives-latest-win-x64\.exe/u);
+  assert.match(workflow, /\$assets = @\(\$installer\[0\]\.FullName, \$stableInstaller, \$latest, \$signature\)/u);
   assert.doesNotMatch(workflow, /Suzu-Lives-Console/u);
+});
+
+test("the public README downloads the latest Windows installer directly", async () => {
+  const readme = await fs.readFile(new URL("../../../README.md", import.meta.url), "utf8");
+  const directDownloadUrl = "https://github.com/eryucheng/suzu-lives/releases/latest/download/Suzu-Lives-latest-win-x64.exe";
+  assert.equal(readme.split(directDownloadUrl).length - 1, 2);
+  assert.doesNotMatch(readme, /releases\/latest(?=["')])/u);
 });
 
 test("capability IPC declares every direct Suzu package it imports as a production dependency", async () => {

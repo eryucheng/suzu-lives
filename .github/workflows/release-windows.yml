@@ -113,10 +113,12 @@ jobs:
           $distRoot = Join-Path $PWD "apps/control-center/dist"
           $installer = @(Get-ChildItem -LiteralPath $distRoot -File -Filter "Suzu-Lives-*-win-x64.exe")
           if ($installer.Count -ne 1) { throw "未找到唯一的 Windows x64 安装程序。" }
+          $stableInstaller = Join-Path $distRoot "Suzu-Lives-latest-win-x64.exe"
+          Copy-Item -LiteralPath $installer[0].FullName -Destination $stableInstaller -Force
           $latest = Join-Path $distRoot "latest.yml"
           $signature = "$($installer[0].FullName).sig"
           $blockmaps = @(Get-ChildItem -LiteralPath $distRoot -File -Filter "*.blockmap")
-          $assets = @($installer[0].FullName, $latest, $signature) + @($blockmaps.FullName)
+          $assets = @($installer[0].FullName, $stableInstaller, $latest, $signature) + @($blockmaps.FullName)
           foreach ($asset in $assets) {
             if (-not (Test-Path -LiteralPath $asset -PathType Leaf)) { throw "待发布文件不存在：$asset" }
           }

@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/eryucheng/suzu-lives/releases/latest"><strong>下载 Windows x64 安装程序</strong></a> ·
+  <a href="https://github.com/eryucheng/suzu-lives/releases/latest/download/Suzu-Lives-latest-win-x64.exe"><strong>下载 Windows x64 安装程序</strong></a> ·
   <a href="https://github.com/eryucheng/suzu-lives/releases">版本记录</a> ·
   <a href="LICENSE.md">Apache-2.0</a>
 </p>
@@ -162,7 +162,7 @@ Suzu lives内置计时器，调用计时器的行为可以统一在计划页面�
 
 ## 快速开始
 
-1. 在 Windows x64 设备上下载并安装 [最新版本](https://github.com/eryucheng/suzu-lives/releases/latest)。
+1. 在 Windows x64 设备上下载并安装 [最新版本](https://github.com/eryucheng/suzu-lives/releases/latest/download/Suzu-Lives-latest-win-x64.exe)。
 2. 按首次引导选择主模型服务，填写模型与 API Key。
 3. 创建第一位 Companion Agent，设置名字、人设与相处方式。
 4. 开始对话；需要图片、语音、视频、网页或邮箱时，再到 **能力** 中配置对应服务与启用范围。
