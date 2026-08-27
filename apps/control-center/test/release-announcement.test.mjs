@@ -112,7 +112,6 @@ test("the v0.3.2 release announcement describes the current update", () => {
   assert.match(text, /联系人创建流程/u);
   assert.match(text, /热门模型价格目录/u);
   assert.match(text, /语音通话体验/u);
-  assert.match(text, /MJ 蜘蛛侠彩蛋/u);
-  assert.equal(CURRENT_RELEASE_ANNOUNCEMENT.items.length, 5);
+  assert.equal(CURRENT_RELEASE_ANNOUNCEMENT.items.length, 4);
   assert.doesNotMatch(text, /\bDSH\b|\bAgent Core\b/u);
 });
