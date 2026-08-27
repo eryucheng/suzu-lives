@@ -5,8 +5,11 @@ import path from "node:path";
 import { normalizeAgentId, resolveAgentDataRoot } from "@suzu-lives/agent-registry";
 import {
   DEFAULT_SUZU_AGENT_PERMISSION_MODE,
+  DEFAULT_SUZU_AGENT_REASONING_EFFORT,
   normalizeSuzuAgentPermissionMode,
+  normalizeSuzuAgentReasoningEffort,
   SUZU_AGENT_PERMISSION_MODES,
+  SUZU_AGENT_REASONING_EFFORTS,
 } from "@suzu-lives/suzu-agent-runtime";
 
 const CONTACT_FILE = "SUZU.md";
@@ -25,6 +28,8 @@ const MAX_CONTACT_NAME_LENGTH = 80;
 // whenever that contact is opened.
 export const CONTACT_PERMISSION_MODES = SUZU_AGENT_PERMISSION_MODES;
 export const DEFAULT_CONTACT_PERMISSION_MODE = DEFAULT_SUZU_AGENT_PERMISSION_MODE;
+export const CONTACT_REASONING_EFFORTS = SUZU_AGENT_REASONING_EFFORTS;
+export const DEFAULT_CONTACT_REASONING_EFFORT = DEFAULT_SUZU_AGENT_REASONING_EFFORT;
 
 export class ContactProjectsError extends Error {
   constructor(message) {
@@ -41,12 +46,24 @@ export function normalizeContactPermissionMode(value) {
   return normalizeSuzuAgentPermissionMode(value);
 }
 
+export function normalizeContactReasoningEffort(value) {
+  return normalizeSuzuAgentReasoningEffort(value);
+}
+
 function requiredContactPermissionMode(value) {
   const mode = clean(value);
   if (!CONTACT_PERMISSION_MODES.includes(mode)) {
     throw new ContactProjectsError("联系人审批模式无效。 ");
   }
   return mode;
+}
+
+function requiredContactReasoningEffort(value) {
+  const effort = clean(value);
+  if (!CONTACT_REASONING_EFFORTS.includes(effort)) {
+    throw new ContactProjectsError("联系人思考强度无效。 ");
+  }
+  return effort;
 }
 
 function unreadCount(value) {
@@ -166,6 +183,7 @@ async function contactMetadata(fsOps, projectRoot) {
       unreadCount: storedUnreadCount,
       longTermMemoryEnabled: raw.longTermMemoryEnabled !== false,
       permissionMode: normalizeContactPermissionMode(raw.permissionMode),
+      reasoningEffort: normalizeContactReasoningEffort(raw.reasoningEffort),
     };
   } catch {
     return null;
@@ -202,6 +220,7 @@ async function contactAt(fsOps, root, value) {
     pinned: metadata.pinned,
     longTermMemoryEnabled: metadata.longTermMemoryEnabled,
     permissionMode: metadata.permissionMode,
+    reasoningEffort: metadata.reasoningEffort,
     sessionId: metadata.sessionId,
     unread: metadata.unread,
     unreadCount: metadata.unreadCount,
@@ -281,6 +300,7 @@ function contactMetadataText({
   unreadCount: count = 0,
   longTermMemoryEnabled = true,
   permissionMode = DEFAULT_CONTACT_PERMISSION_MODE,
+  reasoningEffort = DEFAULT_CONTACT_REASONING_EFFORT,
 } = {}) {
   const storageIdentity = normalizeAgentId(agentId);
   if (!storageIdentity) throw new ContactProjectsError("联系人固定存储身份无效。 ");
@@ -298,6 +318,7 @@ function contactMetadataText({
     ...(muted === true ? { muted: true } : {}),
     ...(longTermMemoryEnabled === false ? { longTermMemoryEnabled: false } : {}),
     permissionMode: normalizeContactPermissionMode(permissionMode),
+    reasoningEffort: normalizeContactReasoningEffort(reasoningEffort),
   }, null, 2)}\n`;
 }
 
@@ -517,6 +538,7 @@ export function createContactProjectsService({
         unreadCount: contact.unreadCount,
         longTermMemoryEnabled: contact.longTermMemoryEnabled,
         permissionMode: contact.permissionMode,
+        reasoningEffort: contact.reasoningEffort,
       }));
     } catch (error) {
       throw new ContactProjectsError(`无法更新联系人备注：${clean(error?.message) || "未知错误"}`);
@@ -571,6 +593,7 @@ export function createContactProjectsService({
         ...next,
         longTermMemoryEnabled: contact.longTermMemoryEnabled,
         permissionMode: contact.permissionMode,
+        reasoningEffort: contact.reasoningEffort,
       }));
     } catch (error) {
       throw new ContactProjectsError(`无法更新联系人显示状态：${clean(error?.message) || "未知错误"}`);
@@ -597,6 +620,7 @@ export function createContactProjectsService({
         unreadCount: contact.unreadCount,
         longTermMemoryEnabled: enabled,
         permissionMode: contact.permissionMode,
+        reasoningEffort: contact.reasoningEffort,
       }));
     } catch (error) {
       throw new ContactProjectsError(`无法更新联系人长期记忆开关：${clean(error?.message) || "未知错误"}`);
@@ -623,9 +647,37 @@ export function createContactProjectsService({
         unreadCount: contact.unreadCount,
         longTermMemoryEnabled: contact.longTermMemoryEnabled,
         permissionMode: nextPermissionMode,
+        reasoningEffort: contact.reasoningEffort,
       }));
     } catch (error) {
       throw new ContactProjectsError(`无法更新联系人审批模式：${clean(error?.message) || "未知错误"}`);
+    }
+    return snapshot();
+  };
+
+  const updateReasoningEffort = async ({ id, reasoningEffort } = {}) => {
+    const nextReasoningEffort = requiredContactReasoningEffort(reasoningEffort);
+    const root = await contactsRoot();
+    const contact = await contactAt(fsOps, root, id);
+    if (!contact) throw new ContactProjectsError("所选联系人不存在或不是由 Suzu 创建的联系人工作区。 ");
+    if (nextReasoningEffort === contact.reasoningEffort) return snapshot();
+    try {
+      await writeTextAtomic(fsOps, path.join(contact.projectRoot, CONTACT_METADATA_DIRECTORY, CONTACT_METADATA_FILE), contactMetadataText({
+        id: contact.id,
+        name: contact.name,
+        createdAt: contact.createdAt,
+        sessionId: contact.sessionId,
+        agentId: contact.agentId,
+        hidden: contact.hidden,
+        muted: contact.muted,
+        pinned: contact.pinned,
+        unreadCount: contact.unreadCount,
+        longTermMemoryEnabled: contact.longTermMemoryEnabled,
+        permissionMode: contact.permissionMode,
+        reasoningEffort: nextReasoningEffort,
+      }));
+    } catch (error) {
+      throw new ContactProjectsError(`无法更新联系人思考强度：${clean(error?.message) || "未知错误"}`);
     }
     return snapshot();
   };
@@ -710,6 +762,7 @@ export function createContactProjectsService({
         sessionId,
         agentId: agentIdForContactId(id),
         permissionMode: DEFAULT_CONTACT_PERMISSION_MODE,
+        reasoningEffort: DEFAULT_CONTACT_REASONING_EFFORT,
       }));
     } catch (error) {
       throw new ContactProjectsError(`无法保存联系人备注：${clean(error?.message) || "未知错误"}`);
@@ -739,6 +792,7 @@ export function createContactProjectsService({
     syncOwnerProfileTitle,
     updateLongTermMemoryEnabled,
     updatePermissionMode,
+    updateReasoningEffort,
     updatePresentation,
   };
 }

@@ -10,7 +10,7 @@ function source(...parts) {
   return readFile(resolve(ROOT, ...parts), "utf8");
 }
 
-test("联系人审批模式在聊天的 Agent 设置中配置，而不是相处资料编辑器中", async () => {
+test("联系人审批模式和思考强度在聊天的 Agent 设置中配置", async () => {
   const [conversationFeature, conversationPage, conversationStyles, relationshipPage] = await Promise.all([
     source("src", "features", "conversation", "index.mjs"),
     source("src", "react", "conversation-page.jsx"),
@@ -24,6 +24,14 @@ test("联系人审批模式在聊天的 Agent 设置中配置，而不是相处�
   assert.match(conversationPage, /<span>审批模式<\/span>/u);
   assert.match(conversationPage, /ariaLabel="联系人审批模式"/u);
   assert.match(conversationPage, /actions\.setContactPermissionMode\(value\)/u);
+  assert.match(conversationPage, /const CONTACT_REASONING_EFFORT_OPTIONS/u);
+  assert.match(conversationPage, /\{ label: "关闭", value: "off" \}/u);
+  assert.match(conversationPage, /\{ label: "低", value: "low" \}/u);
+  assert.match(conversationPage, /\{ label: "高", value: "high" \}/u);
+  assert.match(conversationPage, /\{ label: "最大", value: "max" \}/u);
+  assert.match(conversationPage, /<span>思考强度<\/span>/u);
+  assert.match(conversationPage, /ariaLabel="联系人思考强度"/u);
+  assert.match(conversationPage, /actions\.setContactReasoningEffort\(value\)/u);
   assert.match(conversationPage, /<details className="conversation-session-settings__section conversation-session-settings__display-options">/u);
   assert.doesNotMatch(conversationPage, /conversation-session-settings__display-options" open/u);
   const displayOptions = conversationPage.match(/<details className="conversation-session-settings__section conversation-session-settings__display-options">([\s\S]*?)<\/details>/u)?.[0] || "";
@@ -34,5 +42,7 @@ test("联系人审批模式在聊天的 Agent 设置中配置，而不是相处�
   assert.doesNotMatch(conversationPage, /SUZU AGENT · CORE/u);
   assert.match(conversationFeature, /permissionMode: clean\(contact\?\.permissionMode\) \|\| "danger-full-access"/u);
   assert.match(conversationFeature, /setContactPermissionMode: async \(permissionMode\) => \{[\s\S]*?api\.conversation\.updateContactPermissionMode/u);
+  assert.match(conversationFeature, /reasoningEffort: clean\(contact\?\.reasoningEffort\) \|\| "off"/u);
+  assert.match(conversationFeature, /setContactReasoningEffort: async \(reasoningEffort\) => \{[\s\S]*?api\.conversation\.updateContactReasoningEffort/u);
   assert.doesNotMatch(relationshipPage, /savePermissionMode|APPROVAL_MODE_OPTIONS|relationship-settings-approval-mode/u);
 });

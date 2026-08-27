@@ -1,0 +1,488 @@
+{
+  "schemaVersion": 1,
+  "updatedAt": "2026-08-27",
+  "foreignExchange": {
+    "USD": {
+      "cnyPerUnit": 6.784,
+      "asOf": "2026-08-27",
+      "sourceUrl": "https://www.news.cn/fortune/20260827/76811365a8d241c4afc2bbbef916d6de/c.html"
+    }
+  },
+  "models": {
+    "minimax-m3": {
+      "label": "MiniMax M3",
+      "provider": "MiniMax",
+      "aliases": ["MiniMax-M3"],
+      "sourceUrl": "https://platform.minimaxi.com/docs/guides/pricing-paygo",
+      "rateTiers": [
+        { "label": "输入不超过 512K", "maxInputTokens": 512000, "rates": { "input": 2.1, "cachedInput": 0.42, "output": 8.4 } },
+        { "label": "输入超过 512K", "rates": { "input": 4.2, "cachedInput": 0.84, "output": 16.8 } }
+      ]
+    },
+    "minimax-m2.7": {
+      "label": "MiniMax M2.7",
+      "provider": "MiniMax",
+      "aliases": ["MiniMax-M2.7"],
+      "sourceUrl": "https://platform.minimaxi.com/docs/guides/pricing-paygo",
+      "rates": { "input": 2.1, "cachedInput": 0.42, "cacheWrite": 2.625, "output": 8.4 }
+    },
+    "minimax-m2.7-highspeed": {
+      "label": "MiniMax M2.7 Highspeed",
+      "provider": "MiniMax",
+      "aliases": ["MiniMax-M2.7-highspeed"],
+      "sourceUrl": "https://platform.minimaxi.com/docs/guides/pricing-paygo",
+      "rates": { "input": 4.2, "cachedInput": 0.42, "cacheWrite": 2.625, "output": 16.8 }
+    },
+    "minimax-m2.5": {
+      "label": "MiniMax M2.5",
+      "provider": "MiniMax",
+      "aliases": ["MiniMax-M2.5"],
+      "sourceUrl": "https://platform.minimaxi.com/docs/guides/pricing-paygo",
+      "rates": { "input": 2.1, "cachedInput": 0.21, "cacheWrite": 2.625, "output": 8.4 }
+    },
+    "minimax-m2.5-highspeed": {
+      "label": "MiniMax M2.5 Highspeed",
+      "provider": "MiniMax",
+      "aliases": ["MiniMax-M2.5-highspeed"],
+      "sourceUrl": "https://platform.minimaxi.com/docs/guides/pricing-paygo",
+      "rates": { "input": 4.2, "cachedInput": 0.21, "cacheWrite": 2.625, "output": 16.8 }
+    },
+    "minimax-m2.1": {
+      "label": "MiniMax M2.1",
+      "provider": "MiniMax",
+      "aliases": ["MiniMax-M2.1"],
+      "sourceUrl": "https://platform.minimaxi.com/docs/guides/pricing-paygo",
+      "rates": { "input": 2.1, "cachedInput": 0.21, "cacheWrite": 2.625, "output": 8.4 }
+    },
+    "minimax-m2.1-highspeed": {
+      "label": "MiniMax M2.1 Highspeed",
+      "provider": "MiniMax",
+      "aliases": ["MiniMax-M2.1-highspeed"],
+      "sourceUrl": "https://platform.minimaxi.com/docs/guides/pricing-paygo",
+      "rates": { "input": 4.2, "cachedInput": 0.21, "cacheWrite": 2.625, "output": 16.8 }
+    },
+    "minimax-m2": {
+      "label": "MiniMax M2",
+      "provider": "MiniMax",
+      "aliases": ["MiniMax-M2"],
+      "sourceUrl": "https://platform.minimaxi.com/docs/guides/pricing-paygo",
+      "rates": { "input": 2.1, "cachedInput": 0.21, "cacheWrite": 2.625, "output": 8.4 }
+    },
+
+    "qwen3.8-max": {
+      "label": "Qwen3.8 Max",
+      "provider": "阿里云百炼",
+      "sourceUrl": "https://help.aliyun.com/zh/model-studio/model-pricing",
+      "rates": { "input": 12, "output": 36 }
+    },
+    "qwen3.7-max": {
+      "label": "Qwen3.7 Max",
+      "provider": "阿里云百炼",
+      "sourceUrl": "https://help.aliyun.com/zh/model-studio/model-pricing",
+      "revisionLabel": "北京地域当前限时价",
+      "rates": { "input": 6, "output": 18 }
+    },
+    "qwen3-max": {
+      "label": "Qwen3 Max",
+      "provider": "阿里云百炼",
+      "sourceUrl": "https://help.aliyun.com/zh/model-studio/model-pricing",
+      "rateTiers": [
+        { "label": "输入不超过 32K", "maxInputTokens": 32000, "rates": { "input": 2.5, "output": 10 } },
+        { "label": "输入不超过 128K", "maxInputTokens": 128000, "rates": { "input": 4, "output": 16 } },
+        { "label": "输入不超过 256K", "maxInputTokens": 256000, "rates": { "input": 7, "output": 28 } }
+      ]
+    },
+    "qwen3.7-plus": {
+      "label": "Qwen3.7 Plus",
+      "provider": "阿里云百炼",
+      "sourceUrl": "https://help.aliyun.com/zh/model-studio/model-pricing",
+      "revisionLabel": "北京地域当前限时价",
+      "rateTiers": [
+        { "label": "输入不超过 256K", "maxInputTokens": 256000, "rates": { "input": 1.6, "output": 6.4 } },
+        { "label": "输入超过 256K", "rates": { "input": 4.8, "output": 19.2 } }
+      ]
+    },
+    "qwen3.6-plus": {
+      "label": "Qwen3.6 Plus",
+      "provider": "阿里云百炼",
+      "sourceUrl": "https://help.aliyun.com/zh/model-studio/model-pricing",
+      "rateTiers": [
+        { "label": "输入不超过 256K", "maxInputTokens": 256000, "rates": { "input": 2, "output": 12 } },
+        { "label": "输入超过 256K", "rates": { "input": 8, "output": 48 } }
+      ]
+    },
+    "qwen3.5-plus": {
+      "label": "Qwen3.5 Plus",
+      "provider": "阿里云百炼",
+      "sourceUrl": "https://help.aliyun.com/zh/model-studio/model-pricing",
+      "rateTiers": [
+        { "label": "输入不超过 128K", "maxInputTokens": 128000, "rates": { "input": 0.8, "output": 4.8 } },
+        { "label": "输入不超过 256K", "maxInputTokens": 256000, "rates": { "input": 2, "output": 12 } },
+        { "label": "输入超过 256K", "rates": { "input": 4, "output": 24 } }
+      ]
+    },
+    "qwen3.8-flash": {
+      "label": "Qwen3.8 Flash",
+      "provider": "阿里云百炼",
+      "sourceUrl": "https://help.aliyun.com/zh/model-studio/model-pricing",
+      "rates": { "input": 0.8, "output": 2.7 }
+    },
+    "qwen3.7-flash": {
+      "label": "Qwen3.7 Flash",
+      "provider": "阿里云百炼",
+      "sourceUrl": "https://help.aliyun.com/zh/model-studio/model-pricing",
+      "rateTiers": [
+        { "label": "输入不超过 32K", "maxInputTokens": 32000, "rates": { "input": 0.2, "output": 0.8 } },
+        { "label": "输入不超过 256K", "maxInputTokens": 256000, "rates": { "input": 0.6, "output": 2.4 } },
+        { "label": "输入超过 256K", "rates": { "input": 1.2, "output": 4.8 } }
+      ]
+    },
+    "qwen3.6-flash": {
+      "label": "Qwen3.6 Flash",
+      "provider": "阿里云百炼",
+      "sourceUrl": "https://help.aliyun.com/zh/model-studio/model-pricing",
+      "rateTiers": [
+        { "label": "输入不超过 256K", "maxInputTokens": 256000, "rates": { "input": 1.2, "output": 7.2 } },
+        { "label": "输入超过 256K", "rates": { "input": 4.8, "output": 28.8 } }
+      ]
+    },
+    "qwen3.5-flash": {
+      "label": "Qwen3.5 Flash",
+      "provider": "阿里云百炼",
+      "sourceUrl": "https://help.aliyun.com/zh/model-studio/model-pricing",
+      "rateTiers": [
+        { "label": "输入不超过 128K", "maxInputTokens": 128000, "rates": { "input": 0.2, "output": 2 } },
+        { "label": "输入不超过 256K", "maxInputTokens": 256000, "rates": { "input": 0.8, "output": 8 } },
+        { "label": "输入超过 256K", "rates": { "input": 1.2, "output": 12 } }
+      ]
+    },
+    "qwen3-vl-plus": {
+      "label": "Qwen3 VL Plus",
+      "provider": "阿里云百炼",
+      "sourceUrl": "https://help.aliyun.com/zh/model-studio/model-pricing",
+      "rateTiers": [
+        { "label": "输入不超过 32K", "maxInputTokens": 32000, "rates": { "input": 1, "output": 10 } },
+        { "label": "输入不超过 128K", "maxInputTokens": 128000, "rates": { "input": 1.5, "output": 15 } },
+        { "label": "输入不超过 256K", "maxInputTokens": 256000, "rates": { "input": 3, "output": 30 } }
+      ]
+    },
+    "qwen3-vl-flash": {
+      "label": "Qwen3 VL Flash",
+      "provider": "阿里云百炼",
+      "sourceUrl": "https://help.aliyun.com/zh/model-studio/model-pricing",
+      "rateTiers": [
+        { "label": "输入不超过 32K", "maxInputTokens": 32000, "rates": { "input": 0.15, "output": 1.5 } },
+        { "label": "输入不超过 128K", "maxInputTokens": 128000, "rates": { "input": 0.3, "output": 3 } },
+        { "label": "输入不超过 256K", "maxInputTokens": 256000, "rates": { "input": 0.6, "output": 6 } }
+      ]
+    },
+
+    "kimi-k3": {
+      "label": "Kimi K3",
+      "provider": "Kimi",
+      "sourceUrl": "https://platform.kimi.com/",
+      "rates": { "input": 20, "cachedInput": 2, "output": 100 }
+    },
+    "kimi-k2.7-code": {
+      "label": "Kimi K2.7 Code",
+      "provider": "Kimi",
+      "sourceUrl": "https://platform.kimi.com/",
+      "rates": { "input": 6.5, "cachedInput": 1.3, "output": 27 }
+    },
+    "kimi-k2.6": {
+      "label": "Kimi K2.6",
+      "provider": "Kimi",
+      "sourceUrl": "https://platform.kimi.com/",
+      "rates": { "input": 6.5, "cachedInput": 1.1, "output": 27 }
+    },
+    "kimi-k2.5": {
+      "label": "Kimi K2.5",
+      "provider": "Kimi",
+      "sourceUrl": "https://platform.kimi.com/docs/pricing/chat-k25",
+      "rates": { "input": 4, "cachedInput": 0.7, "output": 21 }
+    },
+    "moonshot-v1-8k": {
+      "label": "Moonshot V1 8K",
+      "provider": "Kimi",
+      "aliases": ["moonshot-v1-8k-vision-preview"],
+      "sourceUrl": "https://platform.kimi.com/docs/pricing/chat-v1",
+      "rates": { "input": 2, "output": 10 }
+    },
+    "moonshot-v1-32k": {
+      "label": "Moonshot V1 32K",
+      "provider": "Kimi",
+      "aliases": ["moonshot-v1-32k-vision-preview"],
+      "sourceUrl": "https://platform.kimi.com/docs/pricing/chat-v1",
+      "rates": { "input": 5, "output": 20 }
+    },
+    "moonshot-v1-128k": {
+      "label": "Moonshot V1 128K",
+      "provider": "Kimi",
+      "aliases": ["moonshot-v1-128k-vision-preview"],
+      "sourceUrl": "https://platform.kimi.com/docs/pricing/chat-v1",
+      "rates": { "input": 10, "output": 30 }
+    },
+
+    "glm-5.2": {
+      "label": "GLM-5.2",
+      "provider": "智谱 BigModel",
+      "sourceUrl": "https://bigmodel.cn/pricing",
+      "rates": { "input": 8, "cachedInput": 2, "output": 28 }
+    },
+    "glm-5.1": {
+      "label": "GLM-5.1",
+      "provider": "智谱 BigModel",
+      "sourceUrl": "https://bigmodel.cn/pricing",
+      "rateTiers": [
+        { "label": "输入少于 32K", "maxInputTokens": 31999, "rates": { "input": 6, "cachedInput": 1.3, "output": 24 } },
+        { "label": "输入不少于 32K", "rates": { "input": 8, "cachedInput": 2, "output": 28 } }
+      ]
+    },
+    "glm-5-turbo": {
+      "label": "GLM-5 Turbo",
+      "provider": "智谱 BigModel",
+      "sourceUrl": "https://bigmodel.cn/pricing",
+      "rateTiers": [
+        { "label": "输入少于 32K", "maxInputTokens": 31999, "rates": { "input": 5, "cachedInput": 1.2, "output": 22 } },
+        { "label": "输入不少于 32K", "rates": { "input": 7, "cachedInput": 1.8, "output": 26 } }
+      ]
+    },
+    "glm-5": {
+      "label": "GLM-5",
+      "provider": "智谱 BigModel",
+      "sourceUrl": "https://bigmodel.cn/pricing",
+      "rateTiers": [
+        { "label": "输入少于 32K", "maxInputTokens": 31999, "rates": { "input": 4, "cachedInput": 1, "output": 18 } },
+        { "label": "输入不少于 32K", "rates": { "input": 6, "cachedInput": 1.5, "output": 22 } }
+      ]
+    },
+    "glm-4.7": {
+      "label": "GLM-4.7",
+      "provider": "智谱 BigModel",
+      "sourceUrl": "https://bigmodel.cn/pricing",
+      "rateTiers": [
+        { "label": "输入少于 32K、输出少于 200", "maxInputTokens": 31999, "maxOutputTokens": 199, "rates": { "input": 2, "cachedInput": 0.4, "output": 8 } },
+        { "label": "输入少于 32K", "maxInputTokens": 31999, "rates": { "input": 3, "cachedInput": 0.6, "output": 14 } },
+        { "label": "输入不少于 32K", "rates": { "input": 4, "cachedInput": 0.8, "output": 16 } }
+      ]
+    },
+    "glm-4.5-air": {
+      "label": "GLM-4.5 Air",
+      "provider": "智谱 BigModel",
+      "sourceUrl": "https://bigmodel.cn/pricing",
+      "rateTiers": [
+        { "label": "输入少于 32K、输出少于 200", "maxInputTokens": 31999, "maxOutputTokens": 199, "rates": { "input": 0.8, "cachedInput": 0.16, "output": 2 } },
+        { "label": "输入少于 32K", "maxInputTokens": 31999, "rates": { "input": 0.8, "cachedInput": 0.16, "output": 6 } },
+        { "label": "输入不少于 32K", "rates": { "input": 1.2, "cachedInput": 0.24, "output": 8 } }
+      ]
+    },
+    "glm-4.7-flashx": {
+      "label": "GLM-4.7 FlashX",
+      "provider": "智谱 BigModel",
+      "sourceUrl": "https://bigmodel.cn/pricing",
+      "rates": { "input": 0.5, "cachedInput": 0.1, "output": 3 }
+    },
+    "glm-4.7-flash": {
+      "label": "GLM-4.7 Flash",
+      "provider": "智谱 BigModel",
+      "sourceUrl": "https://bigmodel.cn/pricing",
+      "rates": { "input": 0, "cachedInput": 0, "output": 0 }
+    },
+
+    "gpt-5.6-sol": {
+      "label": "GPT-5.6 Sol",
+      "provider": "OpenAI",
+      "aliases": ["gpt-5.6"],
+      "sourceCurrency": "USD",
+      "sourceUrl": "https://developers.openai.com/api/docs/models/gpt-5.6-sol",
+      "revisionLabel": "官方推广美元价",
+      "rateTiers": [
+        { "label": "输入不超过 272K", "maxInputTokens": 272000, "rates": { "input": 4, "cachedInput": 0.4, "cacheWrite": 5, "output": 20 } },
+        { "label": "输入超过 272K", "rates": { "input": 8, "cachedInput": 0.8, "cacheWrite": 10, "output": 30 } }
+      ]
+    },
+    "gpt-5.6-terra": {
+      "label": "GPT-5.6 Terra",
+      "provider": "OpenAI",
+      "sourceCurrency": "USD",
+      "sourceUrl": "https://developers.openai.com/api/docs/models/gpt-5.6-terra",
+      "rateTiers": [
+        { "label": "输入不超过 272K", "maxInputTokens": 272000, "rates": { "input": 2, "cachedInput": 0.2, "cacheWrite": 2.5, "output": 12 } },
+        { "label": "输入超过 272K", "rates": { "input": 4, "cachedInput": 0.4, "cacheWrite": 5, "output": 18 } }
+      ]
+    },
+    "gpt-5.6-luna": {
+      "label": "GPT-5.6 Luna",
+      "provider": "OpenAI",
+      "sourceCurrency": "USD",
+      "sourceUrl": "https://developers.openai.com/api/docs/models/gpt-5.6-luna",
+      "rateTiers": [
+        { "label": "输入不超过 272K", "maxInputTokens": 272000, "rates": { "input": 0.2, "cachedInput": 0.02, "cacheWrite": 0.25, "output": 1.2 } },
+        { "label": "输入超过 272K", "rates": { "input": 0.4, "cachedInput": 0.04, "cacheWrite": 0.5, "output": 1.8 } }
+      ]
+    },
+    "gpt-5.5": {
+      "label": "GPT-5.5",
+      "provider": "OpenAI",
+      "sourceCurrency": "USD",
+      "sourceUrl": "https://developers.openai.com/api/docs/models/gpt-5.5",
+      "rateTiers": [
+        { "label": "输入不超过 272K", "maxInputTokens": 272000, "rates": { "input": 5, "cachedInput": 0.5, "output": 30 } },
+        { "label": "输入超过 272K", "rates": { "input": 10, "cachedInput": 1, "output": 45 } }
+      ]
+    },
+    "gpt-5.4": {
+      "label": "GPT-5.4",
+      "provider": "OpenAI",
+      "sourceCurrency": "USD",
+      "sourceUrl": "https://developers.openai.com/api/docs/models/gpt-5.4",
+      "rateTiers": [
+        { "label": "输入不超过 272K", "maxInputTokens": 272000, "rates": { "input": 2.5, "cachedInput": 0.25, "output": 15 } },
+        { "label": "输入超过 272K", "rates": { "input": 5, "cachedInput": 0.5, "output": 22.5 } }
+      ]
+    },
+    "gpt-5.4-mini": {
+      "label": "GPT-5.4 Mini",
+      "provider": "OpenAI",
+      "sourceCurrency": "USD",
+      "sourceUrl": "https://developers.openai.com/api/docs/models/gpt-5.4-mini",
+      "rates": { "input": 0.75, "cachedInput": 0.075, "output": 4.5 }
+    },
+    "gpt-5.4-nano": {
+      "label": "GPT-5.4 Nano",
+      "provider": "OpenAI",
+      "sourceCurrency": "USD",
+      "sourceUrl": "https://developers.openai.com/api/docs/models/gpt-5.4-nano",
+      "rates": { "input": 0.2, "cachedInput": 0.02, "output": 1.25 }
+    },
+    "gpt-5-mini": {
+      "label": "GPT-5 Mini",
+      "provider": "OpenAI",
+      "sourceCurrency": "USD",
+      "sourceUrl": "https://developers.openai.com/api/docs/models/gpt-5-mini",
+      "rates": { "input": 0.25, "cachedInput": 0.025, "output": 2 }
+    },
+    "gpt-5-nano": {
+      "label": "GPT-5 Nano",
+      "provider": "OpenAI",
+      "sourceCurrency": "USD",
+      "sourceUrl": "https://developers.openai.com/api/docs/models/gpt-5-nano",
+      "rates": { "input": 0.05, "cachedInput": 0.005, "output": 0.4 }
+    },
+
+    "claude-fable-5": {
+      "label": "Claude Fable 5",
+      "provider": "Anthropic",
+      "sourceCurrency": "USD",
+      "sourceUrl": "https://platform.claude.com/docs/en/about-claude/pricing",
+      "rates": { "input": 10, "cachedInput": 1, "cacheWrite": 12.5, "cacheWrite1h": 20, "output": 50 }
+    },
+    "claude-opus-5": {
+      "label": "Claude Opus 5",
+      "provider": "Anthropic",
+      "sourceCurrency": "USD",
+      "sourceUrl": "https://platform.claude.com/docs/en/about-claude/pricing",
+      "rates": { "input": 5, "cachedInput": 0.5, "cacheWrite": 6.25, "cacheWrite1h": 10, "output": 25 }
+    },
+    "claude-sonnet-5": {
+      "label": "Claude Sonnet 5",
+      "provider": "Anthropic",
+      "sourceCurrency": "USD",
+      "sourceUrl": "https://platform.claude.com/docs/en/about-claude/pricing",
+      "rates": { "input": 2, "cachedInput": 0.2, "cacheWrite": 2.5, "cacheWrite1h": 4, "output": 10 }
+    },
+    "claude-opus-4-8": {
+      "label": "Claude Opus 4.8",
+      "provider": "Anthropic",
+      "sourceCurrency": "USD",
+      "sourceUrl": "https://platform.claude.com/docs/en/about-claude/pricing",
+      "rates": { "input": 5, "cachedInput": 0.5, "cacheWrite": 6.25, "cacheWrite1h": 10, "output": 25 }
+    },
+    "claude-opus-4-7": {
+      "label": "Claude Opus 4.7",
+      "provider": "Anthropic",
+      "sourceCurrency": "USD",
+      "sourceUrl": "https://platform.claude.com/docs/en/about-claude/pricing",
+      "rates": { "input": 5, "cachedInput": 0.5, "cacheWrite": 6.25, "cacheWrite1h": 10, "output": 25 }
+    },
+    "claude-opus-4-6": {
+      "label": "Claude Opus 4.6",
+      "provider": "Anthropic",
+      "sourceCurrency": "USD",
+      "sourceUrl": "https://platform.claude.com/docs/en/about-claude/pricing",
+      "rates": { "input": 5, "cachedInput": 0.5, "cacheWrite": 6.25, "cacheWrite1h": 10, "output": 25 }
+    },
+    "claude-sonnet-4-6": {
+      "label": "Claude Sonnet 4.6",
+      "provider": "Anthropic",
+      "sourceCurrency": "USD",
+      "sourceUrl": "https://platform.claude.com/docs/en/about-claude/pricing",
+      "rates": { "input": 3, "cachedInput": 0.3, "cacheWrite": 3.75, "cacheWrite1h": 6, "output": 15 }
+    },
+    "claude-sonnet-4-5": {
+      "label": "Claude Sonnet 4.5",
+      "provider": "Anthropic",
+      "sourceCurrency": "USD",
+      "sourceUrl": "https://platform.claude.com/docs/en/about-claude/pricing",
+      "rates": { "input": 3, "cachedInput": 0.3, "cacheWrite": 3.75, "cacheWrite1h": 6, "output": 15 }
+    },
+    "claude-haiku-4-5": {
+      "label": "Claude Haiku 4.5",
+      "provider": "Anthropic",
+      "aliases": ["claude-haiku-4-5-20251001"],
+      "sourceCurrency": "USD",
+      "sourceUrl": "https://platform.claude.com/docs/en/about-claude/pricing",
+      "rates": { "input": 1, "cachedInput": 0.1, "cacheWrite": 1.25, "cacheWrite1h": 2, "output": 5 }
+    },
+
+    "gemini-3.7-flash": {
+      "label": "Gemini 3.7 Flash",
+      "provider": "Google",
+      "sourceCurrency": "USD",
+      "sourceUrl": "https://ai.google.dev/gemini-api/docs/pricing",
+      "revisions": [
+        { "id": "official-promo-through-2026", "effectiveFrom": "1970-01-01T00:00:00.000Z", "label": "2026 年推广美元价", "rates": { "input": 0.75, "cachedInput": 0.075, "output": 3.75 } },
+        { "id": "official-from-2027", "effectiveFrom": "2027-01-01T00:00:00.000Z", "label": "2027 年起官方美元价", "rates": { "input": 1.5, "cachedInput": 0.15, "output": 7.5 } }
+      ]
+    },
+    "gemini-3.5-flash": {
+      "label": "Gemini 3.5 Flash",
+      "provider": "Google",
+      "sourceCurrency": "USD",
+      "sourceUrl": "https://ai.google.dev/gemini-api/docs/pricing",
+      "rates": { "input": 1.5, "cachedInput": 0.15, "output": 9 }
+    },
+    "gemini-3.5-flash-lite": {
+      "label": "Gemini 3.5 Flash-Lite",
+      "provider": "Google",
+      "sourceCurrency": "USD",
+      "sourceUrl": "https://ai.google.dev/gemini-api/docs/pricing",
+      "rates": { "input": 0.3, "cachedInput": 0.03, "output": 2.5 }
+    },
+    "gemini-3.1-pro-preview": {
+      "label": "Gemini 3.1 Pro Preview",
+      "provider": "Google",
+      "aliases": ["gemini-3.1-pro-preview-customtools"],
+      "sourceCurrency": "USD",
+      "sourceUrl": "https://ai.google.dev/gemini-api/docs/pricing",
+      "rateTiers": [
+        { "label": "输入不超过 200K", "maxInputTokens": 200000, "rates": { "input": 2, "cachedInput": 0.2, "output": 12 } },
+        { "label": "输入超过 200K", "rates": { "input": 4, "cachedInput": 0.4, "output": 18 } }
+      ]
+    },
+    "gemini-3.1-flash-lite": {
+      "label": "Gemini 3.1 Flash-Lite",
+      "provider": "Google",
+      "sourceCurrency": "USD",
+      "sourceUrl": "https://ai.google.dev/gemini-api/docs/pricing",
+      "rates": { "input": 0.25, "cachedInput": 0.025, "output": 1.5 }
+    },
+    "gemini-3-flash-preview": {
+      "label": "Gemini 3 Flash Preview",
+      "provider": "Google",
+      "sourceCurrency": "USD",
+      "sourceUrl": "https://ai.google.dev/gemini-api/docs/pricing",
+      "rates": { "input": 0.5, "cachedInput": 0.05, "output": 3 }
+    }
+  }
+}

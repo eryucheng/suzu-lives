@@ -21,6 +21,11 @@ import { TEXT_MODEL_PROVIDERS } from "../features/agent/runtime.mjs";
 import { modelCatalogEntry } from "@suzu-lives/suzu-agent-runtime/model-capability-catalog";
 import { usageAmountLabel, usageCostLabel } from "../features/usage/usage-display.mjs";
 import { usageHistoryRows } from "../features/usage/usage-history.mjs";
+import {
+  priceCatalogModelKeys,
+  usageEventModelKeys,
+  usedPriceCatalogModels,
+} from "../features/usage/usage-price-catalog.mjs";
 
 import { PageScaffold } from "./page-scaffold.jsx";
 import { usePointerCaptureRecovery } from "./pointer-capture-recovery.mjs";
@@ -733,6 +738,13 @@ function PriceModelCard({ actions, model }) {
   const [error, setError] = useState("");
   const [pending, setPending] = useState(false);
   const definitions = model?.rateDefinitions || {};
+  const priceNotes = [
+    model.origin === "custom" ? "当前使用自定义价格" : "当前使用官方默认价",
+    model.rateTiers?.length ? `按 ${model.rateTiers.length} 档计价，表单显示首档` : "",
+    model.sourceCurrency && model.sourceCurrency !== model.currency
+      ? `${model.sourceCurrency} 官方价按 ${model.exchangeRateDate} 汇率折算`
+      : "",
+  ].filter(Boolean);
 
   useEffect(() => {
     setRates({ ...(model?.rates || {}) });
@@ -780,7 +792,7 @@ function PriceModelCard({ actions, model }) {
 
   return (
     <AdminPanel className="admin-price-card">
-      <PanelHeading description={(model.provider || "未知服务商") + " · " + (model.origin === "custom" ? "当前使用自定义价格" : "当前使用官方默认价")} status={<Status label={model.origin === "custom" ? "自定义" : "官方默认"} tone={model.origin === "custom" ? "success" : "muted"} />} title={model.label || model.modelId} />
+      <PanelHeading description={[model.provider || "未知服务商", ...priceNotes].join(" · ")} status={<Status label={model.origin === "custom" ? "自定义" : "官方默认"} tone={model.origin === "custom" ? "success" : "muted"} />} title={model.label || model.modelId} />
       <div className="admin-price-rate-grid">
         {Object.entries(definitions).map(([key, definition]) => (
           <Field key={key} label={definition.label}>
@@ -921,10 +933,6 @@ function UsageHistoryPage({ data, onBack, onPeriodChange, period }) {
   );
 }
 
-function modelKey(value) {
-  return clean(value).replace(/\[[^\]]+\]$/u, "").toLowerCase();
-}
-
 function UsageSettings({ actions, data }) {
   const ready = data?.status === "ready";
   const [filter, setFilter] = useState("all");
@@ -941,17 +949,22 @@ function UsageSettings({ actions, data }) {
   const allFilteredEvents = filtered.slice().reverse();
   const visibleConversationCosts = summary.conversations.slice(0, 20);
   const sourceNames = [...new Set(events.map((event) => event.source).filter(Boolean))];
-  const prices = list(data?.priceCatalog?.models);
-  const pricedModelKeys = new Set(prices.flatMap((model) => [modelKey(model.modelId), modelKey(model.label)]).filter(Boolean));
+  const catalogPrices = list(data?.priceCatalog?.models);
+  const priceCatalogUpdatedAt = clean(data?.priceCatalog?.updatedAt);
+  const prices = usedPriceCatalogModels(catalogPrices, events);
+  const pricedModelKeys = priceCatalogModelKeys(catalogPrices);
   const seenModelEntries = [];
   const seenModelIndex = new Map();
   for (const event of events) {
     const name = clean(event.model);
     if (!name) continue;
-    const key = modelKey(name);
+    const key = usageEventModelKeys(event)[0];
     if (seenModelIndex.has(key)) continue;
     seenModelIndex.set(key, true);
-    seenModelEntries.push({ name, covered: pricedModelKeys.has(key) });
+    seenModelEntries.push({
+      name,
+      covered: usageEventModelKeys(event).some((modelId) => pricedModelKeys.has(modelId)),
+    });
   }
   const coveredModelCount = seenModelEntries.filter((entry) => entry.covered).length;
 
@@ -1025,10 +1038,12 @@ function UsageSettings({ actions, data }) {
       </AdminPanel>
 
       <AdminPanel className="admin-price-intro">
-        <PanelHeading actions={<Button onClick={() => setCustomPriceOpen(true)} size="md" type="button">新建模型价格</Button>} description="内置价格可直接调整；其他模型可按实际返回的 model 名称自行建立映射。" title="模型价格" />
+        <PanelHeading actions={<Button onClick={() => setCustomPriceOpen(true)} size="md" type="button">新建模型价格</Button>} description={`这里只显示调用流水中出现过的模型；其他官方价格仍保存在软件中，首次使用后会自动出现。${priceCatalogUpdatedAt ? ` 内置目录更新于 ${priceCatalogUpdatedAt}。` : ""}`} title="模型价格" />
       </AdminPanel>
       <section className="admin-price-list">
-        {prices.map((model) => <PriceModelCard actions={actions} key={model.modelId} model={model} />)}
+        {prices.length
+          ? prices.map((model) => <PriceModelCard actions={actions} key={model.modelId} model={model} />)
+          : <AdminPanel><p className="admin-empty-copy">调用流水中还没有出现过已登记价格的模型。</p></AdminPanel>}
       </section>
       {customPriceOpen ? <CustomPriceModelDialog onClose={() => setCustomPriceOpen(false)} onCreate={actions?.createPriceModel} /> : null}
     </section>

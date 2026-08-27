@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import { existsSync } from "node:fs";
-import { readFile, readdir } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { afterEach, test } from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -201,6 +202,31 @@ test("native core resolver accepts the supervisor-provided runtime root", () => 
     resolveSuzuAgentCoreNativeAnchor({ nativeRuntimeRoot }),
     join(nativeRuntimeRoot, "@suzu-lives", "agent-core-native", "package.json"),
   );
+});
+
+test("native core resolver locates the desktop resource island", async () => {
+  const temporaryParent = resolve(process.env.SUZU_LIVES_TEST_TEMP || tmpdir());
+  await mkdir(temporaryParent, { recursive: true });
+  const temporaryRoot = await mkdtemp(join(temporaryParent, "suzu-agent-native-resources-"));
+  try {
+    const resourcesPath = join(temporaryRoot, "resources");
+    const anchor = join(
+      resourcesPath,
+      "agent-core-native",
+      "node_modules",
+      "@suzu-lives",
+      "agent-core-native",
+      "package.json",
+    );
+    await mkdir(dirname(anchor), { recursive: true });
+    await writeFile(anchor, "{}\n", "utf8");
+    assert.equal(
+      resolveSuzuAgentCoreNativeAnchor({ nativeRuntimeRoot: "", resourcesPath }),
+      anchor,
+    );
+  } finally {
+    await rm(temporaryRoot, { recursive: true, force: true });
+  }
 });
 
 test("supervisor forwards only validated lifecycle IPC and replies to the owned child", async () => {
@@ -469,6 +495,92 @@ test("embedded host writes the requested approval mode to the same contact sessi
   ]);
 });
 
+test("embedded host overlays contact reasoning effort without pinning the live main model", async () => {
+  const workspace = resolve(TEST_DIRECTORY, "host-reasoning-workspace");
+  const agents = new Map();
+  let liveSelection = { provider: "deepseek-official", model: "deepseek-v4-flash" };
+  const context = {
+    agents: {
+      get: (sessionId) => agents.get(sessionId),
+      async create({ sessionId, meta, agentOptions }) {
+        const agent = {
+          options: agentOptions,
+          session: {
+            id: sessionId,
+            header: { cwd: meta.cwd, agentPreset: "suzu-companion" },
+            events: [],
+            requestHeader: () => undefined,
+          },
+          ctx: { on: () => () => undefined },
+          followup() {},
+        };
+        agents.set(sessionId, agent);
+        return { agent };
+      },
+    },
+    agentPresets: { async resolve(id) { return { id: id || "suzu-companion" }; }, async mount() {} },
+    llm: {
+      async resolveModelInfo(provider) {
+        if (provider === "deepseek-official") {
+          return { reasoning: { efforts: ["off", "low", "high", "max"].map((id) => ({ id, name: id })) } };
+        }
+        if (provider === "suzu-kimi") {
+          return { reasoning: { efforts: ["low", "medium"].map((id) => ({ id, name: id })) } };
+        }
+        return {};
+      },
+    },
+    get(name) {
+      return name === "agentDefaultModel"
+        ? { currentSelection: () => liveSelection }
+        : undefined;
+    },
+  };
+  const host = new SuzuAgentHost(context, { send: () => true });
+
+  const high = await host.handle("sessions.create", {
+    sessionId: "reasoning-contact-session",
+    cwd: workspace,
+    agentPreset: "suzu-companion",
+    reasoningEffort: "high",
+  });
+  const agent = agents.get("reasoning-contact-session");
+  assert.equal(high.reasoningEffort, "high");
+  assert.deepEqual(host.selectionFor(agent).current, { ...liveSelection, reasoningEffort: "high" });
+
+  liveSelection = { provider: "suzu-kimi", model: "kimi-for-coding" };
+  assert.deepEqual(host.selectionFor(agent).current, { ...liveSelection, reasoningEffort: "high" });
+  await host.handle("sessions.prompt", { sessionId: "reasoning-contact-session", content: [{ type: "text", text: "继续" }] });
+  assert.deepEqual(host.selectionFor(agent).current, { ...liveSelection, reasoningEffort: "medium" });
+
+  const disabled = await host.handle("sessions.create", {
+    sessionId: "reasoning-contact-session",
+    cwd: workspace,
+    agentPreset: "suzu-companion",
+    reasoningEffort: "off",
+  });
+  assert.equal(disabled.reasoningEffort, "off");
+  assert.deepEqual(host.selectionFor(agent).current, { ...liveSelection, reasoningEffort: "low" });
+
+  const maximum = await host.handle("sessions.create", {
+    sessionId: "reasoning-contact-session",
+    cwd: workspace,
+    agentPreset: "suzu-companion",
+    reasoningEffort: "max",
+  });
+  assert.equal(maximum.reasoningEffort, "max");
+  assert.deepEqual(host.selectionFor(agent).current, { ...liveSelection, reasoningEffort: "medium" });
+
+  liveSelection = { provider: "plain-model", model: "plain-model" };
+  await host.handle("sessions.create", {
+    sessionId: "reasoning-contact-session",
+    cwd: workspace,
+    agentPreset: "suzu-companion",
+    reasoningEffort: "off",
+  });
+  assert.deepEqual(host.selectionFor(agent).current, liveSelection);
+});
+
 test("embedded host keeps the create-time model selection when Core's live default source is unavailable", () => {
   const host = new SuzuAgentHost({ get: () => undefined }, { send: () => true });
   const agent = {
@@ -641,6 +753,15 @@ test("embedded host exposes each model's resolved native input modalities", asyn
         return {
           inputModalities: ["text", "image"],
           context: { contextWindow: 1_000_000, maxTokens: 384_000 },
+          reasoning: {
+            efforts: [
+              { id: "off", name: "Off" },
+              { id: "low", name: "Low", description: "Lower cost" },
+              { id: "high", name: "High" },
+              { id: "max", name: "Max" },
+            ],
+            defaultEffort: "high",
+          },
         };
       },
     },
@@ -658,6 +779,15 @@ test("embedded host exposes each model's resolved native input modalities", asyn
         contextWindow: 1_000_000,
         maxTokens: 384_000,
         inputModalities: ["text", "image"],
+        reasoning: {
+          efforts: [
+            { id: "off", name: "Off" },
+            { id: "low", name: "Low", description: "Lower cost" },
+            { id: "high", name: "High" },
+            { id: "max", name: "Max" },
+          ],
+          defaultEffort: "high",
+        },
       }],
     }],
     failures: [],

@@ -27,7 +27,7 @@ export const DEEPSEEK_VISION_MODEL_IDS = Object.freeze(new Set([
 
 const PATCH_MARKER = Symbol.for("suzu-lives.deepseek-vision-adapter.v1");
 const IMAGE_MIME_TYPE = /^image\/[a-z0-9.+-]+$/iu;
-const REASONING_EFFORTS = new Set(["off", "high", "max"]);
+const REASONING_EFFORTS = new Set(["off", "low", "high", "max"]);
 const ADAPTER_ATTACHMENT_RESOLVERS = new WeakMap();
 
 function clean(value) {
@@ -48,6 +48,17 @@ export function isDeepSeekVisionModel(value) {
 
 export function deepSeekInputModalities(modelId) {
   return modelInputModalities("deepseek", modelId);
+}
+
+function withDeepSeekLowReasoning(model) {
+  const reasoning = plainObject(model?.reasoning);
+  const efforts = Array.isArray(reasoning.efforts) ? reasoning.efforts : [];
+  if (!efforts.some((effort) => effort?.id === "high" || effort?.id === "max")
+    || efforts.some((effort) => effort?.id === "low")) return model;
+  const highIndex = efforts.findIndex((effort) => effort?.id === "high");
+  const nextEfforts = [...efforts];
+  nextEfforts.splice(highIndex < 0 ? nextEfforts.length : highIndex, 0, { id: "low", name: "Low" });
+  return { ...model, reasoning: { ...reasoning, efforts: nextEfforts } };
 }
 
 function imageBlocks(value) {
@@ -294,7 +305,7 @@ function thinkingOptions(event, defaults = {}) {
     throw new LlmError(`DeepSeek 当前部署不支持推理强度“${configured}”。`, "UNSUPPORTED_REASONING_EFFORT");
   }
   if (effort === "off") return { thinking: "disabled" };
-  if (effort === "high" || effort === "max") return { thinking: "enabled", reasoningEffort: effort };
+  if (effort === "low" || effort === "high" || effort === "max") return { thinking: "enabled", reasoningEffort: effort };
   return defaults.thinking === undefined ? {} : { thinking: defaults.thinking };
 }
 
@@ -603,12 +614,13 @@ function installDeepSeekVisionPatch() {
 
   DeepSeekAdapter.prototype.resolveModel = async function resolveModelWithVision(provider, modelId, signal) {
     const model = await resolveModel.call(this, provider, modelId, signal);
-    return { ...model, inputModalities: deepSeekInputModalities(modelId) };
+    return withDeepSeekLowReasoning({ ...model, inputModalities: deepSeekInputModalities(modelId) });
   };
 
   DeepSeekAdapter.prototype.request = async function* requestWithNativeVision(event, signal, options, apiKey, userId, onHeartbeat) {
     const replaySafeEvent = eventForThinkingReplay(event, options?.defaults);
-    if (!isDeepSeekVisionModel(replaySafeEvent?.model) || !eventHasImages(replaySafeEvent)) {
+    const effort = clean(replaySafeEvent?.reasoningEffort ?? options?.defaults?.reasoningEffort).toLowerCase();
+    if (effort !== "low" && (!isDeepSeekVisionModel(replaySafeEvent?.model) || !eventHasImages(replaySafeEvent))) {
       yield* request.call(this, replaySafeEvent, signal, options, apiKey, userId, onHeartbeat);
       return;
     }

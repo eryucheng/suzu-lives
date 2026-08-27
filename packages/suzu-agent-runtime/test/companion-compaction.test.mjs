@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   estimateSuzuContextMeasurement,
+  inspectSuzuCompactionRange,
   selectSuzuCompactionBatchRange,
   selectSuzuCompactionRange,
   SuzuCompanionCompactionEngine,
@@ -52,6 +53,64 @@ test("Suzu manual compaction selects an older prefix and retains a balanced raw 
 
   assert.deepEqual(selectSuzuCompactionRange(session, measurement, 700), { start: 1, end: 3 });
   assert.equal(selectSuzuCompactionRange(session, measurement, 3_000), null);
+});
+
+test("automatic compaction recognizes a range made only from an existing checkpoint", () => {
+  const events = [];
+  events[1] = {
+    seq: 1,
+    type: "user/message",
+    data: { source: { kind: "plugin", plugin: "compact", compactionId: "checkpoint-1" } },
+  };
+  events[2] = {
+    seq: 2,
+    type: "user/message",
+    data: { source: { kind: "user" } },
+  };
+  const session = {
+    surface: { nodes: [1, 2] },
+    events,
+    deriveEventMessage: (event) => event?.data || null,
+  };
+  const measurement = {
+    nodes: [
+      { seq: 1, tokens: 228 },
+      { seq: 2, tokens: 8_500 },
+    ],
+  };
+
+  assert.deepEqual(inspectSuzuCompactionRange(session, measurement, { start: 1, end: 1 }), {
+    shadowedTokenCount: 228,
+    onlyCheckpoints: true,
+  });
+  assert.deepEqual(inspectSuzuCompactionRange(session, measurement, { start: 1, end: 2 }), {
+    shadowedTokenCount: 8_728,
+    onlyCheckpoints: false,
+  });
+});
+
+test("automatic pressure skips a tiny checkpoint instead of summarizing it again", async () => {
+  const engine = {
+    settingsFor: async () => ({ automatic: { enabled: true } }),
+    configForAutomaticTrigger: async () => ({ maxTokens: 8_192 }),
+    conservativePressurePlan: async () => ({
+      checked: true,
+      pressured: true,
+      range: { start: 1, end: 1 },
+      shadowedTokenCount: 228,
+      onlyCheckpoints: true,
+    }),
+    settingsContext: { run: (_value, callback) => callback() },
+  };
+
+  const result = await SuzuCompanionCompactionEngine.prototype.compactIfNeeded.call(
+    engine,
+    {},
+    "pressure",
+    new AbortController().signal,
+  );
+
+  assert.equal(result, null);
 });
 
 test("Suzu manual compaction splits an overlong prefix into balanced input-safe batches", () => {
@@ -131,6 +190,45 @@ test("Suzu manual summaries disable contact tools and use the bounded recovery o
   assert.equal(calls[0].maxTokens, 32_768);
   assert.equal(calls[0].system, "companion system");
   assert.match(calls[0].messages.at(-1).content[0].text, /分批压缩/u);
+});
+
+test("automatic summaries honor the source-relative output budget", async () => {
+  const calls = [];
+  const engine = {
+    baseConfig: { maxTokens: 8_192 },
+    settingsContext: {
+      getStore: () => ({
+        config: { maxTokens: 8_192 },
+        settings: { prompt: "整理旧对话" },
+        summaryMaxTokens: 320,
+      }),
+    },
+    ctx: {
+      llm: {
+        async *stream(options) {
+          calls.push(options);
+          yield { type: "block-start", index: 0, blockType: "text" };
+          yield { type: "text-delta", index: 0, text: "精简记录" };
+          yield { type: "block-end", index: 0, block: { type: "text", text: "精简记录" } };
+          yield { type: "finish", reason: { kind: "stop" } };
+        },
+      },
+    },
+  };
+  const agent = {
+    options: { provider: "test-provider", model: "test-model" },
+    session: { id: "automatic-summary-options" },
+  };
+
+  await SuzuCompanionCompactionEngine.prototype.summarize.call(
+    engine,
+    { messages: [{ role: "user", content: [{ type: "text", text: "旧对话" }] }] },
+    agent,
+    new AbortController().signal,
+  );
+
+  assert.equal(calls[0].maxTokens, 320);
+  assert.match(calls[0].messages.at(-1).content[0].text, /紧凑的续接记录/u);
 });
 
 test("Suzu manual compaction rolls successive safe batches into one final checkpoint", async () => {

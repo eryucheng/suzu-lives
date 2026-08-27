@@ -1,5 +1,6 @@
 import { SuzuAgentRuntimeError } from "./runtime-error.mjs";
 import { isSuzuAgentPermissionMode } from "./permission-modes.mjs";
+import { isSuzuAgentReasoningEffort } from "./reasoning-efforts.mjs";
 import { normalizeSuzuAgentTaskOutputPolicy } from "./task-trigger.mjs";
 import { formatErrorForDisplay } from "./error-detail.mjs";
 
@@ -16,6 +17,13 @@ export {
   isSuzuAgentPermissionMode,
   normalizeSuzuAgentPermissionMode,
 } from "./permission-modes.mjs";
+export {
+  DEFAULT_SUZU_AGENT_REASONING_EFFORT,
+  SUZU_AGENT_REASONING_EFFORTS,
+  adaptSuzuAgentReasoningEffort,
+  isSuzuAgentReasoningEffort,
+  normalizeSuzuAgentReasoningEffort,
+} from "./reasoning-efforts.mjs";
 
 const MAX_IDENTIFIER_LENGTH = 256;
 const EVENT_STREAM_OPEN_TIMEOUT_MS = 10_000;
@@ -695,14 +703,19 @@ export function createSuzuAgentRuntimeDriver({
       await ensureStreams();
       const preset = clean(plainObject(presentation).agentPreset);
       const permissionMode = clean(plainObject(presentation).permissionMode);
+      const reasoningEffort = clean(plainObject(presentation).reasoningEffort);
       if (permissionMode && !isSuzuAgentPermissionMode(permissionMode)) {
         throw new SuzuAgentRuntimeError("INVALID_PERMISSION_MODE", "Suzu Agent 审批模式无效。 ");
+      }
+      if (reasoningEffort && !isSuzuAgentReasoningEffort(reasoningEffort)) {
+        throw new SuzuAgentRuntimeError("INVALID_REASONING_EFFORT", "Suzu Agent 思考强度无效。 ");
       }
       const value = unwrapRpc(await coreApi.sessions.create({
         sessionId: requestedRuntimeSessionId,
         ...(clean(cwd) ? { cwd: clean(cwd) } : {}),
         ...(preset ? { agentPreset: preset } : {}),
         ...(permissionMode ? { permissionMode } : {}),
+        ...(reasoningEffort ? { reasoningEffort } : {}),
       }), "创建会话");
       const runtimeSessionId = identifier(plainObject(value).sessionId, "Agent Core 会话标识");
       if (existing) {

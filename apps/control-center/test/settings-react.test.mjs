@@ -14,8 +14,9 @@ test("React settings keeps software updates in the existing settings action chai
   assert.match(page, /function SoftwareUpdate/u);
   assert.match(page, /软件更新/u);
   assert.match(page, /检查更新/u);
-  assert.match(page, /下载更新/u);
+  assert.match(page, /发现新版本/u);
   assert.match(page, /重启并安装/u);
+  assert.match(page, /settings-update-attention-dot/u);
   assert.match(page, /development: \{ action: null, button: "开发版不检查"/u);
   assert.match(page, /disabled=\{Boolean\(pending\) \|\| !presentation\.action\}/u);
   assert.match(page, /actions\.checkForUpdate/u);
@@ -25,6 +26,10 @@ test("React settings keeps software updates in the existing settings action chai
   assert.match(app, /runAppUpdateAction\("checkForUpdate"/u);
   assert.match(app, /runAppUpdateAction\("downloadUpdate"/u);
   assert.match(app, /runAppUpdateAction\("installUpdate"/u);
+  assert.match(app, /api\.settings\?\.onAppUpdateStatus/u);
+  assert.match(app, /appUpdateAttention: appUpdateNeedsAttention\(\)/u);
+  const automaticStatusObserver = app.slice(app.indexOf("function observeAppUpdateStatus"), app.indexOf("async function loadAppUpdateStatus"));
+  assert.doesNotMatch(automaticStatusObserver, /setNotice/u);
 });
 
 test("React settings exposes one current release announcement, not a changelog list", () => {
@@ -95,9 +100,12 @@ test("settings owns the reusable API connection library without a global capabil
 
 test("API editor exposes DashScope as a normal reusable connection type", () => {
   const apiConnections = readFileSync(resolve(ROOT, "src", "react", "api-connections-ui.jsx"), "utf8");
+  const catalog = readFileSync(resolve(ROOT, "src", "features", "api-connections", "catalog.mjs"), "utf8");
 
-  assert.match(apiConnections, /\{ label: "DashScope", value: "dashscope" \}/u);
-  assert.match(apiConnections, /type: "dashscope", value: "dashscope", label: "DashScope"/u);
+  assert.match(catalog, /\{ label: "DashScope", value: "dashscope" \}/u);
+  assert.match(catalog, /type: "dashscope", value: "dashscope", label: "DashScope"/u);
+  assert.match(apiConnections, /API_CONNECTION_TYPE_OPTIONS/u);
+  assert.match(apiConnections, /API_CONNECTION_ENDPOINT_PRESETS/u);
   assert.match(apiConnections, /options=\{CONNECTION_TYPE_OPTIONS\}/u);
   assert.doesNotMatch(apiConnections, /DashScope 原生协议（已有连接）/u);
 });

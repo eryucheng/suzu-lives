@@ -259,6 +259,121 @@ test("calculates an arbitrary user-created text model from its own price mapping
   assert.ok(Math.abs(revised.amountCny - 12) < 0.000001);
 });
 
+test("ships the popular text model catalog as a compact built-in resource", () => {
+  const view = priceCatalogView({ timestamp: "2026-08-27T12:00:00.000Z" });
+  const providers = new Set(view.models.map((model) => model.provider));
+
+  assert.ok(view.models.length >= 60);
+  for (const provider of ["DeepSeek", "阿里云百炼", "MiniMax", "Kimi", "智谱 BigModel", "OpenAI", "Anthropic", "Google"]) {
+    assert.equal(providers.has(provider), true, `missing ${provider}`);
+  }
+  const openAi = view.models.find((model) => model.modelId === "gpt-5.6-sol");
+  assert.equal(openAi?.sourceCurrency, "USD");
+  assert.equal(openAi?.exchangeRateCny, 6.784);
+  assert.equal(openAi?.exchangeRateDate, "2026-08-27");
+  assert.deepEqual(Object.keys(openAi?.rateDefinitions || {}), [
+    "inputUncachedTokens",
+    "inputCachedTokens",
+    "inputCacheWriteTokens",
+    "outputTextTokens",
+  ]);
+});
+
+test("selects the MiniMax M3 price tier from request input tokens", () => {
+  const standard = calculateCost({
+    model: "MiniMax-M3",
+    timestamp: "2026-08-27T12:00:00.000Z",
+    usage: { prompt_tokens: 500_000, completion_tokens: 1_000_000 },
+  });
+  const longContext = calculateCost({
+    model: "minimax-m3",
+    timestamp: "2026-08-27T12:00:00.000Z",
+    usage: { prompt_tokens: 600_000, completion_tokens: 1_000_000 },
+  });
+
+  assert.ok(Math.abs(standard.amountCny - 9.45) < 0.000001);
+  assert.equal(standard.price.rateTier, "输入不超过 512K");
+  assert.ok(Math.abs(longContext.amountCny - 19.32) < 0.000001);
+  assert.equal(longContext.price.rateTier, "输入超过 512K");
+});
+
+test("prices cache reads and writes independently when the provider reports them", () => {
+  const result = calculateCost({
+    model: "MiniMax-M2.7",
+    timestamp: "2026-08-27T12:00:00.000Z",
+    usage: {
+      inputTokens: 1_000_000,
+      cacheReadTokens: 1_000_000,
+      cacheWriteTokens: 1_000_000,
+      outputTokens: 1_000_000,
+    },
+  });
+
+  assert.ok(Math.abs(result.amountCny - 13.545) < 0.000001);
+  assert.equal(result.units.inputCacheWriteTokens, 1_000_000);
+});
+
+test("applies Qwen and GLM context and output price tiers", () => {
+  const qwen = calculateCost({
+    model: "qwen3.5-plus",
+    timestamp: "2026-08-27T12:00:00.000Z",
+    usage: { prompt_tokens: 200_000, completion_tokens: 1_000_000 },
+  });
+  const glmShort = calculateCost({
+    model: "glm-4.7",
+    timestamp: "2026-08-27T12:00:00.000Z",
+    usage: { prompt_tokens: 10_000, completion_tokens: 100 },
+  });
+  const glmRegular = calculateCost({
+    model: "glm-4.7",
+    timestamp: "2026-08-27T12:00:00.000Z",
+    usage: { prompt_tokens: 10_000, completion_tokens: 200 },
+  });
+
+  assert.ok(Math.abs(qwen.amountCny - 12.4) < 0.000001);
+  assert.equal(qwen.price.rateTier, "输入不超过 256K");
+  assert.ok(Math.abs(glmShort.amountCny - 0.0208) < 0.000001);
+  assert.equal(glmShort.price.rateTier, "输入少于 32K、输出少于 200");
+  assert.ok(Math.abs(glmRegular.amountCny - 0.0328) < 0.000001);
+  assert.equal(glmRegular.price.rateTier, "输入少于 32K");
+});
+
+test("converts official USD prices to the catalog's fixed CNY snapshot", () => {
+  const openAi = calculateCost({
+    model: "gpt-5.6-sol",
+    timestamp: "2026-08-27T12:00:00.000Z",
+    usage: { prompt_tokens: 300_000, completion_tokens: 1_000_000 },
+  });
+  const anthropic = calculateCost({
+    model: "claude-sonnet-5",
+    timestamp: "2026-08-27T12:00:00.000Z",
+    usage: {
+      input_tokens: 1_000_000,
+      cache_read_input_tokens: 1_000_000,
+      cache_creation_input_tokens: 2_000_000,
+      cache_creation: {
+        ephemeral_5m_input_tokens: 500_000,
+        ephemeral_1h_input_tokens: 1_500_000,
+      },
+      output_tokens: 1_000_000,
+    },
+  });
+  const gemini = calculateCost({
+    model: "gemini-3.5-flash",
+    timestamp: "2026-08-27T12:00:00.000Z",
+    usage: {
+      promptTokenCount: 2_000_000,
+      cachedContentTokenCount: 1_000_000,
+      candidatesTokenCount: 1_000_000,
+    },
+  });
+
+  assert.ok(Math.abs(openAi.amountCny - 219.8016) < 0.000001);
+  assert.equal(openAi.price.rateTier, "输入超过 272K");
+  assert.ok(Math.abs(anthropic.amountCny - 131.9488) < 0.000001);
+  assert.ok(Math.abs(gemini.amountCny - 72.2496) < 0.000001);
+});
+
 test("appends and reads a raw usage event without storing a price snapshot", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "suzu-ledger-"));
   const ledgerPath = path.join(root, "events.jsonl");

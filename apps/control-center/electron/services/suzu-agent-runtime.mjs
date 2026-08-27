@@ -5,8 +5,11 @@ import { fileURLToPath } from "node:url";
 import { createAgentRuntime } from "@suzu-lives/agent-runtime";
 import {
   DEFAULT_SUZU_AGENT_PERMISSION_MODE,
+  DEFAULT_SUZU_AGENT_REASONING_EFFORT,
   isSuzuAgentPermissionMode,
+  isSuzuAgentReasoningEffort,
   normalizeSuzuAgentPermissionMode,
+  normalizeSuzuAgentReasoningEffort,
   SuzuAgentRuntimeError,
   createSuzuAgentRuntimeDriver,
   createSuzuAgentCoreSupervisor,
@@ -54,12 +57,26 @@ const SUZU_SOFTWARE_ASSISTANT_SKILL_NAMES = Object.freeze([
   "model-and-api-setup",
   "capability-setup",
   "contact-creation",
+  "contact-avatar",
   "contact-and-relationship",
   "chat-and-context",
   "today-and-schedules",
   "app-management",
   "software-diagnostics",
 ]);
+const SUZU_SOFTWARE_ASSISTANT_SKILL_RESOURCE_FILES = Object.freeze({
+  "model-and-api-setup": Object.freeze([
+    "references/deepseek.md",
+    "references/minimax.md",
+    "references/alibaba-cloud.md",
+    "references/kimi.md",
+    "references/openai.md",
+    "references/zhipu.md",
+    "references/ollama.md",
+    "references/custom-services.md",
+    "references/online-lookup.md",
+  ]),
+});
 const SUZU_SOFTWARE_ASSISTANT_LEGACY_SKILL_NAMES = Object.freeze([
   "plans-and-management",
 ]);
@@ -253,9 +270,13 @@ export async function ensureSuzuSoftwareAssistantAgentPreset({
     }
   }));
   const skillContents = await Promise.all(SUZU_SOFTWARE_ASSISTANT_SKILL_NAMES.map(async (skillName) => {
-    const relativePath = path.join("skills", skillName, "SKILL.md");
+    const files = ["SKILL.md", ...(SUZU_SOFTWARE_ASSISTANT_SKILL_RESOURCE_FILES[skillName] || [])];
     try {
-      return [skillName, await fsOps.readFile(path.join(sourceDirectory, relativePath), "utf8")];
+      const entries = await Promise.all(files.map(async (relativePath) => ([
+        relativePath,
+        await fsOps.readFile(path.join(sourceDirectory, "skills", skillName, ...relativePath.split("/")), "utf8"),
+      ])));
+      return [skillName, entries];
     } catch (error) {
       throw new SuzuAgentRuntimeServiceError(
         `无法读取 Suzu 软件助手 Skill：${skillName}。`,
@@ -300,14 +321,18 @@ export async function ensureSuzuSoftwareAssistantAgentPreset({
       label: fileName,
     });
   }
-  for (const [skillName, content] of skillContents) {
+  for (const [skillName, files] of skillContents) {
     const skillDirectory = path.join(skillsDirectory, skillName);
     await fsOps.mkdir(skillDirectory, { recursive: true });
-    await refreshManagedFile({
-      target: path.join(skillDirectory, "SKILL.md"),
-      content,
-      label: `${skillName}/SKILL.md`,
-    });
+    for (const [relativePath, content] of files) {
+      const target = path.join(skillDirectory, ...relativePath.split("/"));
+      await fsOps.mkdir(path.dirname(target), { recursive: true });
+      await refreshManagedFile({
+        target,
+        content,
+        label: `${skillName}/${relativePath}`,
+      });
+    }
   }
   for (const skillName of SUZU_SOFTWARE_ASSISTANT_LEGACY_SKILL_NAMES) {
     try {
@@ -339,6 +364,7 @@ export function createSuzuAgentRuntime({
   temporaryDirectory = "",
   workspaceDirectory,
   resolveContactPermissionMode = null,
+  resolveContactReasoningEffort = null,
   fsOps = fs,
   defaultAgentPreset = SUZU_COMPANION_AGENT_PRESET,
   agentAdapter = DEFAULT_SUZU_AGENT_COMPOSITION,
@@ -366,7 +392,7 @@ export function createSuzuAgentRuntime({
     );
   }
   const companionPreset = clean(companionAgentBinding?.agentPreset);
-  if (!companionPreset || clean(defaultAgentPreset) !== companionPreset || typeof ensureCompanionPreset !== "function" || typeof ensureSoftwareAssistantPreset !== "function" || typeof ensureExternalCapabilitiesPatch !== "function" || typeof createInstructionBridge !== "function" || !fsOps?.mkdir || typeof createSupervisor !== "function" || typeof createDriver !== "function" || typeof createRuntimeFacade !== "function" || typeof deleteSessionStorage !== "function" || (resolveContactPermissionMode !== null && typeof resolveContactPermissionMode !== "function")) {
+  if (!companionPreset || clean(defaultAgentPreset) !== companionPreset || typeof ensureCompanionPreset !== "function" || typeof ensureSoftwareAssistantPreset !== "function" || typeof ensureExternalCapabilitiesPatch !== "function" || typeof createInstructionBridge !== "function" || !fsOps?.mkdir || typeof createSupervisor !== "function" || typeof createDriver !== "function" || typeof createRuntimeFacade !== "function" || typeof deleteSessionStorage !== "function" || (resolveContactPermissionMode !== null && typeof resolveContactPermissionMode !== "function") || (resolveContactReasoningEffort !== null && typeof resolveContactReasoningEffort !== "function")) {
     throw new SuzuAgentRuntimeServiceError("Suzu Agent Core 会话运行时依赖无效。", { code: "RUNTIME_CONTRACT_INVALID" });
   }
   let instructionBridge;
@@ -592,8 +618,30 @@ export function createSuzuAgentRuntime({
     return normalizeSuzuAgentPermissionMode(saved || requested || SUZU_COMPANION_PERMISSION_MODE);
   };
 
+  const reasoningEffortFor = async ({ contactId = "", presentation = {} } = {}) => {
+    const source = plainObject(presentation);
+    const requested = clean(source.reasoningEffort);
+    if (requested && !isSuzuAgentReasoningEffort(requested)) {
+      throw new SuzuAgentRuntimeServiceError("Suzu Agent 思考强度无效。", { code: "INVALID_REASONING_EFFORT" });
+    }
+    let saved = "";
+    const id = clean(contactId);
+    if (id && typeof resolveContactReasoningEffort === "function") {
+      try {
+        saved = clean(await resolveContactReasoningEffort({ contactId: id }));
+      } catch {
+        // A temporary contact catalogue failure falls back to the model's
+        // own reasoning default for this session open.
+      }
+    }
+    return normalizeSuzuAgentReasoningEffort(saved || requested || DEFAULT_SUZU_AGENT_REASONING_EFFORT);
+  };
+
   const ensureSession = async ({ sessionId, contactId = "", cwd, presentation = {} } = {}) => {
-    const permissionMode = await permissionModeFor({ contactId, presentation });
+    const [permissionMode, reasoningEffort] = await Promise.all([
+      permissionModeFor({ contactId, presentation }),
+      reasoningEffortFor({ contactId, presentation }),
+    ]);
     const facade = await start();
     try {
       return await facade.createSession({
@@ -604,6 +652,7 @@ export function createSuzuAgentRuntime({
           ...plainObject(presentation),
           agentPreset: managedPreset(presentation),
           permissionMode,
+          reasoningEffort,
         },
       });
     } catch (error) {

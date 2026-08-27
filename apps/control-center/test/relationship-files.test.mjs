@@ -110,6 +110,9 @@ test("targeted relationship saves resolve the requested contact instead of the s
     content: "新建联系人的人设",
   });
 
+  const createdSnapshot = await current.snapshotForContact({ contactId: "contact-created" });
+  assert.equal(createdSnapshot.files.find((item) => item.path === "persona.md")?.content, "新建联系人的人设");
+
   assert.equal(await fs.readFile(path.join(createdRoot, "persona.md"), "utf8"), "新建联系人的人设");
   const createdSuzu = await fs.readFile(path.join(createdRoot, "SUZU.md"), "utf8");
   assert.match(createdSuzu, /^@persona\.md$/mu);

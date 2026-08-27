@@ -12,7 +12,7 @@ import {
   setAvatarCropZoom,
 } from "../../core/avatar-file.mjs";
 import { getAgentProfile, getIdentity, profileInitial } from "../../core/identity.mjs";
-import { endActiveConversationCall } from "../../react/conversation-call-coordinator.mjs";
+import { hasActiveConversationCall } from "../../react/conversation-call-coordinator.mjs";
 import { parseSuzuConversationCommand } from "../../../shared/conversation-command.mjs";
 import { PRODUCT_FEATURES } from "../../../shared/product-features.mjs";
 import {
@@ -1482,6 +1482,7 @@ function sessionSettingsSnapshot(context, selected, prefs) {
     longTermMemoryEnabled: longTermMemoryEnabled(contact?.longTermMemoryEnabled),
     proactiveContactEnabled: proactiveContactEnabled(contactId),
     permissionMode: clean(contact?.permissionMode) || "danger-full-access",
+    reasoningEffort: clean(contact?.reasoningEffort) || "off",
     removeContactAvatar: Boolean(agent.avatarDataUrl),
     saving: viewState.sending,
     sessionId,
@@ -2321,7 +2322,6 @@ export function stopConversationPolling() {
   viewState.searchFocusRequest = 0;
   viewState.scrollTarget = null;
   viewState.scrollToLatestRequest = 0;
-  void endActiveConversationCall();
 }
 
 export function dismissConversationOverlays(target = viewState) {
@@ -2735,7 +2735,6 @@ export function createConversationReactActions(context) {
       viewState.sending = true;
       context.render();
       try {
-        await endActiveConversationCall();
         viewState.lastVersion = applyConversationSnapshot(
           await context.api.conversation.createContact({ name: value }),
         ).version;
@@ -2761,6 +2760,12 @@ export function createConversationReactActions(context) {
       if (!dismissConversationOverlays()) return false;
       context.render();
       return true;
+    },
+    dismissNotice: (message) => {
+      const expected = clean(message);
+      if (!viewState.notice || (expected && viewState.notice !== expected)) return;
+      viewState.notice = "";
+      context.render();
     },
     focusSearchMatch: async ({ lineNumber, messageId } = {}) => {
       await focusConversationRecord(context, { lineNumber, messageId }, { fromSearch: true });
@@ -3009,6 +3014,11 @@ export function createConversationReactActions(context) {
         .find((item) => clean(item?.id) === id) || null;
       const name = clean(contact?.name) || "这位联系人";
       const activeContactRemoved = id === clean(viewState.snapshot?.activeContact?.id);
+      if (activeContactRemoved && hasActiveConversationCall()) {
+        viewState.error = "请先挂断当前语音通话，再删除正在查看的联系人。";
+        context.render();
+        return;
+      }
       viewState.contactContextMenu = null;
       const confirmed = await requestConversationConfirmation(context, {
         confirmLabel: "删除联系人",
@@ -3020,7 +3030,6 @@ export function createConversationReactActions(context) {
       viewState.sending = true;
       context.render();
       try {
-        if (activeContactRemoved) await endActiveConversationCall();
         viewState.lastVersion = applyConversationSnapshot(
           await context.api.conversation.removeContact({ id, confirmed: true }),
         ).version;
@@ -3147,7 +3156,6 @@ export function createConversationReactActions(context) {
         const nextSnapshot = await context.api.conversation.updateContactPresentation({ id, ...patch });
         const nextActiveContactId = clean(nextSnapshot?.activeContact?.id);
         const activeContactChanged = previousActiveContactId !== nextActiveContactId;
-        if (activeContactChanged) await endActiveConversationCall();
         viewState.lastVersion = applyConversationSnapshot(nextSnapshot).version;
         if (activeContactChanged) {
           resetConversationForContactChange();
@@ -3178,7 +3186,6 @@ export function createConversationReactActions(context) {
       const id = clean(contactId);
       if (!id || viewState.sending || !context.api.conversation.selectContact) return;
       try {
-        await endActiveConversationCall();
         viewState.lastVersion = applyConversationSnapshot(
           await context.api.conversation.selectContact({ id }),
         ).version;
@@ -3301,6 +3308,26 @@ export function createConversationReactActions(context) {
         viewState.notice = "已更新这位联系人的审批模式。";
       } catch (error) {
         viewState.error = `无法更新联系人审批模式：${error?.message || error}`;
+      } finally {
+        viewState.sending = false;
+        context.render();
+      }
+    },
+    setContactReasoningEffort: async (reasoningEffort) => {
+      const contactId = clean(viewState.snapshot?.activeContact?.id);
+      const nextReasoningEffort = clean(reasoningEffort);
+      const currentReasoningEffort = clean(viewState.snapshot?.activeContact?.reasoningEffort) || "off";
+      if (!contactId || !nextReasoningEffort || nextReasoningEffort === currentReasoningEffort || viewState.sending || !context.api.conversation.updateContactReasoningEffort) return;
+      viewState.sending = true;
+      context.render();
+      try {
+        viewState.lastVersion = applyConversationSnapshot(
+          await context.api.conversation.updateContactReasoningEffort({ id: contactId, reasoningEffort: nextReasoningEffort }),
+        ).version;
+        viewState.error = "";
+        viewState.notice = "已更新这位联系人的思考强度。";
+      } catch (error) {
+        viewState.error = `无法更新联系人思考强度：${error?.message || error}`;
       } finally {
         viewState.sending = false;
         context.render();

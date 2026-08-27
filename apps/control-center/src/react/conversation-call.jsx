@@ -9,7 +9,7 @@ import {
   useState,
 } from "react";
 
-import { registerConversationCallEndHandler } from "./conversation-call-coordinator.mjs";
+import { registerConversationCallActivityReader } from "./conversation-call-coordinator.mjs";
 import {
   callStatusLabel,
   cleanCallText,
@@ -84,7 +84,7 @@ export function useConversationCall() {
   return useContext(ConversationCallContext) || EMPTY_CALL_CONTROL;
 }
 
-export function ConversationCallProvider({ active = false, api = null, snapshot = null, children }) {
+export function ConversationCallProvider({ api = null, snapshot = null, children }) {
   const [call, setCall] = useState(null);
   const [startError, setStartError] = useState("");
   const apiRef = useRef(api);
@@ -435,18 +435,12 @@ export function ConversationCallProvider({ active = false, api = null, snapshot 
   }, [disposeAudio, isCurrentCall, patchCall, replaceCall, stopPlayback, receiveAudio]);
 
   useEffect(() => {
-    if (!active || typeof api?.conversation?.onEvent !== "function") return undefined;
-    return api.conversation.onEvent(handleCallEvent);
-  }, [active, api, handleCallEvent]);
+    const eventApi = api || apiRef.current;
+    if (typeof eventApi?.conversation?.onEvent !== "function") return undefined;
+    return eventApi.conversation.onEvent(handleCallEvent);
+  }, [api, handleCallEvent]);
 
-  useEffect(() => {
-    if (!active) {
-      setStartError("");
-      void end();
-    }
-  }, [active, end]);
-
-  useEffect(() => registerConversationCallEndHandler(end), [end]);
+  useEffect(() => registerConversationCallActivityReader(() => Boolean(callRef.current)), []);
 
   useEffect(() => () => {
     void end();

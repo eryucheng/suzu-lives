@@ -304,6 +304,9 @@ export function createRelationshipFilesService({ contactProjectsService = null, 
     const configured = clean(settingsService.load()?.projectRoot); if (!configured) return { status: "needs-project", files: [] };
     return snapshotForRoot(await root());
   };
+  const snapshotForContact = async ({ contactId } = {}) => (
+    snapshotForRoot(await contactRoot(contactId))
+  );
   const write = async (selectedRoot, { path: relativePath, content } = {}) => {
     assertRelationshipContent(content);
     const normalized = normalizeRelationshipPath(relativePath);
@@ -351,7 +354,7 @@ export function createRelationshipFilesService({ contactProjectsService = null, 
     ], fsOps);
     return snapshot();
   };
-  return { snapshot, save, saveForContact, create };
+  return { snapshot, snapshotForContact, save, saveForContact, create };
 }
 
 export function registerRelationshipFilesIpc({ ipcMain, relationshipFilesService }) {

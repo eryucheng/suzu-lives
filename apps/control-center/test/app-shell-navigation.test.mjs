@@ -14,6 +14,8 @@ test("the primary shell navigation exposes the current conversation directly bel
   assert.match(shell, /view === "conversation"[\s\S]*?openSuzuSearchItem\?\.\("conversation"\)/u);
   assert.match(shell, /route\?\.kind === "conversation"[\s\S]*?\? "conversation"/u);
   assert.match(shell, /item\.view === "conversation" && conversationUnread/u);
+  assert.match(shell, /item\.view === "settings" && appUpdateAttention/u);
+  assert.match(shell, /appUpdateAttention=\{appUpdateAttention\}/u);
 });
 
 test("the desktop shell defaults its navigation rail to compact on narrow windows without locking manual expansion", () => {
@@ -59,6 +61,7 @@ test("the desktop shell provides a persisted draggable sidebar splitter", () => 
 
 test("the top command field opens the fixed Suzu software assistant instead of a command palette", () => {
   const shell = readFileSync(resolve(HERE, "..", "src", "react", "app-shell.jsx"), "utf8");
+  const shellStyles = readFileSync(resolve(HERE, "..", "src", "react", "app-shell.css"), "utf8");
   const app = readFileSync(resolve(HERE, "..", "src", "app.mjs"), "utf8");
   const dialog = readFileSync(resolve(HERE, "..", "src", "react", "software-assistant-dialog.jsx"), "utf8");
   const assistantStyles = readFileSync(resolve(HERE, "..", "src", "react", "software-assistant-dialog.css"), "utf8");
@@ -66,6 +69,10 @@ test("the top command field opens the fixed Suzu software assistant instead of a
   assert.match(shell, /SoftwareAssistantDialog/u);
   assert.match(shell, /placeholder="问 Suzu：想做什么？"/u);
   assert.match(shell, /aria-label="问 Suzu"/u);
+  assert.match(shell, /suffix=\{\([\s\S]*?<button[\s\S]*?aria-label="打开 Suzu 助手"[\s\S]*?onClick=\{\(\) => openSoftwareAssistant\(\)\}[\s\S]*?type="button"[\s\S]*?Ctrl K[\s\S]*?<\/button>/u);
+  assert.doesNotMatch(shell, /suffix=\{<kbd className="shell-command-key"/u);
+  assert.match(shellStyles, /\.shell-command-key \{[\s\S]*?cursor:pointer;[\s\S]*?pointer-events:auto;/u);
+  assert.match(shellStyles, /\.shell-command-key:focus-visible/u);
   assert.doesNotMatch(shell, /SuzuSearchDialog/u);
   assert.match(dialog, /const assistantName = phase === "clearing" \? "正在清空记录\.\.\." : busy \? "正在输入中\.\.\." : "Suzu";/u);
   assert.match(dialog, /<h2 aria-live="polite">\{assistantName\}<\/h2>/u);

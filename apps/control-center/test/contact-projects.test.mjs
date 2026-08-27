@@ -55,9 +55,11 @@ test("contacts are Suzu workspaces directly below the configured contacts root",
   assert.equal(Object.hasOwn(created.activeContact, "approvalMode"), false);
   assert.equal(created.activeContact.longTermMemoryEnabled, true);
   assert.equal(created.activeContact.permissionMode, "danger-full-access");
+  assert.equal(created.activeContact.reasoningEffort, "off");
   assert.equal(Object.hasOwn(metadata, "approvalMode"), false);
   assert.equal(Object.hasOwn(metadata, "longTermMemoryEnabled"), false);
   assert.equal(metadata.permissionMode, "danger-full-access");
+  assert.equal(metadata.reasoningEffort, "off");
   assert.ok(Number.isFinite(Date.parse(metadata.createdAt)));
   assert.match(metadata.sessionId, /^[0-9a-f-]{36}$/u);
   assert.equal(created.activeContact.sessionId, metadata.sessionId);
@@ -385,5 +387,34 @@ test("each contact persists its own Agent approval mode and defaults to full acc
   await assert.rejects(
     service.updatePermissionMode({ id: firstId, permissionMode: "everything" }),
     /审批模式无效/u,
+  );
+});
+
+test("each contact persists its own reasoning effort and defaults to off", async () => {
+  const contactsRoot = await temporaryDirectory("suzu-contact-reasoning-effort-");
+  let settings = { contactsRoot, projectRoot: "", preferredContactId: "" };
+  const service = createContactProjectsService({
+    settingsService: { load: () => settings, save: (next) => { settings = next; return settings; } },
+  });
+  const first = await service.create({ name: "小苏" });
+  const second = await service.create({ name: "工作" });
+  const firstId = first.activeContact.id;
+  const secondId = second.activeContact.id;
+
+  const updated = await service.updateReasoningEffort({ id: firstId, reasoningEffort: "low" });
+  assert.equal(updated.contacts.find((contact) => contact.id === firstId)?.reasoningEffort, "low");
+  assert.equal(updated.contacts.find((contact) => contact.id === secondId)?.reasoningEffort, "off");
+
+  const metadataPath = path.join(first.activeContact.projectRoot, ".suzu-lives", "contact.json");
+  assert.equal(JSON.parse(await fs.readFile(metadataPath, "utf8")).reasoningEffort, "low");
+  await service.rename({ id: firstId, name: "新的备注" });
+  await service.updatePermissionMode({ id: firstId, permissionMode: "read-only" });
+  assert.equal(JSON.parse(await fs.readFile(metadataPath, "utf8")).reasoningEffort, "low");
+
+  const reset = await service.updateReasoningEffort({ id: firstId, reasoningEffort: "off" });
+  assert.equal(reset.contacts.find((contact) => contact.id === firstId)?.reasoningEffort, "off");
+  await assert.rejects(
+    service.updateReasoningEffort({ id: firstId, reasoningEffort: "medium" }),
+    /思考强度无效/u,
   );
 });

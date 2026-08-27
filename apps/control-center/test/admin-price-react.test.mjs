@@ -27,4 +27,6 @@ test("DSH management keeps identity, model configuration, and editable custom pr
   assert.match(page, /admin-usage-history-chart__column/u);
   assert.match(page, /setHistoryPeriod\("daily"\)/u);
   assert.match(page, /setHistoryPeriod\("monthly"\)/u);
+  assert.match(page, /usedPriceCatalogModels\(catalogPrices, events\)/u);
+  assert.match(page, /这里只显示调用流水中出现过的模型/u);
 });

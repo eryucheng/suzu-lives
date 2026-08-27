@@ -4,6 +4,7 @@ import { flushSync } from "react-dom";
 import "suzu-design-system/style.css";
 import "./styles.css";
 import "./react/app-shell.css";
+import "../../../easter-eggs/mj-spiderman/index.mjs";
 import { AppShell } from "./react/app-shell.jsx";
 
 const app = document.querySelector("#app");

@@ -30,6 +30,7 @@ export function scheduleAppUpdateChecks({
   clearTimeoutFn = globalThis.clearTimeout,
   initialDelayMs = APP_UPDATE_INITIAL_CHECK_DELAY_MS,
   intervalMs = APP_UPDATE_CHECK_INTERVAL_MS,
+  onUpdateAvailable = null,
   setIntervalFn = globalThis.setInterval,
   setTimeoutFn = globalThis.setTimeout,
 } = {}) {
@@ -37,11 +38,24 @@ export function scheduleAppUpdateChecks({
 
   let disposed = false;
   let intervalHandle = null;
+  const reportAvailable = (result) => {
+    if (disposed || result?.status !== "available" || typeof onUpdateAvailable !== "function") return;
+    try {
+      const notification = onUpdateAvailable(result);
+      if (notification && typeof notification.catch === "function") void notification.catch(() => undefined);
+    } catch {
+      // Update attention is best-effort and must not affect background checks.
+    }
+  };
   const runCheck = () => {
     if (disposed) return;
     try {
       const operation = checkForUpdates();
-      if (operation && typeof operation.catch === "function") void operation.catch(() => undefined);
+      if (operation && typeof operation.then === "function") {
+        void operation.then(reportAvailable).catch(() => undefined);
+      } else {
+        reportAvailable(operation);
+      }
     } catch {
       // Background checks are intentionally silent.  Manual checks still
       // surface their result in Settings.

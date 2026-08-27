@@ -69,9 +69,32 @@ test("background update checks wait for startup, then repeat every twelve hours"
   assert.equal(checks, 2);
 });
 
+test("background update checks announce only a discovered version and keep failures silent", async () => {
+  const timers = timerFixture();
+  const announced = [];
+  let result = { status: "error" };
+  scheduleAppUpdateChecks({
+    checkForUpdates: async () => result,
+    onUpdateAvailable: (update) => announced.push(update),
+    ...timers,
+  });
+
+  const [startupTimer] = [...timers.timeouts.values()];
+  startupTimer.callback();
+  await Promise.resolve();
+  assert.deepEqual(announced, []);
+
+  result = { status: "available", availableVersion: "0.4.0" };
+  const [intervalTimer] = [...timers.intervals.values()];
+  intervalTimer.callback();
+  await Promise.resolve();
+  assert.deepEqual(announced, [result]);
+});
+
 test("main process schedules update checks only for packaged builds and disposes them before quitting", () => {
   const main = readFileSync(resolve(HERE, "..", "electron", "main.mjs"), "utf8");
 
-  assert.match(main, /app\.isPackaged === true[\s\S]*?scheduleAppUpdateChecks\(\{[\s\S]*?checkForUpdates: \(\) => appUpdateService\.checkForUpdates\(\)/u);
+  assert.match(main, /app\.isPackaged === true[\s\S]*?scheduleAppUpdateChecks\(\{[\s\S]*?checkForUpdates: \(\) => appUpdateService\.checkForUpdates\(\)[\s\S]*?onUpdateAvailable: \(result\) => sendAppUpdateAvailable\(result\)/u);
+  assert.match(main, /webContents\.send\("settings:app-update-status-changed", result\)/u);
   assert.match(main, /app\.once\("before-quit", stopAppUpdateChecks\)/u);
 });

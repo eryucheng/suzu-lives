@@ -1,18 +1,15 @@
-let activeEndHandler = null;
+let activeCallStateReader = null;
 
-export function registerConversationCallEndHandler(handler) {
-  activeEndHandler = typeof handler === "function" ? handler : null;
+export function registerConversationCallActivityReader(reader) {
+  activeCallStateReader = typeof reader === "function" ? reader : null;
   return () => {
-    if (activeEndHandler === handler) activeEndHandler = null;
+    if (activeCallStateReader === reader) activeCallStateReader = null;
   };
 }
 
-export async function endActiveConversationCall() {
-  const handler = activeEndHandler;
-  if (!handler) return false;
+export function hasActiveConversationCall() {
   try {
-    await handler();
-    return true;
+    return Boolean(activeCallStateReader?.());
   } catch {
     return false;
   }

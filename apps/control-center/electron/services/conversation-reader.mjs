@@ -1682,6 +1682,15 @@ export function createConversationReader({
     return snapshot();
   };
 
+  const updateContactReasoningEffort = async (value = {}) => {
+    if (!contactProjectsService?.updateReasoningEffort) {
+      throw new ConversationReaderError("当前版本未接入联系人思考强度服务。", { code: "CONTACTS_REQUIRED" });
+    }
+    await contactProjectsService.updateReasoningEffort(value);
+    selectionVersion += 1;
+    return snapshot();
+  };
+
   const deleteMessage = async (value = {}) => {
     const source = plainObject(value);
     if (source.confirmed !== true) {
@@ -1969,6 +1978,7 @@ export function createConversationReader({
     snapshot,
     updateContactLongTermMemoryEnabled,
     updateContactPermissionMode,
+    updateContactReasoningEffort,
     updateContactPresentation,
   });
 }

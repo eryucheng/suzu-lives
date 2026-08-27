@@ -16,7 +16,7 @@ import { contactAvatarSource } from "./core/contact-avatar.mjs";
 import { getAgentProfile, getIdentity } from "./core/identity.mjs";
 import { getSuzuSearchItem } from "./core/suzu-search.mjs";
 import { renderAppWorkspace, setGlobalNotice } from "./react/app-shell.jsx";
-import { endActiveConversationCall } from "./react/conversation-call-coordinator.mjs";
+import { hasActiveConversationCall } from "./react/conversation-call-coordinator.mjs";
 import { PRODUCT_FEATURES } from "../shared/product-features.mjs";
 
 const api = window.suzuConsole;
@@ -292,6 +292,18 @@ function observeSoftwareAssistantActions() {
       openSuzuSearchItem(event.destinationId);
       return;
     }
+    if (event?.type === "api-connections-changed") {
+      void api.connections.apiServicesSnapshot()
+        .then((snapshot) => { state.apiServices = snapshot; render(); })
+        .catch((error) => setNotice(`API 已保存，但界面未能立即刷新：${error?.message || error}`));
+      return;
+    }
+    if (event?.type === "main-model-changed") {
+      void api.agentRuntime.snapshot()
+        .then((snapshot) => { state.agentRuntime = snapshot; render(); })
+        .catch((error) => setNotice(`主模型已保存，但界面未能立即刷新：${error?.message || error}`));
+      return;
+    }
     if (event?.type !== "theme-changed" && event?.type !== "contact-avatar-changed") return;
     void api.settings.get()
       .then((settings) => {
@@ -488,6 +500,21 @@ async function changeSettingsDataLocation() {
 function appUpdateMessage(result, fallback) {
   return String(result?.message || "").trim() || fallback;
 }
+
+function appUpdateNeedsAttention(update = state.appUpdate) {
+  return ["available", "downloaded"].includes(String(update?.status || "").trim().toLowerCase());
+}
+
+function observeAppUpdateStatus() {
+  if (typeof api.settings?.onAppUpdateStatus !== "function") return;
+  api.settings.onAppUpdateStatus((result) => {
+    if (!result || typeof result !== "object") return;
+    state.appUpdate = result;
+    render();
+  });
+}
+
+observeAppUpdateStatus();
 
 async function loadAppUpdateStatus() {
   const request = ++appUpdateRequest;
@@ -1254,7 +1281,11 @@ async function answerIncomingVoiceCall(requestId) {
   render();
   try {
     if (typeof api.conversation?.selectContact !== "function") throw new Error("当前版本无法切换联系人。");
-    await endActiveConversationCall();
+    if (hasActiveConversationCall()) {
+      state.incomingVoiceCall = { ...incoming, phase: "ringing" };
+      setNotice("请先挂断当前语音通话，再接听新的来电。");
+      return;
+    }
     await api.conversation.selectContact({ id: incoming.contactId });
     if (typeof api.settings?.get === "function") state.settings = await api.settings.get().catch(() => state.settings);
     state.pendingIncomingVoiceCall = incoming;
@@ -2032,6 +2063,7 @@ function buildWorkspace() {
     notice: currentGlobalNotice(),
     onboarding: onboardingWorkspace(),
     owner: getIdentity(state.settings).owner,
+    appUpdateAttention: appUpdateNeedsAttention(),
     releaseAnnouncement: state.releaseAnnouncement,
     releaseAnnouncementOpen: state.releaseAnnouncementOpen,
     route: routeForCurrentView(),
@@ -2061,14 +2093,21 @@ async function refreshData() {
     const releaseAnnouncementSnapshot = typeof api.settings?.releaseAnnouncementStatus === "function"
       ? api.settings.releaseAnnouncementStatus().catch(() => null)
       : Promise.resolve(null);
+    const appUpdateSnapshot = typeof api.settings?.appUpdateStatus === "function"
+      ? api.settings.appUpdateStatus().catch(() => null)
+      : Promise.resolve(null);
     // Prime the runtime's selected-model capability cache once during every
     // application start. Subsequent refreshes reuse state.agentRuntime; model
     // saves return a fresh snapshot and replace this cached value.
     const agentRuntimeSnapshot = ensureAgentRuntimeConfig(context).catch(() => null);
-    [state.agentRuntime, state.releaseAnnouncement] = await Promise.all([
+    const [agentRuntime, releaseAnnouncement, initialAppUpdate] = await Promise.all([
       agentRuntimeSnapshot,
       releaseAnnouncementSnapshot,
+      appUpdateSnapshot,
     ]);
+    state.agentRuntime = agentRuntime;
+    state.releaseAnnouncement = releaseAnnouncement;
+    if (!appUpdateNeedsAttention()) state.appUpdate = initialAppUpdate;
     state.releaseAnnouncementOpen = state.releaseAnnouncement?.pending === true;
     if (!state.onboardingInitialized) await prepareOnboarding({ open: true });
   } catch (error) {

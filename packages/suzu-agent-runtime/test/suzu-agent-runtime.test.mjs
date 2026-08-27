@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
 import {
+  DEFAULT_SUZU_AGENT_REASONING_EFFORT,
+  SUZU_AGENT_REASONING_EFFORTS,
   SuzuAgentRuntimeError,
+  adaptSuzuAgentReasoningEffort,
   createSuzuAgentRuntimeDriver,
 } from "../src/index.mjs";
 
@@ -38,6 +41,17 @@ function createAsyncQueue() {
     },
   };
 }
+
+test("contact reasoning uses an off default and maps conservatively to model-native levels", () => {
+  assert.equal(DEFAULT_SUZU_AGENT_REASONING_EFFORT, "off");
+  assert.deepEqual(SUZU_AGENT_REASONING_EFFORTS, ["off", "low", "high", "max"]);
+  assert.equal(adaptSuzuAgentReasoningEffort("off", ["off", "low", "high"]), "off");
+  assert.equal(adaptSuzuAgentReasoningEffort("off", ["low", "high"]), "low");
+  assert.equal(adaptSuzuAgentReasoningEffort("low", ["minimal", "medium"]), "minimal");
+  assert.equal(adaptSuzuAgentReasoningEffort("high", ["medium", "xhigh"]), "medium");
+  assert.equal(adaptSuzuAgentReasoningEffort("max", ["low", "high"]), "high");
+  assert.equal(adaptSuzuAgentReasoningEffort("off", []), "");
+});
 
 function createFakeAgentCoreApi() {
   const mux = createAsyncQueue();
@@ -298,6 +312,45 @@ test("Agent Core driver reapplies a contact permission preset when its existing 
       permissionMode: "danger-full-access",
     },
   ]);
+});
+
+test("Agent Core driver forwards a validated contact reasoning effort when reopening a session", async () => {
+  const { driver, fake } = setup();
+  const first = await driver.createSession({
+    sessionId: "reasoning-session",
+    cwd: "D:\\Temp\\suzu-agent-core-test-cwd",
+    presentation: { agentPreset: "standard", reasoningEffort: "low" },
+  });
+  const reopened = await driver.createSession({
+    sessionId: "reasoning-session",
+    cwd: "D:\\Temp\\suzu-agent-core-test-cwd",
+    presentation: { agentPreset: "standard", reasoningEffort: "off" },
+  });
+
+  assert.deepEqual(first, { runtimeSessionId: "reasoning-session", created: true });
+  assert.deepEqual(reopened, { runtimeSessionId: "reasoning-session", created: false });
+  assert.deepEqual(fake.calls.create, [
+    {
+      sessionId: "reasoning-session",
+      cwd: "D:\\Temp\\suzu-agent-core-test-cwd",
+      agentPreset: "standard",
+      reasoningEffort: "low",
+    },
+    {
+      sessionId: "reasoning-session",
+      cwd: "D:\\Temp\\suzu-agent-core-test-cwd",
+      agentPreset: "standard",
+      reasoningEffort: "off",
+    },
+  ]);
+  await assert.rejects(
+    driver.createSession({
+      sessionId: "invalid-reasoning-session",
+      cwd: "D:\\Temp\\suzu-agent-core-test-cwd",
+      presentation: { reasoningEffort: "medium" },
+    }),
+    (error) => error instanceof SuzuAgentRuntimeError && error.code === "INVALID_REASONING_EFFORT",
+  );
 });
 
 test("Agent Core driver forwards validated native image prompt parts unchanged", async () => {

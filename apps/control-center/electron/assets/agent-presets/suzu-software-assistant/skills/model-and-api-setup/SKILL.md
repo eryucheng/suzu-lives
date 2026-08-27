@@ -1,19 +1,40 @@
 ---
 name: model-and-api-setup
-description: 当用户想配置主模型、新建或维护 API 连接、确认模型服务参数时使用。说明主模型与能力 API 的用途、页面和所需字段。
+description: 当用户要查看、填写或更换 Suzu Lives 的主模型、API Key、API 连接或模型服务参数时使用。
 ---
 
 # 主模型与 API 连接
 
-先区分用户要配置的对象：
+先判断 API Key 的用途：
 
 - **主模型**用于联系人聊天和“问 Suzu”的文本回复，入口是“设置 → 主模型”。
 - **API 连接**供图像、视频、语音等能力按名称选用，入口是“设置 → API”。
 
-配置主模型时，按当前页面要求填写服务类型、Base URL、模型标识和 API Key。保存后的新对话轮次会使用这条连接；服务商支持读取模型列表时，可在页面刷新后选择模型。
+用途已经明确时直接完成配置。用途会改变保存位置时，用一句具体问题确认是“主模型”还是哪项能力使用的 API。
 
-新建 API 连接时，先确定唯一且易识别的备注，再填写这项服务所需的地址、密钥和字段。能力详情显示的是 API 备注；同一条 API 可以被多个适配器或能力引用。
+## 主模型
 
-用户询问某项功能时，先说明它需要的是主模型还是独立 API，再引导到对应页面。软件状态摘要不包含当前服务商、模型标识或连接详情；需要确认实际配置时，读取主模型配置或对应 API 页面后再回答。需要跳转时，加载 `software-navigation`，读取当前状态后使用已登记的页面 ID。
+`suzu_main_model_status` 读取当前厂商、模型和连接状态。`suzu_main_model_save` 保存连接；用户给出已收录厂商和 API Key 时，厂商默认地址、协议和模型由软件补齐。用户指定模型、地址或协议时，以用户给出的值保存。
 
-密钥只用于完成本机配置；答复中描述字段和保存结果，不复述密钥内容。
+## API 连接
+
+`suzu_api_connection_search` 查找已保存的连接。`suzu_api_connection_save` 新建或更新连接；已收录厂商会自动补服务类型和官方地址。更新现有连接时使用查询返回的 `connectionId`。备注省略时使用厂商名称。
+
+OpenAI 兼容和 ASR 连接需要默认模型。用户说明了用途且厂商参考里有明确适配模型时可以直接填写；用途或模型仍不明确时，询问准备使用的能力或模型标识。
+
+## 厂商资料
+
+只读取当前厂商对应的参考：
+
+- DeepSeek：[references/deepseek.md](references/deepseek.md)
+- MiniMax：[references/minimax.md](references/minimax.md)
+- 阿里云百炼、通义与 DashScope：[references/alibaba-cloud.md](references/alibaba-cloud.md)
+- Kimi Code 与 Moonshot Kimi API：[references/kimi.md](references/kimi.md)
+- OpenAI：[references/openai.md](references/openai.md)
+- 智谱 GLM：[references/zhipu.md](references/zhipu.md)
+- Ollama：[references/ollama.md](references/ollama.md)
+- 自定义兼容服务、TTS 与 ASR：[references/custom-services.md](references/custom-services.md)
+
+内置资料没有覆盖所需字段，或厂商规则可能已经更新时，再按 [references/online-lookup.md](references/online-lookup.md) 查厂商官网。
+
+以工具返回的 `status` 和公开字段判断是否保存成功。回复中给出保存位置、厂商、连接备注和模型；API Key 作为本机配置输入使用。

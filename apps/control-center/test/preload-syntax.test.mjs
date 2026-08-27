@@ -245,6 +245,7 @@ test("Electron preload exposes the memory bridge", async () => {
   assert.equal(typeof bridge?.settings?.checkForUpdate, "function");
   assert.equal(typeof bridge?.settings?.downloadUpdate, "function");
   assert.equal(typeof bridge?.settings?.installUpdate, "function");
+  assert.equal(typeof bridge?.settings?.onAppUpdateStatus, "function");
   assert.equal(typeof bridge?.settings?.systemStatus, "function");
   assert.equal(typeof bridge?.settings?.openExternal, "function");
   await bridge.settings.releaseAnnouncementStatus();

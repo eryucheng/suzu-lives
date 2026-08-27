@@ -25,6 +25,12 @@ contextBridge.exposeInMainWorld("suzuConsole", {
     checkForUpdate: () => ipcRenderer.invoke("settings:check-for-update"),
     downloadUpdate: () => ipcRenderer.invoke("settings:download-update"),
     installUpdate: () => ipcRenderer.invoke("settings:install-update"),
+    onAppUpdateStatus: (callback) => {
+      if (typeof callback !== "function") return () => {};
+      const listener = (_event, status) => callback(status);
+      ipcRenderer.on("settings:app-update-status-changed", listener);
+      return () => ipcRenderer.removeListener("settings:app-update-status-changed", listener);
+    },
     systemStatus: () => ipcRenderer.invoke("settings:system-status"),
     chooseWallpaper: () => ipcRenderer.invoke("settings:choose-wallpaper"),
     selectWallpaperSource: (sourceType) => ipcRenderer.invoke("settings:select-wallpaper-source", sourceType),
@@ -93,6 +99,7 @@ contextBridge.exposeInMainWorld("suzuConsole", {
     updateContactPresentation: (value) => ipcRenderer.invoke("conversation:update-contact-presentation", value),
     updateContactLongTermMemoryEnabled: (value) => ipcRenderer.invoke("conversation:update-contact-long-term-memory", value),
     updateContactPermissionMode: (value) => ipcRenderer.invoke("conversation:update-contact-permission-mode", value),
+    updateContactReasoningEffort: (value) => ipcRenderer.invoke("conversation:update-contact-reasoning-effort", value),
     removeContact: (value) => ipcRenderer.invoke("conversation:remove-contact", value),
     deleteMessage: (value) => ipcRenderer.invoke("conversation:delete-message", value),
     attachments: {

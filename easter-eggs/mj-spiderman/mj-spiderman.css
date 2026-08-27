@@ -1,0 +1,27 @@
+.mj-spiderman-easter-egg {
+  position: fixed;
+  inset: 0;
+  z-index: 2147483647;
+  overflow: hidden;
+  pointer-events: none;
+  contain: layout paint style;
+}
+
+.mj-spiderman-easter-egg[hidden],
+.mj-spiderman-easter-egg__video[hidden] {
+  display: none;
+}
+
+.mj-spiderman-easter-egg__video {
+  position: absolute;
+  top: 8px;
+  left: 50%;
+  width: auto;
+  height: auto;
+  max-width: calc(100vw - 16px);
+  max-height: calc(100vh - 16px);
+  object-fit: contain;
+  pointer-events: none;
+  user-select: none;
+  transform: translateX(-50%);
+}

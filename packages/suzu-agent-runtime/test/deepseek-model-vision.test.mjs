@@ -77,7 +77,42 @@ test("DeepSeek Vision exposes image input only for the visual model", async () =
   assert.deepEqual(visual.inputModalities, ["text", "image"]);
   assert.deepEqual(text.inputModalities, ["text"]);
   assert.deepEqual(resolved.inputModalities, ["text", "image"]);
+  assert.deepEqual(resolved.reasoning.efforts.map((effort) => effort.id), ["off", "low", "high", "max"]);
+  assert.equal(resolved.reasoning.defaultEffort, "high");
   assert.deepEqual(deepSeekInputModalities("deepseek-v4-flash"), ["text"]);
+});
+
+test("DeepSeek forwards the low reasoning effort through Chat Completions", async () => {
+  const originalFetch = globalThis.fetch;
+  let payload;
+  globalThis.fetch = async (_url, init) => {
+    payload = JSON.parse(init.body);
+    return sseResponse([
+      '{"choices":[{"delta":{"content":"简短回答"},"finish_reason":"stop"}]}',
+      "[DONE]",
+    ]);
+  };
+
+  try {
+    const chunks = await requestChunks(adapterForTest(), {
+      provider: "deepseek-official",
+      model: "deepseek-v4-flash",
+      reasoningEffort: "low",
+      messages: [{
+        id: "low-reasoning-user-message",
+        role: "user",
+        source: { kind: "user" },
+        content: [{ type: "text", text: "快速回答" }],
+      }],
+      tools: [],
+    }, adapterOptions());
+
+    assert.deepEqual(payload.thinking, { type: "enabled" });
+    assert.equal(payload.reasoning_effort, "low");
+    assert.equal(chunks.some((chunk) => chunk.type === "text-delta" && chunk.text === "简短回答"), true);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test("DeepSeek thinking requests omit an unreplayable historical tool-call pair", async () => {

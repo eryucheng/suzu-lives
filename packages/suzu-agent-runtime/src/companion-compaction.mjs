@@ -46,6 +46,9 @@ const MAX_MANUAL_COMPACTION_BATCHES = 128;
 const MAX_MANUAL_SUMMARY_TOKENS = 32_768;
 const MAX_MANUAL_SUMMARY_RECOVERY_ATTEMPTS = 6;
 const MIN_MANUAL_SUMMARY_TOKENS = 256;
+const MIN_AUTOMATIC_COMPACTION_SOURCE_TOKENS = 512;
+const MIN_AUTOMATIC_SUMMARY_TOKENS = 128;
+const AUTOMATIC_SUMMARY_SOURCE_RATIO = 0.35;
 // The manual-only output discipline instruction is intentionally counted in
 // the input budget even though it is short.  This keeps a near-limit batch
 // from crossing a provider boundary because of product-added text.
@@ -313,6 +316,36 @@ export function selectSuzuCompactionRange(session, measurement, retainTokens) {
     start: surfaceNodes[0],
     end: surfaceNodes[keepFromIndex - 1],
   };
+}
+
+export function inspectSuzuCompactionRange(session, measurement, range) {
+  const surfaceNodes = Array.from(session?.surface?.nodes || []);
+  const pricedNodes = Array.isArray(measurement?.nodes) ? measurement.nodes : [];
+  const startIndex = surfaceNodes.indexOf(range?.start);
+  const endIndex = surfaceNodes.indexOf(range?.end);
+  if (startIndex < 0 || endIndex < startIndex
+    || surfaceNodes.length !== pricedNodes.length
+    || surfaceNodes.some((seq, index) => seq !== pricedNodes[index]?.seq)) {
+    throw new Error("compaction: selected automatic range is not on the measured session surface");
+  }
+  const events = Array.isArray(session?.events) ? session.events : [];
+  const selectedNodes = pricedNodes.slice(startIndex, endIndex + 1);
+  const onlyCheckpoints = selectedNodes.length > 0 && selectedNodes.every((node) => {
+    let message = null;
+    try {
+      message = typeof session?.deriveEventMessage === "function"
+        ? session.deriveEventMessage(events[node.seq])
+        : null;
+    } catch {
+      message = null;
+    }
+    const source = plainObject(message?.source);
+    return source.kind === "plugin" && source.plugin === "compact" && Boolean(clean(source.compactionId));
+  });
+  return Object.freeze({
+    shadowedTokenCount: selectedNodes.reduce((total, node) => total + (Number(node?.tokens) || 0), 0),
+    onlyCheckpoints,
+  });
 }
 
 /**
@@ -683,22 +716,32 @@ export class SuzuCompanionCompactionEngine extends BasicCompactionEngine {
     return suzuContextBudget(info);
   }
 
-  async conservativePressureRange(agent, config, signal) {
+  async conservativePressurePlan(agent, config, signal) {
     const budget = await this.contextBudgetFor(agent, signal);
-    if (!budget) return null;
+    if (!budget) return Object.freeze({ checked: false, pressured: false, range: null });
     const configuredThreshold = Math.max(
       1,
       Math.floor(budget.contextWindow * Number(config?.thresholdRatio || 0)),
     );
     const thresholdTokens = Math.min(configuredThreshold, budget.inputLimitTokens);
     const conservative = estimateSuzuContextMeasurement(agent.session);
-    const nativeTokens = Number(this.ctx.tokenMeter.measure(agent.session).totalTokens) || 0;
-    if (Math.max(conservative.totalTokens, nativeTokens) < thresholdTokens) return null;
-    return selectSuzuCompactionRange(
+    const nativeMeasurement = this.ctx.tokenMeter.measure(agent.session);
+    const nativeTokens = Number(nativeMeasurement.totalTokens) || 0;
+    if (Math.max(conservative.totalTokens, nativeTokens) < thresholdTokens) {
+      return Object.freeze({ checked: true, pressured: false, range: null });
+    }
+    const range = selectSuzuCompactionRange(
       agent.session,
       conservative,
       positiveInteger(config?.retainTokens, DEFAULT_SUZU_COMPACTION_RETAIN_TOKENS),
     );
+    if (!range) return Object.freeze({ checked: true, pressured: true, range: null });
+    return Object.freeze({
+      checked: true,
+      pressured: true,
+      range,
+      ...inspectSuzuCompactionRange(agent.session, nativeMeasurement, range),
+    });
   }
 
   async configForAutomaticTrigger(agent, trigger, settings, signal) {
@@ -722,8 +765,26 @@ export class SuzuCompanionCompactionEngine extends BasicCompactionEngine {
       // conversations, in which case waiting for the upstream threshold lets
       // the next normal chat request overflow first.
       if (trigger === "pressure") {
-        const range = await this.conservativePressureRange(agent, config, signal);
-        if (range) return super.compactRegion(range.start, range.end, agent, signal);
+        const plan = await this.conservativePressurePlan(agent, config, signal);
+        if (plan.checked) {
+          if (!plan.pressured) return null;
+          if (!plan.range
+            || plan.onlyCheckpoints
+            || plan.shadowedTokenCount < MIN_AUTOMATIC_COMPACTION_SOURCE_TOKENS) {
+            return null;
+          }
+          const configuredSummaryMaxTokens = positiveInteger(config?.maxTokens, MIN_AUTOMATIC_SUMMARY_TOKENS);
+          const summaryMaxTokens = Math.min(
+            configuredSummaryMaxTokens,
+            Math.max(
+              MIN_AUTOMATIC_SUMMARY_TOKENS,
+              Math.floor(plan.shadowedTokenCount * AUTOMATIC_SUMMARY_SOURCE_RATIO),
+            ),
+          );
+          return this.settingsContext.run({ settings, config, summaryMaxTokens }, () => (
+            super.compactRegion(plan.range.start, plan.range.end, agent, signal)
+          ));
+        }
       }
       return super.compactIfNeeded(agent, trigger, signal);
     });
@@ -737,10 +798,16 @@ export class SuzuCompanionCompactionEngine extends BasicCompactionEngine {
     if (!target) {
       throw new Error("no provider/model available for companion compaction");
     }
-    const maxTokens = positiveInteger(summaryOptions?.maxTokens, config.maxTokens);
+    const scopedSummaryMaxTokens = positiveInteger(scoped?.summaryMaxTokens, 0);
+    const requestedMaxTokens = positiveInteger(summaryOptions?.maxTokens, config.maxTokens);
+    const maxTokens = scopedSummaryMaxTokens
+      ? Math.min(requestedMaxTokens, scopedSummaryMaxTokens)
+      : requestedMaxTokens;
     const outputDiscipline = summaryOptions?.manual === true
       ? `这是一段分批压缩。只保留继续理解关系所必需的信息，合并重复内容，绝不能逐轮复述。请将正文控制在约 ${Math.max(128, Math.floor(maxTokens * 0.6))} 个中文字符（或等量的简短英文）以内。`
-      : "";
+      : scopedSummaryMaxTokens
+        ? `把旧内容整理成紧凑的续接记录，只保留后续仍需使用的事实。正文控制在约 ${Math.max(64, Math.floor(maxTokens * 0.55))} 个中文字符（或等量的简短英文）以内。`
+        : "";
     const assembler = new BlockAssembler();
     const messages = [
       ...(Array.isArray(input?.messages) ? input.messages : []),

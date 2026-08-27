@@ -1,6 +1,6 @@
 {
   "name": "suzu-lives-console",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "private": true,
   "author": "儿玉诚也",
   "description": "Local desktop control center for Suzu Lives.",
@@ -10,8 +10,9 @@
   "scripts": {
     "start": "node scripts/start-desktop.mjs",
     "test": "node --test test/*.test.mjs",
-    "dist": "electron-builder --win zip --x64",
-    "dist:installer": "vite build && electron-builder --win nsis --x64 --publish never"
+    "dist": "electron-builder --win zip --x64 && npm run verify:packaged-image-runtime",
+    "dist:installer": "vite build && electron-builder --win nsis --x64 --publish never && npm run verify:packaged-image-runtime",
+    "verify:packaged-image-runtime": "node scripts/verify-packaged-image-runtime.mjs"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^6.0.4",

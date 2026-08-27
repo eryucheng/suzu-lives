@@ -1,61 +1,46 @@
-# Product-owned Agent Core composition for the fixed Suzu Lives software assistant.
-#
-# This fixed composition provides a product-help persona, a one-turn
-# software-state context bridge, a curated product Skill catalog, application
-# actions, and local inspection tools for checking installed software,
-# configuration, and diagnostics.
+# Suzu Lives 软件助手使用的固定 Agent Core 组合。
+# 这份组合提供软件助手人格、软件状态与动作桥、产品技能目录，
+# 以及核对本机软件、配置和诊断信息所需的本地工具。
 - id: software-assistant-persona
   name: '@suzu-lives/suzu-agent-runtime/core/persona'
   config:
     text: |-
-      你是 Suzu，Suzu Lives 的软件使用助手。帮助用户理解功能、完成配置、找到设置、
-      排查问题，并执行用户请求的软件内操作。回答自然、简明，先回应用户当前最关心的事。
+      你是 Suzu，Suzu Lives 的软件使用助手。理解用户现在想了解、完成或解决的事情，
+      并结合软件功能、当前状态和可用工具提供合适的协助。表达自然、简明，贴合用户提出的需求。
 
-      先理解用户要达成的结果，再读取与该目标对应的产品使用 Skill。请求跨越多个领域时，
-      按实际需要继续读取相关 Skill。根据当前任务给出直接答案、清晰步骤、页面跳转或已授权
-      的本机操作；说明围绕用户所在页面、需要填写的信息和完成后的可见结果组织。
+      用户已经说明清楚时，沿着用户的要求继续；缺少会影响结果的信息时，用简短具体的问题确认。
+      协助方式可以是解释功能、查找信息、打开页面、整理配置、排查问题，或在用户授权范围内执行软件和本机操作。
 
-      每轮都会收到一份基础软件概览。suzu_software_status 只重新读取这份概览和页面入口，
-      不能代替具体配置核验。涉及服务商、模型标识、API 连接状态、联系人能力开关或外部能力
-      登记时，先读取对应本机配置、页面状态或诊断结果，明确区分概览说明和已经核实的事实。通过
-      suzu_software_action 调用已登记的软件操作，并以工具返回的 completed 结果确认完成。
-      用户明确要求新建联系人时，加载 contact-creation Skill；联系人名称和人设要求清楚后，
-      调用 create-contact 完成创建与资料写入，不只提供手动步骤。
-      用户要求为二次元角色联系人补头像时，加载 contact-and-relationship Skill，默认调用
-      lookup-contact-avatar 从萌娘百科检索与保存预览；只有用户明确指定其他来源时才使用其他联网工具。
-      用户授权修改本机设置、资料或源码时，先定位实际目标，再说明改动位置和结果。
-
-      API Key、密码和令牌属于私密字段。指导配置时写明需要填写的字段、所在页面和保存状态。
-      联系人资料、长期记忆和聊天记录按用户点名的联系人与任务范围读取；遇到同名联系人时，
-      先让用户确认目标。
+      API Key、密码和令牌按私密字段处理。联系人资料、长期记忆和聊天记录按用户指定的
+      联系人和当前需求读取与处理。
     complete: true
     includeRuntimeContext: false
 
-# The Electron parent injects a fresh, display-hidden snapshot of product
-# state and operation hints for each model request.
+# 固定助手会话的生命周期桥，负责上下文整理设置和请求钩子。
 - id: lifecycle-bridge
   name: '@suzu-lives/suzu-agent-runtime/lifecycle-bridge'
   config:
     timeoutMs: 5000
 
-# Product navigation and setting action bridge. It contains only the small
-# action catalog implemented by the Electron host.
+# 软件导航与设置动作桥；动作范围由 Electron 宿主登记。
 - id: software-assistant-bridge
   name: '@suzu-lives/suzu-agent-runtime/software-assistant-bridge'
   config:
     timeoutMs: 15000
 
-# The normal local tools are intentionally available to this product assistant.
-# They let it examine local source, packaged files, settings and diagnostics as
-# a fallback to the curated product Skills. The shared Agent Core host already owns its
-# direct PowerShell/filesystem implementation and permission mode.
+# 软件助手可使用 Agent Core 提供的本地命令和文件工具，
+# 用于核对源码、安装文件、设置与诊断结果。
 - id: tool-bash
   name: '@suzu-lives/suzu-agent-runtime/core/terminal-bash'
   disabled: !!js process.platform === 'win32'
+  config:
+    enableRunInBackground: false
 
 - id: tool-pwsh
   name: '@suzu-lives/suzu-agent-runtime/core/terminal-pwsh'
   disabled: !!js process.platform !== 'win32'
+  config:
+    enableRunInBackground: false
 
 - id: tool-fs
   name: '@suzu-lives/suzu-agent-runtime/core/filesystem'
@@ -65,9 +50,8 @@
   config:
     sampleOverCapGlobResults: false
 
-# These Skills are owned by Suzu and copied into the managed Agent Core home
-# before this preset starts. This preset uses that directory as its complete
-# product guidance source.
+# 产品技能会在预设启动前复制到 Suzu 管理的 Agent Core 目录，
+# 该目录是软件助手的产品说明来源。
 - id: software-assistant-skill-filesystem
   name: '@suzu-lives/suzu-agent-runtime/core/skill-filesystem'
   config:
@@ -75,6 +59,9 @@
     watch: false
     customSkillDirs:
       - !!js suzuAgentHomePath('software-assistant-skills')
+
+- id: software-assistant-language
+  name: '@suzu-lives/suzu-agent-runtime/software-assistant-language'
 
 - id: software-assistant-tool-skill
   name: '@suzu-lives/suzu-agent-runtime/core/skill-tool'

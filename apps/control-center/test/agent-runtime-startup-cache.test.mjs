@@ -39,6 +39,7 @@ test("completed installations warm the main-model cache during app startup", asy
   const application = await readFile(new URL("../src/app.mjs", import.meta.url), "utf8");
 
   assert.match(application, /const agentRuntimeSnapshot = ensureAgentRuntimeConfig\(context\)\.catch\(\(\) => null\);/u);
-  assert.match(application, /\[state\.agentRuntime, state\.releaseAnnouncement\] = await Promise\.all\(\[\s*agentRuntimeSnapshot,/u);
+  assert.match(application, /const \[agentRuntime, releaseAnnouncement, initialAppUpdate\] = await Promise\.all\(\[\s*agentRuntimeSnapshot,\s*releaseAnnouncementSnapshot,\s*appUpdateSnapshot,/u);
+  assert.match(application, /state\.agentRuntime = agentRuntime;\s*state\.releaseAnnouncement = releaseAnnouncement;/u);
   assert.doesNotMatch(application, /requiresOnboarding \? api\.agentRuntime\.snapshot\(\)\.catch\(\(\) => null\) : Promise\.resolve\(null\)/u);
 });

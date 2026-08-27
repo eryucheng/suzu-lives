@@ -145,7 +145,8 @@
   transition:max-width .26s cubic-bezier(.22,.72,.2,1),opacity .2s ease,transform .26s cubic-bezier(.22,.72,.2,1);
 }
 
-.shell-nav-item--unread::after {
+.shell-nav-item--unread::after,
+.shell-nav-item--update::after {
   position:absolute;
   top:9px;
   right:10px;
@@ -321,12 +322,36 @@
 }
 
 .shell-command-key {
+  appearance:none;
+  display:inline-grid;
+  height:20px;
+  min-width:43px;
+  place-items:center;
   border:1px solid var(--border);
   border-radius:5px;
   background:color-mix(in srgb,var(--panel-soft) 74%,transparent);
   color:var(--text-muted);
-  padding:2px 5px;
+  padding:0 5px;
+  cursor:pointer;
   font:10px Consolas,monospace;
+  line-height:1;
+  pointer-events:auto;
+  transition:border-color .15s ease,background-color .15s ease,color .15s ease,transform .1s ease;
+}
+
+.shell-command-key:hover {
+  border-color:color-mix(in srgb,var(--accent) 48%,var(--border));
+  background:color-mix(in srgb,var(--accent) 9%,var(--panel-soft));
+  color:var(--text);
+}
+
+.shell-command-key:active {
+  transform:translateY(1px);
+}
+
+.shell-command-key:focus-visible {
+  outline:2px solid color-mix(in srgb,var(--accent) 62%,transparent);
+  outline-offset:2px;
 }
 
 /* The rounded corners belong to the shell-level workspace, not PageCanvas. */

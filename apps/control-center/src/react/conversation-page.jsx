@@ -12,6 +12,8 @@ import { PRODUCT_FEATURES } from "../../shared/product-features.mjs";
 import { releasePointerCapture } from "../core/pointer-capture.mjs";
 import { groupConversationToolActivityRows, hasMarkdownFormatting, shouldSubmitConversationOnEnter } from "../features/conversation/index.mjs";
 import { useConversationCall } from "./conversation-call.jsx";
+
+const CONVERSATION_NOTICE_TIMEOUT_MS = 5_000;
 import { captureConversationViewportAnchor, restoreConversationViewportAnchor } from "./conversation-scroll-anchor.mjs";
 import { useConversationVoiceInput } from "./conversation-voice-input.jsx";
 import { usePointerCaptureRecovery } from "./pointer-capture-recovery.mjs";
@@ -37,6 +39,12 @@ const CONTACT_APPROVAL_MODE_OPTIONS = Object.freeze([
   { label: "全权限", value: "danger-full-access" },
   { label: "工作目录可写", value: "workspace-write" },
   { label: "只读", value: "read-only" },
+]);
+const CONTACT_REASONING_EFFORT_OPTIONS = Object.freeze([
+  { label: "关闭", value: "off" },
+  { label: "低", value: "low" },
+  { label: "高", value: "high" },
+  { label: "最大", value: "max" },
 ]);
 const CONVERSATION_COMPOSER_DEFAULT_HEIGHT = 168;
 const CONVERSATION_COMPOSER_MIN_HEIGHT = 168;
@@ -660,19 +668,20 @@ function ConversationComposer({ actions, callActive = false, composer, composerH
 }
 
 function ConversationHeader({ actions, snapshot, callControl }) {
-  const callLabel = callControl.active ? "正在语音通话" : "开始语音通话";
+  const callContact = callControl.call?.contactName || snapshot.peer || "联系人";
+  const callLabel = callControl.active ? `正在与${callContact}语音通话` : "开始语音通话";
   return (
     <header className="conversation-pane__header">
       <h1 className="conversation-peer">{snapshot.peer || "未选择联系人"}</h1>
       <div className="conversation-pane__actions">
         <ConversationUnreadIndicator contacts={snapshot.contacts} />
         <button
-          aria-label={callControl.active ? "正在与此联系人语音通话，可在下方状态栏挂断" : "开始与此联系人语音通话"}
+          aria-label={callControl.active ? `${callLabel}，可在下方状态栏挂断` : "开始与此联系人语音通话"}
           aria-pressed={callControl.active}
           className={`conversation-icon-button conversation-icon-button--call${callControl.active ? " is-active" : ""}`}
           disabled={!callControl.available}
           onClick={() => { if (!callControl.active) void callControl.open(); }}
-          title={callControl.active ? "语音通话中，可在下方状态栏挂断" : callLabel}
+          title={callControl.active ? `${callLabel}，可在下方状态栏挂断` : callLabel}
           type="button"
         ><ConversationIcon name="phone" /></button>
         <button
@@ -1098,12 +1107,14 @@ function ConversationSessionSettings({ actions, onDisplayPreferenceChange, onTim
   const changeDisplayPreference = typeof onDisplayPreferenceChange === "function" ? onDisplayPreferenceChange : actions.setDisplayPreference;
   const changeTimeDisplay = typeof onTimeDisplayChange === "function" ? onTimeDisplayChange : actions.setTimeDisplay;
   const permissionMode = settings.permissionMode || "danger-full-access";
+  const reasoningEffort = settings.reasoningEffort || "off";
   return (
     <aside aria-label="当前联系人设置" className={`conversation-session-settings${settings.visible ? "" : " hidden"}`} id="conversationSettings">
       <section className="conversation-session-settings__section conversation-session-settings__identity"><span className="conversation-contact__avatar"><PersonAvatar avatar={settings.contactAvatar} fallback={settings.contactName} /></span><div className="conversation-session-settings__identity-copy"><strong>{settings.contactName}</strong><div className="conversation-session-settings__identity-actions"><button className="conversation-session-settings__identity-action" onClick={() => actions.openContactRename(settings.contactId)} type="button">修改备注</button><label className="conversation-session-settings__identity-action">更换头像<input accept="image/png,image/jpeg,image/webp" hidden onChange={(event) => { const file = event.currentTarget.files?.[0]; event.currentTarget.value = ""; void actions.uploadContactAvatar(file); }} type="file" /></label>{settings.removeContactAvatar ? <button className="conversation-session-settings__identity-action" onClick={() => { void actions.removeContactAvatar(); }} type="button">移除头像</button> : null}</div></div><button aria-label="关闭联系人设置" className="conversation-session-settings__close suzu-close-button" onClick={actions.closeSessionSettings} type="button">×</button></section>
       <details className="conversation-session-settings__section conversation-session-settings__display-options"><summary className="conversation-settings__time-display"><span>聊天显示</span></summary><div className="conversation-session-settings__checks">{settings.preferences.map((preference) => <label key={preference.key}><input checked={preference.checked} onChange={(event) => { void changeDisplayPreference(preference.key, event.currentTarget.checked); }} type="checkbox" />{preference.label}</label>)}</div></details>
       <section className="conversation-session-settings__section conversation-session-settings__single-row"><label className="conversation-settings__time-display"><span>时间显示</span><Select ariaLabel="时间显示方式" className="conversation-settings__select" onChange={(value) => { void changeTimeDisplay(value); }} options={[{ label: "每条气泡内", value: "bubble" }, { label: "画面中心", value: "center" }]} value={settings.timeDisplay} /></label></section>
       <section className="conversation-session-settings__section conversation-session-settings__single-row"><label className="conversation-settings__time-display"><span>审批模式</span><Select ariaLabel="联系人审批模式" className="conversation-settings__select" disabled={Boolean(settings.saving)} onChange={(value) => { void actions.setContactPermissionMode(value); }} options={CONTACT_APPROVAL_MODE_OPTIONS} value={permissionMode} /></label></section>
+      <section className="conversation-session-settings__section conversation-session-settings__single-row"><label className="conversation-settings__time-display"><span>思考强度</span><Select ariaLabel="联系人思考强度" className="conversation-settings__select" disabled={Boolean(settings.saving)} onChange={(value) => { void actions.setContactReasoningEffort(value); }} options={CONTACT_REASONING_EFFORT_OPTIONS} value={reasoningEffort} /></label></section>
       <section className="conversation-session-settings__section"><header><div><span>COMPANION</span><h2>主动关心</h2><p>开启后，Suzu 会判断此刻是否适合联系，并在每次判断后给出下一次检查时间；软件据此安排下一次检查。关闭后会停止为这位联系人创建新的主动关心任务。</p></div></header><label className="conversation-session-settings__switch"><input checked={settings.proactiveContactEnabled} disabled={Boolean(settings.saving)} onChange={(event) => { void actions.setProactiveContactEnabled(event.currentTarget.checked); }} type="checkbox" /><span>启用主动关心</span></label></section>
       <section className="conversation-session-settings__section"><header><div><span>MEMORY · CORE</span><h2>长期记忆</h2><p>这个开关控制这位联系人的自动写入和召回；已有记忆会保留。召回内容会作为当前 Agent 请求的动态上下文参与对话，聊天页面显示实际消息。</p></div></header><label className="conversation-session-settings__switch"><input checked={settings.longTermMemoryEnabled} onChange={(event) => { void actions.setLongTermMemoryEnabled(event.currentTarget.checked); }} type="checkbox" /><span>启用长期记忆</span></label></section>
       {settings.hasSession ? (
@@ -1283,6 +1294,20 @@ function ConversationCallBar({ call, onEnd }) {
   const status = call.error || call.status;
   const statusPhase = call.error ? "error" : call.phase;
   return <section aria-label={`与${call.contactName}的语音通话`} className="conversation-call-bar"><div className="conversation-call-bar__identity"><span className="conversation-call-bar__avatar"><PersonAvatar avatar={call.avatar} fallback={call.contactName} /></span><div><strong>{call.contactName}</strong><span aria-live="polite" className={`conversation-call-bar__status is-${statusPhase}`}><i aria-hidden="true" />{status}</span></div></div><button aria-label="挂断语音通话" className="conversation-call-bar__hangup" disabled={call.ending} onClick={() => { void onEnd(); }} type="button"><ConversationIcon name="phone" /><span>{call.ending ? "正在挂断" : "挂断"}</span></button></section>;
+}
+
+function ConversationFeedback({ error = "", notice = "", onDismissNotice }) {
+  const dismissNoticeRef = useRef(onDismissNotice);
+  useEffect(() => {
+    dismissNoticeRef.current = onDismissNotice;
+  }, [onDismissNotice]);
+  useEffect(() => {
+    const message = String(notice || "").trim();
+    if (!message || typeof window === "undefined") return undefined;
+    const timer = window.setTimeout(() => dismissNoticeRef.current?.(message), CONVERSATION_NOTICE_TIMEOUT_MS);
+    return () => window.clearTimeout(timer);
+  }, [notice]);
+  return <>{error ? <div className="conversation-error">{error}</div> : null}{notice ? <div className="conversation-notice">{notice}</div> : null}</>;
 }
 
 function ConversationCallDialing({ call, onEnd }) {
@@ -1762,8 +1787,7 @@ export function ConversationPage({ actions, api = null, incomingCall = null, sna
         <ConversationHeader actions={actions} callControl={callControl} snapshot={snapshot} />
         <ConversationCallBar call={callControl.call} onEnd={callControl.end} />
         <ConversationSessionSettings actions={actions} onDisplayPreferenceChange={setDisplayPreferenceWithAnchor} onTimeDisplayChange={setTimeDisplayWithAnchor} settings={snapshot.sessionSettings} />
-        {snapshot.error || callControl.startError ? <div className="conversation-error">{snapshot.error || callControl.startError}</div> : null}
-        {snapshot.notice ? <div className="conversation-notice">{snapshot.notice}</div> : null}
+        <ConversationFeedback error={snapshot.error || callControl.startError} notice={snapshot.notice} onDismissNotice={actions.dismissNotice} />
         {snapshot.focus ? <div className="conversation-focus-banner"><span>已定位到搜索结果附近的聊天记录</span><button onClick={actions.viewCurrentConversation} type="button">回到最新消息</button></div> : null}
         <div className="conversation-chat-shell" ref={chatShellRef}>
           <ConversationPermissions actions={actions} permissions={permissions} />

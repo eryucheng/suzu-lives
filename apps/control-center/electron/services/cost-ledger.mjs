@@ -107,12 +107,14 @@ function modelProvider(catalog, model) {
 
 function withUnitTotals(units = {}) {
   const normalized = { ...units };
-  const inputTokens =
+  const detailedInputTokens =
     Number(units.inputUncachedTokens || 0)
     + Number(units.inputCachedTokens || 0)
+    + Number(units.inputCacheWriteTokens || 0)
+    + Number(units.inputCacheWrite1hTokens || 0)
     + Number(units.inputTextImageVideoTokens || 0)
-    + Number(units.inputAudioTokens || 0)
-    + Number(units.inputTokens || 0);
+    + Number(units.inputAudioTokens || 0);
+  const inputTokens = detailedInputTokens || Number(units.inputTokens || 0);
   const outputTokens =
     Number(units.outputTextTokens || 0)
     + Number(units.outputAudioTokens || 0)
@@ -304,15 +306,16 @@ function addEvent(total, event) {
   } else {
     total.unknownRequestCount += 1;
   }
-  total.inputTokens +=
-    Number(event.units?.totalInputTokens || 0)
-    || (
-      Number(event.units?.inputUncachedTokens || 0)
-      + Number(event.units?.inputCachedTokens || 0)
-      + Number(event.units?.inputTextImageVideoTokens || 0)
-      + Number(event.units?.inputAudioTokens || 0)
-      + Number(event.units?.inputTokens || 0)
-    );
+  const detailedInputTokens =
+    Number(event.units?.inputUncachedTokens || 0)
+    + Number(event.units?.inputCachedTokens || 0)
+    + Number(event.units?.inputCacheWriteTokens || 0)
+    + Number(event.units?.inputCacheWrite1hTokens || 0)
+    + Number(event.units?.inputTextImageVideoTokens || 0)
+    + Number(event.units?.inputAudioTokens || 0);
+  total.inputTokens += Number(event.units?.totalInputTokens || 0)
+    || detailedInputTokens
+    || Number(event.units?.inputTokens || 0);
   total.outputTokens +=
     Number(event.units?.outputTokens || 0)
     + Number(event.units?.outputTextTokens || 0)

@@ -16,6 +16,10 @@ import {
   SUZU_AGENT_TASK_TRIGGER_FORM,
   SUZU_AGENT_TASK_TRIGGER_PLUGIN,
 } from "./task-trigger.mjs";
+import {
+  adaptSuzuAgentReasoningEffort,
+  isSuzuAgentReasoningEffort,
+} from "./reasoning-efforts.mjs";
 
 const {
   boot,
@@ -86,6 +90,13 @@ function permissionMode(value) {
   return mode;
 }
 
+function reasoningEffort(value) {
+  const effort = clean(value);
+  if (!effort) return "";
+  if (!isSuzuAgentReasoningEffort(effort)) throw new Error("Suzu Agent 思考强度无效。 ");
+  return effort;
+}
+
 function boundedError(error, fallback = "Suzu Agent Core 操作失败。") {
   const source = error instanceof Error ? error : new Error(String(error ?? ""));
   return {
@@ -131,6 +142,15 @@ async function modelCatalog(ctx) {
         const inputModalities = [...new Set((Array.isArray(info?.inputModalities) ? info.inputModalities : [])
           .map((modality) => clean(modality).toLowerCase())
           .filter((modality) => modality === "text" || modality === "image"))];
+        const reasoning = plainObject(info?.reasoning);
+        const reasoningEfforts = (Array.isArray(reasoning.efforts) ? reasoning.efforts : [])
+          .map((effort) => ({
+            id: clean(effort?.id),
+            name: clean(effort?.name) || clean(effort?.id),
+            ...(clean(effort?.description) ? { description: clean(effort.description) } : {}),
+          }))
+          .filter((effort) => effort.id);
+        const defaultReasoningEffort = clean(reasoning.defaultEffort);
         entries.push({
           id: model.id,
           name: model.name,
@@ -138,6 +158,14 @@ async function modelCatalog(ctx) {
           ...(info?.context?.contextWindow === undefined ? {} : { contextWindow: info.context.contextWindow }),
           ...(info?.context?.maxTokens === undefined ? {} : { maxTokens: info.context.maxTokens }),
           ...(inputModalities.length ? { inputModalities } : {}),
+          ...(reasoningEfforts.length ? {
+            reasoning: {
+              efforts: reasoningEfforts,
+              ...(reasoningEfforts.some((effort) => effort.id === defaultReasoningEffort)
+                ? { defaultEffort: defaultReasoningEffort }
+                : {}),
+            },
+          } : {}),
         });
       }
       if (entries.length) groups.push({ id: provider.id, name: provider.name, models: entries });
@@ -231,6 +259,8 @@ export class SuzuAgentHost {
     this.ctx = context;
     this.send = typeof send === "function" ? send : () => false;
     this.selections = new WeakMap();
+    this.reasoningEfforts = new WeakMap();
+    this.reasoningEffortPreferences = new WeakMap();
     this.pendingApprovals = new Map();
     this.sessionCreations = new Map();
     this.disposers = [];
@@ -366,23 +396,27 @@ export class SuzuAgentHost {
     let chosen;
     const selection = {
       get current() {
-        if (chosen) return chosen;
+        let current = chosen;
         // The product's main-model setting is a live, product-wide choice.
         // It must win over an old request header: otherwise changing the
         // setting after a contact's first turn would leave that contact
         // permanently pinned to its original provider/model.
         const live = host.currentDefaultModelSelection();
-        if (live) return live;
+        if (!current && live) current = live;
         // agentOptions is the selection captured while this Agent was
         // created or resumed. Keep it as the fallback when the Core's live
         // settings source is temporarily unavailable.
         const configured = modelSelection(agent.options);
-        if (configured) return configured;
+        if (!current && configured) current = configured;
         // Older persisted sessions may predate either product-owned source.
         // Their recorded request header is still a safe last-resort route.
         const logged = modelSelection(plainObject(agent.session.requestHeader?.()).config);
-        if (logged) return logged;
-        throw new Error("Suzu Agent 缺少可用的主模型配置；请在“设置 → 主模型”保存后重试。 ");
+        if (!current && logged) current = logged;
+        if (!current) throw new Error("Suzu Agent 缺少可用的主模型配置；请在“设置 → 主模型”保存后重试。 ");
+        if (!host.reasoningEfforts.has(agent)) return current;
+        const override = host.reasoningEfforts.get(agent);
+        const { reasoningEffort: _reasoningEffort, ...base } = current;
+        return override ? { ...base, reasoningEffort: override } : base;
       },
       set current(next) { chosen = next; },
       assembled: undefined,
@@ -418,6 +452,23 @@ export class SuzuAgentHost {
     return mode;
   }
 
+  async applyReasoningEffort(agent, value) {
+    const requested = reasoningEffort(value);
+    if (requested) this.reasoningEffortPreferences.set(agent, requested);
+    const effort = requested || this.reasoningEffortPreferences.get(agent) || "";
+    if (!effort) return "";
+    const selection = this.selectionFor(agent).current;
+    const llm = this.ctx.llm || this.ctx.get?.("llm");
+    const adapted = typeof llm?.resolveModelInfo === "function"
+      ? adaptSuzuAgentReasoningEffort(
+        effort,
+        (await llm.resolveModelInfo(selection.provider, selection.model))?.reasoning?.efforts,
+      )
+      : effort;
+    this.reasoningEfforts.set(agent, adapted);
+    return effort;
+  }
+
   async ensureSession(payload) {
     const sessionId = identifier(payload.sessionId, "会话标识");
     // Session creation receives the contact workspace explicitly. Later requests
@@ -428,6 +479,7 @@ export class SuzuAgentHost {
     const cwd = requestedCwd ? requiredAbsoluteDirectory(requestedCwd, "工作目录") : "";
     const requestedPreset = clean(payload.agentPreset) || undefined;
     const requestedPermissionMode = permissionMode(payload.permissionMode);
+    const requestedReasoningEffort = reasoningEffort(payload.reasoningEffort);
     let creation = this.sessionCreations.get(sessionId);
     if (!creation) {
       creation = (async () => {
@@ -448,7 +500,7 @@ export class SuzuAgentHost {
           const selection = this.requireCurrentDefaultModelSelection();
           return (await this.ctx.agents.resume({
             resumeSessionId: sessionId,
-            agentOptions: { provider: selection.provider, model: selection.model },
+            agentOptions: { ...selection },
             setup: composition.setup,
           })).agent;
         }
@@ -458,7 +510,7 @@ export class SuzuAgentHost {
         const selection = this.requireCurrentDefaultModelSelection();
         return (await this.ctx.agents.create({
           sessionId,
-          agentOptions: { provider: selection.provider, model: selection.model },
+          agentOptions: { ...selection },
           meta: { cwd, agentPreset: composition.agentPreset },
           setup: composition.setup,
         })).agent;
@@ -474,6 +526,7 @@ export class SuzuAgentHost {
       throw new Error(`会话 ${sessionId} 已绑定到 ${storedPreset}，不能切换到 ${requestedPreset}。`);
     }
     await this.applyPermissionMode(agent, requestedPermissionMode);
+    await this.applyReasoningEffort(agent, requestedReasoningEffort);
     return agent;
   }
 
@@ -506,6 +559,7 @@ export class SuzuAgentHost {
           sessionId: agent.session.id,
           agentPreset: resolveSessionPreset(agent.session),
           ...(permissionMode(payload.permissionMode) ? { permissionMode: permissionMode(payload.permissionMode) } : {}),
+          ...(reasoningEffort(payload.reasoningEffort) ? { reasoningEffort: reasoningEffort(payload.reasoningEffort) } : {}),
         };
       }
       case "sessions.history":

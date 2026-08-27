@@ -54,11 +54,12 @@ function DirectoryCard({ action, configured, description, onOpen, onSelect, pend
 
 function SoftwareUpdate({ onCheckForUpdate, onDownloadUpdate, onInstallUpdate, onOpenReleaseAnnouncement, pending, releaseAnnouncement, update }) {
   const status = cleanText(update?.status).toLowerCase();
+  const attention = ["available", "downloaded"].includes(status);
   const version = cleanText(update?.version);
   const availableVersion = cleanText(update?.availableVersion);
   const copy = cleanText(update?.message) || (version ? `当前版本 v${version}，点击检查更新。` : "点击检查更新。");
   const presentation = {
-    available: { action: onDownloadUpdate, button: "下载更新", label: "可更新", tone: "success" },
+    available: { action: onDownloadUpdate, button: "发现新版本", label: "可更新", tone: "success" },
     current: { action: onCheckForUpdate, button: "检查更新", label: "已是最新", tone: "success" },
     development: { action: null, button: "开发版不检查", label: "开发构建", tone: "muted" },
     downloaded: { action: onInstallUpdate, button: "重启并安装", label: "等待安装", tone: "success" },
@@ -86,7 +87,7 @@ function SoftwareUpdate({ onCheckForUpdate, onDownloadUpdate, onInstallUpdate, o
         </div>
         <div className="settings-card__actions">
           {releaseAnnouncement?.announcement ? <Button className="settings-action-button" disabled={Boolean(pending)} onClick={onOpenReleaseAnnouncement} size="md" variant="secondary">查看本次公告</Button> : null}
-          <Button className="settings-action-button" disabled={Boolean(pending) || !presentation.action} onClick={presentation.action || undefined} size="md" variant="secondary">{busyLabel}</Button>
+          <Button className={`settings-action-button${attention ? " settings-update-action--attention" : ""}`} disabled={Boolean(pending) || !presentation.action} onClick={presentation.action || undefined} size="md" variant="secondary">{attention ? <span aria-hidden="true" className="settings-update-attention-dot" /> : null}{busyLabel}</Button>
         </div>
       </div>
     </SettingCard>
@@ -592,6 +593,10 @@ function PrivacySettings({ contactsSnapshot, loading, onRestoreContact, pending 
 export function SettingsPage({ actions = {}, snapshot = {} }) {
   const settings = snapshot.settings || {};
   const tab = SETTINGS_TABS.some((item) => item.value === snapshot.tab) ? snapshot.tab : "general";
+  const updateAttention = ["available", "downloaded"].includes(cleanText(snapshot.appUpdate?.status).toLowerCase());
+  const tabs = SETTINGS_TABS.map((item) => item.value === "general" && updateAttention
+    ? { ...item, label: <span className="settings-tab-label">{item.label}<span aria-hidden="true" className="settings-update-attention-dot" /></span> }
+    : item);
   const [pending, setPending] = useState("");
   const run = async (key, action) => {
     if (!action || pending) return;
@@ -609,7 +614,7 @@ export function SettingsPage({ actions = {}, snapshot = {} }) {
       className="settings-react-page"
       header={<PageHeader eyebrow="SETTINGS" subtitle="调整软件外观、壁纸、API 连接、数据存储与联系人隐私。" title="设置" />}
     >
-      <Tabs active={tab} className="settings-page-tabs" items={SETTINGS_TABS} onChange={actions.setTab} size="md" />
+      <Tabs active={tab} className="settings-page-tabs" items={tabs} onChange={actions.setTab} size="md" />
       <section className="settings-page-body" aria-label={tab === "wallpaper" ? "壁纸设置" : tab === "api" ? "API 设置" : tab === "main-model" ? "主模型设置" : tab === "data" ? "数据设置" : tab === "privacy" ? "隐私设置" : "常规设置"}>
         {tab === "wallpaper" ? (
           <WallpaperSettings

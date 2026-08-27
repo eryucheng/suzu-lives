@@ -1,28 +1,16 @@
 import { useEffect, useState } from "react";
 import { Button, Dialog, Drawer, Empty, GlassPanel, Input, Select, Status, Textarea } from "suzu-design-system";
 
+import {
+  API_CONNECTION_ENDPOINT_PRESETS,
+  API_CONNECTION_TYPE_OPTIONS,
+  DEFAULT_DASHSCOPE_BASE_URL,
+} from "../features/api-connections/catalog.mjs";
+
 import "./api-connections-ui.css";
 
-const DEFAULT_DASHSCOPE_BASE_URL = "https://dashscope.aliyuncs.com/api/v1";
-
-const CONNECTION_TYPE_OPTIONS = Object.freeze([
-  { label: "TTS API", value: "tts-api" },
-  { label: "ASR API", value: "asr-api" },
-  { label: "OpenAI 兼容", value: "openai-compatible" },
-  { label: "DashScope", value: "dashscope" },
-  { label: "其他 API", value: "generic-api" },
-]);
-
-// 服务商预设：选中只自动填写服务地址；"自定义"留给用户自己的地址。
-const ENDPOINT_PRESETS = Object.freeze([
-  { type: "openai-compatible", value: "openai", label: "OpenAI", baseUrl: "https://api.openai.com/v1" },
-  { type: "openai-compatible", value: "deepseek", label: "DeepSeek", baseUrl: "https://api.deepseek.com/v1" },
-  { type: "openai-compatible", value: "moonshot", label: "Moonshot Kimi", baseUrl: "https://api.moonshot.cn/v1" },
-  { type: "openai-compatible", value: "zhipu", label: "智谱 GLM", baseUrl: "https://open.bigmodel.cn/api/paas/v4" },
-  { type: "openai-compatible", value: "tongyi", label: "通义（兼容模式）", baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1" },
-  { type: "openai-compatible", value: "ollama", label: "本地 Ollama", baseUrl: "http://127.0.0.1:11434/v1" },
-  { type: "dashscope", value: "dashscope", label: "DashScope", baseUrl: DEFAULT_DASHSCOPE_BASE_URL },
-]);
+const CONNECTION_TYPE_OPTIONS = API_CONNECTION_TYPE_OPTIONS;
+const ENDPOINT_PRESETS = API_CONNECTION_ENDPOINT_PRESETS;
 const PRESET_CUSTOM = "custom";
 const PRESET_BASE_URLS = new Set(ENDPOINT_PRESETS.map((item) => item.baseUrl).filter(Boolean));
 

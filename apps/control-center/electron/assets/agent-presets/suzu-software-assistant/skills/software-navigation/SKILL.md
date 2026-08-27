@@ -1,22 +1,14 @@
 ---
 name: software-navigation
-description: 当用户想查看当前软件状态、找到或打开页面、切换主题时使用。先读取当前状态，再依据登记入口完成操作。
+description: 当用户要查看当前软件状态、查找或打开页面，或切换主题时使用。
 ---
 
-# 软件导航与操作
+# 软件状态与导航
 
-先调用 `suzu_software_status` 读取即时软件状态和已登记的页面入口。入口名称后的括号里是页面 ID；跳转时只使用这份状态返回的 ID。
+查看当前主题、版本、更新状态、数据目录或程序位置时，调用 `suzu_software_status`。
 
-需要打开页面时，调用 `suzu_software_action`：
+查找页面时，调用 `suzu_software_page_search`。`query` 使用用户提到的页面名称、功能或目的；返回结果中的页面 ID 用于导航。
 
-- `action` 为 `navigate`
-- `input` 为 `{ "destinationId": "状态返回的页面 ID" }`
+用户只询问入口时，说明查询结果中的界面路径。用户要求打开页面时，把选定的页面 ID 交给 `suzu_software_action` 的 `navigate` 动作。
 
-需要切换外观时，调用 `suzu_software_action`：
-
-- `action` 为 `set-theme`
-- `input` 为 `{ "theme": "light" }` 或 `{ "theme": "dark" }`
-
-工具返回 `completed` 后，再说明页面已经打开或主题已经切换。用户只想了解路径时，先给出简洁的界面路径，再按需要补充下一步。
-
-状态还会给出软件数据目录和软件本体位置。它们用于核对本机事实；围绕当前请求读取需要的信息即可。
+用户明确指定浅色或深色时，直接调用 `suzu_software_action` 的 `set-theme` 动作。用户要求切换到另一种主题时，先读取当前状态，再设置相反的主题。根据工具的实际返回说明结果。

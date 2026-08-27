@@ -62,6 +62,8 @@ test("file context menu delegates copy and reveal through the scoped conversatio
     assert.deepEqual(calls, [["copy", { fileUrl: "file:///D:/Temp/report.txt" }]]);
     assert.equal(conversationReactSnapshot(context).fileContextMenu, null);
     assert.equal(conversationReactSnapshot(context).notice, "已复制“report.txt”，可在资源管理器中粘贴。");
+    actions.dismissNotice("已复制“report.txt”，可在资源管理器中粘贴。");
+    assert.equal(conversationReactSnapshot(context).notice, "");
 
     actions.openFileContextMenu(attachment, { x: 120, y: 160 });
     await actions.openMediaFile(attachment);

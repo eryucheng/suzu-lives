@@ -4,6 +4,9 @@ import { fileURLToPath } from "node:url";
 const DEFAULT_CATALOG_PATH = fileURLToPath(
   new URL("../resources/default-prices.json", import.meta.url),
 );
+const POPULAR_TEXT_CATALOG_PATH = fileURLToPath(
+  new URL("../resources/popular-text-prices.json", import.meta.url),
+);
 
 function clean(value) {
   return String(value ?? "").trim();
@@ -114,6 +117,8 @@ const CUSTOM_RATE_DEFINITIONS = Object.freeze({
   outputTextTokens: Object.freeze({ label: "输出", unitLabel: "元 / 百万 Token", per: 1_000_000 }),
   inputUncachedTokens: Object.freeze({ label: "未缓存输入", unitLabel: "元 / 百万 Token", per: 1_000_000 }),
   inputCachedTokens: Object.freeze({ label: "缓存命中输入", unitLabel: "元 / 百万 Token", per: 1_000_000 }),
+  inputCacheWriteTokens: Object.freeze({ label: "缓存写入（5 分钟）", unitLabel: "元 / 百万 Token", per: 1_000_000 }),
+  inputCacheWrite1hTokens: Object.freeze({ label: "缓存写入（1 小时）", unitLabel: "元 / 百万 Token", per: 1_000_000 }),
   inputCharacters: Object.freeze({ label: "输入字符", unitLabel: "元 / 万字符", per: 10_000 }),
   inputAudioSeconds: Object.freeze({ label: "输入音频时长", unitLabel: "元 / 秒", per: 1 }),
   imageRequests: Object.freeze({ label: "图片请求", unitLabel: "元 / 次", per: 1 }),
@@ -122,6 +127,121 @@ const CUSTOM_RATE_DEFINITIONS = Object.freeze({
 
 function plainObject(value) {
   return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+}
+
+const COMPACT_TEXT_RATE_KEYS = Object.freeze({
+  input: "inputUncachedTokens",
+  cachedInput: "inputCachedTokens",
+  cacheWrite: "inputCacheWriteTokens",
+  cacheWrite1h: "inputCacheWrite1hTokens",
+  output: "outputTextTokens",
+});
+const COMPACT_TEXT_DEFINITION_ORDER = Object.freeze([
+  "inputUncachedTokens",
+  "inputCachedTokens",
+  "inputCacheWriteTokens",
+  "inputCacheWrite1hTokens",
+  "outputTextTokens",
+]);
+
+function readJsonResource(resourcePath) {
+  return JSON.parse(fs.readFileSync(resourcePath, "utf8").replace(/^\uFEFF/u, ""));
+}
+
+function roundedRate(value, multiplier) {
+  const rate = finiteNonNegative(value);
+  return rate === null ? null : Number((rate * multiplier).toFixed(8));
+}
+
+function expandCompactRates(value, multiplier) {
+  const rates = {};
+  for (const [compactKey, candidate] of Object.entries(plainObject(value))) {
+    const key = COMPACT_TEXT_RATE_KEYS[compactKey];
+    const rate = roundedRate(candidate, multiplier);
+    if (key && rate !== null) rates[key] = rate;
+  }
+  return rates;
+}
+
+function compactRateTiers(value, multiplier) {
+  return (Array.isArray(value) ? value : []).map((tier) => ({
+    label: clean(tier?.label).slice(0, 120),
+    ...(Number.isFinite(Number(tier?.maxInputTokens))
+      ? { maxInputTokens: Number(tier.maxInputTokens) }
+      : {}),
+    ...(Number.isFinite(Number(tier?.maxOutputTokens))
+      ? { maxOutputTokens: Number(tier.maxOutputTokens) }
+      : {}),
+    rates: expandCompactRates(tier?.rates, multiplier),
+    sourceRates: expandCompactRates(tier?.rates, 1),
+  })).filter((tier) => Object.keys(tier.rates).length);
+}
+
+function compactTextModel(modelId, value, compactCatalog) {
+  const model = plainObject(value);
+  const sourceCurrency = clean(model.sourceCurrency).toUpperCase() || "CNY";
+  const exchange = sourceCurrency === "CNY"
+    ? { cnyPerUnit: 1, asOf: compactCatalog.updatedAt, sourceUrl: "" }
+    : plainObject(compactCatalog.foreignExchange?.[sourceCurrency]);
+  const multiplier = finiteNonNegative(exchange.cnyPerUnit);
+  if (multiplier === null || multiplier <= 0) return null;
+  const sourceRevisions = Array.isArray(model.revisions) && model.revisions.length
+    ? model.revisions
+    : [{
+        id: clean(model.revisionId) || "official-current",
+        effectiveFrom: clean(model.effectiveFrom) || "1970-01-01T00:00:00.000Z",
+        label: clean(model.revisionLabel),
+        rates: model.rates,
+        rateTiers: model.rateTiers,
+      }];
+  const rateKeys = new Set();
+  const revisions = sourceRevisions.map((sourceRevision) => {
+    const revision = plainObject(sourceRevision);
+    const tiers = compactRateTiers(revision.rateTiers, multiplier);
+    const sourceTiers = compactRateTiers(revision.rateTiers, 1);
+    const sourceRates = Object.keys(plainObject(revision.rates)).length
+      ? expandCompactRates(revision.rates, 1)
+      : (sourceTiers[0]?.sourceRates || {});
+    const rates = Object.keys(plainObject(revision.rates)).length
+      ? expandCompactRates(revision.rates, multiplier)
+      : (tiers[0]?.rates || {});
+    for (const key of Object.keys(rates)) rateKeys.add(key);
+    for (const tier of tiers) {
+      for (const key of Object.keys(tier.rates)) rateKeys.add(key);
+    }
+    return {
+      id: clean(revision.id) || "official-current",
+      effectiveFrom: validDate(revision.effectiveFrom || "1970-01-01T00:00:00.000Z"),
+      publishedAt: clean(revision.publishedAt) || compactCatalog.updatedAt,
+      label: clean(revision.label) || (
+        sourceCurrency === "CNY"
+          ? "当前官方公开价"
+          : `官方美元价（按 ${clean(exchange.asOf)} 汇率折算）`
+      ),
+      rates,
+      sourceRates,
+      ...(tiers.length ? { rateTiers: tiers } : {}),
+    };
+  }).filter((revision) => revision.effectiveFrom && Object.keys(revision.rates).length);
+  if (!revisions.length) return null;
+  const rateDefinitions = Object.fromEntries(
+    COMPACT_TEXT_DEFINITION_ORDER
+      .filter((key) => rateKeys.has(key))
+      .map((key) => [key, CUSTOM_RATE_DEFINITIONS[key]]),
+  );
+  return {
+    label: clean(model.label) || modelId,
+    provider: clean(model.provider) || "未知供应商",
+    currency: "CNY",
+    sourceCurrency,
+    aliases: Array.isArray(model.aliases) ? model.aliases : [],
+    sourceUrl: clean(model.sourceUrl),
+    exchangeRateCny: multiplier,
+    exchangeRateDate: clean(exchange.asOf),
+    exchangeRateSourceUrl: clean(exchange.sourceUrl),
+    rateDefinitions,
+    revisions,
+  };
 }
 
 function normalizeCustomRateDefinitions(value) {
@@ -146,7 +266,22 @@ export function normalizeModelId(value) {
 }
 
 export function loadDefaultPriceCatalog() {
-  return JSON.parse(fs.readFileSync(DEFAULT_CATALOG_PATH, "utf8").replace(/^\uFEFF/u, ""));
+  const baseCatalog = readJsonResource(DEFAULT_CATALOG_PATH);
+  const compactCatalog = readJsonResource(POPULAR_TEXT_CATALOG_PATH);
+  const popularModels = Object.fromEntries(
+    Object.entries(compactCatalog.models || {})
+      .map(([modelId, model]) => [modelId, compactTextModel(modelId, model, compactCatalog)])
+      .filter(([, model]) => Boolean(model)),
+  );
+  return {
+    ...baseCatalog,
+    updatedAt: [baseCatalog.updatedAt, compactCatalog.updatedAt].filter(Boolean).sort().at(-1),
+    foreignExchange: compactCatalog.foreignExchange,
+    models: {
+      ...(baseCatalog.models || {}),
+      ...popularModels,
+    },
+  };
 }
 
 export const DEFAULT_PRICE_CATALOG = Object.freeze(loadDefaultPriceCatalog());
@@ -303,7 +438,11 @@ export function resolvePriceRevision({
     label: resolved.model.label,
     provider: resolved.model.provider,
     currency: resolved.model.currency,
+    sourceCurrency: resolved.model.sourceCurrency || resolved.model.currency,
     sourceUrl: resolved.model.sourceUrl,
+    exchangeRateCny: resolved.model.exchangeRateCny || 1,
+    exchangeRateDate: resolved.model.exchangeRateDate || "",
+    exchangeRateSourceUrl: resolved.model.exchangeRateSourceUrl || "",
     rateDefinitions: resolved.model.rateDefinitions,
     revisionId: selected.id,
     revisionLabel: selected.label,
@@ -311,6 +450,9 @@ export function resolvePriceRevision({
     origin: selected.origin,
     ratePeriod,
     rates,
+    rateTiers: selected.origin === "default" && Array.isArray(selected.rateTiers)
+      ? selected.rateTiers
+      : [],
   };
 }
 
@@ -333,6 +475,7 @@ export function priceCatalogView({
       });
       return {
         ...active,
+        aliases: [modelId, ...(Array.isArray(model.aliases) ? model.aliases : [])],
         isUserDefined: model.userDefined === true,
         customRevisionCount: sanitized.filter((revision) => revision.modelId === modelId).length,
       };

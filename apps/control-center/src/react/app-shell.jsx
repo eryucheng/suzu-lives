@@ -81,14 +81,14 @@ function ShellIcon({ name }) {
   return <svg className="shell-icon" viewBox="0 0 24 24" aria-hidden="true">{paths[name] || null}</svg>;
 }
 
-function Navigation({ items, activeView, conversationUnread = false, onNavigate, className }) {
+function Navigation({ items, activeView, appUpdateAttention = false, conversationUnread = false, onNavigate, className }) {
   return (
     <SideNav className={className}>
       {items.map((item) => (
         <SideNavItem
           key={item.view}
           active={activeView === item.view}
-          className={`shell-nav-item${item.view === "conversation" && conversationUnread ? " shell-nav-item--unread" : ""}`}
+          className={`shell-nav-item${item.view === "conversation" && conversationUnread ? " shell-nav-item--unread" : ""}${item.view === "settings" && appUpdateAttention ? " shell-nav-item--update" : ""}`}
           icon={<ShellIcon name={item.icon} />}
           onClick={() => onNavigate(item.view)}
         >
@@ -253,6 +253,7 @@ export function AppShell() {
   };
   const conversationProps = workspace?.route?.kind === "conversation" ? workspace.route.props : null;
   const conversationUnread = workspace?.conversationUnread === true;
+  const appUpdateAttention = workspace?.appUpdateAttention === true;
   const openSoftwareAssistant = (prompt = "") => {
     const value = String(prompt || "").trim();
     if (value) setSoftwareAssistantPrompt(value);
@@ -410,7 +411,7 @@ export function AppShell() {
           </div>
           <Navigation items={PRIMARY_NAVIGATION} activeView={activeView} conversationUnread={conversationUnread} onNavigate={navigate} className="shell-primary-nav" />
           <div className="shell-sidebar-spacer" />
-          <Navigation items={UTILITY_NAVIGATION} activeView={activeView} onNavigate={navigate} className="shell-utility-nav" />
+          <Navigation items={UTILITY_NAVIGATION} activeView={activeView} appUpdateAttention={appUpdateAttention} onNavigate={navigate} className="shell-utility-nav" />
         </aside>
         <div
           aria-label="调整侧边栏宽度"
@@ -457,7 +458,21 @@ export function AppShell() {
                   prefix={<ShellIcon name="search" />}
                   size="sm"
                   style={{ width: "min(620px, 100%)" }}
-                  suffix={<kbd className="shell-command-key">Ctrl K</kbd>}
+                  suffix={(
+                    <button
+                      aria-controls="suzu-software-assistant-dialog"
+                      aria-expanded={softwareAssistantOpen}
+                      aria-haspopup="dialog"
+                      aria-keyshortcuts="Control+K Meta+K"
+                      aria-label="打开 Suzu 助手"
+                      className="shell-command-key"
+                      onClick={() => openSoftwareAssistant()}
+                      title="打开 Suzu 助手（Ctrl K）"
+                      type="button"
+                    >
+                      Ctrl K
+                    </button>
+                  )}
                   value={softwareAssistantDraft}
                 />
               </form>
@@ -470,7 +485,7 @@ export function AppShell() {
           <ReleaseAnnouncementDialog announcement={workspace?.releaseAnnouncement} onAcknowledge={workspace?.actions?.acknowledgeReleaseAnnouncement} open={workspace?.releaseAnnouncementOpen === true} />
           <GlobalNotice message={notice} />
           <section className={`content page-workspace${workspace?.contentClassName ? ` ${workspace.contentClassName}` : ""}`} id="content" aria-live="polite">
-            <ConversationCallProvider active={Boolean(conversationProps)} api={conversationProps?.api} snapshot={conversationProps?.snapshot}>
+            <ConversationCallProvider api={conversationProps?.api} snapshot={conversationProps?.snapshot}>
               <ApplicationRouter workspace={workspace} />
             </ConversationCallProvider>
           </section>

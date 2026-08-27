@@ -6,11 +6,13 @@
   "exports": {
     ".": "./src/index.mjs",
     "./compaction-defaults": "./src/compaction-defaults.mjs",
+    "./avatar-image": "./src/avatar-image.mjs",
     "./companion-compaction": "./src/companion-compaction.mjs",
     "./companion-compaction-prompt": "./src/companion-compaction-prompt.mjs",
     "./software-assistant-compaction": "./src/software-assistant-compaction.mjs",
     "./software-assistant-compaction-prompt": "./src/software-assistant-compaction-prompt.mjs",
     "./software-assistant-bridge": "./src/software-assistant-bridge.mjs",
+    "./software-assistant-language": "./src/software-assistant-language.mjs",
     "./supervisor": "./src/supervisor.mjs",
     "./lifecycle-bridge": "./src/lifecycle-bridge.mjs",
     "./system-message": "./src/system-message.mjs",

@@ -91,6 +91,17 @@ function contactPermissionModeValue(value) {
   return { id, permissionMode };
 }
 
+function contactReasoningEffortValue(value) {
+  const source = plainObject(value);
+  if (Object.hasOwn(source, "sessionId") || Object.hasOwn(source, "projectRoot")) {
+    throw new Error("联系人思考强度只接受 contactId。 ");
+  }
+  const id = clean(source.id);
+  const reasoningEffort = clean(source.reasoningEffort);
+  if (!id || !reasoningEffort) throw new Error("联系人思考强度无效。 ");
+  return { id, reasoningEffort };
+}
+
 function contactPresentationValue(value) {
   const source = plainObject(value);
   if (Object.hasOwn(source, "sessionId") || Object.hasOwn(source, "projectRoot")) {
@@ -279,6 +290,18 @@ export function registerConversationIpc({
       } catch {
         // A temporary catalogue read failure must not block a normal chat;
         // the runtime falls back to the product default for this one open.
+        return "";
+      }
+    },
+    resolveContactReasoningEffort: async ({ contactId } = {}) => {
+      const id = clean(contactId);
+      if (!id || !contactProjectsService?.snapshot) return "";
+      try {
+        const snapshot = await contactProjectsService.snapshot();
+        const contact = (Array.isArray(snapshot?.contacts) ? snapshot.contacts : [])
+          .find((item) => clean(item?.id) === id) || null;
+        return clean(contact?.reasoningEffort);
+      } catch {
         return "";
       }
     },
@@ -754,6 +777,10 @@ export function registerConversationIpc({
   ipcMain.handle("conversation:update-contact-permission-mode", async (event, value) => {
     sender = event.sender;
     return reader.updateContactPermissionMode(contactPermissionModeValue(value));
+  });
+  ipcMain.handle("conversation:update-contact-reasoning-effort", async (event, value) => {
+    sender = event.sender;
+    return reader.updateContactReasoningEffort(contactReasoningEffortValue(value));
   });
   ipcMain.handle("conversation:remove-contact", async (event, value) => {
     sender = event.sender;

@@ -335,7 +335,13 @@ export function registerIpcHandlers({ app, appUpdateService = null, dataStorageS
   // child-process bridge, never by copying credentials into this process.
   memoryService.setStructuredGenerationRuntime(conversation.agentRuntime);
   const softwareAssistantService = createSoftwareAssistantService({
+    apiConnectionsSnapshot: () => connectionsService.apiServicesSnapshot(),
     applicationPath: typeof app?.getAppPath === "function" ? app.getAppPath() : "",
+    applicationStatus: () => (
+      typeof appUpdateService?.status === "function"
+        ? appUpdateService.status()
+        : { version: typeof app?.getVersion === "function" ? app.getVersion() : "" }
+    ),
     contactSnapshot: () => (
       typeof contactProjectsService.visibleSnapshot === "function"
         ? contactProjectsService.visibleSnapshot()
@@ -343,9 +349,18 @@ export function registerIpcHandlers({ app, appUpdateService = null, dataStorageS
     ),
     createContact: (value) => conversation.reader.createContact(value),
     dataRoot,
+    mainModelSnapshot: () => agentRuntimeConfigService.runtimeSnapshot(),
+    readRelationshipFiles: (value) => relationshipFilesService.snapshotForContact(value),
+    renameContact: (value) => conversation.reader.renameContact(value),
     runtime: conversation.agentRuntime,
+    saveApiConnection: (value) => connectionsService.saveNamedApiConnection(value),
+    saveMainModelConfiguration: (value) => agentRuntimeConfigService.saveModelConfiguration(value),
     saveRelationshipFile: (value) => relationshipFilesService.saveForContact(value),
     settingsService,
+    updateContactLongTermMemoryEnabled: (value) => conversation.reader.updateContactLongTermMemoryEnabled(value),
+    updateContactPermissionMode: (value) => conversation.reader.updateContactPermissionMode(value),
+    updateContactPresentation: (value) => conversation.reader.updateContactPresentation(value),
+    updateContactReasoningEffort: (value) => conversation.reader.updateContactReasoningEffort(value),
     usageLedger: conversation.usageLedger,
   });
   registerSoftwareAssistantIpc({ app, ipcMain: rendererIpcMain, softwareAssistantService });

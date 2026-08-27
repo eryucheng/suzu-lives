@@ -33,26 +33,47 @@ export async function importSuzuAgentCoreModule(id) {
   return import(pathToFileURL(resolveSuzuAgentCoreModule(id)).href);
 }
 
+/** Resolves the native dependency island carried beside a packaged desktop app. */
+export function resolveSuzuAgentCoreNativeRuntimeRoot({
+  nativeRuntimeRoot = process.env[NATIVE_RUNTIME_ROOT_VARIABLE],
+  resourcesPath = process.resourcesPath,
+} = {}) {
+  const explicitRoot = clean(nativeRuntimeRoot);
+  if (explicitRoot) return resolve(explicitRoot);
+  const desktopResourcesPath = clean(resourcesPath);
+  return desktopResourcesPath
+    ? resolve(desktopResourcesPath, "agent-core-native", "node_modules")
+    : "";
+}
+
 /**
  * The desktop package carries native dependencies outside app.asar in a
  * resource island. The owned supervisor passes that absolute root to its
  * Node child because ELECTRON_RUN_AS_NODE does not promise resourcesPath.
  * Source and test executions retain the colocated development island.
  */
-export function resolveSuzuAgentCoreNativeAnchor({ nativeRuntimeRoot = process.env[NATIVE_RUNTIME_ROOT_VARIABLE] } = {}) {
-  const packagedRoot = clean(nativeRuntimeRoot);
-  const packagedAnchor = packagedRoot
-    ? resolve(packagedRoot, "@suzu-lives", "agent-core-native", "package.json")
-    : "";
-  if (packagedAnchor && existsSync(packagedAnchor)) return packagedAnchor;
+export function resolveSuzuAgentCoreNativeAnchor({
+  nativeRuntimeRoot = process.env[NATIVE_RUNTIME_ROOT_VARIABLE],
+  resourcesPath = process.resourcesPath,
+} = {}) {
+  const roots = [
+    resolveSuzuAgentCoreNativeRuntimeRoot({ nativeRuntimeRoot, resourcesPath: "" }),
+    resolveSuzuAgentCoreNativeRuntimeRoot({ nativeRuntimeRoot: "", resourcesPath }),
+  ].filter((root, index, values) => root && values.indexOf(root) === index);
+  const packagedAnchors = roots.map((root) => (
+    resolve(root, "@suzu-lives", "agent-core-native", "package.json")
+  ));
+  for (const packagedAnchor of packagedAnchors) {
+    if (existsSync(packagedAnchor)) return packagedAnchor;
+  }
   if (existsSync(NATIVE_ANCHOR)) return NATIVE_ANCHOR;
-  return requireFile(packagedAnchor || NATIVE_ANCHOR, "Suzu Agent Core native runtime");
+  return requireFile(packagedAnchors[0] || NATIVE_ANCHOR, "Suzu Agent Core native runtime");
 }
 
 /**
  * Native terminal/image helpers cannot be bundled into JavaScript. They live
  * in a small private island beside the compiled core, not in app dependencies.
  */
-export function createSuzuAgentCoreNativeRequire() {
-  return createRequire(resolveSuzuAgentCoreNativeAnchor());
+export function createSuzuAgentCoreNativeRequire(options = {}) {
+  return createRequire(resolveSuzuAgentCoreNativeAnchor(options));
 }

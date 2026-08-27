@@ -84,6 +84,13 @@ function sendWindowControlState(window = mainWindow) {
   return state;
 }
 
+function sendAppUpdateAvailable(result, window = mainWindow) {
+  if (result?.status !== "available" || !window || window.isDestroyed()) return false;
+  if (!window.webContents || window.webContents.isDestroyed?.()) return false;
+  window.webContents.send("settings:app-update-status-changed", result);
+  return true;
+}
+
 function isSuzuRendererUrl(value) {
   try {
     const url = new URL(String(value || ""));
@@ -242,6 +249,7 @@ const singleInstance = app.requestSingleInstanceLock();
     const stopAppUpdateChecks = app.isPackaged === true
       ? scheduleAppUpdateChecks({
         checkForUpdates: () => appUpdateService.checkForUpdates(),
+        onUpdateAvailable: (result) => sendAppUpdateAvailable(result),
       })
       : () => {};
     app.once("before-quit", stopAppUpdateChecks);
