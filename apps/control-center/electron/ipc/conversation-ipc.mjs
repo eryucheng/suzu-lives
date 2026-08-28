@@ -676,7 +676,8 @@ export function registerConversationIpc({
   registerStickerSendIpcHandler("conversation:send-emoji-sticker", async (event, value) => {
     sender = event.sender;
     const sticker = await stickerCatalog.read(clean(value?.id));
-    const stickerName = normalizeEmojiStickerMetadata(sticker.metadata).name || sticker.fileName;
+    const metadata = normalizeEmojiStickerMetadata(sticker.metadata);
+    const stickerName = metadata.name || sticker.fileName;
     return chat.send({
       content: "",
       media: [{
@@ -685,9 +686,16 @@ export function registerConversationIpc({
         kind: "image",
         mimeType: sticker.mimeType,
         path: sticker.path,
+        stickerContext: {
+          description: metadata.description,
+          keywords: metadata.keywords,
+          name: stickerName,
+        },
       }],
       mediaSource: "sticker",
-      memoryText: `用户发送了一个表情：${stickerName}`,
+      memoryText: metadata.description
+        ? `用户发送了表情“${stickerName}”：${metadata.description}`
+        : `用户发送了一个表情：${stickerName}`,
     });
   });
   ipcMain.handle("conversation:search", (_event, query) => reader.search(query));

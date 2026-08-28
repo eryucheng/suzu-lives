@@ -197,35 +197,6 @@ function unreadBadgeLabel(value) {
   return count > 99 ? "99+" : String(count);
 }
 
-function unreadContactSummary(contacts) {
-  const unreadContacts = (Array.isArray(contacts) ? contacts : []).filter((contact) => contact?.unread);
-  if (!unreadContacts.length) return null;
-  const visibleNames = unreadContacts
-    .map((contact) => String(contact?.name || "").trim())
-    .filter(Boolean)
-    .slice(0, 2);
-  const names = visibleNames.join("、") || "联系人";
-  const more = unreadContacts.length > visibleNames.length ? `等 ${unreadContacts.length} 位` : "";
-  const label = unreadContacts.length === 1
-    ? `${names}有 ${unreadBadgeLabel(unreadContacts[0]?.unreadCount)} 条未读`
-    : `${names}${more}有未读`;
-  const title = unreadContacts
-    .map((contact) => `${String(contact?.name || "").trim() || "联系人"} ${unreadBadgeLabel(contact?.unreadCount)} 条`)
-    .join("；");
-  return { label, title: `未读消息：${title}` };
-}
-
-function ConversationUnreadIndicator({ contacts }) {
-  const summary = unreadContactSummary(contacts);
-  if (!summary) return null;
-  return (
-    <span className="conversation-pane__unread-summary" title={summary.title}>
-      <i aria-hidden="true" />
-      <span className="conversation-pane__unread-summary-copy">{summary.label}</span>
-    </span>
-  );
-}
-
 function PersonAvatar({ avatar, fallback = "" }) {
   if (avatar?.src) return <img alt="" src={avatar.src} />;
   return <span>{avatar?.initial || fallback}</span>;
@@ -299,9 +270,15 @@ function ConversationRoster({ actions, contacts, hasContactsRoot, rosterEmpty })
             <PersonAvatar avatar={contact.avatar} fallback={contact.name} />
             {contact.unread ? <span aria-hidden="true" className="conversation-contact__unread-badge">{unreadBadgeLabel(contact.unreadCount)}</span> : null}
           </span>
-          <span className="conversation-contact__copy"><strong>{contact.name}</strong></span>
-          <span className="conversation-contact__state" title={contact.unread ? "有未读消息" : contact.muted ? "已开启消息免打扰" : contact.selected ? "当前联系人" : "联系人"}>
-            {contact.muted ? <span aria-hidden="true" className="conversation-contact__muted-mark">免</span> : null}
+          <span className="conversation-contact__copy">
+            <span className="conversation-contact__headline">
+              <strong>{contact.name}</strong>
+              <span className="conversation-contact__state" title={contact.unread ? "有未读消息" : contact.muted ? "已开启消息免打扰" : contact.selected ? "当前联系人" : "联系人"}>
+                {contact.lastMessageTime ? <time className="conversation-contact__time" dateTime={contact.lastMessageAt}>{contact.lastMessageTime}</time> : null}
+                {contact.muted ? <span aria-hidden="true" className="conversation-contact__muted-mark">免</span> : null}
+              </span>
+            </span>
+            <small title={contact.lastMessagePreview}>{contact.lastMessagePreview}</small>
           </span>
         </button>
       )) : <div className="conversation-roster__empty">{emptyCopy}</div>}
@@ -674,7 +651,6 @@ function ConversationHeader({ actions, snapshot, callControl }) {
     <header className="conversation-pane__header">
       <h1 className="conversation-peer">{snapshot.peer || "未选择联系人"}</h1>
       <div className="conversation-pane__actions">
-        <ConversationUnreadIndicator contacts={snapshot.contacts} />
         <button
           aria-label={callControl.active ? `${callLabel}，可在下方状态栏挂断` : "开始与此联系人语音通话"}
           aria-pressed={callControl.active}

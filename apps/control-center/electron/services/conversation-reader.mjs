@@ -2,6 +2,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { hasBoundaryNoReply, isExactNoReply } from "../../shared/agent-reply-markers.mjs";
+import { latestConversationMessageSummary } from "../../shared/conversation-reply-segmentation.mjs";
 import {
   conversationAttachmentReceipt,
   conversationMediaManifest,
@@ -20,6 +21,9 @@ const CHAT_HISTORY_EVENT_PAGE_SIZE = 100;
 const CHAT_HISTORY_VISIBLE_MESSAGE_LIMIT = 100;
 const CHAT_HISTORY_BACKFILL_PAGE_SIZE = 2_000;
 const CHAT_HISTORY_INITIAL_MAX_EVENTS = 12_000;
+const ROSTER_HISTORY_EVENT_PAGE_SIZE = 100;
+const ROSTER_HISTORY_MAX_EVENTS = 4_000;
+const ROSTER_SUMMARY_READ_CONCURRENCY = 4;
 const TRANSCRIPT_DISPLAY_DEFAULTS = Object.freeze({
   attachments: false,
   dynamicContext: false,
@@ -383,9 +387,10 @@ function contentText(content) {
     .slice(0, 80);
 }
 
-function publicContact(contact) {
+function publicContact(contact, summary = null) {
   if (!contact || typeof contact !== "object") return null;
   const unreadCount = Number.isSafeInteger(contact.unreadCount) && contact.unreadCount >= 0 ? contact.unreadCount : 0;
+  const latest = plainObject(summary);
   return {
     id: clean(contact.id),
     name: clean(contact.name),
@@ -397,8 +402,15 @@ function publicContact(contact) {
     unreadCount,
     longTermMemoryEnabled: contact.longTermMemoryEnabled !== false,
     permissionMode: clean(contact.permissionMode) || "danger-full-access",
+    ...(clean(latest.preview) ? { lastMessagePreview: clean(latest.preview) } : {}),
+    ...(clean(latest.timestamp) ? { lastMessageAt: clean(latest.timestamp) } : {}),
     ...(clean(contact.updatedAt) ? { updatedAt: clean(contact.updatedAt) } : {}),
   };
+}
+
+function publicCatalog(catalog) {
+  const { contactScopes: _contactScopes, ...value } = plainObject(catalog);
+  return value;
 }
 
 function publicSession(session) {
@@ -1229,6 +1241,7 @@ export function createConversationReader({
 
   let selectionVersion = 0;
   const reconciledUsageHistoryBySession = new Map();
+  const rosterSummaryBySession = new Map();
   const usageReconciliationTasksBySession = new Map();
 
   const contactsSnapshot = async () => contactProjectsService.snapshot();
@@ -1256,6 +1269,11 @@ export function createConversationReader({
       settings,
       contactsSnapshot: contacts,
       contacts: sourceContacts.map(publicContact).filter(Boolean),
+      contactScopes: sourceContacts.map((contact) => ({
+        contactId: clean(contact?.id),
+        projectRoot: clean(contact?.projectRoot),
+        sessionId: clean(contact?.sessionId),
+      })).filter((contact) => contact.contactId && contact.projectRoot && isSessionId(contact.sessionId)),
       contactsRoot: clean(contacts.contactsRoot),
       activeContact: active ? publicContact(active) : null,
       hiddenContactCount: Number.isSafeInteger(contacts.hiddenContactCount) && contacts.hiddenContactCount > 0
@@ -1288,14 +1306,14 @@ export function createConversationReader({
     }
   };
 
-  const activeMessageDeletions = async (catalog) => {
-    if (!catalog.projectRoot || !isSessionId(catalog.sessionId)) {
+  const messageDeletionsFor = async ({ projectRoot, sessionId } = {}) => {
+    if (!projectRoot || !isSessionId(sessionId)) {
       return Object.freeze({ eventSequences: Object.freeze([]), revision: "" });
     }
     try {
       const state = await messageDeletionStore.list({
-        projectRoot: catalog.projectRoot,
-        sessionId: catalog.sessionId,
+        projectRoot,
+        sessionId,
       });
       const eventSequences = [...new Set((Array.isArray(state?.entries) ? state.entries : [])
         .map((entry) => Number(plainObject(entry).eventSeq))
@@ -1313,11 +1331,110 @@ export function createConversationReader({
     }
   };
 
+  const activeMessageDeletions = async (catalog) => messageDeletionsFor({
+    projectRoot: catalog.projectRoot,
+    sessionId: catalog.sessionId,
+  });
+
   const displayMessages = (events, catalog, deletions, maxMessages = MAX_MESSAGES) => conversationDisplayMessages(events, maxMessages, {
     dataRoot,
     deletedEventSequences: deletions.eventSequences,
     includeDynamicContext: catalog.settings?.conversationPreferences?.dynamicContext === true,
   });
+
+  const rosterSummaryForScope = (scope) => {
+    const summary = rosterSummaryBySession.get(clean(scope?.sessionId));
+    return summary?.projectScope === projectScopeKey(scope?.projectRoot) ? summary : null;
+  };
+
+  const cacheRosterSummary = (scope, messages) => {
+    const sessionId = clean(scope?.sessionId);
+    const projectScope = projectScopeKey(scope?.projectRoot);
+    if (!isSessionId(sessionId) || !projectScope) return { preview: "", timestamp: "" };
+    const summary = latestConversationMessageSummary(messages);
+    const cached = Object.freeze({ ...summary, projectScope });
+    rosterSummaryBySession.set(sessionId, cached);
+    return cached;
+  };
+
+  const historyForRosterScope = async (scope, { beforeSeq = undefined, limit = ROSTER_HISTORY_EVENT_PAGE_SIZE } = {}) => runtime.history({
+    sessionId: scope.sessionId,
+    contactId: scope.contactId,
+    cwd: scope.projectRoot,
+    maxMessages: limit,
+    ...(Number.isSafeInteger(beforeSeq) && beforeSeq >= 0 ? { beforeSeq } : {}),
+  });
+
+  const readRosterSummary = async (scope) => {
+    let history = await historyForRosterScope(scope);
+    let events = Array.isArray(history?.events) ? history.events : [];
+    const deletions = await messageDeletionsFor(scope);
+    let messages = conversationDisplayMessages(events, MAX_MESSAGES, {
+      dataRoot,
+      deletedEventSequences: deletions.eventSequences,
+    });
+    let summary = latestConversationMessageSummary(messages);
+    const visitedCursors = new Set();
+
+    while (!summary.preview && history?.hasMore === true && events.length < ROSTER_HISTORY_MAX_EVENTS) {
+      const cursor = historyPageMetadata(events, history, { limit: ROSTER_HISTORY_EVENT_PAGE_SIZE }).oldestEventSeq;
+      if (!Number.isSafeInteger(cursor) || cursor < 0 || visitedCursors.has(cursor)) break;
+      visitedCursors.add(cursor);
+      const remainingEvents = ROSTER_HISTORY_MAX_EVENTS - events.length;
+      const older = await historyForRosterScope(scope, {
+        beforeSeq: cursor,
+        limit: Math.min(CHAT_HISTORY_BACKFILL_PAGE_SIZE, remainingEvents),
+      });
+      const olderEvents = Array.isArray(older?.events) ? older.events : [];
+      const olderCursor = historyPageMetadata(olderEvents, older, {
+        limit: CHAT_HISTORY_BACKFILL_PAGE_SIZE,
+      }).oldestEventSeq;
+      if (!olderEvents.length || !Number.isSafeInteger(olderCursor) || olderCursor >= cursor) break;
+      events = [...olderEvents, ...events];
+      history = { ...plainObject(history), hasMore: older?.hasMore === true };
+      messages = conversationDisplayMessages(events, MAX_MESSAGES, {
+        dataRoot,
+        deletedEventSequences: deletions.eventSequences,
+      });
+      summary = latestConversationMessageSummary(messages);
+    }
+
+    return cacheRosterSummary(scope, messages);
+  };
+
+  const ensureRosterSummaries = async (catalog, { excludeSessionId = "" } = {}) => {
+    const pending = (Array.isArray(catalog?.contactScopes) ? catalog.contactScopes : [])
+      .filter((scope) => clean(scope.sessionId) !== clean(excludeSessionId))
+      .filter((scope) => !rosterSummaryForScope(scope));
+    for (let index = 0; index < pending.length; index += ROSTER_SUMMARY_READ_CONCURRENCY) {
+      await Promise.all(pending.slice(index, index + ROSTER_SUMMARY_READ_CONCURRENCY).map(async (scope) => {
+        try { await readRosterSummary(scope); }
+        catch { /* One damaged history must not hide the rest of the contact roster. */ }
+      }));
+    }
+  };
+
+  const catalogWithRosterSummaries = (catalog) => {
+    const scopeByContactId = new Map((Array.isArray(catalog?.contactScopes) ? catalog.contactScopes : [])
+      .map((scope) => [clean(scope.contactId), scope]));
+    const summarized = (contact) => {
+      const scope = scopeByContactId.get(clean(contact?.id));
+      return publicContact(contact, rosterSummaryForScope(scope));
+    };
+    return {
+      ...catalog,
+      contacts: (Array.isArray(catalog?.contacts) ? catalog.contacts : []).map(summarized).filter(Boolean),
+      activeContact: catalog?.activeContact ? summarized(catalog.activeContact) : null,
+    };
+  };
+
+  const invalidateRosterSummary = ({ sessionId, projectRoot = "" } = {}) => {
+    const id = clean(sessionId);
+    if (!isSessionId(id)) return false;
+    const existing = rosterSummaryBySession.get(id);
+    if (clean(projectRoot) && existing?.projectScope !== projectScopeKey(projectRoot)) return false;
+    return rosterSummaryBySession.delete(id);
+  };
 
   // Agent Core pages are measured in durable events. A streamed reply can
   // contain hundreds of chunks, reasoning records, and lifecycle events while
@@ -1448,7 +1565,7 @@ export function createConversationReader({
     };
     return {
       status: "ready",
-      ...catalog,
+      ...publicCatalog(catalog),
       history: unavailable,
       session,
       events: [],
@@ -1470,22 +1587,32 @@ export function createConversationReader({
     const safeHistoryLimit = Number.isSafeInteger(historyLimit) && historyLimit > 0
       ? Math.min(historyLimit, 2_000)
       : HISTORY_PAGE_SIZE;
-    const catalog = await activeCatalog();
-    const contactsVersion = JSON.stringify(catalog.contacts.map((contact) => [
-      contact.id,
-      contact.name,
-      contact.updatedAt || "",
-      contact.unreadCount,
-      contact.pinned,
-      contact.hidden,
-      contact.muted,
-      contact.longTermMemoryEnabled,
-      contact.permissionMode,
-    ]));
+    let catalog = await activeCatalog();
+    const rosterTask = ensureRosterSummaries(catalog, {
+      excludeSessionId: beforeSeq === undefined ? catalog.sessionId : "",
+    });
+    const finishRosterCatalog = async () => {
+      await rosterTask;
+      catalog = catalogWithRosterSummaries(catalog);
+      return JSON.stringify(catalog.contacts.map((contact) => [
+        contact.id,
+        contact.name,
+        contact.updatedAt || "",
+        contact.lastMessagePreview || "",
+        contact.lastMessageAt || "",
+        contact.unreadCount,
+        contact.pinned,
+        contact.hidden,
+        contact.muted,
+        contact.longTermMemoryEnabled,
+        contact.permissionMode,
+      ]));
+    };
     if (!catalog.projectRoot || !isSessionId(catalog.sessionId)) {
+      const contactsVersion = await finishRosterCatalog();
       return {
         status: catalog.projectRoot ? "ready" : "missing",
-        ...catalog,
+        ...publicCatalog(catalog),
         history: {
           status: "missing",
           code: "",
@@ -1505,6 +1632,7 @@ export function createConversationReader({
     try {
       history = await activeHistory(catalog, { limit: safeHistoryLimit, beforeSeq });
     } catch (error) {
+      const contactsVersion = await finishRosterCatalog();
       return unavailableContext(catalog, contactsVersion, error, { historyLimit: safeHistoryLimit });
     }
     let events = Array.isArray(history.events) ? history.events : [];
@@ -1512,6 +1640,7 @@ export function createConversationReader({
     try {
       deletions = await activeMessageDeletions(catalog);
     } catch (error) {
+      const contactsVersion = await finishRosterCatalog();
       return unavailableContext(catalog, contactsVersion, error, { historyLimit: safeHistoryLimit });
     }
     let messages = displayMessages(events, catalog, deletions);
@@ -1522,20 +1651,27 @@ export function createConversationReader({
         events = expanded.events;
         messages = expanded.messages;
       } catch (error) {
+        const contactsVersion = await finishRosterCatalog();
         return unavailableContext(catalog, contactsVersion, error, { historyLimit: safeHistoryLimit });
       }
     }
+    if (beforeSeq === undefined) {
+      const activeScope = (Array.isArray(catalog.contactScopes) ? catalog.contactScopes : [])
+        .find((scope) => clean(scope.sessionId) === clean(catalog.sessionId));
+      cacheRosterSummary(activeScope, messages);
+    }
+    const contactsVersion = await finishRosterCatalog();
     const visiblePage = visibleTranscriptPage(messages, catalog.settings?.conversationPreferences);
     messages = visiblePage.messages;
     const contextRecords = conversationContextRecords(events, HISTORY_PAGE_SIZE, {
       deletedEventSequences: deletions.eventSequences,
     });
-    const last = [...messages].reverse().find((message) => ["user", "assistant"].includes(clean(message?.kind))) || null;
+    const latest = latestConversationMessageSummary(messages);
     const session = {
       id: catalog.sessionId,
       title: clean(catalog.activeContact?.name) || "对话",
-      preview: textForMessage(last) || "还没有可展示的消息",
-      updatedAt: clean(last?.timestamp) || new Date().toISOString(),
+      preview: latest.preview || "还没有可展示的消息",
+      updatedAt: latest.timestamp || new Date().toISOString(),
       createdAt: "",
       draft: events.length === 0,
     };
@@ -1557,7 +1693,7 @@ export function createConversationReader({
     }
     return {
       status: "ready",
-      ...catalog,
+      ...publicCatalog(catalog),
       history: {
         status: "ready",
         code: "",
@@ -1967,6 +2103,7 @@ export function createConversationReader({
     deleteMessage,
     ensureActiveSession,
     focus,
+    invalidateRosterSummary,
     removeContact,
     renameContact,
     resolveCompactorSession,

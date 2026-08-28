@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal, flushSync } from "react-dom";
-import { Avatar, Button, Dialog, Input, SideNav, SideNavItem } from "suzu-design-system";
+import { Avatar, Button, Dialog, SideNav, SideNavItem } from "suzu-design-system";
 import { releasePointerCapture } from "../core/pointer-capture.mjs";
 import { ApplicationRouter } from "./app-router.jsx";
 import { ConversationCallProvider } from "./conversation-call.jsx";
@@ -76,7 +76,7 @@ function ShellIcon({ name }) {
     palette: <><path d="M12 3a9 9 0 1 0 0 18h1.3a1.7 1.7 0 0 0 0-3.4h-.8a1.6 1.6 0 0 1 0-3.2h2.2A6.3 6.3 0 0 0 21 8.1 5.1 5.1 0 0 0 16 3Z" /><circle cx="7.7" cy="10" r=".8" /><circle cx="10.5" cy="6.8" r=".8" /><circle cx="15" cy="7.3" r=".8" /></>,
     sliders: <><path d="M4 6h16M4 12h16M4 18h16" /><circle cx="9" cy="6" r="2" /><circle cx="15" cy="12" r="2" /><circle cx="7" cy="18" r="2" /></>,
     gear: <><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.1 2.1-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5v.2h-3v-.2a1.7 1.7 0 0 0-1-1.5 1.7 1.7 0 0 0-1.9.3l-.1.1-2.1-2.1.1-.1A1.7 1.7 0 0 0 7 15a1.7 1.7 0 0 0-1.5-1H5.3v-3h.2A1.7 1.7 0 0 0 7 10a1.7 1.7 0 0 0-.3-1.9l-.1-.1 2.1-2.1.1.1a1.7 1.7 0 0 0 1.9.3 1.7 1.7 0 0 0 1-1.5v-.2h3v.2a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1 2.1 2.1-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.5 1h.2v3h-.2a1.7 1.7 0 0 0-1.4 1Z" /></>,
-    search: <><circle cx="10.8" cy="10.8" r="5.8" /><path d="m15.2 15.2 4.1 4.1" /></>,
+    panelRight: <><rect x="3" y="4" width="18" height="16" rx="2.5" /><path d="M15 4v16" /></>,
   }), []);
   return <svg className="shell-icon" viewBox="0 0 24 24" aria-hidden="true">{paths[name] || null}</svg>;
 }
@@ -170,12 +170,15 @@ function ReleaseAnnouncementDialog({ announcement = null, onAcknowledge, open = 
   );
 }
 
-const WINDOW_CONTROL_GLYPH = {
-  close: "\uE8BB",
-  maximize: "\uE922",
-  minimize: "\uE921",
-  restore: "\uE923",
-};
+function WindowControlIcon({ name }) {
+  const icons = {
+    close: <><path d="m6 6 12 12" /><path d="M18 6 6 18" /></>,
+    maximize: <rect x="5" y="5" width="14" height="14" rx="1.5" />,
+    minimize: <path d="M5 12.5h14" />,
+    restore: <><path d="M9 5h8.5A1.5 1.5 0 0 1 19 6.5V15a1 1 0 0 1-1 1h-2" /><rect x="5" y="8" width="11" height="11" rx="1.5" /></>,
+  };
+  return <svg aria-hidden="true" className="shell-window-control-icon" viewBox="0 0 24 24">{icons[name] || null}</svg>;
+}
 
 function WindowControls() {
   const chrome = globalThis.suzuConsole?.windowChrome;
@@ -204,14 +207,14 @@ function WindowControls() {
 
   return (
     <div aria-label="窗口控制" className="shell-window-controls" role="group">
-      <button aria-label="最小化" className="shell-window-control" onClick={() => control("minimize")} title="最小化" type="button">
-        <span aria-hidden="true">{WINDOW_CONTROL_GLYPH.minimize}</span>
+      <button aria-label="最小化" className="shell-titlebar-control shell-window-control" onClick={() => control("minimize")} title="最小化" type="button">
+        <WindowControlIcon name="minimize" />
       </button>
-      <button aria-label={maximized ? "还原窗口" : "最大化"} className="shell-window-control" onClick={() => control("toggle-maximize")} title={maximized ? "还原窗口" : "最大化"} type="button">
-        <span aria-hidden="true">{maximized ? WINDOW_CONTROL_GLYPH.restore : WINDOW_CONTROL_GLYPH.maximize}</span>
+      <button aria-label={maximized ? "还原窗口" : "最大化"} className="shell-titlebar-control shell-window-control" onClick={() => control("toggle-maximize")} title={maximized ? "还原窗口" : "最大化"} type="button">
+        <WindowControlIcon name={maximized ? "restore" : "maximize"} />
       </button>
-      <button aria-label="关闭窗口" className="shell-window-control shell-window-control--close" onClick={() => control("close")} title="关闭窗口" type="button">
-        <span aria-hidden="true">{WINDOW_CONTROL_GLYPH.close}</span>
+      <button aria-label="关闭窗口" className="shell-titlebar-control shell-window-control shell-window-control--close" onClick={() => control("close")} title="关闭窗口" type="button">
+        <WindowControlIcon name="close" />
       </button>
     </div>
   );
@@ -221,12 +224,11 @@ export function AppShell() {
   const [workspace, setWorkspace] = useState(() => latestWorkspace);
   const [notice, setNotice] = useState(() => latestNotice);
   const [softwareAssistantOpen, setSoftwareAssistantOpen] = useState(false);
-  const [softwareAssistantPrompt, setSoftwareAssistantPrompt] = useState("");
-  const [softwareAssistantDraft, setSoftwareAssistantDraft] = useState("");
   const [sidebarWidth, setSidebarWidth] = useState(() => snapSidebarWidth(latestWorkspace?.shellSidebarWidth));
   const [sidebarResizing, setSidebarResizing] = useState(false);
   const [compactSidebarViewport, setCompactSidebarViewport] = useState(viewportUsesCompactSidebar);
   const [sidebarViewportOverride, setSidebarViewportOverride] = useState(false);
+  const assistantToggleRef = useRef(null);
   const shellRef = useRef(null);
   const sidebarResizeRef = useRef(null);
   const compactSidebarViewportRef = useRef(compactSidebarViewport);
@@ -254,17 +256,18 @@ export function AppShell() {
   const conversationProps = workspace?.route?.kind === "conversation" ? workspace.route.props : null;
   const conversationUnread = workspace?.conversationUnread === true;
   const appUpdateAttention = workspace?.appUpdateAttention === true;
-  const openSoftwareAssistant = (prompt = "") => {
-    const value = String(prompt || "").trim();
-    if (value) setSoftwareAssistantPrompt(value);
-    setSoftwareAssistantOpen(true);
+  const closeSoftwareAssistant = () => {
+    assistantToggleRef.current?.focus();
+    setSoftwareAssistantOpen(false);
   };
-
   useEffect(() => {
     const openAssistant = (event) => {
       if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== "k") return;
       event.preventDefault();
-      openSoftwareAssistant();
+      setSoftwareAssistantOpen((current) => {
+        if (current) assistantToggleRef.current?.focus();
+        return !current;
+      });
     };
     window.addEventListener("keydown", openAssistant);
     return () => window.removeEventListener("keydown", openAssistant);
@@ -388,7 +391,6 @@ export function AppShell() {
   const effectiveSidebarWidth = sidebarAutoCompact ? SIDEBAR_COMPACT_WIDTH : sidebarWidth;
   const sidebarIsCompact = effectiveSidebarWidth < SIDEBAR_MIN_EXPANDED_WIDTH;
   const shellStyle = {
-    "--shell-command-center-offset": `${-(effectiveSidebarWidth / 2)}px`,
     "--shell-main-center-offset": `${effectiveSidebarWidth / 2}px`,
     "--shell-sidebar-width": `${effectiveSidebarWidth}px`,
   };
@@ -433,51 +435,23 @@ export function AppShell() {
 
         <main className="main shell-main">
           <header className="topbar shell-topbar">
-            <WindowControls />
-            <div className="shell-topbar-edge" aria-hidden="true" />
-            <div className="shell-command-slot">
-              <form className="shell-command-form" onSubmit={(event) => {
-                event.preventDefault();
-                const prompt = softwareAssistantDraft.trim();
-                if (!prompt) {
-                  openSoftwareAssistant();
-                  return;
-                }
-                setSoftwareAssistantDraft("");
-                openSoftwareAssistant(prompt);
-              }}>
-                <Input
-                  aria-controls="suzu-software-assistant-dialog"
-                  aria-expanded={softwareAssistantOpen}
-                  aria-haspopup="dialog"
-                  aria-label="问 Suzu"
-                  className="shell-command"
-                  maxLength={12000}
-                  onChange={(event) => setSoftwareAssistantDraft(event.currentTarget.value)}
-                  placeholder="问 Suzu：想做什么？"
-                  prefix={<ShellIcon name="search" />}
-                  size="sm"
-                  style={{ width: "min(620px, 100%)" }}
-                  suffix={(
-                    <button
-                      aria-controls="suzu-software-assistant-dialog"
-                      aria-expanded={softwareAssistantOpen}
-                      aria-haspopup="dialog"
-                      aria-keyshortcuts="Control+K Meta+K"
-                      aria-label="打开 Suzu 助手"
-                      className="shell-command-key"
-                      onClick={() => openSoftwareAssistant()}
-                      title="打开 Suzu 助手（Ctrl K）"
-                      type="button"
-                    >
-                      Ctrl K
-                    </button>
-                  )}
-                  value={softwareAssistantDraft}
-                />
-              </form>
+            <div aria-label="标题栏控制" className="shell-titlebar-controls" role="group">
+              <button
+                aria-controls="suzu-software-assistant-dialog"
+                aria-expanded={softwareAssistantOpen}
+                aria-haspopup="dialog"
+                aria-keyshortcuts="Control+K Meta+K"
+                aria-label={softwareAssistantOpen ? "收起 Suzu 助手" : "打开 Suzu 助手"}
+                className={`shell-titlebar-control shell-assistant-toggle${softwareAssistantOpen ? " is-active" : ""}`}
+                onClick={() => setSoftwareAssistantOpen((current) => !current)}
+                ref={assistantToggleRef}
+                title={`${softwareAssistantOpen ? "收起" : "打开"} Suzu 助手（Ctrl K）`}
+                type="button"
+              >
+                <ShellIcon name="panelRight" />
+              </button>
+              <WindowControls />
             </div>
-            <div className="shell-topbar-edge" aria-hidden="true" />
           </header>
 
           <IncomingConversationNotice notice={workspace?.incomingConversationNotice} />
@@ -492,11 +466,13 @@ export function AppShell() {
           <div aria-hidden="true" className="shell-bottombar" />
           <SoftwareAssistantDialog
             api={globalThis.suzuConsole?.softwareAssistant}
-            initialPrompt={softwareAssistantPrompt}
-            onClose={() => setSoftwareAssistantOpen(false)}
-            onPromptConsumed={() => setSoftwareAssistantPrompt("")}
+            onClose={closeSoftwareAssistant}
+            onPanelWidthChange={workspace?.actions?.setSoftwareAssistantPanelWidth}
+            onReasoningEffortChange={workspace?.actions?.setSoftwareAssistantReasoningEffort}
             open={softwareAssistantOpen}
             owner={workspace?.owner}
+            panelWidth={workspace?.softwareAssistantPanelWidth}
+            reasoningEffort={workspace?.softwareAssistantReasoningEffort}
           />
           <OnboardingDialog onboarding={workspace?.onboarding} />
         </main>

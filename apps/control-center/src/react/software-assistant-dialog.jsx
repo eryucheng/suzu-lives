@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Input } from "suzu-design-system";
+import { Input, Select } from "suzu-design-system";
 import { createPortal } from "react-dom";
 
+import { releasePointerCapture } from "../core/pointer-capture.mjs";
 import {
   conversationMessageBlocks,
   mergeConversationMessageWindow,
@@ -9,10 +10,32 @@ import {
   projectedLiveReply,
 } from "../features/conversation/index.mjs";
 import { ConversationMessageList } from "./conversation-page.jsx";
+import { usePointerCaptureRecovery } from "./pointer-capture-recovery.mjs";
 import "./software-assistant-dialog.css";
+
+const SOFTWARE_ASSISTANT_PANEL_DEFAULT_WIDTH = 480;
+const SOFTWARE_ASSISTANT_PANEL_MIN_WIDTH = 380;
+const SOFTWARE_ASSISTANT_PANEL_MAX_WIDTH = 720;
+const SOFTWARE_ASSISTANT_REASONING_EFFORT_OPTIONS = Object.freeze([
+  { label: "关闭", value: "off" },
+  { label: "低", value: "low" },
+  { label: "高", value: "high" },
+  { label: "最大", value: "max" },
+]);
 
 function clean(value) {
   return String(value ?? "").trim();
+}
+
+function normalizePanelWidth(value) {
+  const numeric = Math.round(Number(value));
+  if (!Number.isFinite(numeric)) return SOFTWARE_ASSISTANT_PANEL_DEFAULT_WIDTH;
+  return Math.min(Math.max(numeric, SOFTWARE_ASSISTANT_PANEL_MIN_WIDTH), SOFTWARE_ASSISTANT_PANEL_MAX_WIDTH);
+}
+
+function normalizeReasoningEffort(value) {
+  const effort = clean(value);
+  return SOFTWARE_ASSISTANT_REASONING_EFFORT_OPTIONS.some((option) => option.value === effort) ? effort : "high";
 }
 
 function textBlocks(message) {
@@ -72,10 +95,11 @@ function conversationRow(message, owner, { live = false } = {}) {
 }
 
 /**
- * A small persistent chat surface for the fixed product-help Agent Core session.
+ * A persistent non-modal panel for the fixed product-help Agent Core session.
  * It intentionally owns none of the contact conversation UI or its memory.
  */
-export function SoftwareAssistantDialog({ api, initialPrompt = "", onClose, onPromptConsumed, open = false, owner = null }) {
+export function SoftwareAssistantDialog({ api, initialPrompt = "", onClose, onPanelWidthChange, onPromptConsumed, onReasoningEffortChange, open = false, owner = null, panelWidth = SOFTWARE_ASSISTANT_PANEL_DEFAULT_WIDTH, reasoningEffort = "high" }) {
+  const [actionsOpen, setActionsOpen] = useState(false);
   const [messages, setMessages] = useState([]);
   const [pendingMessages, setPendingMessages] = useState([]);
   const [liveReplies, setLiveReplies] = useState(() => new Map());
@@ -83,8 +107,14 @@ export function SoftwareAssistantDialog({ api, initialPrompt = "", onClose, onPr
   const [draft, setDraft] = useState("");
   const [phase, setPhase] = useState("idle");
   const [error, setError] = useState("");
+  const [resizing, setResizing] = useState(false);
+  const [savingReasoningEffort, setSavingReasoningEffort] = useState(false);
+  const [visiblePanelWidth, setVisiblePanelWidth] = useState(() => normalizePanelWidth(panelWidth));
+  const actionsRef = useRef(null);
   const composerRef = useRef(null);
   const historyRef = useRef(null);
+  const panelResizeRef = useRef(null);
+  const panelWidthRef = useRef(normalizePanelWidth(panelWidth));
   const processedPromptRef = useRef("");
   const activeRequestRef = useRef("");
   // A history snapshot is asynchronous while turn events can continue to
@@ -93,6 +123,82 @@ export function SoftwareAssistantDialog({ api, initialPrompt = "", onClose, onPr
   const historyEpochRef = useRef(0);
   const refreshSequenceRef = useRef(0);
   const appliedRefreshSequenceRef = useRef(0);
+
+  useEffect(() => {
+    if (panelResizeRef.current) return;
+    const nextWidth = normalizePanelWidth(panelWidth);
+    panelWidthRef.current = nextWidth;
+    setVisiblePanelWidth(nextWidth);
+  }, [panelWidth]);
+
+  const applyPanelWidth = useCallback((value) => {
+    const nextWidth = normalizePanelWidth(value);
+    panelWidthRef.current = nextWidth;
+    setVisiblePanelWidth(nextWidth);
+    return nextWidth;
+  }, []);
+
+  const panelWidthFromPointer = useCallback((clientX, activeResize) => (
+    normalizePanelWidth(activeResize.startWidth + activeResize.startX - clientX)
+  ), []);
+
+  const finishPanelResize = useCallback((event, { applyPointer = true, save = true } = {}) => {
+    const activeResize = panelResizeRef.current;
+    if (!activeResize || activeResize.pointerId !== event.pointerId) return;
+    if (applyPointer && Number.isFinite(event.clientX)) applyPanelWidth(panelWidthFromPointer(event.clientX, activeResize));
+    panelResizeRef.current = null;
+    setResizing(false);
+    releasePointerCapture(event.currentTarget || activeResize.target, activeResize.pointerId);
+    if (save) void onPanelWidthChange?.(panelWidthRef.current);
+  }, [applyPanelWidth, onPanelWidthChange, panelWidthFromPointer]);
+
+  const beginPanelResize = useCallback((event) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    panelResizeRef.current = {
+      pointerId: event.pointerId,
+      startWidth: panelWidthRef.current,
+      startX: event.clientX,
+      target: event.currentTarget,
+    };
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+    setResizing(true);
+  }, []);
+
+  const resizePanel = useCallback((event) => {
+    const activeResize = panelResizeRef.current;
+    if (activeResize?.pointerId !== event.pointerId) return;
+    applyPanelWidth(panelWidthFromPointer(event.clientX, activeResize));
+  }, [applyPanelWidth, panelWidthFromPointer]);
+
+  const cancelPanelResize = useCallback((event) => {
+    const activeResize = panelResizeRef.current;
+    if (activeResize?.pointerId !== event.pointerId) return;
+    applyPanelWidth(activeResize.startWidth);
+    finishPanelResize(event, { applyPointer: false, save: false });
+  }, [applyPanelWidth, finishPanelResize]);
+
+  const abortPanelResize = useCallback(() => {
+    const activeResize = panelResizeRef.current;
+    if (!activeResize) return;
+    panelResizeRef.current = null;
+    setResizing(false);
+    releasePointerCapture(activeResize.target, activeResize.pointerId);
+  }, []);
+
+  usePointerCaptureRecovery(abortPanelResize);
+
+  const resizePanelFromKeyboard = useCallback((event) => {
+    let nextWidth = null;
+    if (event.key === "ArrowLeft") nextWidth = panelWidthRef.current + 24;
+    if (event.key === "ArrowRight") nextWidth = panelWidthRef.current - 24;
+    if (event.key === "Home") nextWidth = SOFTWARE_ASSISTANT_PANEL_MIN_WIDTH;
+    if (event.key === "End") nextWidth = SOFTWARE_ASSISTANT_PANEL_MAX_WIDTH;
+    if (nextWidth === null) return;
+    event.preventDefault();
+    const normalized = applyPanelWidth(nextWidth);
+    void onPanelWidthChange?.(normalized);
+  }, [applyPanelWidth, onPanelWidthChange]);
 
   const invalidateHistoryRefreshes = useCallback(() => {
     historyEpochRef.current += 1;
@@ -241,23 +347,54 @@ export function SoftwareAssistantDialog({ api, initialPrompt = "", onClose, onPr
     }
   }, [api, invalidateHistoryRefreshes, phase, refresh]);
 
-  useEffect(() => {
-    if (!open) {
-      invalidateHistoryRefreshes();
-      setDraft("");
-      setPendingMessages([]);
-      setLiveReplies(new Map());
-      setSessionId("");
-      setPhase("idle");
-      setError("");
-      activeRequestRef.current = "";
-      processedPromptRef.current = "";
-      return undefined;
+  const changeReasoningEffort = useCallback(async (value) => {
+    const nextEffort = normalizeReasoningEffort(value);
+    if (phase !== "idle" || savingReasoningEffort) return false;
+    if (nextEffort === normalizeReasoningEffort(reasoningEffort)) {
+      setActionsOpen(false);
+      return true;
     }
+    if (typeof onReasoningEffortChange !== "function") {
+      setError("当前版本没有连接到 Suzu 思考强度设置。");
+      return false;
+    }
+    setSavingReasoningEffort(true);
+    setError("");
+    try {
+      await onReasoningEffortChange(nextEffort);
+      setActionsOpen(false);
+      return true;
+    } catch (cause) {
+      setError(`无法切换思考强度：${clean(cause?.message || cause) || "未知错误。"}`);
+      return false;
+    } finally {
+      setSavingReasoningEffort(false);
+    }
+  }, [onReasoningEffortChange, phase, reasoningEffort, savingReasoningEffort]);
+
+  useEffect(() => {
+    if (!open) return undefined;
     void refresh();
     const frame = window.requestAnimationFrame(() => composerRef.current?.focus());
     return () => window.cancelAnimationFrame(frame);
-  }, [invalidateHistoryRefreshes, open, refresh]);
+  }, [open, refresh]);
+
+  useEffect(() => {
+    if (open) return;
+    setActionsOpen(false);
+  }, [open]);
+
+  useEffect(() => {
+    if (!open || !actionsOpen) return undefined;
+    const closeActions = (event) => {
+      const target = event.target;
+      if (actionsRef.current?.contains(target)) return;
+      if (target instanceof Element && target.closest('[role="listbox"]')) return;
+      setActionsOpen(false);
+    };
+    window.addEventListener("pointerdown", closeActions);
+    return () => window.removeEventListener("pointerdown", closeActions);
+  }, [actionsOpen, open]);
 
   // Agent Core durably appends each model/tool step while a turn is still
   // running. Poll that same transcript cadence as the main conversation so a
@@ -269,7 +406,7 @@ export function SoftwareAssistantDialog({ api, initialPrompt = "", onClose, onPr
   }, [open, phase, refresh]);
 
   useEffect(() => {
-    if (!open || typeof api?.onEvent !== "function") return undefined;
+    if (typeof api?.onEvent !== "function") return undefined;
     return api.onEvent((event) => {
       const requestId = clean(event?.requestId);
       if (activeRequestRef.current && requestId && requestId !== activeRequestRef.current) return;
@@ -327,7 +464,7 @@ export function SoftwareAssistantDialog({ api, initialPrompt = "", onClose, onPr
         setError(clean(event.message) || "软件助手没有完成这次回复。");
       }
     });
-  }, [api, open, projectLiveReply, refresh]);
+  }, [api, projectLiveReply, refresh]);
 
   useEffect(() => {
     const prompt = clean(initialPrompt);
@@ -342,11 +479,15 @@ export function SoftwareAssistantDialog({ api, initialPrompt = "", onClose, onPr
     const onKeyDown = (event) => {
       if (event.key !== "Escape") return;
       event.preventDefault();
+      if (actionsOpen) {
+        setActionsOpen(false);
+        return;
+      }
       onClose?.();
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [onClose, open]);
+  }, [actionsOpen, onClose, open]);
 
   useEffect(() => {
     const history = historyRef.current;
@@ -354,7 +495,6 @@ export function SoftwareAssistantDialog({ api, initialPrompt = "", onClose, onPr
     history.scrollTop = history.scrollHeight;
   }, [liveReplies, messages, open, pendingMessages, phase]);
 
-  if (!open) return null;
   const busy = phase !== "idle";
   const history = mergeConversationMessages(messages, pendingMessages, liveReplies, sessionId);
   const visibleHistory = history.length ? history : [{
@@ -365,17 +505,67 @@ export function SoftwareAssistantDialog({ api, initialPrompt = "", onClose, onPr
   const messageRows = visibleHistory.map((message) => conversationRow(message, owner)).filter(Boolean);
   const assistantName = phase === "clearing" ? "正在清空记录..." : busy ? "正在输入中..." : "Suzu";
   const canStop = ["thinking", "replying"].includes(phase);
+  const selectedReasoningEffort = normalizeReasoningEffort(reasoningEffort);
 
   const dialog = (
-    <div className="software-assistant-overlay" onMouseDown={onClose}>
-      <section aria-label="问 Suzu" aria-modal="true" className="software-assistant-dialog" id="suzu-software-assistant-dialog" onMouseDown={(event) => event.stopPropagation()} role="dialog">
+    <div aria-hidden={open ? undefined : true} className={`software-assistant-overlay${open ? " is-open" : ""}${resizing ? " is-resizing" : ""}`}>
+      <section
+        aria-label="问 Suzu"
+        aria-modal="false"
+        className="software-assistant-dialog"
+        id="suzu-software-assistant-dialog"
+        role="dialog"
+        style={{ "--software-assistant-panel-width": `${visiblePanelWidth}px` }}
+      >
+        <div
+          aria-label="调整 Suzu 面板宽度"
+          aria-orientation="vertical"
+          aria-valuemax={SOFTWARE_ASSISTANT_PANEL_MAX_WIDTH}
+          aria-valuemin={SOFTWARE_ASSISTANT_PANEL_MIN_WIDTH}
+          aria-valuenow={visiblePanelWidth}
+          className="software-assistant-dialog__resizer"
+          onKeyDown={resizePanelFromKeyboard}
+          onLostPointerCapture={cancelPanelResize}
+          onPointerCancel={cancelPanelResize}
+          onPointerDown={beginPanelResize}
+          onPointerMove={resizePanel}
+          onPointerUp={finishPanelResize}
+          role="separator"
+          tabIndex={0}
+          title="拖动调整 Suzu 面板宽度"
+        />
         <header className="software-assistant-dialog__header">
           <div>
             <span>SUZU LIVES</span>
             <h2 aria-live="polite">{assistantName}</h2>
           </div>
-          <div className="software-assistant-dialog__header-actions">
-            <button aria-label="清空问 Suzu 的记录" className="software-assistant-dialog__clear" disabled={busy || !sessionId} onClick={() => { void clearHistory(); }} type="button">清空记录</button>
+          <div className="software-assistant-dialog__header-actions" ref={actionsRef}>
+            <button
+              aria-expanded={actionsOpen}
+              aria-haspopup="dialog"
+              aria-label="更多 Suzu 助手操作"
+              className="software-assistant-dialog__more"
+              onClick={() => setActionsOpen((current) => !current)}
+              type="button"
+            >⋯</button>
+            {actionsOpen ? (
+              <div aria-label="Suzu 助手操作" className="software-assistant-dialog__menu" role="dialog">
+                <label className="software-assistant-dialog__menu-setting">
+                  <span>思考强度</span>
+                  <Select
+                    ariaLabel="Suzu 助手思考强度"
+                    className="software-assistant-dialog__menu-select"
+                    disabled={busy || savingReasoningEffort}
+                    fullWidth
+                    onChange={(value) => { void changeReasoningEffort(value); }}
+                    options={SOFTWARE_ASSISTANT_REASONING_EFFORT_OPTIONS}
+                    value={selectedReasoningEffort}
+                  />
+                </label>
+                <span aria-hidden="true" className="software-assistant-dialog__menu-separator" />
+                <button aria-label="清空问 Suzu 的记录" className="software-assistant-dialog__menu-danger" disabled={busy || !sessionId} onClick={() => { setActionsOpen(false); void clearHistory(); }} type="button">清空记录</button>
+              </div>
+            ) : null}
             <button aria-label="关闭问 Suzu" className="software-assistant-dialog__close" onClick={onClose} type="button">×</button>
           </div>
         </header>

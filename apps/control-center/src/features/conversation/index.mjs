@@ -17,6 +17,8 @@ import { parseSuzuConversationCommand } from "../../../shared/conversation-comma
 import { PRODUCT_FEATURES } from "../../../shared/product-features.mjs";
 import {
   hasConversationMarkdownFormatting,
+  latestConversationMessageSummary,
+  splitConversationReplyBlocks,
   splitConversationReplyBuffer,
 } from "../../../shared/conversation-reply-segmentation.mjs";
 
@@ -907,20 +909,8 @@ function scheduleLiveReplyReveal(context, requestId) {
 
 export function splitAssistantMessageOnBlankLines(message) {
   if (message?.kind !== "assistant" || !Array.isArray(message.blocks)) return [message];
-  const segments = [[]];
-  let split = false;
-  for (const item of message.blocks) {
-    if (item?.kind !== "text") {
-      segments.at(-1).push(item);
-      continue;
-    }
-    const parts = splitCompanionReplyBuffer(item.text, { final: true }).sentences;
-    segments.at(-1).push(parts.length ? { ...item, text: parts[0] } : item);
-    if (parts.length < 2) continue;
-    split = true;
-    for (const text of parts.slice(1)) segments.push([{ ...item, text }]);
-  }
-  if (!split) return [message];
+  const segments = splitConversationReplyBlocks(message.blocks);
+  if (segments.length < 2) return [message];
   return segments.filter((blocks) => blocks.length).map((blocks, index, all) => {
     const last = index === all.length - 1;
     return {
@@ -1612,6 +1602,9 @@ export function conversationReactSnapshot(context) {
   const peer = companionPeerLabel(contactPeer, clean(snapshot.activeSessionId), viewState.liveReplies);
   const callAvailable = ready && Boolean(clean(activeContact?.agentId));
   const preferredContactId = clean(snapshot.preferredContactId);
+  const activeRosterSummary = activeContact && !isHistoryWindowDetached()
+    ? latestConversationMessageSummary(entries)
+    : { preview: "", timestamp: "" };
   const allContactRows = contacts.map((contact) => {
     const name = clean(contact?.name) || "未命名联系人";
     const selectedContact = clean(activeContact?.id) === clean(contact?.id);
@@ -1626,10 +1619,19 @@ export function conversationReactSnapshot(context) {
       pinned: contact?.pinned === true,
       preferred: clean(contact?.id) === preferredContactId,
       selected: selectedContact,
+      lastMessageAt: selectedContact && activeRosterSummary.timestamp
+        ? activeRosterSummary.timestamp
+        : clean(contact?.lastMessageAt),
+      lastMessagePreview: selectedContact && activeRosterSummary.preview
+        ? activeRosterSummary.preview
+        : clean(contact?.lastMessagePreview),
       unread: contactUnreadCount > 0,
       unreadCount: contactUnreadCount,
     };
   });
+  for (const contact of allContactRows) {
+    contact.lastMessageTime = wechatTimeLabel(contact.lastMessageAt);
+  }
   const contactRows = allContactRows.filter((contact) => !contact.hidden);
   const hiddenContactCount = Math.max(
     Number.isSafeInteger(snapshot.hiddenContactCount) ? snapshot.hiddenContactCount : 0,
@@ -2109,7 +2111,10 @@ function handleConversationEvent(context, event) {
     return;
   }
   const activeProjectRoot = clean(viewState.snapshot?.projectRoot);
-  if (activeProjectRoot && clean(event?.projectRoot) && !sameProjectRoot(activeProjectRoot, event.projectRoot)) return;
+  if (activeProjectRoot && clean(event?.projectRoot) && !sameProjectRoot(activeProjectRoot, event.projectRoot)) {
+    if (["turn-complete", "turn-stopped", "error"].includes(event?.type)) void load(context, true);
+    return;
+  }
   const requestId = clean(event?.requestId);
   const sessionId = clean(event?.sessionId);
   if (event?.type === "queue" && sessionId) {

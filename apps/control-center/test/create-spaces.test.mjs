@@ -20,7 +20,7 @@ test("create overview exposes the active creation workbenches", () => {
   assert.ok(CREATE_SPACES.every((space) => !space.title.includes("视频")));
 });
 
-test("sticker workbench keeps square crop, editable information, and background completion in one React page", async () => {
+test("sticker workbench keeps crop, editing, background completion, and batch selection in one React page", async () => {
   const ipc = await readFile(new URL("../electron/ipc/conversation-ipc.mjs", import.meta.url), "utf8");
   const stickers = await readFile(new URL("../src/react/create-sticker-page.jsx", import.meta.url), "utf8");
   const styles = await readFile(new URL("../src/styles/create.css", import.meta.url), "utf8");
@@ -33,7 +33,7 @@ test("sticker workbench keeps square crop, editable information, and background 
   assert.match(stickers, /const generateAfterSave = Boolean\(savingDraft && empty\);/u);
   assert.match(stickers, /void completeSaved\(selectedAfterSave, selectedAfterSave\.metadata, \{ background: true \}\);/u);
   assert.match(stickers, /const \[completingIds, setCompletingIds\] = useState/u);
-  assert.match(stickers, /<button className="primary-button" disabled=\{busy\} onClick=\{\(\) => \{ void beginAdd\(\); \}\} type="button">添加表情包<\/button>/u);
+  assert.match(stickers, /<button className="primary-button" disabled=\{busy \|\| batchEditing\} onClick=\{\(\) => \{ void beginAdd\(\); \}\} type="button">添加表情包<\/button>/u);
   assert.doesNotMatch(stickers, /completeDraft/u);
   assert.doesNotMatch(stickers, /automaticCompletionIds/u);
   assert.doesNotMatch(stickers, /autoCompletionAttempted/u);
@@ -48,6 +48,14 @@ test("sticker workbench keeps square crop, editable information, and background 
   assert.match(stickers, /requestSubmit/u);
   assert.match(stickers, /const source = clean\(selection\.fileUrl\);/u);
   assert.doesNotMatch(ipc, /previewDataUrl:\s*`data:/u);
+  const sendHandlerStart = ipc.indexOf('registerStickerSendIpcHandler("conversation:send-emoji-sticker"');
+  const sendHandlerEnd = ipc.indexOf('ipcMain.handle("conversation:search"');
+  assert.ok(sendHandlerStart >= 0 && sendHandlerEnd > sendHandlerStart);
+  const sendHandler = ipc.slice(sendHandlerStart, sendHandlerEnd);
+  assert.match(sendHandler, /stickerContext:\s*\{/u);
+  assert.match(sendHandler, /description:\s*metadata\.description/u);
+  assert.match(sendHandler, /keywords:\s*metadata\.keywords/u);
+  assert.match(sendHandler, /memoryText:\s*metadata\.description/u);
   assert.match(stickers, /const zoom = event\.currentTarget\.value;\s*setWorkingCrop\(\(current\) => setAvatarCropZoom\(current, zoom\)\);/u);
   assert.doesNotMatch(stickers, /setWorkingCrop\(\(current\) => setAvatarCropZoom\(current, event\.currentTarget\.value\)\)/u);
   assert.match(styles, /\.sticker-workbench\s*\{[\s\S]*?grid-template-columns:\s*minmax\(250px, \.28fr\) minmax\(0, 1fr\);/u);
@@ -55,6 +63,18 @@ test("sticker workbench keeps square crop, editable information, and background 
   assert.match(styles, /\.sticker-editor-preview\s*\{[\s\S]*?border-bottom:\s*1px solid var\(--line\);/u);
   assert.doesNotMatch(styles, /\.sticker-editor-panel\s*\{[^}]*grid-template-columns:/u);
   assert.doesNotMatch(styles, /\.sticker-library-rail\s*\{[^}]*display:\s*none;/u);
+  assert.match(stickers, /const \[batchEditing, setBatchEditing\] = useState\(false\);/u);
+  assert.match(stickers, /const \[batchSelectedIds, setBatchSelectedIds\] = useState\(\(\) => new Set\(\)\);/u);
+  assert.match(stickers, />\{batchEditing \? "完成" : "批量编辑"\}<\/button>/u);
+  assert.match(stickers, /className=\{`sticker-library-checkbox\$\{batchSelected \? " is-checked" : ""\}`\}/u);
+  assert.match(stickers, /删除所选\{batchSelectedCount/u);
+  assert.match(stickers, /for \(const item of selectedItems\) \{\s*latestSnapshot = await stickers\.remove\(\{ confirmed: true, id: item\.id \}\);/u);
+  const toggleBatchStart = stickers.indexOf("const toggleBatchSticker");
+  const toggleBatchEnd = stickers.indexOf("const toggleBatchAll");
+  assert.ok(toggleBatchStart >= 0 && toggleBatchEnd > toggleBatchStart);
+  assert.doesNotMatch(stickers.slice(toggleBatchStart, toggleBatchEnd), /stickers\.remove/u);
+  assert.match(styles, /\.sticker-library-checkbox\s*\{[\s\S]*?position:\s*absolute;[\s\S]*?top:\s*12px;[\s\S]*?right:\s*12px;/u);
+  assert.match(styles, /\.sticker-library-batch-toolbar\s*\{[\s\S]*?display:\s*flex;/u);
 });
 
 test("sticker metadata calls generation only for a completely blank submitted form", () => {

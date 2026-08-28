@@ -263,22 +263,74 @@ function StickerMetadataForm({ busy, form, mode, needsCompletion, onCancel, onCh
   );
 }
 
-function StickerLibraryRail({ completingIds, items, loading, onAdd, onSelect, selectedId }) {
+function StickerLibraryRail({
+  batchEditing,
+  batchSelectedIds,
+  batchUnavailable,
+  completingIds,
+  items,
+  loading,
+  onAdd,
+  onCancelBatch,
+  onSelect,
+  onStartBatch,
+  onToggleBatch,
+  onToggleBatchAll,
+  selectedId,
+}) {
+  const selectableBatchIds = items
+    .filter((item) => !completingIds.has(item.id))
+    .map((item) => item.id);
+  const allBatchSelected = selectableBatchIds.length > 0
+    && selectableBatchIds.every((id) => batchSelectedIds.has(id));
   return (
     <aside className="sticker-library-rail">
       <header>
         <div><span className="reference-kicker">STICKER LIBRARY</span><h2>表情系统</h2></div>
-        <button aria-label="添加表情包" className="sticker-add-button" disabled={loading} onClick={onAdd} title="添加表情包" type="button">＋</button>
+        <div className="sticker-library-header-actions">
+          {items.length ? (
+            <button
+              className={`sticker-batch-mode-button${batchEditing ? " is-active" : ""}`}
+              disabled={loading || (!batchEditing && batchUnavailable)}
+              onClick={batchEditing ? onCancelBatch : onStartBatch}
+              title={!batchEditing && batchUnavailable ? "请先保存或取消当前新增表情包" : undefined}
+              type="button"
+            >{batchEditing ? "完成" : "批量编辑"}</button>
+          ) : null}
+          {!batchEditing ? <button aria-label="添加表情包" className="sticker-add-button" disabled={loading} onClick={onAdd} title="添加表情包" type="button">＋</button> : null}
+        </div>
       </header>
+      {batchEditing && items.length ? (
+        <div className="sticker-library-batch-toolbar">
+          <span>已选择 <strong>{batchSelectedIds.size}</strong> 张</span>
+          <button
+            disabled={loading || !selectableBatchIds.length}
+            onClick={() => onToggleBatchAll(selectableBatchIds, allBatchSelected)}
+            type="button"
+          >{allBatchSelected ? "取消全选" : "全选"}</button>
+        </div>
+      ) : null}
       {items.length ? (
         <div className="sticker-library-grid">
           {items.map((item) => {
             const completing = completingIds.has(item.id);
-            const selected = item.id === selectedId;
+            const batchSelected = batchSelectedIds.has(item.id);
+            const selected = !batchEditing && item.id === selectedId;
+            const label = item.metadata?.name || item.fileName || "表情包";
             return (
-              <button aria-pressed={selected} className={`sticker-library-item${selected ? " is-selected" : ""}`} key={item.id} onClick={() => onSelect(item)} type="button">
+              <button
+                aria-label={batchEditing ? `${batchSelected ? "取消选择" : "选择"}“${label}”` : `编辑“${label}”`}
+                aria-pressed={batchEditing ? batchSelected : selected}
+                className={`sticker-library-item${selected ? " is-selected" : ""}${batchSelected ? " is-batch-selected" : ""}`}
+                disabled={loading || (batchEditing && completing)}
+                key={item.id}
+                onClick={() => { if (batchEditing) onToggleBatch(item); else onSelect(item); }}
+                title={batchEditing && completing ? "正在后台生成信息，暂时不能选择" : label}
+                type="button"
+              >
+                {batchEditing ? <span aria-hidden="true" className={`sticker-library-checkbox${batchSelected ? " is-checked" : ""}`}>{batchSelected ? "✓" : ""}</span> : null}
                 <img alt="" src={item.fileUrl} />
-                <span><strong>{item.metadata?.name || item.fileName}</strong><small>{completing ? "正在后台生成信息" : item.metadata?.keywords?.slice(0, 2).join(" · ") || "尚未填写信息"}</small></span>
+                <span className="sticker-library-item-copy"><strong>{label}</strong><small>{completing ? "正在后台生成信息" : item.metadata?.keywords?.slice(0, 2).join(" · ") || "尚未填写信息"}</small></span>
               </button>
             );
           })}
@@ -296,6 +348,8 @@ function StickerLibraryRail({ completingIds, items, loading, onAdd, onSelect, se
 }
 
 export function CreateStickerPage({ actions = {}, api = {} }) {
+  const [batchEditing, setBatchEditing] = useState(false);
+  const [batchSelectedIds, setBatchSelectedIds] = useState(() => new Set());
   const [busy, setBusy] = useState(false);
   const [completingIds, setCompletingIds] = useState(() => new Set());
   const [crop, setCrop] = useState(null);
@@ -348,10 +402,11 @@ export function CreateStickerPage({ actions = {}, api = {} }) {
     [selectedId, snapshot.items],
   );
   const selectedTagging = Boolean(selectedId && completingIds.has(selectedId));
+  const batchSelectedCount = batchSelectedIds.size;
 
   const changeForm = (field, value) => setForm((current) => ({ ...current, [field]: value }));
   const selectSticker = (item) => {
-    if (busy) return;
+    if (batchEditing || busy) return;
     draftRef.current = null;
     selectedIdRef.current = item.id;
     setDraft(null);
@@ -361,8 +416,38 @@ export function CreateStickerPage({ actions = {}, api = {} }) {
     setNotice("");
   };
 
+  const startBatchEdit = () => {
+    if (busy || draft || crop) return;
+    setBatchSelectedIds(new Set());
+    setBatchEditing(true);
+    setError("");
+    setNotice("");
+  };
+
+  const cancelBatchEdit = () => {
+    if (busy) return;
+    setBatchSelectedIds(new Set());
+    setBatchEditing(false);
+  };
+
+  const toggleBatchSticker = (item) => {
+    const id = clean(item?.id);
+    if (!batchEditing || busy || !id || completingIdsRef.current.has(id)) return;
+    setBatchSelectedIds((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleBatchAll = (ids, clear) => {
+    if (!batchEditing || busy) return;
+    setBatchSelectedIds(clear ? new Set() : new Set(ids.map(clean).filter(Boolean)));
+  };
+
   const beginAdd = async () => {
-    if (busy || typeof stickers?.select !== "function") return;
+    if (batchEditing || busy || typeof stickers?.select !== "function") return;
     setBusy(true);
     setError("");
     setNotice("");
@@ -482,7 +567,7 @@ export function CreateStickerPage({ actions = {}, api = {} }) {
   };
 
   const removeSelected = async () => {
-    if (!selected || busy || selectedTagging || !window.confirm(`确定删除“${selected.metadata?.name || selected.fileName}”吗？`)) return;
+    if (batchEditing || !selected || busy || selectedTagging || !window.confirm(`确定删除“${selected.metadata?.name || selected.fileName}”吗？`)) return;
     setBusy(true);
     setError("");
     try {
@@ -498,6 +583,47 @@ export function CreateStickerPage({ actions = {}, api = {} }) {
     }
   };
 
+  const removeBatchSelected = async () => {
+    const selectedItems = (snapshot.items || []).filter((item) => (
+      batchSelectedIds.has(item.id) && !completingIdsRef.current.has(item.id)
+    ));
+    if (!batchEditing || busy || !selectedItems.length) return;
+    if (typeof stickers?.remove !== "function") {
+      setError("当前版本无法删除表情包。");
+      return;
+    }
+    if (!window.confirm(`确定删除选中的 ${selectedItems.length} 张表情包吗？删除后无法恢复。`)) return;
+
+    setBusy(true);
+    setError("");
+    setNotice("");
+    let latestSnapshot = null;
+    const removedIds = new Set();
+    try {
+      for (const item of selectedItems) {
+        latestSnapshot = await stickers.remove({ confirmed: true, id: item.id });
+        removedIds.add(item.id);
+      }
+      setDraft(null);
+      const next = applySnapshot(latestSnapshot);
+      setForm(formFromMetadata(next?.metadata));
+      setBatchSelectedIds(new Set());
+      setBatchEditing(false);
+      setNotice(`已删除 ${removedIds.size} 张表情包。`);
+    } catch (reason) {
+      if (latestSnapshot) {
+        const next = applySnapshot(latestSnapshot);
+        setForm(formFromMetadata(next?.metadata));
+      }
+      setBatchSelectedIds((current) => new Set([...current].filter((id) => !removedIds.has(id))));
+      setError(removedIds.size
+        ? `已删除 ${removedIds.size} 张，其余表情包未删除：${reason?.message || reason}`
+        : `无法批量删除表情包：${reason?.message || reason}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const preview = draft?.previewDataUrl || selected?.fileUrl || "";
   const mode = draft ? "new" : "edit";
 
@@ -507,7 +633,7 @@ export function CreateStickerPage({ actions = {}, api = {} }) {
       className="create-sticker-react-page"
       header={(
         <PageHeader
-          action={<div className="create-subpage-actions"><button className="secondary-button" onClick={actions.returnToOverview} type="button">返回创造</button><button className="primary-button" disabled={busy} onClick={() => { void beginAdd(); }} type="button">添加表情包</button></div>}
+          action={<div className="create-subpage-actions"><button className="secondary-button" onClick={actions.returnToOverview} type="button">返回创造</button><button className="primary-button" disabled={busy || batchEditing} onClick={() => { void beginAdd(); }} type="button">添加表情包</button></div>}
           eyebrow="CREATE / STICKERS"
           subtitle="整理自定义表情的图片、说明与检索词，让聊天与 Agent 共用同一套表情系统。"
           title="表情包工作台"
@@ -517,9 +643,33 @@ export function CreateStickerPage({ actions = {}, api = {} }) {
       {error ? <div className="sticker-workbench-feedback is-error" role="alert">{error}</div> : null}
       {notice ? <div className="sticker-workbench-feedback" role="status">{notice}</div> : null}
       <div className="sticker-workbench">
-        <StickerLibraryRail completingIds={completingIds} items={snapshot.items || []} loading={loading || busy} onAdd={() => { void beginAdd(); }} onSelect={selectSticker} selectedId={selectedId} />
+        <StickerLibraryRail
+          batchEditing={batchEditing}
+          batchSelectedIds={batchSelectedIds}
+          batchUnavailable={Boolean(draft || crop)}
+          completingIds={completingIds}
+          items={snapshot.items || []}
+          loading={loading || busy}
+          onAdd={() => { void beginAdd(); }}
+          onCancelBatch={cancelBatchEdit}
+          onSelect={selectSticker}
+          onStartBatch={startBatchEdit}
+          onToggleBatch={toggleBatchSticker}
+          onToggleBatchAll={toggleBatchAll}
+          selectedId={selectedId}
+        />
         <main className="sticker-editor-panel">
-          {preview ? (
+          {batchEditing ? (
+            <div className="sticker-editor-empty sticker-batch-editor">
+              <span aria-hidden="true">✓</span>
+              <h2>批量编辑</h2>
+              <p>{batchSelectedCount ? `已选择 ${batchSelectedCount} 张表情包。确认选择后，再执行统一操作。` : "点击左侧表情卡片右上角的方框，可以选择多张表情包。"}</p>
+              <div className="sticker-batch-editor-actions">
+                <button className="secondary-button" disabled={busy} onClick={cancelBatchEdit} type="button">完成</button>
+                <button className="sticker-danger-button" disabled={busy || !batchSelectedCount} onClick={() => { void removeBatchSelected(); }} type="button">删除所选{batchSelectedCount ? `（${batchSelectedCount}）` : ""}</button>
+              </div>
+            </div>
+          ) : preview ? (
             <>
               <div className="sticker-editor-preview">
                 <div className="sticker-editor-preview-image"><img alt={draft ? "新表情包预览" : selected?.metadata?.name || selected?.fileName || "表情包预览"} src={preview} /></div>

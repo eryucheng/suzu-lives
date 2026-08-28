@@ -27,6 +27,8 @@ const DEFAULT_SETTINGS = Object.freeze({
   conversationComposerHeight: 168,
   conversationRosterWidth: 246,
   shellSidebarWidth: 240,
+  softwareAssistantPanelWidth: 480,
+  softwareAssistantReasoningEffort: "high",
   theme: "light",
   appearance: { styleId: "classic", wallpaper: null },
   agentId: "",
@@ -179,6 +181,9 @@ const SHELL_SIDEBAR_COMPACT_WIDTH = 70;
 const SHELL_SIDEBAR_MIN_EXPANDED_WIDTH = 240;
 const SHELL_SIDEBAR_MAX_WIDTH = 360;
 const SHELL_SIDEBAR_COLLAPSE_THRESHOLD = 144;
+const SOFTWARE_ASSISTANT_PANEL_MIN_WIDTH = 380;
+const SOFTWARE_ASSISTANT_PANEL_MAX_WIDTH = 720;
+const SOFTWARE_ASSISTANT_REASONING_EFFORTS = new Set(["off", "low", "high", "max"]);
 const CONVERSATION_COMPOSER_MIN_HEIGHT = 168;
 const CONVERSATION_COMPOSER_MAX_HEIGHT = 420;
 const CONVERSATION_ROSTER_MIN_WIDTH = 192;
@@ -189,6 +194,17 @@ export function normalizeShellSidebarWidth(value) {
   if (!Number.isFinite(numeric)) return 240;
   if (numeric <= SHELL_SIDEBAR_COLLAPSE_THRESHOLD) return SHELL_SIDEBAR_COMPACT_WIDTH;
   return Math.min(Math.max(numeric, SHELL_SIDEBAR_MIN_EXPANDED_WIDTH), SHELL_SIDEBAR_MAX_WIDTH);
+}
+
+export function normalizeSoftwareAssistantPanelWidth(value) {
+  const numeric = Math.round(Number(value));
+  if (!Number.isFinite(numeric)) return 480;
+  return Math.min(Math.max(numeric, SOFTWARE_ASSISTANT_PANEL_MIN_WIDTH), SOFTWARE_ASSISTANT_PANEL_MAX_WIDTH);
+}
+
+export function normalizeSoftwareAssistantReasoningEffort(value) {
+  const effort = clean(value);
+  return SOFTWARE_ASSISTANT_REASONING_EFFORTS.has(effort) ? effort : "high";
 }
 
 export function normalizeConversationComposerHeight(value) {
@@ -275,6 +291,8 @@ function normalizeSettings(value = {}) {
     conversationComposerHeight: normalizeConversationComposerHeight(value.conversationComposerHeight),
     conversationRosterWidth: normalizeConversationRosterWidth(value.conversationRosterWidth),
     shellSidebarWidth: normalizeShellSidebarWidth(value.shellSidebarWidth),
+    softwareAssistantPanelWidth: normalizeSoftwareAssistantPanelWidth(value.softwareAssistantPanelWidth),
+    softwareAssistantReasoningEffort: normalizeSoftwareAssistantReasoningEffort(value.softwareAssistantReasoningEffort),
     theme: value.theme === "dark" ? "dark" : "light",
     appearance: normalizeAppearance(value.appearance),
     agentId: stableAgentId(projectRoot),
@@ -301,6 +319,8 @@ function safePatch(value, current = {}) {
   if (Object.hasOwn(value, "conversationComposerHeight")) patch.conversationComposerHeight = normalizeConversationComposerHeight(value.conversationComposerHeight);
   if (Object.hasOwn(value, "conversationRosterWidth")) patch.conversationRosterWidth = normalizeConversationRosterWidth(value.conversationRosterWidth);
   if (Object.hasOwn(value, "shellSidebarWidth")) patch.shellSidebarWidth = normalizeShellSidebarWidth(value.shellSidebarWidth);
+  if (Object.hasOwn(value, "softwareAssistantPanelWidth")) patch.softwareAssistantPanelWidth = normalizeSoftwareAssistantPanelWidth(value.softwareAssistantPanelWidth);
+  if (Object.hasOwn(value, "softwareAssistantReasoningEffort")) patch.softwareAssistantReasoningEffort = normalizeSoftwareAssistantReasoningEffort(value.softwareAssistantReasoningEffort);
   if (Object.hasOwn(value, "theme")) patch.theme = value.theme === "light" ? "light" : "dark";
   if (Object.hasOwn(value, "appearance")) {
     const currentAppearance = normalizeAppearance(current.appearance);

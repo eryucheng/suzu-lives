@@ -26,6 +26,7 @@ import {
   splitAssistantMessageOnBlankLines,
   splitCompanionReplyBuffer,
 } from "../src/features/conversation/index.mjs";
+import { latestConversationMessageSummary } from "../shared/conversation-reply-segmentation.mjs";
 
 function flush() {
   return new Promise((resolve) => setTimeout(resolve, 0));
@@ -661,6 +662,14 @@ test("assistant replies split into sentence bubbles and keep the live state on t
     blocks: [{ kind: "text", text: "Hello! Nice to meet you. 你今天怎么样？" }],
   });
   assert.deepEqual(punctuationParts.map((item) => item.blocks[0].text), ["Hello!", "Nice to meet you.", "你今天怎么样？"]);
+  assert.deepEqual(latestConversationMessageSummary([{
+    kind: "assistant",
+    timestamp: "2026-08-28T15:33:00+08:00",
+    blocks: [{ kind: "text", text: "第一句。第二句。最后一句。" }],
+  }]), {
+    preview: "最后一句。",
+    timestamp: "2026-08-28T15:33:00+08:00",
+  });
 });
 
 test("center time mode groups nearby messages and renders a centered divider", () => {

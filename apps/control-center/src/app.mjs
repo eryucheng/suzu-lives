@@ -212,6 +212,32 @@ async function setShellSidebarWidth(width) {
   return state.settings;
 }
 
+async function setSoftwareAssistantPanelWidth(width) {
+  if (typeof api.settings?.update !== "function") return state.settings;
+  try {
+    state.settings = await api.settings.update({ softwareAssistantPanelWidth: width });
+  } catch (error) {
+    setNotice(`无法保存 Suzu 面板宽度：${error?.message || error}`);
+    render();
+    return state.settings;
+  }
+  render();
+  return state.settings;
+}
+
+async function setSoftwareAssistantReasoningEffort(reasoningEffort) {
+  if (typeof api.settings?.update !== "function") throw new Error("当前版本无法保存 Suzu 思考强度。");
+  try {
+    state.settings = await api.settings.update({ softwareAssistantReasoningEffort: reasoningEffort });
+  } catch (error) {
+    setNotice(`无法保存 Suzu 思考强度：${error?.message || error}`);
+    render();
+    throw error;
+  }
+  render();
+  return state.settings;
+}
+
 function setCreatePage(page) {
   if (!createPages.has(page)) return;
   state.createPage = page;
@@ -2053,7 +2079,7 @@ function routeForCurrentView() {
 
 function buildWorkspace() {
   return {
-    actions: { acknowledgeReleaseAnnouncement, answerIncomingVoiceCall, declineIncomingVoiceCall, navigate: setView, openSuzuSearchItem, reportWallpaperError, setShellSidebarWidth },
+    actions: { acknowledgeReleaseAnnouncement, answerIncomingVoiceCall, declineIncomingVoiceCall, navigate: setView, openSuzuSearchItem, reportWallpaperError, setShellSidebarWidth, setSoftwareAssistantPanelWidth, setSoftwareAssistantReasoningEffort },
     activeView: state.view,
     appearance: currentAppearance(),
     contentClassName: contentClassName(),
@@ -2068,6 +2094,8 @@ function buildWorkspace() {
     releaseAnnouncementOpen: state.releaseAnnouncementOpen,
     route: routeForCurrentView(),
     shellSidebarWidth: state.settings?.shellSidebarWidth,
+    softwareAssistantPanelWidth: state.settings?.softwareAssistantPanelWidth,
+    softwareAssistantReasoningEffort: state.settings?.softwareAssistantReasoningEffort,
   };
 }
 

@@ -1854,6 +1854,13 @@
   padding: 17px;
 }
 
+.sticker-library-header-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 7px;
+}
+
 .sticker-library-rail h2,
 .sticker-editor-heading h2,
 .sticker-crop-dialog h2,
@@ -1883,6 +1890,63 @@
   color: var(--text);
 }
 
+.sticker-batch-mode-button {
+  min-height: 34px;
+  border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--line));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--panel-soft) 72%, transparent);
+  color: var(--muted);
+  cursor: pointer;
+  padding: 0 10px;
+  font-size: 10px;
+  font-weight: 650;
+}
+
+.sticker-batch-mode-button:hover,
+.sticker-batch-mode-button.is-active {
+  border-color: color-mix(in srgb, var(--accent) 46%, var(--line));
+  background: color-mix(in srgb, var(--accent) 10%, var(--panel));
+  color: var(--accent);
+}
+
+.sticker-batch-mode-button:disabled,
+.sticker-add-button:disabled {
+  cursor: not-allowed;
+  opacity: .48;
+}
+
+.sticker-library-batch-toolbar {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+  padding: 9px 12px;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.sticker-library-batch-toolbar strong {
+  color: var(--text);
+}
+
+.sticker-library-batch-toolbar button {
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  cursor: pointer;
+  padding: 4px 2px;
+  font: inherit;
+  font-weight: 650;
+}
+
+.sticker-library-batch-toolbar button:disabled {
+  cursor: not-allowed;
+  opacity: .48;
+}
+
 .sticker-library-grid {
   display: grid;
   min-height: 0;
@@ -1894,7 +1958,9 @@
 }
 
 .sticker-library-item {
+  position: relative;
   display: grid;
+  width: 100%;
   min-width: 0;
   gap: 7px;
   border: 1px solid transparent;
@@ -1917,6 +1983,41 @@
   box-shadow: inset 0 1px rgba(255, 255, 255, .045);
 }
 
+.sticker-library-item.is-batch-selected {
+  border-color: color-mix(in srgb, var(--accent) 62%, var(--line));
+  background: color-mix(in srgb, var(--accent) 13%, var(--panel));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 13%, transparent);
+}
+
+.sticker-library-item:disabled {
+  cursor: not-allowed;
+  opacity: .58;
+}
+
+.sticker-library-checkbox {
+  position: absolute;
+  z-index: 1;
+  top: 12px;
+  right: 12px;
+  display: grid;
+  width: 20px;
+  height: 20px;
+  box-sizing: border-box;
+  place-items: center;
+  border: 1px solid color-mix(in srgb, var(--text) 58%, var(--line));
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--panel) 88%, transparent);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, .24);
+  color: transparent;
+  font: 700 12px/1 sans-serif;
+}
+
+.sticker-library-checkbox.is-checked {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--panel);
+}
+
 .sticker-library-item > img {
   width: 100%;
   aspect-ratio: 1;
@@ -1925,7 +2026,7 @@
   object-fit: cover;
 }
 
-.sticker-library-item > span {
+.sticker-library-item-copy {
   display: grid;
   min-width: 0;
   gap: 2px;
@@ -2136,6 +2237,18 @@
   color: var(--danger);
   cursor: pointer;
   padding: 0 11px;
+}
+
+.sticker-danger-button:disabled {
+  cursor: not-allowed;
+  opacity: .48;
+}
+
+.sticker-batch-editor-actions {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
 }
 
 .sticker-crop-backdrop {

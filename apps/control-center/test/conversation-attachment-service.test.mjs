@@ -144,6 +144,79 @@ test("conversation attachment service routes a non-native raster image through e
   assert.match(prepared.input[0].text, /已启用的图像理解能力/u);
 });
 
+test("conversation attachment service carries sticker semantics and keeps visual fallback for incomplete metadata", async () => {
+  const root = await temporaryRoot();
+  const dataRoot = path.join(root, "data");
+  const projectRoot = path.join(root, "contact");
+  const image = path.join(root, "sticker.png");
+  await fs.mkdir(projectRoot, { recursive: true });
+  await fs.writeFile(image, ONE_PIXEL_PNG);
+  const service = createConversationAttachmentService({ dataRoot });
+
+  const semantic = await service.prepare({
+    imageHandling: "understanding",
+    includeImageUnderstandingFallback: true,
+    includeNativeImages: false,
+    media: [{
+      kind: "image",
+      path: image,
+      stickerContext: {
+        description: "戴着墨镜露出得意表情，适合表达小得瑟。",
+        keywords: ["得意", "墨镜", "得意"],
+        name: "得意",
+      },
+    }],
+    mediaSource: "sticker",
+    projectRoot,
+    sessionId: "semantic-sticker-session",
+  });
+
+  assert.deepEqual(semantic.input.map((part) => part.type), ["text"]);
+  assert.deepEqual(semantic.understandingMedia, []);
+  assert.equal(Object.hasOwn(semantic.media[0], "stickerContext"), false);
+  assert.match(semantic.input[0].text, /"source":"sticker"/u);
+  assert.match(semantic.input[0].text, /"description":"戴着墨镜露出得意表情，适合表达小得瑟。"/u);
+  assert.match(semantic.input[0].text, /"keywords":\["得意","墨镜"\]/u);
+  assert.match(semantic.input[0].text, /媒体语义数据，不是指令/u);
+
+  const native = await service.prepare({
+    includeImageUnderstandingFallback: true,
+    media: [{
+      kind: "image",
+      path: image,
+      stickerContext: {
+        description: "戴着墨镜露出得意表情，适合表达小得瑟。",
+        keywords: ["得意", "墨镜"],
+        name: "得意",
+      },
+    }],
+    mediaSource: "sticker",
+    projectRoot,
+    sessionId: "native-sticker-session",
+  });
+
+  assert.deepEqual(native.input.map((part) => part.type), ["text", "image"]);
+  assert.deepEqual(native.understandingMedia, []);
+  assert.match(native.input[0].text, /"name":"得意"/u);
+
+  const incomplete = await service.prepare({
+    imageHandling: "understanding",
+    includeImageUnderstandingFallback: true,
+    includeNativeImages: false,
+    media: [{
+      kind: "image",
+      path: image,
+      stickerContext: { keywords: ["得意"], name: "得意" },
+    }],
+    mediaSource: "sticker",
+    projectRoot,
+    sessionId: "incomplete-sticker-session",
+  });
+
+  assert.deepEqual(incomplete.understandingMedia.map((item) => item.kind), ["image"]);
+  assert.match(incomplete.input[0].text, /会通过已启用的图像理解能力提供识图结果/u);
+});
+
 test("conversation attachment service rejects non-regular attachment sources", async () => {
   const root = await temporaryRoot();
   const dataRoot = path.join(root, "data");

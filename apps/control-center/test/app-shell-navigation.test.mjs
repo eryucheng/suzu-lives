@@ -34,7 +34,7 @@ test("the desktop shell defaults its navigation rail to compact on narrow window
   assert.match(styles, /\.shell-brand-name \{[\s\S]*?white-space:nowrap;/u);
   assert.match(styles, /\.desktop-shell > \.app-shell\[data-sidebar-compact="true"\] \.shell-nav-item \{[\s\S]*?padding-left:calc\(\(100% - 19px\)\/2\);/u);
   assert.match(compactRail, /left:calc\(50% \+ 35px\)/u);
-  assert.match(styles, /\.shell-command-form \{ width:100%; margin:0; \}/u);
+  assert.doesNotMatch(styles, /\.shell-command-form/u);
   assert.doesNotMatch(styles, /\.suzu-search-overlay/u);
 });
 
@@ -59,7 +59,7 @@ test("the desktop shell provides a persisted draggable sidebar splitter", () => 
   assert.match(styles, /width:min\(\s*calc\(100vw - var\(--shell-sidebar-width\) - 32px\),\s*clamp\(360px,42vw,680px\)\s*\);/u);
 });
 
-test("the top command field opens the fixed Suzu software assistant instead of a command palette", () => {
+test("the top-right panel toggle opens the fixed Suzu software assistant", () => {
   const shell = readFileSync(resolve(HERE, "..", "src", "react", "app-shell.jsx"), "utf8");
   const shellStyles = readFileSync(resolve(HERE, "..", "src", "react", "app-shell.css"), "utf8");
   const app = readFileSync(resolve(HERE, "..", "src", "app.mjs"), "utf8");
@@ -67,12 +67,15 @@ test("the top command field opens the fixed Suzu software assistant instead of a
   const assistantStyles = readFileSync(resolve(HERE, "..", "src", "react", "software-assistant-dialog.css"), "utf8");
 
   assert.match(shell, /SoftwareAssistantDialog/u);
-  assert.match(shell, /placeholder="问 Suzu：想做什么？"/u);
-  assert.match(shell, /aria-label="问 Suzu"/u);
-  assert.match(shell, /suffix=\{\([\s\S]*?<button[\s\S]*?aria-label="打开 Suzu 助手"[\s\S]*?onClick=\{\(\) => openSoftwareAssistant\(\)\}[\s\S]*?type="button"[\s\S]*?Ctrl K[\s\S]*?<\/button>/u);
-  assert.doesNotMatch(shell, /suffix=\{<kbd className="shell-command-key"/u);
-  assert.match(shellStyles, /\.shell-command-key \{[\s\S]*?cursor:pointer;[\s\S]*?pointer-events:auto;/u);
-  assert.match(shellStyles, /\.shell-command-key:focus-visible/u);
+  assert.doesNotMatch(shell, /placeholder="问 Suzu：想做什么？"/u);
+  assert.doesNotMatch(shell, /className="shell-command"/u);
+  assert.match(shell, /aria-label=\{softwareAssistantOpen \? "收起 Suzu 助手" : "打开 Suzu 助手"\}/u);
+  assert.match(shell, /className=\{`shell-titlebar-control shell-assistant-toggle\$\{softwareAssistantOpen \? " is-active" : ""\}`\}/u);
+  assert.match(shell, /<ShellIcon name="panelRight" \/>/u);
+  assert.match(shell, /setSoftwareAssistantOpen\(\(current\) => !current\)/u);
+  assert.match(shellStyles, /\.shell-titlebar-controls \{[\s\S]*?right:4px;[\s\S]*?gap:2px;/u);
+  assert.match(shellStyles, /\.shell-titlebar-control \{[\s\S]*?width:32px;[\s\S]*?height:32px;[\s\S]*?cursor:pointer;/u);
+  assert.match(shellStyles, /\.shell-titlebar-control\.is-active/u);
   assert.doesNotMatch(shell, /SuzuSearchDialog/u);
   assert.match(dialog, /const assistantName = phase === "clearing" \? "正在清空记录\.\.\." : busy \? "正在输入中\.\.\." : "Suzu";/u);
   assert.match(dialog, /<h2 aria-live="polite">\{assistantName\}<\/h2>/u);
@@ -106,21 +109,42 @@ test("the top command field opens the fixed Suzu software assistant instead of a
   assert.doesNotMatch(dialog, /software-assistant-message/u);
   assert.doesNotMatch(assistantStyles, /software-assistant-message/u);
   assert.doesNotMatch(assistantStyles, /software-assistant-avatar/u);
-  assert.match(assistantStyles, /\.software-assistant-overlay\s*\{[\s\S]*?place-items:center;/u);
-  assert.doesNotMatch(assistantStyles, /padding-left:calc\(70px \+ 20px\)/u);
+  assert.match(dialog, /aria-modal="false"/u);
+  assert.match(dialog, /className=\{`software-assistant-overlay\$\{open \? " is-open" : ""\}/u);
+  assert.doesNotMatch(dialog, /onMouseDown=\{onClose\}/u);
+  assert.match(dialog, /className="software-assistant-dialog__resizer"/u);
+  assert.match(dialog, /onPointerDown=\{beginPanelResize\}/u);
+  assert.match(dialog, /onPanelWidthChange/u);
+  assert.match(dialog, /更多 Suzu 助手操作/u);
+  assert.match(dialog, /SOFTWARE_ASSISTANT_REASONING_EFFORT_OPTIONS/u);
+  assert.match(dialog, /<Select[\s\S]*?ariaLabel="Suzu 助手思考强度"[\s\S]*?disabled=\{busy \|\| savingReasoningEffort\}/u);
+  assert.match(dialog, /target\.closest\('\[role="listbox"\]'\)/u);
+  assert.match(assistantStyles, /:root:has\(\.software-assistant-overlay\.is-open\) body > \[role="listbox"\][\s\S]*?z-index:calc\(var\(--z-assistant,200\) \+ 1\);/u);
+  assert.match(dialog, /onReasoningEffortChange/u);
+  assert.match(shell, /reasoningEffort=\{workspace\?\.softwareAssistantReasoningEffort\}/u);
+  assert.match(shell, /onReasoningEffortChange=\{workspace\?\.actions\?\.setSoftwareAssistantReasoningEffort\}/u);
+  assert.match(app, /softwareAssistantReasoningEffort: state\.settings\?\.softwareAssistantReasoningEffort/u);
+  assert.match(assistantStyles, /\.software-assistant-overlay\s*\{[\s\S]*?inset:40px 0 0;[\s\S]*?background:transparent;[\s\S]*?pointer-events:none;/u);
+  assert.match(assistantStyles, /\.software-assistant-overlay\.is-open[\s\S]*?visibility:visible;/u);
+  assert.match(assistantStyles, /\.software-assistant-overlay\.is-open \.software-assistant-dialog[\s\S]*?pointer-events:auto;/u);
+  assert.match(assistantStyles, /width:min\(var\(--software-assistant-panel-width,480px\),calc\(100vw - 28px\)\);/u);
+  assert.doesNotMatch(assistantStyles, /backdrop-filter:blur\(/u);
+  assert.match(shell, /setSoftwareAssistantPanelWidth/u);
+  assert.match(shell, /panelWidth=\{workspace\?\.softwareAssistantPanelWidth\}/u);
+  assert.match(app, /softwareAssistantPanelWidth: state\.settings\?\.softwareAssistantPanelWidth/u);
 });
 
-test("the top command field stays centered in the whole desktop shell", () => {
+test("the Suzu panel toggle stays next to the window controls", () => {
   const styles = readFileSync(resolve(HERE, "..", "src", "react", "app-shell.css"), "utf8");
   const shell = readFileSync(resolve(HERE, "..", "src", "react", "app-shell.jsx"), "utf8");
-  const topbar = styles.slice(styles.indexOf(".shell-topbar {"), styles.indexOf(".shell-topbar-edge"));
+  const topbar = styles.slice(styles.indexOf(".shell-topbar {"), styles.indexOf(".shell-titlebar-controls"));
 
-  assert.match(topbar, /grid-template-columns:minmax\(120px,1fr\) minmax\(280px,620px\) minmax\(120px,1fr\);/u);
-  assert.match(topbar, /padding:0 28px;/u);
-  assert.doesNotMatch(topbar, /padding:0 156px 0 28px;/u);
-  assert.match(styles, /--shell-command-center-offset:-120px;/u);
-  assert.match(styles, /\.shell-command-slot \{[\s\S]*?transform:translateX\(var\(--shell-command-center-offset\)\);/u);
-  assert.match(shell, /"--shell-command-center-offset":[\s\S]*?effectiveSidebarWidth/u);
+  assert.doesNotMatch(topbar, /grid-template-columns:/u);
+  assert.doesNotMatch(styles, /--shell-command-center-offset/u);
+  assert.doesNotMatch(styles, /\.shell-command-slot/u);
+  assert.match(styles, /\.shell-titlebar-controls \{[\s\S]*?position:absolute;[\s\S]*?top:4px;[\s\S]*?right:4px;/u);
+  assert.match(shell, /className="shell-titlebar-controls"[\s\S]*?className=\{`shell-titlebar-control shell-assistant-toggle[\s\S]*?<WindowControls \/>/u);
+  assert.match(shell, /aria-keyshortcuts="Control\+K Meta\+K"/u);
 });
 
 test("an incoming unread-message notice is centered in the window and uses its contact identity", () => {
@@ -166,5 +190,5 @@ test("the application chrome is a compact continuous surface above the rounded w
   assert.match(styles, /\.shell-main > \.content\s*\{[\s\S]*?border-radius:var\(--shell-workspace-corner\) 0 0 var\(--shell-workspace-corner\);[\s\S]*?background:var\(--bg\);/u);
   assert.match(styles, /\.shell-bottombar\s*\{[\s\S]*?flex:0 0 var\(--shell-bottombar-height\);[\s\S]*?background:var\(--shell-chrome-bg\);/u);
   assert.match(shell, /<\/section>\s*<div aria-hidden="true" className="shell-bottombar" \/>/u);
-  assert.match(shell, /aria-label="问 Suzu"[\s\S]*?size="sm"/u);
+  assert.match(shell, /aria-controls="suzu-software-assistant-dialog"[\s\S]*?className=\{`shell-titlebar-control shell-assistant-toggle/u);
 });

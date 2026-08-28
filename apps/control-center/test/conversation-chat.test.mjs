@@ -1795,6 +1795,58 @@ test("Agent Core chat sends enabled image and video understanding results to the
   chat.dispose();
 });
 
+test("Agent Core chat reuses saved sticker semantics before optional image understanding", async () => {
+  const root = await temporaryRoot();
+  const dataRoot = path.join(root, "data");
+  const projectRoot = path.join(root, "contact");
+  const image = path.join(root, "sticker.png");
+  await fs.mkdir(projectRoot, { recursive: true });
+  await fs.writeFile(image, Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl+jh0AAAAASUVORK5CYII=", "base64"));
+  const runtime = createFakeRuntime();
+  runtime.currentModelCapabilities = async () => ({
+    inputModalities: ["text"],
+    model: "text-only-model",
+    provider: "text-only-provider",
+    supportsImageInput: false,
+  });
+  const invocations = [];
+  const chat = createConversationChatService({
+    attachmentService: createConversationAttachmentService({ dataRoot }),
+    capabilityRuntime: {
+      availableActions: ({ capabilityId }) => [{ capabilityId, action: "analyze" }],
+      async invoke(value) {
+        invocations.push(value);
+        return { status: "completed", value: { answer: "这是一张表情图片。" } };
+      },
+    },
+    settingsService: { load: () => ({}) },
+    reader: fakeReader(projectRoot),
+    runtime,
+  });
+
+  await chat.send({
+    media: [{
+      kind: "image",
+      path: image,
+      stickerContext: {
+        description: "戴着墨镜露出得意表情，适合表达小得瑟。",
+        keywords: ["得意", "墨镜"],
+        name: "得意",
+      },
+    }],
+    mediaSource: "sticker",
+    memoryText: "用户发送了表情“得意”：戴着墨镜露出得意表情，适合表达小得瑟。",
+  });
+
+  const input = runtime.calls.sendTurn[0].input;
+  assert.deepEqual(input.map((part) => part.type), ["text"]);
+  assert.match(input[0].text, /"source":"sticker"/u);
+  assert.match(input[0].text, /戴着墨镜露出得意表情/u);
+  assert.match(input[0].text, /以收到表情的方式自然回应/u);
+  assert.deepEqual(invocations, []);
+  chat.dispose();
+});
+
 test("Agent Core chat sends images natively to a visual main model and retains the video fallback", async () => {
   const root = await temporaryRoot();
   const dataRoot = path.join(root, "data");
@@ -2079,6 +2131,98 @@ test("Agent Core reader renders the full append-only human transcript after mode
   });
   await reader.removeContact({ id: "contact-suzu", confirmed: true });
   assert.deepEqual(removals, [{ id: "contact-suzu", confirmed: true }]);
+});
+
+test("Agent Core reader adds the final split bubble and timestamp to every roster contact", async () => {
+  const first = {
+    id: "contact-first",
+    name: "第一位",
+    projectRoot: "D:\\Contacts\\first",
+    sessionId: "session-first",
+  };
+  const second = {
+    id: "contact-second",
+    name: "第二位",
+    projectRoot: "D:\\Contacts\\second",
+    sessionId: "session-second",
+  };
+  const histories = new Map([
+    [first.sessionId, {
+      events: [{
+        type: "assistant/message",
+        seq: 1,
+        time: Date.parse("2026-08-28T15:33:00+08:00"),
+        surfaceOp: "append",
+        data: { message: { id: "assistant-first", content: [{ type: "text", text: "第一句。第二句。最后一句。" }] } },
+      }],
+      hasMore: false,
+    }],
+    [second.sessionId, {
+      events: [{
+        type: "user/message",
+        seq: 1,
+        time: Date.parse("2026-08-27T10:20:00+08:00"),
+        surfaceOp: "append",
+        data: { id: "user-second", source: { kind: "user" }, content: [{ type: "text", text: "第二位的最后消息" }] },
+      }],
+      hasMore: false,
+    }],
+  ]);
+  const historyReads = new Map();
+  const reader = createConversationReader({
+    runtime: {
+      async history({ sessionId }) {
+        historyReads.set(sessionId, (historyReads.get(sessionId) || 0) + 1);
+        return histories.get(sessionId) || { events: [], hasMore: false };
+      },
+    },
+    settingsService: { load: () => ({ projectRoot: first.projectRoot }) },
+    contactProjectsService: {
+      async snapshot() {
+        return {
+          status: "ready",
+          contactsRoot: "D:\\Contacts",
+          contacts: [first, second],
+          activeContact: first,
+          preferredContact: first,
+        };
+      },
+    },
+    messageDeletionStore: {
+      async list() { return { entries: [], revision: "" }; },
+      async markDeleted() {},
+    },
+  });
+
+  const snapshot = await reader.snapshot();
+  assert.deepEqual(snapshot.contacts.map((contact) => ({
+    id: contact.id,
+    preview: contact.lastMessagePreview,
+    timestamp: contact.lastMessageAt,
+  })), [
+    { id: first.id, preview: "最后一句。", timestamp: "2026-08-28T07:33:00.000Z" },
+    { id: second.id, preview: "第二位的最后消息", timestamp: "2026-08-27T02:20:00.000Z" },
+  ]);
+  assert.equal(snapshot.sessions[0]?.preview, "最后一句。");
+  assert.equal(historyReads.get(second.sessionId), 1);
+
+  await reader.snapshot();
+  assert.equal(historyReads.get(second.sessionId), 1, "unchanged inactive summaries are read only once");
+
+  histories.set(second.sessionId, {
+    events: [{
+      type: "assistant/message",
+      seq: 2,
+      time: Date.parse("2026-08-28T16:00:00+08:00"),
+      surfaceOp: "append",
+      data: { message: { id: "assistant-second", content: [{ type: "text", text: "更新后的第一句。更新后的最后一句。" }] } },
+    }],
+    hasMore: false,
+  });
+  assert.equal(reader.invalidateRosterSummary({ sessionId: second.sessionId, projectRoot: second.projectRoot }), true);
+  const refreshed = await reader.snapshot();
+  assert.equal(refreshed.contacts.find((contact) => contact.id === second.id)?.lastMessagePreview, "更新后的最后一句。");
+  assert.equal(historyReads.get(second.sessionId), 2);
 });
 
 test("Agent Core reader reads the current page first and accepts an older-history cursor", async () => {

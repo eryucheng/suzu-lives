@@ -892,6 +892,7 @@ export function createConversationChatService({
       }
     }
     await Promise.allSettled(turn.usageTasks || []);
+    reader.invalidateRosterSummary?.({ sessionId: turn.sessionId, projectRoot: turn.projectRoot });
     if (interrupted) {
       emit({
         type: "turn-stopped",

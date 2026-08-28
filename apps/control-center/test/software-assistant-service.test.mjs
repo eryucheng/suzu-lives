@@ -163,12 +163,12 @@ test("software assistant keeps per-turn context empty and serves software status
   assert.deepEqual(fake.calls.ensureSession[0], {
     sessionId: SUZU_SOFTWARE_ASSISTANT_SESSION_ID,
     cwd: workspaceDirectory,
-    presentation: { agentPreset: SUZU_SOFTWARE_ASSISTANT_AGENT_PRESET },
+    presentation: { agentPreset: SUZU_SOFTWARE_ASSISTANT_AGENT_PRESET, reasoningEffort: "high" },
   });
   assert.deepEqual(fake.calls.history[0], {
     sessionId: SUZU_SOFTWARE_ASSISTANT_SESSION_ID,
     cwd: workspaceDirectory,
-    presentation: { agentPreset: SUZU_SOFTWARE_ASSISTANT_AGENT_PRESET },
+    presentation: { agentPreset: SUZU_SOFTWARE_ASSISTANT_AGENT_PRESET, reasoningEffort: "high" },
     maxMessages: 300,
   });
   assert.equal("contactId" in fake.calls.ensureSession[0], false);
@@ -241,6 +241,26 @@ test("software assistant keeps per-turn context empty and serves software status
     automatic: { enabled: true, tokenThreshold: 32_000, retainTokens: 8_000 },
     manual: { retainTokens: 8_000 },
   });
+  service.dispose();
+});
+
+test("software assistant reapplies its saved reasoning effort before the next task", async (t) => {
+  const root = await temporaryRoot();
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const fake = createFakeRuntime();
+  const settings = createSettings({ theme: "light", softwareAssistantReasoningEffort: "low" });
+  const service = createSoftwareAssistantService({
+    dataRoot: path.join(root, "Suzu Lives"),
+    runtime: fake.runtime,
+    settingsService: settings.service,
+  });
+
+  await service.snapshot();
+  assert.equal(fake.calls.ensureSession.at(-1)?.presentation?.reasoningEffort, "low");
+
+  await settings.service.update({ softwareAssistantReasoningEffort: "max" });
+  await service.send({ content: "检查一下设置" });
+  assert.equal(fake.calls.ensureSession.at(-1)?.presentation?.reasoningEffort, "max");
   service.dispose();
 });
 

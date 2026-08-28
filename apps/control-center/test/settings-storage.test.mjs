@@ -5,7 +5,7 @@ import path from "node:path";
 import test from "node:test";
 
 import { legacyStableAgentId } from "@suzu-lives/agent-registry";
-import { createSettingsService, normalizeAppearance, normalizeConversationComposerHeight, normalizeConversationPreferences, normalizeConversationRosterWidth, normalizeMemoryRecallEnabled, normalizeOnboardingCompleted, normalizeOnboardingMultimodalCompleted, normalizeShellSidebarWidth, registerSettingsIpc } from "../electron/ipc/settings-ipc.mjs";
+import { createSettingsService, normalizeAppearance, normalizeConversationComposerHeight, normalizeConversationPreferences, normalizeConversationRosterWidth, normalizeMemoryRecallEnabled, normalizeOnboardingCompleted, normalizeOnboardingMultimodalCompleted, normalizeShellSidebarWidth, normalizeSoftwareAssistantPanelWidth, normalizeSoftwareAssistantReasoningEffort, registerSettingsIpc } from "../electron/ipc/settings-ipc.mjs";
 import { createContactProjectsService } from "../electron/services/contact-projects.mjs";
 import { renderManagedAgentRuntimeSettings, renderSettings } from "../src/features/settings/index.mjs";
 
@@ -554,6 +554,40 @@ test("sidebar width is stored as a bounded full sidebar or compact icon rail", (
     assert.equal(settings.update({ shellSidebarWidth: 120 }).shellSidebarWidth, 70);
     assert.equal(settings.update({ shellSidebarWidth: 216 }).shellSidebarWidth, 240);
     assert.equal(settings.update({ shellSidebarWidth: 284 }).shellSidebarWidth, 284);
+  } finally {
+    fs.rmSync(userData, { recursive: true, force: true });
+  }
+});
+
+test("Suzu assistant panel width is persisted within its floating-panel range", () => {
+  assert.equal(normalizeSoftwareAssistantPanelWidth(undefined), 480);
+  assert.equal(normalizeSoftwareAssistantPanelWidth(120), 380);
+  assert.equal(normalizeSoftwareAssistantPanelWidth(524), 524);
+  assert.equal(normalizeSoftwareAssistantPanelWidth(999), 720);
+
+  const userData = fs.mkdtempSync(path.join(os.tmpdir(), "suzu-settings-assistant-panel-width-"));
+  try {
+    const settings = createSettingsService({ app: { getPath: () => userData } });
+    assert.equal(settings.load().softwareAssistantPanelWidth, 480);
+    assert.equal(settings.update({ softwareAssistantPanelWidth: 320 }).softwareAssistantPanelWidth, 380);
+    assert.equal(settings.update({ softwareAssistantPanelWidth: 536 }).softwareAssistantPanelWidth, 536);
+    assert.equal(settings.update({ softwareAssistantPanelWidth: 900 }).softwareAssistantPanelWidth, 720);
+  } finally {
+    fs.rmSync(userData, { recursive: true, force: true });
+  }
+});
+
+test("Suzu assistant reasoning effort defaults to high and persists supported strengths", () => {
+  assert.equal(normalizeSoftwareAssistantReasoningEffort(undefined), "high");
+  assert.equal(normalizeSoftwareAssistantReasoningEffort("low"), "low");
+  assert.equal(normalizeSoftwareAssistantReasoningEffort("medium"), "high");
+
+  const userData = fs.mkdtempSync(path.join(os.tmpdir(), "suzu-settings-assistant-reasoning-"));
+  try {
+    const settings = createSettingsService({ app: { getPath: () => userData } });
+    assert.equal(settings.load().softwareAssistantReasoningEffort, "high");
+    assert.equal(settings.update({ softwareAssistantReasoningEffort: "max" }).softwareAssistantReasoningEffort, "max");
+    assert.equal(settings.update({ softwareAssistantReasoningEffort: "invalid" }).softwareAssistantReasoningEffort, "high");
   } finally {
     fs.rmSync(userData, { recursive: true, force: true });
   }

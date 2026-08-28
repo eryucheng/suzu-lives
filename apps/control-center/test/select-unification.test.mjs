@@ -10,6 +10,7 @@ const REACT_SOURCES = [
   "conversation-page.jsx",
   "memory-page.jsx",
   "onboarding-dialog.jsx",
+  "software-assistant-dialog.jsx",
 ];
 
 test("live React selection fields reuse the shared Suzu Select instead of browser-native menus", () => {

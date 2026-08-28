@@ -586,10 +586,15 @@ export function createSoftwareAssistantService({
     return payload;
   };
 
+  const reasoningEffort = () => {
+    const configured = clean(settingsService.load()?.softwareAssistantReasoningEffort);
+    return SUZU_AGENT_REASONING_EFFORTS.includes(configured) ? configured : "high";
+  };
+
   const scope = () => ({
     sessionId: SUZU_SOFTWARE_ASSISTANT_SESSION_ID,
     cwd: workspaceDirectory,
-    presentation,
+    presentation: { ...presentation, reasoningEffort: reasoningEffort() },
   });
 
   const prepareWorkspace = async () => {

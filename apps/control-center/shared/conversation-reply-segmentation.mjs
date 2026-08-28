@@ -96,3 +96,71 @@ export function splitConversationReplyBuffer(value, { final = false } = {}) {
   if (final && remainder.trim()) sentences.push(remainder.trim());
   return { remainder: final ? "" : remainder, sentences };
 }
+
+/**
+ * Apply the same reply segmentation to projected conversation blocks that the
+ * chat renderer uses for assistant bubbles. Non-text blocks stay attached to
+ * the closest preceding text segment.
+ */
+export function splitConversationReplyBlocks(value) {
+  const blocks = Array.isArray(value) ? value : [];
+  const segments = [[]];
+  for (const block of blocks) {
+    if (block?.kind !== "text") {
+      segments.at(-1).push(block);
+      continue;
+    }
+    const parts = splitConversationReplyBuffer(block.text, { final: true }).sentences;
+    segments.at(-1).push(parts.length ? { ...block, text: parts[0] } : block);
+    for (const text of parts.slice(1)) segments.push([{ ...block, text }]);
+  }
+  return segments.filter((segment) => segment.length);
+}
+
+function inlinePreview(value, limit = 500) {
+  const text = String(value ?? "").replace(/\s+/gu, " ").trim();
+  if (text.length <= limit) return text;
+  return `${text.slice(0, Math.max(0, limit - 1))}…`;
+}
+
+function mediaPreviewLabel(block) {
+  if (block?.kind !== "media") return "";
+  if (block.mediaKind === "sticker") return "[表情包]";
+  if (block.mediaKind === "image") return "[图片]";
+  if (block.mediaKind === "audio") return "[语音]";
+  return "[文件]";
+}
+
+function previewForBlocks(blocks) {
+  return inlinePreview((Array.isArray(blocks) ? blocks : [])
+    .map((block) => block?.kind === "text" ? inlinePreview(block.text) : mediaPreviewLabel(block))
+    .filter(Boolean)
+    .join(" "));
+}
+
+/** Return the text represented by the final visible bubble of one message. */
+export function conversationMessagePreview(message) {
+  const blocks = Array.isArray(message?.blocks) ? message.blocks : [];
+  const segments = message?.kind === "assistant" ? splitConversationReplyBlocks(blocks) : [blocks];
+  for (let index = segments.length - 1; index >= 0; index -= 1) {
+    const preview = previewForBlocks(segments[index]);
+    if (preview) return preview;
+  }
+  return "";
+}
+
+/** Find the last human/assistant chat bubble and its original message time. */
+export function latestConversationMessageSummary(messages) {
+  const source = Array.isArray(messages) ? messages : [];
+  for (let index = source.length - 1; index >= 0; index -= 1) {
+    const message = source[index];
+    if (message?.kind !== "user" && message?.kind !== "assistant") continue;
+    const preview = conversationMessagePreview(message);
+    if (!preview) continue;
+    return {
+      preview,
+      timestamp: String(message?.timestamp ?? "").trim(),
+    };
+  }
+  return { preview: "", timestamp: "" };
+}
