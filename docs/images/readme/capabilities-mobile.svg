@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="480" height="520" viewBox="0 0 480 520" role="img" aria-labelledby="title desc" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif">
+<title id="title">Suzu Lives 的四类内置能力</title><desc id="desc">感知：图片与视频理解。陪伴：语音消息与实时通话。行动：网页浏览与本机文件。创作：图片生成与编辑。对应服务按需配置。</desc>
+<style>:root{--bg:#f8f6fc;--panel:#fff;--border:#e6dfef;--text:#332940;--muted:#80738e;--accent:#8d70b6;--soft:#f1eaf9}@media(prefers-color-scheme:dark){:root{--bg:#14111b;--panel:#1e1728;--border:#3e2f50;--text:#eee6f7;--muted:#b29cc7;--accent:#c2a0ed;--soft:#2a2039}}.bg{fill:var(--bg);stroke:var(--border)}.panel{fill:var(--panel);stroke:var(--border)}.title{fill:var(--text)}.muted{fill:var(--muted)}.accent{fill:var(--accent)}.icon{fill:none;stroke:var(--accent);stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round}</style>
+<rect x="1" y="1" width="478" height="518" rx="22" class="bg"/>
+<text x="26" y="34" font-size="10" fill="var(--muted)" font-weight="500" letter-spacing="1.8">CAPABILITIES / ON YOUR TERMS</text>
+<text x="26" y="73" font-size="26" fill="var(--text)" font-weight="600" >从交流，到行动。</text>
+<rect x="20" y="100" width="215" height="180" rx="15" class="panel"/>
+<g transform="translate(40 122)" class="icon"><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></g>
+<text x="40" y="180" font-size="25" fill="var(--text)" font-weight="600" >感知</text>
+<text x="40" y="213" font-size="14" fill="var(--text)" font-weight="400" >看见你分享的内容。</text>
+<text x="40" y="246" font-size="12.5" fill="var(--muted)" font-weight="400" >图片理解 · 视频理解</text>
+<rect x="245" y="100" width="215" height="180" rx="15" class="panel"/>
+<g transform="translate(265 122)" class="icon"><path d="M4 10v4m4-8v12m4-15v18m4-15v12m4-8v4"/></g>
+<text x="265" y="180" font-size="25" fill="var(--text)" font-weight="600" >陪伴</text>
+<text x="265" y="213" font-size="14" fill="var(--text)" font-weight="400" >也听见彼此的声音。</text>
+<text x="265" y="246" font-size="12.5" fill="var(--muted)" font-weight="400" >语音消息 · 实时通话</text>
+<rect x="20" y="295" width="215" height="180" rx="15" class="panel"/>
+<g transform="translate(40 317)" class="icon"><rect x="2" y="3" width="20" height="16" rx="3"/><path d="M2 8h20M7 5.5h.01M12 11l4 3-4 3"/></g>
+<text x="40" y="375" font-size="25" fill="var(--text)" font-weight="600" >行动</text>
+<text x="40" y="408" font-size="14" fill="var(--text)" font-weight="400" >让想法成为具体任务。</text>
+<text x="40" y="441" font-size="12.5" fill="var(--muted)" font-weight="400" >网页浏览 · 本机文件</text>
+<rect x="245" y="295" width="215" height="180" rx="15" class="panel"/>
+<g transform="translate(265 317)" class="icon"><path d="m13 3 2.4 6.6L22 12l-6.6 2.4L13 21l-2.4-6.6L4 12l6.6-2.4L13 3ZM4 2v4M2 4h4"/></g>
+<text x="265" y="375" font-size="25" fill="var(--text)" font-weight="600" >创作</text>
+<text x="265" y="408" font-size="14" fill="var(--text)" font-weight="400" >从一句描述开始创作。</text>
+<text x="265" y="441" font-size="12.5" fill="var(--muted)" font-weight="400" >图片生成 · 图片编辑</text>
+</svg>

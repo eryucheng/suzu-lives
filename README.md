@@ -1,182 +1,182 @@
 <p align="center">
-  <img src="apps/control-center/assets/app-icon.png" width="96" alt="Suzu Lives logo" />
-</p>
-
-<h1 align="center">Suzu Lives</h1>
-
-<p align="center">
-  <strong>A life with agents.</strong><br />
-  让 Companion Agent 成为能长期相处、记得彼此，也能实际行动的伙伴。
+  <picture>
+    <source media="(max-width: 600px)" srcset="docs/images/readme/hero-mobile.svg">
+    <img src="docs/images/readme/hero.svg" alt="Suzu Lives：让每一次相遇，继续。从一份人设开始，留住对话、记忆与日常。" width="1120">
+  </picture>
 </p>
 
 <p align="center">
-  <a href="https://github.com/eryucheng/suzu-lives/releases/latest/download/Suzu-Lives-latest-win-x64.exe"><strong>下载 Windows x64 安装程序</strong></a> ·
-  <a href="https://github.com/eryucheng/suzu-lives/releases">版本记录</a> ·
-  <a href="LICENSE.md">Apache-2.0</a>
+  <a href="https://github.com/eryucheng/suzu-lives/releases/latest"><img src="https://img.shields.io/github/v/release/eryucheng/suzu-lives?style=for-the-badge&amp;color=9680C8&amp;label=Release" alt="最新发布版本"></a>
+  <a href="https://www.suzulives.com/#download"><img src="https://img.shields.io/badge/Windows-x64-7066BD?style=for-the-badge" alt="Windows x64"></a>
+  <a href="#常见问题"><img src="https://img.shields.io/badge/Data-local--first-8776AA?style=for-the-badge" alt="数据本地保存"></a>
 </p>
 
-<p align="center">Companion Agent · Windows x64 · 本地优先</p>
+<p align="center">
+  <a href="https://www.suzulives.com/"><strong>访问官网</strong></a> ·
+  <a href="https://www.suzulives.com/#download"><strong>下载 Windows 版</strong></a> ·
+  <a href="#开始相处"><strong>开始使用</strong></a> ·
+  <a href="#角色与身份"><strong>功能展示</strong></a> ·
+  <a href="https://github.com/eryucheng/suzu-lives/releases"><strong>版本记录</strong></a>
+</p>
 
-![Suzu Lives Companion Agent 对话界面](docs/images/conversation-chat.png)
+**Suzu Lives** 是一款本地优先的 Windows 桌面 AI 伙伴软件。创建角色与自己的身份，在私聊、群聊和语音中相处，让对话、记忆与日常延续。你可以为角色配置声音、开启主动活动，也可以让他们调用图片、网页、文件等能力，一起聊天、创作和处理事情。
 
-## 认识 Suzu Lives
+<p align="center">
+  <a href="https://www.suzulives.com/#conversations"><img src="docs/images/readme/conversation.png" alt="Suzu Lives 官网群聊演示：以自己的身份和多位角色交流。" width="1440"></a>
+</p>
 
-Suzu Lives 是一款运行在 Windows 上、本地优先的 Companion Agent（陪伴型 Agent）桌面应用。它围绕每位 Companion Agent 组织长期关系、对话、记忆与日常互动：每位 Agent 都拥有独立的人设与相处设定、固定会话、长期记忆、资料、头像、声音、计划和能力开关。
+<p align="center"><sub>私聊与群聊 · 点击图片，在官网体验互动展示</sub></p>
 
-每位 Companion Agent 的对话、关系资料、记忆、能力、计划、附件和用量都由 Suzu Lives 统一整理。你可以把一次次聊天积累成一段可维护、可延续的长期关系。
+## 开始相处
 
-![Suzu Lives 玻璃对话界面](docs/images/conversation-glass.png)
+1. **安装软件**：在[官网](https://www.suzulives.com/#download)下载 Windows x64 安装包，也可以从 [GitHub Releases](https://github.com/eryucheng/suzu-lives/releases/latest) 获取。
+2. **连接主模型**：跟随首次引导填写模型服务、模型名称和自己的 API Key。
+3. **认识第一个角色**：创建角色或导入角色卡，选择你想使用的身份，添加好友并开始对话。也可以邀请多位角色创建群聊。
 
-## 功能地图
+模型 API 由你自行配置，费用由所选服务商收取。图片、语音等能力可以在需要时分别配置。
 
-| 入口 | 可以做什么 |
-| --- | --- |
-| **问 Suzu** | 查询软件功能，定位设置入口，逐步配置 API 与能力，并直接完成软件支持的操作。 |
-| **对话** | 管理多位 Companion Agent 及各自的固定会话；支持消息排队、处理中引导、停止、Markdown、表情、附件、语音输入与实时语音通话。 |
-| **关系** | 管理相处设定与关系资料；浏览长期记忆、整理会话上下文、查看 Agent 日记。 |
-| **今天** | 查看每位 Agent 的重要日期、纪念日、生日、节日、日程、今日成本与最近活动。 |
-| **计划** | 创建一次性或循环计划，运行每位 Agent 的专属任务，并集中管理主动关心。 |
-| **能力** | 为不同 Agent 启用图像生成、图像理解、视频理解、语音消息、网页自动化、邮箱通道、写日记和微信连接。 |
-| **创造** | 在视觉工作台中组织提示词、视觉参考和候选结果，完成图片生成与编辑。 |
-| **管理与设置** | 管理个人身份、主模型、API 连接、价格与调用流水、软件更新、数据位置、隐私设置和系统状态。 |
+## 角色与身份
 
-## 核心体验
+### 让角色有自己的样子
 
-### 每位 Agent 都有自己的连续生活
+为角色写下背景与性格，设置名字、头像、人设、相处方式和声音。角色卡可以导入、导出；分享时也可以选择携带保存的 MP3 声音片段。
 
-切换 Companion Agent 时，Suzu Lives 会继续使用对方对应的会话、相处设定、关系资料、能力配置和长期记忆。复杂任务进行中，你可以继续发送想法作为引导，也可以把后续消息排队或停止当前处理。
+你也可以创建多张**身份卡**，填写自己的名字、头像和介绍，为不同角色选择相处时使用的身份。
 
-每位 Agent 可以读取和整理本机文件、处理任务，也可以调用你为其启用的图片、语音、网页等能力。需要确认的操作会在对话中发起审批，生成结果和附件也会回到同一段对话中。
+<p align="center">
+  <a href="https://www.suzulives.com/#characters"><img src="docs/images/readme/characters.png" alt="Suzu Lives 官网角色展示：角色卡片、独立资料和好友状态。" width="1440"></a>
+</p>
 
-### 记忆、上下文与日记各司其职
+### 把人物放进同一个世界
 
-| 层次 | 作用 |
-| --- | --- |
-| **长期记忆** | 将事件、主题、人物状态、关系和原始证据组织为可检索的记忆网络，并在相关对话中自动想起合适内容。 |
-| **记忆压缩器** | 自动或手动把较早上下文整理成摘要，同时保留最近原话；聊天界面继续显示完整对话。 |
-| **Agent 日记** | 让指定 Agent 在设定时间回顾当天，并按日期保存独立的本地日记。 |
+**人物关系网**用于整理角色之间的关系与共同经历。点开人物或关系，就能查看对应资料。你可以围绕同一个世界观创建多位角色，再把他们带进群聊，让人物之间的联系成为交流的背景。
 
-长期记忆可以在神经网络视图中搜索、定位、拖动和缩放，也可以查看来源与关联、测试一次实际召回会带给 Agent 哪些内容。
+<p align="center">
+  <a href="https://www.suzulives.com/#relationships"><img src="docs/images/readme/relationships.png" alt="Suzu Lives 官网人物关系网：选择五条悟与其他人物之间的关系，查看关系资料。" width="1440"></a>
+</p>
 
-![Suzu Memory 可视化记忆神经网络](docs/images/memory-brain.png)
+## 对话与语音
 
-### 从聊天延伸到日常
+### 从两个人的对话，到大家的群聊
 
-- **主动关心**：Agent 根据对话内容和当前时间判断联系时机，并安排下一次检查。
-- **日历与计划**：为每位 Agent 保存纪念日、生日和日程，创建一次性、每日或循环任务。
-- **微信连接**：为每位 Agent 生成专属二维码，把微信消息、回复和选定附件路由到固定会话。
-- **语音交流**：配置语音合成与语音识别后，可发送语音消息、主动拨打或接听实时语音电话。
+添加好友开始私聊，或把已有角色拉进同一个群。每位角色保留自己的设定与经历，你可以与他们交谈、分享图片和附件，也可以通过 `@` 点名交流。
 
-<table>
-  <tr>
-    <td width="50%"><img src="docs/images/calendar-overview.png" alt="Suzu Lives Agent 日历" /></td>
-    <td width="50%"><img src="docs/images/plan-management.png" alt="Suzu Lives 计划管理" /></td>
-  </tr>
-  <tr>
-    <td align="center">重要日期与日程</td>
-    <td align="center">一次性、循环与主动联系计划</td>
-  </tr>
-</table>
+角色在私聊与群聊中延续自己的经历。群里的消息在角色实际查看后进入它的经历；结合主动活动，角色也能自行查看聊天、参与交流，或暂时保持沉默。
 
-### 从感知到创作与行动
+### 听见熟悉的声音
 
-内置能力覆盖图片生成与编辑、图片理解、视频理解、语音消息、专用浏览器自动化和邮箱通道。网页自动化支持打开与读取页面、点击、填写、上传、下载和截图；邮箱通道可发送邮件，并把按主题路由的回信交给对应 Agent 的会话。
+- **语音消息**：配置语音能力后，角色可以用自己的音色发来语音。
+- **实时通话**：你可以拨打电话，也可以接听角色发起的来电；通话沿用该角色已有的对话背景。
+- **角色音色**：为不同角色选择声音，保存参考音频，或让 Suzu 助手协助查找素材、完成音色复刻。新查找的样音会先供你试听确认。
 
-能力中心按 **感知、陪伴、行动、创作** 组织。你可以为不同 Agent 分别开关能力，也可以导入 Suzu Lives 支持的外部能力。
+语音消息、语音识别和通话需要配置相应服务；可用音色与效果取决于所选服务。
 
-![按感知、陪伴、行动与创作组织的能力中心](docs/images/capabilities.png)
+## 记忆与长期相处
 
-## 核心功能
+### 长对话，也能继续聊下去
 
-### 主动关心与回访
+随着对话变长，软件会整理较早的经历摘要，并保留近期原话供后续交流使用。你可以在角色设置中调整自动压缩的触发点与近期原话保留比例，也可以手动整理当前上下文。
 
-开启“主动关心”后，在 Suzu Lives 运行期间，联系人可以根据此前的对话和当前时间安排后续联系：既可以持续地在合适时机问候，也可以只为“等结果”“晚点确认”这类具体事情创建一次性回访。
+### 经历过的事，可以再次想起
 
-你也可以自己为联系人设置一次性或每天执行的计划，并随时查看、暂停或删除。自动联系仅在软件运行期间执行，所有计划都留在你看得见、能控制的范围内。
+启用长期记忆写入后，角色经历的交流会逐步整理为事件、主题、人物状态与关系。交流中需要过去的信息时，由角色判断要回想什么，再按需查阅相关记忆；还需要线索时，可以沿关联继续回想，查看经历与原话证据。
 
-### 自定义壁纸
+你也能打开**记忆神经网络**，旋转、缩放、搜索定位，查看记忆内容、来源与关联。
 
-可以用自定义图片或视频作为壁纸。
+<p align="center">
+  <a href="https://www.suzulives.com/#memories"><img src="docs/images/readme/memory.png" alt="Suzu Lives 官网长期记忆演示：五条悟的经历、主题、人物与状态构成三维记忆网络。" width="1440"></a>
+</p>
 
-![Suzu Lives 自定义壁纸对话界面](docs/images/wallpaper-chat.png)
+底层记忆引擎 [Suzu Memory](https://github.com/eryucheng/suzu-memory) 已独立开源。关于记忆模型、多路检索与证据展开，可以在引擎仓库继续了解。
 
-![Suzu Lives 自定义壁纸设置](docs/images/wallpaper-settings.png)
+### 相处中的约定，可以留下来
 
-### 记得你，也让你看得见
+整理摘要时，角色也会识别已经成立、适合持续生效的变化。长期称呼、偏好和共同约定等，可以更新到相处资料；有具体经历与表达支持的成长，也可以更新到角色设定中。
 
-Suzu Memory 会把对话中值得保留的事件、主题、人物状态和关系组织成可追溯的网络；每条记忆都能关联到来源和相关内容。
+这些变化以实际交流为依据，区分长期约定与“今天”“这次”等临时要求。之后的相处可以沿用更新后的资料。
 
-你可以在记忆神经网络中拖动、缩放和搜索，也可以在记忆库查看原始证据与关联。对某个问题先运行一次“测试最终召回”，就能看到这一轮实际会带给 Agent 的记忆。错误内容可以审核、驳回或撤销，让长期记忆随关系一起维护。
+## 日常与主动联系
 
-![Suzu Memory：可浏览的记忆神经网络](docs/images/memory-brain.png)
+### 给角色自己的节奏
 
-![Suzu Lives 应用内语音通话](docs/images/voice-call.png)
+为角色开启**主动安排**后，它可以安排后续活动，在到期时查看聊天，并结合经历与当前消息判断是否发言。自主活动既可以进入私聊，也可以参与所在的群聊；你可以分别选择哪些角色参与，并在计划页管理。
 
-### 一键新建人设
+### 让安排和回顾有处可看
 
-可以直接让 Suzu 助手创建新联系人、设定人设，或处理软件内的事情。
+- **重要的日子**：记录生日、纪念日和日程，在“今天”查看当天安排。
+- **定时计划**：设置一次性提醒或每天固定时间执行的任务，交给指定角色处理；也支持本机系统脚本计划。
+- **角色日记**：选择参与的角色与每日时间，让他们回顾当天经历，按日期保存日记。
 
-![Suzu 助手创建联系人与处理软件操作](docs/images/suzu-assistant-create-persona.png)
+主动活动、定时计划和日记均由本机软件运行，相关功能需要保持 Suzu Lives 开启。
 
-### 一键连接微信，手机上继续聊
+## Suzu 助手
 
-在当前联系人的设置里点一次“连接微信”，就会生成专属二维码。用希望绑定的微信扫码，再按提示发出一条文字即可完成确认。
+内置的 **Suzu 助手**负责协助你使用和配置软件。可以直接描述想做的事，让它查找入口、创建角色与身份卡、修改资料、建立群聊，或协助配置头像和声音。
 
-之后从微信发来的消息会进入这位联系人的固定对话，回复也会沿着同一段关系回来；多个联系人可以分别绑定，各自连接到固定对话。
+例如，你可以这样开始：
 
-![为当前联系人连接微信的二维码示意](docs/images/wechat-connect.png)
+> 按这个世界观创建几位主要人物，补充他们的背景与关系，再建一个群。
 
-### 日历功能
+> 为这个角色找头像，准备一段声音给我试听。
 
-设置联系人专属或共享的纪念日，注意事项，时间到了之后会通过时间感知hook注入给对应联系人
+> 帮我找到主模型连接和这个角色的设置。
 
-![为联系人添加日期](docs/images/calendar-add-date.png)
+助手可以使用已有角色，也可以在建群时创建新人物。人物资料、头像和声音都有对应的设置入口，之后仍可自行查看与调整。
 
-![日历中的联系人日期](docs/images/calendar-overview.png)
+## 能力与连接
 
-### 语音通话功能
+在能力中心为角色启用所需的内置能力，并配置对应服务。主模型负责日常交流与任务处理，图片理解、语音、视频理解和记忆等功能可以分别使用各自的模型连接。
 
-在配置联系人对应的音色api后，agent不仅能发送语音条，也可以进行语音通话，通话将会保持原来的上下文。
+<p align="center">
+  <picture>
+    <source media="(max-width: 600px)" srcset="docs/images/readme/capabilities-mobile.svg">
+    <img src="docs/images/readme/capabilities.svg" alt="四类内置能力：感知包括图片与视频理解；陪伴包括语音消息与实时通话；行动包括网页浏览与本机文件；创作包括图片生成与编辑。" width="1120">
+  </picture>
+</p>
 
-![主动拨打语音电话](docs/images/voice-call-outgoing.png)
+### 在聊天里一起做事
 
-![Agent 发起的语音来电](docs/images/voice-call-incoming.png)
+- **看懂内容**：借助图片与视频理解能力，交流画面中的信息。
+- **浏览与处理**：使用网页和本机文件能力，查找资料、阅读内容或处理文件。
+- **生成与编辑图片**：描述想要的画面，或围绕已有图片继续修改。
 
-### 查看调用流水
+内置能力可按角色选择。需要接入自己的工具时，也可以通过[外部能力清单](docs/external-capabilities.md)导入 Skill 与 MCP；启用的外部能力供软件中的角色共同使用。
 
-统计软件内部所有功能的花销（需自行填写不同厂家价格）
+### 从手机继续聊
 
-![按功能筛选的调用流水和费用统计](docs/images/usage-invocation-log.png)
+配置**微信连接**后，可以扫码绑定对应角色，从微信继续这段交流。微信消息会送入该角色的既有对话，角色回复也会传回微信。不同角色可以分别管理连接。
 
-### 管理计划
+**邮箱通道**可用于发送邮件并接收回信。微信与邮箱连接由桌面端维护，需要 Suzu Lives 保持运行。
 
-Suzu lives内置计时器，调用计时器的行为可以统一在计划页面检查并且管理，也可以新建计划执行自己的脚本。
+### 让桌面有你的样子
 
-![统一查看和管理计划](docs/images/plan-management-glass.png)
+支持浅色与深色主题，也可以选择图片或视频壁纸，让常用的聊天界面更贴近自己的喜好。
 
-### 相处设定
+## 常见问题
 
-每位联系人隔离，可填写不同的设定。
+### 聊天、角色和记忆保存在哪里？
 
-![为不同联系人编辑相处设定](docs/images/relationship-setup.png)
+保存在你选择的本机 Suzu 数据目录中。调用模型或联网能力时，相应请求会发送到你配置的服务。本地保存的数据与配置共同支撑角色后续的交流与相处。
 
-## 快速开始
+### 使用费用怎么看？
 
-1. 在 Windows x64 设备上下载并安装 [最新版本](https://github.com/eryucheng/suzu-lives/releases/latest/download/Suzu-Lives-latest-win-x64.exe)。
-2. 按首次引导选择主模型服务，填写模型与 API Key。
-3. 创建第一位 Companion Agent，设置名字、人设与相处方式。
-4. 开始对话；需要图片、语音、视频、网页或邮箱时，再到 **能力** 中配置对应服务与启用范围。
+模型 API 费用由你选择的服务商收取。软件提供调用流水和用量查看，可按内置或自定义价格估算已记录调用的成本；价格可以按所选服务调整。“今天”会展示当日成本概况，便于了解使用情况。
 
-主模型负责日常对话和任务处理。图像、视频、语音和长期记忆等功能可以分别绑定自己的 API 连接与模型。
+### 可以使用自己的角色吗？
 
-## 使用与数据说明
+可以自行创建角色，填写背景与人设，也可以导入别人分享的角色卡。本页与官网中的人物和对话为展示示例，《咒术回战》人物不随安装包提供。
 
-- 各 Agent 的会话、关系资料、记忆、计划、附件和设置保存在你选择的 Suzu 数据目录中。
-- 模型、图像、语音、视频、邮箱、微信等功能会按你的配置连接对应服务；请求内容与费用由所选服务决定。
-- 主动关心、计划、日记、微信和邮箱等持续功能由本机桌面端维护，并在 Suzu Lives 运行期间执行。
-- 每项能力都可以为不同 Agent 单独开关；导入的外部能力可供 Agent 会话使用。
-- 调用流水统一记录各项功能的用量；填写服务价格后可以估算成本。
+### 软件是否开源？
 
-## 许可证
+Suzu Lives 当前桌面版本以闭源安装包发行。公开仓库保留了 v0.3.3 的历史源码；使用软件请从官网或 GitHub Releases 下载当前安装包。独立的记忆引擎 [Suzu Memory](https://github.com/eryucheng/suzu-memory) 已开源，具体许可见该项目仓库。
 
-Suzu Lives 采用 [Apache License 2.0](LICENSE.md) 发布。第三方组件与来源说明见 [NOTICE](NOTICE)。
+## 相关链接与反馈
+
+- [Suzu Memory](https://github.com/eryucheng/suzu-memory)：本地长期记忆引擎、记忆模型与检索接口。
+- [外部能力清单与导入](docs/external-capabilities.md)：通过清单接入外部能力，附[示例](docs/examples/external-capability/suzu-capability.json)。
+- [版本与发布记录](https://github.com/eryucheng/suzu-lives/releases)：下载历史版本，查看版本说明。
+- **联系开发者**：`contact@suzulives.com`，欢迎反馈使用体验与建议。
+
+---
+
+第三方组件与来源说明见 [NOTICE](NOTICE)。展示中的人物素材归各自权利人所有。
